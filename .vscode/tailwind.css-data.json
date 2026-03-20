@@ -1,0 +1,7 @@
+{
+  "version": 1.1,
+  "atDirectives": [
+    { "name": "@theme", "description": "Tailwind CSS v4: Define design tokens (colors, spacing, fonts) as CSS custom properties.", "references": [{ "name": "Tailwind CSS v4 Docs", "url": "https://tailwindcss.com/docs/theme" }] },
+    { "name": "@custom-variant", "description": "Tailwind CSS v4: Register a custom variant for use in utility classes.", "references": [{ "name": "Tailwind CSS v4 Docs", "url": "https://tailwindcss.com/docs/adding-custom-styles#adding-custom-variants" }] }
+  ]
+}

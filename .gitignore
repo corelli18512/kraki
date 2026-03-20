@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.enc
+.DS_Store
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+*.tsbuildinfo
+coverage/
+ROADMAP.md
+KRAKI_FILE_BY_FILE_REVIEW.md

@@ -1,0 +1,20 @@
+import { defineConfig } from 'vitest/config';
+import { resolve } from 'path';
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+    exclude: ['src/**/*.live.test.ts'],
+    testTimeout: 10_000,
+  },
+  resolve: {
+    alias: {
+      'kraki-relay': resolve(__dirname, '../head/src/index.ts'),
+      'kraki': resolve(__dirname, '../tentacle/src/index.ts'),
+      '@kraki/protocol': resolve(__dirname, '../protocol/src/index.ts'),
+      '@kraki/crypto': resolve(__dirname, '../crypto/src/index.ts'),
+    },
+  },
+});

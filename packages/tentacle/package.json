@@ -1,0 +1,46 @@
+{
+  "name": "kraki",
+  "version": "0.1.0",
+  "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "kraki": "dist/cli.js"
+  },
+  "scripts": {
+    "start": "node dist/cli.js",
+    "dev": "tsc --watch",
+    "dev:local": "KRAKI_APP_URL=http://localhost:3000 node dist/cli.js",
+    "build": "rm -rf dist && tsc && cp src/banner-data.json dist/",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "postinstall": "sed -i.bak 's|from \"vscode-jsonrpc/node\"|from \"vscode-jsonrpc/node.js\"|g' node_modules/@github/copilot-sdk/dist/session.js 2>/dev/null; rm -f node_modules/@github/copilot-sdk/dist/session.js.bak 2>/dev/null; true"
+  },
+  "dependencies": {
+    "@kraki/crypto": "workspace:*",
+    "@kraki/protocol": "workspace:*",
+    "@github/copilot-sdk": "^0.1.32",
+    "@inquirer/prompts": "^8.3.2",
+    "chalk": "^5.6.2",
+    "ora": "^9.3.0",
+    "pino": "^10.3.1",
+    "pino-roll": "^4.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "uuid": "^13.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/pino": "^7.0.5",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,303 @@
+/**
+ * Mock WebSocket server — simulates a Kraki head relay for development.
+ * Run: pnpm --filter @kraki/arm-web mock
+ */
+import { WebSocketServer, WebSocket } from 'ws';
+import { randomUUID } from 'crypto';
+
+const PORT = 9000;
+const wss = new WebSocketServer({ port: PORT });
+
+// --- State ---
+
+interface MockSession {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  agent: string;
+  model?: string;
+  state: 'active' | 'idle' | 'ended';
+  messageCount: number;
+}
+
+const devices = [
+  { id: 'dev-macbook', name: 'MacBook Pro', role: 'tentacle' as const, kind: 'desktop' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'claude-opus-4', 'gpt-4.1', 'gpt-4o', 'o3'] } },
+  { id: 'dev-server', name: 'CI Server', role: 'tentacle' as const, kind: 'server' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'gpt-4.1'] } },
+];
+
+const sessions: MockSession[] = [
+  { id: 'sess-1', deviceId: 'dev-macbook', deviceName: 'MacBook Pro', agent: 'copilot', model: 'gpt-4o', state: 'active', messageCount: 5 },
+  { id: 'sess-2', deviceId: 'dev-server', deviceName: 'CI Server', agent: 'claude', model: 'claude-4-sonnet', state: 'idle', messageCount: 12 },
+  { id: 'sess-3', deviceId: 'dev-macbook', deviceName: 'MacBook Pro', agent: 'codex', state: 'ended', messageCount: 3 },
+];
+
+let globalSeq = 100;
+const nextSeq = () => ++globalSeq;
+
+// --- Helpers ---
+
+function envelope(type: string, sessionId: string, payload: Record<string, unknown>, deviceId = 'dev-macbook') {
+  return JSON.stringify({
+    type,
+    channel: 'ch-demo',
+    deviceId,
+    seq: nextSeq(),
+    timestamp: new Date().toISOString(),
+    sessionId,
+    payload,
+  });
+}
+
+function send(ws: WebSocket, data: string) {
+  if (ws.readyState === WebSocket.OPEN) ws.send(data);
+}
+
+// --- Connection handling ---
+
+wss.on('connection', (ws) => {
+  let clientDeviceId = '';
+  console.log('[mock] Client connected');
+
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      handleClientMessage(ws, msg);
+    } catch {
+      // ignore
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[mock] Client disconnected');
+  });
+
+  function handleClientMessage(ws: WebSocket, msg: Record<string, unknown>) {
+    switch (msg.type) {
+      case 'auth': {
+        clientDeviceId = 'dev-web-' + randomUUID().slice(0, 8);
+        const appDevice = {
+          id: clientDeviceId,
+          name: (msg.device as Record<string, unknown>)?.name ?? 'Web Browser',
+          role: 'app',
+          kind: 'web',
+          online: true,
+        };
+
+        send(ws, JSON.stringify({
+          type: 'auth_ok',
+          channel: 'ch-demo',
+          deviceId: clientDeviceId,
+          e2e: false,
+          devices: [...devices, appDevice],
+          sessions: sessions.map(({ id, deviceId, deviceName, agent, model, state, messageCount }) => ({
+            id, deviceId, deviceName, agent, model, state, messageCount,
+          })),
+        }));
+
+        // Send history for active sessions
+        sendSessionHistory(ws);
+
+        // Start simulation after a brief delay
+        setTimeout(() => startSimulation(ws), 2000);
+        break;
+      }
+
+      case 'ping':
+        send(ws, JSON.stringify({ type: 'pong' }));
+        break;
+
+      case 'send_input':
+        console.log(`[mock] User input in ${msg.sessionId}: ${(msg.payload as Record<string, unknown>)?.text}`);
+        // Echo as user_message then simulate agent response
+        send(ws, envelope('user_message', msg.sessionId as string, {
+          content: (msg.payload as Record<string, unknown>)?.text ?? '',
+        }));
+        simulateAgentResponse(ws, msg.sessionId as string);
+        break;
+
+      case 'approve':
+        console.log(`[mock] Approved: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        send(ws, envelope('approve', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        // Continue with tool complete
+        setTimeout(() => {
+          send(ws, envelope('tool_complete', msg.sessionId as string, {
+            toolName: 'shell',
+            args: { command: 'echo "done"' },
+            result: 'done\n',
+          }));
+        }, 1000);
+        break;
+
+      case 'deny':
+        console.log(`[mock] Denied: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        send(ws, envelope('deny', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        break;
+
+      case 'always_allow':
+        console.log(`[mock] Always allowed: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        send(ws, envelope('always_allow', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        break;
+
+      case 'answer':
+        console.log(`[mock] Answer: ${(msg.payload as Record<string, unknown>)?.answer}`);
+        send(ws, envelope('answer', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        break;
+
+      case 'kill_session':
+        console.log(`[mock] Kill session: ${msg.sessionId}`);
+        send(ws, envelope('session_ended', msg.sessionId as string, { reason: 'killed by user' }));
+        break;
+
+      case 'replay':
+        console.log(`[mock] Replay after seq: ${msg.afterSeq}`);
+        break;
+    }
+  }
+});
+
+// --- Send initial session history ---
+
+function sendSessionHistory(ws: WebSocket) {
+  // Session 1 (copilot) — some chat history
+  send(ws, envelope('session_created', 'sess-1', { agent: 'copilot', model: 'gpt-4o' }));
+  send(ws, envelope('user_message', 'sess-1', { content: 'Help me refactor the authentication module' }));
+  send(ws, envelope('agent_message', 'sess-1', {
+    content: "I'll help you refactor the authentication module. Let me start by reading the current implementation.\n\n```typescript\n// Current auth.ts\nexport class AuthService {\n  async login(email: string, password: string) {\n    // TODO: implement\n  }\n}\n```\n\nI see several areas we can improve:\n1. Add proper token management\n2. Implement refresh token flow\n3. Add rate limiting",
+  }));
+  send(ws, envelope('tool_start', 'sess-1', { toolName: 'read_file', args: { path: 'src/auth.ts' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolName: 'read_file',
+    args: { path: 'src/auth.ts' },
+    result: 'export class AuthService {\n  // ...\n}',
+  }));
+
+  // Session 2 (claude) — idle session
+  send(ws, envelope('session_created', 'sess-2', { agent: 'claude', model: 'claude-4-sonnet' }, 'dev-server'));
+  send(ws, envelope('agent_message', 'sess-2', {
+    content: 'The CI pipeline analysis is complete. All tests are passing. Here are the metrics:\n\n- **Build time**: 2m 34s (↓ 15%)\n- **Test coverage**: 87.3% (↑ 2.1%)\n- **Bundle size**: 142KB gzipped',
+  }, 'dev-server'));
+
+  // Session 3 (codex) — ended
+  send(ws, envelope('session_created', 'sess-3', { agent: 'codex' }));
+  send(ws, envelope('agent_message', 'sess-3', { content: 'Generated the database migration files successfully.' }));
+  send(ws, envelope('session_ended', 'sess-3', { reason: 'completed' }));
+}
+
+// --- Simulation scenarios ---
+
+function startSimulation(ws: WebSocket) {
+  // Scenario 1: After 3s, agent sends a streaming message
+  setTimeout(() => {
+    const chunks = [
+      "I've analyzed ",
+      "the codebase and found ",
+      "a potential memory leak in ",
+      "`src/cache.ts`. ",
+      "The `WeakMap` reference isn't being ",
+      "properly cleaned up when connections close.\n\n",
+      "Let me fix that now…",
+    ];
+    let delay = 0;
+    for (const chunk of chunks) {
+      setTimeout(() => {
+        send(ws, envelope('agent_message_delta', 'sess-1', { content: chunk }));
+      }, delay);
+      delay += 150 + Math.random() * 200;
+    }
+    // Final complete message
+    setTimeout(() => {
+      send(ws, envelope('agent_message', 'sess-1', {
+        content: "I've analyzed the codebase and found a potential memory leak in `src/cache.ts`. The `WeakMap` reference isn't being properly cleaned up when connections close.\n\nLet me fix that now…",
+      }));
+    }, delay + 100);
+  }, 3000);
+
+  // Scenario 2: After 6s, a permission request
+  setTimeout(() => {
+    const permId = 'perm-' + randomUUID().slice(0, 8);
+    send(ws, envelope('tool_start', 'sess-1', {
+      toolName: 'shell',
+      args: { command: 'npm install --save-dev @types/node@latest' },
+    }));
+    send(ws, envelope('permission', 'sess-1', {
+      id: permId,
+      toolName: 'shell',
+      args: { command: 'npm install --save-dev @types/node@latest' },
+      description: 'Install updated TypeScript Node.js type definitions',
+    }));
+  }, 8000);
+
+  // Scenario 3: After 12s, a question
+  setTimeout(() => {
+    const qId = 'q-' + randomUUID().slice(0, 8);
+    send(ws, envelope('question', 'sess-1', {
+      id: qId,
+      question: 'Which database driver should I use for the migration?',
+      choices: ['better-sqlite3', 'pg (PostgreSQL)', 'mysql2'],
+    }));
+  }, 14000);
+
+  // Scenario 4: After 18s, new session appears
+  setTimeout(() => {
+    const newSessId = 'sess-' + randomUUID().slice(0, 8);
+    send(ws, JSON.stringify({
+      type: 'head_notice',
+      event: 'session_updated',
+      data: {
+        session: {
+          id: newSessId,
+          deviceId: 'dev-server',
+          deviceName: 'CI Server',
+          agent: 'claude',
+          model: 'claude-4-opus',
+          state: 'active',
+          messageCount: 0,
+        },
+      },
+    }));
+    send(ws, envelope('session_created', newSessId, { agent: 'claude', model: 'claude-4-opus' }, 'dev-server'));
+    setTimeout(() => {
+      send(ws, envelope('agent_message', newSessId, {
+        content: '🔍 Starting deep code review of PR #142: "Refactor auth middleware"\n\nI\'ll check for:\n- Security vulnerabilities\n- Performance regressions\n- API compatibility breaks',
+      }, 'dev-server'));
+    }, 1500);
+  }, 20000);
+}
+
+// --- Agent response simulation ---
+
+function simulateAgentResponse(ws: WebSocket, sessionId: string) {
+  const responses = [
+    "That's a great question! Let me think about the best approach here.\n\nBased on the current architecture, I'd recommend using a **middleware pattern** to handle this cleanly. Here's what I'm thinking:\n\n```typescript\nconst authMiddleware = (req, res, next) => {\n  const token = req.headers.authorization?.split(' ')[1];\n  if (!token) return res.status(401).json({ error: 'Unauthorized' });\n  // validate token\n  next();\n};\n```",
+    "Done! I've made the following changes:\n\n1. Updated `src/auth.ts` — Added token refresh logic\n2. Modified `src/middleware.ts` — Integrated rate limiter\n3. Created `src/auth.test.ts` — Added 12 new test cases\n\nAll tests are passing ✅",
+    "I found an issue with the current approach. The session store is using synchronous I/O which could block the event loop under heavy load.\n\nWould you like me to refactor it to use async/await?",
+  ];
+
+  const response = responses[Math.floor(Math.random() * responses.length)];
+
+  // Simulate streaming
+  let delay = 500;
+  const words = response.split(/(?<=\s)/);
+  let accumulated = '';
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    setTimeout(() => {
+      send(ws, envelope('agent_message_delta', sessionId, { content: word }));
+    }, delay);
+    accumulated += word;
+    delay += 30 + Math.random() * 60;
+  }
+
+  // Final complete message
+  setTimeout(() => {
+    send(ws, envelope('agent_message', sessionId, { content: accumulated }));
+  }, delay + 100);
+}
+
+console.log(`\n  ◈ Kraki mock server running on ws://localhost:${PORT}\n`);
+console.log(`  Simulating:`);
+console.log(`    • 2 machines (MacBook Pro, CI Server)`);
+console.log(`    • 3 sessions (Copilot, Claude, Codex)`);
+console.log(`    • Streaming messages, permissions, questions`);
+console.log(`    • New session after ~20s\n`);
+console.log(`  Start the web app: pnpm --filter @kraki/arm-web dev\n`);

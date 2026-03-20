@@ -1,0 +1,187 @@
+@import 'tailwindcss';
+@import 'highlight.js/styles/github-dark.min.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Primary — Coral */
+  --color-kraki-50: #fef3f1;
+  --color-kraki-100: #fde5e0;
+  --color-kraki-200: #fccec6;
+  --color-kraki-300: #f9ad9f;
+  --color-kraki-400: #f4836e;
+  --color-kraki-500: #ea6046;
+  --color-kraki-600: #d74428;
+  --color-kraki-700: #b5361e;
+  --color-kraki-800: #96301d;
+  --color-kraki-900: #7d2d1e;
+  --color-kraki-950: #44130b;
+
+  /* Secondary — Ocean teal */
+  --color-ocean-50: #ecfeff;
+  --color-ocean-100: #cffafe;
+  --color-ocean-200: #a5f3fc;
+  --color-ocean-300: #67e8f9;
+  --color-ocean-400: #22d3ee;
+  --color-ocean-500: #06b6d4;
+  --color-ocean-600: #0891b2;
+  --color-ocean-700: #0e7490;
+  --color-ocean-800: #155e75;
+  --color-ocean-900: #164e63;
+  --color-ocean-950: #083344;
+
+  /* Accent — Violet */
+  --color-accent-50: #f5f3ff;
+  --color-accent-100: #ede9fe;
+  --color-accent-200: #ddd6fe;
+  --color-accent-300: #c4b5fd;
+  --color-accent-400: #a78bfa;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+  --color-accent-700: #6d28d9;
+  --color-accent-800: #5b21b6;
+  --color-accent-900: #4c1d95;
+  --color-accent-950: #2e1065;
+
+  --color-surface-primary: var(--color-white);
+  --color-surface-secondary: var(--color-slate-50);
+  --color-surface-tertiary: var(--color-slate-100);
+  --color-border-primary: var(--color-slate-200);
+  --color-text-primary: var(--color-slate-900);
+  --color-text-secondary: var(--color-slate-500);
+  --color-text-muted: var(--color-slate-400);
+}
+
+/* Theme toggle via class on <html> */
+.dark {
+  --color-surface-primary: var(--color-slate-950);
+  --color-surface-secondary: var(--color-slate-800);
+  --color-surface-tertiary: var(--color-slate-700);
+  --color-border-primary: var(--color-slate-600);
+  --color-text-primary: var(--color-slate-100);
+  --color-text-secondary: var(--color-slate-400);
+  --color-text-muted: var(--color-slate-500);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-slate-300);
+  border-radius: 3px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--color-slate-700);
+}
+
+/* Markdown content styles */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+.markdown-content h1 { font-size: 1.25rem; }
+.markdown-content h2 { font-size: 1.125rem; }
+.markdown-content h3 { font-size: 1rem; }
+
+.markdown-content p {
+  margin-bottom: 0.5em;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content pre {
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0.5em 0;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  background: var(--color-slate-800) !important;
+}
+
+.markdown-content code:not(pre code) {
+  font-size: 0.8125rem;
+  padding: 0.15em 0.4em;
+  border-radius: 0.25rem;
+  background: var(--color-slate-200);
+}
+.dark .markdown-content code:not(pre code) {
+  background: var(--color-slate-700);
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.5em;
+}
+.markdown-content ul { list-style-type: disc; }
+.markdown-content ol { list-style-type: decimal; }
+
+.markdown-content a {
+  color: var(--color-kraki-500);
+  text-decoration: underline;
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid var(--color-kraki-500);
+  padding-left: 0.75rem;
+  margin: 0.5em 0;
+  color: var(--color-text-secondary);
+}
+
+/* Streaming cursor animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.streaming-cursor::after {
+  content: '▊';
+  animation: blink 1s step-end infinite;
+  color: var(--color-kraki-500);
+  margin-left: 1px;
+}
+
+@keyframes logo-clip {
+  0% { clip-path: circle(0% at 50% 50%); }
+  100% { clip-path: circle(75% at 50% 50%); }
+}
+
+@keyframes logo-surface {
+  0% { opacity: 0; filter: blur(12px); }
+  100% { opacity: 1; filter: blur(0px); }
+}
+
+@keyframes fade-up {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+.animate-logo-reveal {
+  animation:
+    logo-clip 4s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    logo-surface 3s ease-out forwards;
+}
+
+.animate-fade-up {
+  opacity: 0;
+  animation: fade-up 1s ease-out 1s forwards;
+}
+
+.animate-fade-up-d2 {
+  opacity: 0;
+  animation: fade-up 1s ease-out 1.3s forwards;
+}
+
+.animate-fade-up-d3 {
+  opacity: 0;
+  animation: fade-up 1s ease-out 1.6s forwards;
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Kraki — Agent Control",
+  "short_name": "Kraki",
+  "description": "E2E encrypted relay for AI coding agents",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#ea6046",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

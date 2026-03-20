@@ -1,0 +1,22 @@
+{
+  "name": "@kraki/protocol",
+  "version": "0.1.0",
+  "description": "Shared TypeScript types and message definitions for the Kraki protocol",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "css.customData": [".vscode/tailwind.css-data.json"],
+  "css.lint.unknownAtRules": "ignore",
+  "editor.colorDecorators": true,
+  "files.associations": { "*.css": "tailwindcss" },
+  "tailwindCSS.experimental.configFile": "packages/arm/web/src/index.css"
+}

@@ -1,0 +1,40 @@
+{
+  "name": "kraki-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kraki monorepo workspace",
+  "scripts": {
+    "kraki": "pnpm exec tsx packages/tentacle/src/cli.ts",
+    "kraki:dev": "KRAKI_APP_URL=http://localhost:3000 pnpm exec tsx packages/tentacle/src/cli.ts",
+    "kraki-relay": "pnpm exec tsx packages/head/src/cli.ts",
+    "kraki-relay:dev": "pnpm exec tsx packages/head/src/cli.ts --port 4000 --auth github --e2e true --log debug",
+    "dev:head": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && AUTH_MODE=github E2E_MODE=true PAIRING_ENABLED=true pnpm exec tsx packages/head/src/cli.ts --port 4000",
+    "dev:tentacle": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm exec tsx packages/tentacle/src/cli.ts",
+    "dev:web": "pnpm --filter @kraki/arm-web dev",
+    "start:head": "node packages/head/dist/cli.js",
+    "start:tentacle": "node packages/tentacle/dist/daemon-worker.js",
+    "start:web": "pnpm --filter @kraki/arm-web preview",
+    "build": "pnpm --filter @kraki/protocol build && pnpm -r build",
+    "build:head": "pnpm --filter @kraki/protocol build && pnpm --filter kraki-relay build",
+    "build:tentacle": "pnpm --filter @kraki/protocol build && pnpm --filter kraki build",
+    "build:web": "pnpm --filter @kraki/arm-web build",
+    "test": "pnpm --filter @kraki/crypto test && pnpm --filter kraki-relay test && pnpm --filter kraki test && pnpm --filter @kraki/tests test",
+    "test:live": "pnpm --filter @kraki/tests test:live",
+    "validate": "pnpm build && pnpm test && pnpm --filter @kraki/arm-web test",
+    "reset": "rm -rf ~/.kraki && echo '🦑 Cleared ~/.kraki — run pnpm dev:tentacle to set up fresh'",
+    "clean": "pnpm -r clean"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

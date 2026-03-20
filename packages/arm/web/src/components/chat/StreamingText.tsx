@@ -1,0 +1,18 @@
+import Markdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import { AgentAvatar } from '../common/AgentAvatar';
+
+export function StreamingText({ content, agent }: { content: string; agent?: string }) {
+  return (
+    <div className="flex gap-2">
+      <div className="mt-0.5 shrink-0">
+        <AgentAvatar agent={agent ?? ''} size="sm" />
+      </div>
+      <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+        <div className="markdown-content streaming-cursor text-sm leading-relaxed text-text-primary">
+          <Markdown rehypePlugins={[rehypeHighlight]}>{content}</Markdown>
+        </div>
+      </div>
+    </div>
+  );
+}

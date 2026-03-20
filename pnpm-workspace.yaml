@@ -1,0 +1,11 @@
+packages:
+  - packages/protocol
+  - packages/crypto
+  - packages/head
+  - packages/tentacle
+  - packages/arm/*
+  - packages/tests
+
+ignoredBuiltDependencies:
+  - better-sqlite3
+  - esbuild
