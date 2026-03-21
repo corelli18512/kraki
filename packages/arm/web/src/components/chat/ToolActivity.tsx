@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Loader2, CheckCircle2 } from 'lucide-react';
+import { Loader2, CheckCircle2, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
 
 interface ToolActivityProps {
   type: 'start' | 'complete';
@@ -14,6 +14,9 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
 
   const summary = getToolSummary(toolName, args as Record<string, unknown>);
   const resultPreview = result ? getResultPreview(result) : '';
+  const ToolIcon = getToolIcon(toolName);
+  const detailLabel = getDetailLabel(toolName);
+  const argsDetail = getArgsDetail(toolName, args as Record<string, unknown>);
 
   return (
     <div className="my-1">
@@ -52,13 +55,21 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
         <div className="ml-7 mt-1 space-y-2 rounded-lg bg-surface-tertiary p-3 text-xs">
           {summary && (
             <div>
-              <p className="font-semibold text-text-muted">Command</p>
+              <p className="font-semibold text-text-muted">{detailLabel}</p>
               <pre className="mt-1 overflow-x-auto font-mono text-text-secondary">
                 {summary}
               </pre>
             </div>
           )}
-          {!summary && Object.keys(args).length > 0 && (
+          {argsDetail && (
+            <div>
+              <p className="font-semibold text-text-muted">{argsDetail.label}</p>
+              <pre className="mt-1 max-h-40 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
+                {argsDetail.content}
+              </pre>
+            </div>
+          )}
+          {!summary && !argsDetail && Object.keys(args).length > 0 && (
             <div>
               <p className="font-semibold text-text-muted">Arguments</p>
               <pre className="mt-1 overflow-x-auto text-text-secondary">
@@ -80,6 +91,93 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
   );
 }
 
+function getToolIcon(toolName: string): typeof FileText {
+  switch (toolName) {
+    case 'read_file':
+    case 'view':
+      return FileText;
+    case 'write_file':
+    case 'edit_file':
+    case 'edit':
+    case 'create_file':
+    case 'create':
+      return FileEdit;
+    case 'shell':
+    case 'bash':
+      return Terminal;
+    case 'grep':
+    case 'search':
+      return Search;
+    case 'glob':
+      return FolderSearch;
+    default:
+      return FileText;
+  }
+}
+
+function getDetailLabel(toolName: string): string {
+  switch (toolName) {
+    case 'shell':
+    case 'bash':
+      return 'Command';
+    case 'read_file':
+    case 'view':
+    case 'write_file':
+    case 'edit_file':
+    case 'edit':
+    case 'create_file':
+    case 'create':
+      return 'Path';
+    case 'grep':
+    case 'search':
+      return 'Pattern';
+    case 'glob':
+      return 'Pattern';
+    case 'fetch_url':
+      return 'URL';
+    default:
+      return 'Summary';
+  }
+}
+
+/** Extract additional detail args to display beyond the summary. */
+function getArgsDetail(toolName: string, args: Record<string, unknown>): { label: string; content: string } | null {
+  switch (toolName) {
+    case 'edit':
+    case 'edit_file': {
+      const old_str = typeof args.old_str === 'string' ? args.old_str : undefined;
+      const new_str = typeof args.new_str === 'string' ? args.new_str : undefined;
+      if (old_str != null || new_str != null) {
+        const parts: string[] = [];
+        if (old_str != null) parts.push(`- ${old_str}`);
+        if (new_str != null) parts.push(`+ ${new_str}`);
+        return { label: 'Changes', content: parts.join('\n') };
+      }
+      return null;
+    }
+    case 'write_file':
+    case 'create_file':
+    case 'create': {
+      const content = typeof args.file_text === 'string' ? args.file_text
+        : typeof args.content === 'string' ? args.content
+        : undefined;
+      if (content) {
+        const preview = content.length > 500 ? content.slice(0, 497) + '…' : content;
+        return { label: 'Content', content: preview };
+      }
+      return null;
+    }
+    case 'grep':
+    case 'search': {
+      const path = typeof args.path === 'string' ? args.path : undefined;
+      if (path) return { label: 'Directory', content: path };
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
 function getToolSummary(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
     case 'shell':
@@ -89,6 +187,7 @@ function getToolSummary(toolName: string, args: Record<string, unknown>): string
     case 'edit_file':
     case 'edit':
     case 'create_file':
+    case 'create':
       return typeof args.path === 'string' ? args.path : '';
     case 'read_file':
     case 'view':
