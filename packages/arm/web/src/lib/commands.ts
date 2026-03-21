@@ -54,6 +54,28 @@ export function resolvePermissionMessage(
   }
 }
 
+/** Stamp the user's answer on the matching question chat message. */
+export function resolveQuestionMessage(
+  sessionId: string,
+  questionId: string,
+  answerText: string,
+): void {
+  const store = getStore();
+  const msgs = store.messages.get(sessionId);
+  if (!msgs) return;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i] as any;
+    if (m.type === 'question' && m.payload?.id === questionId) {
+      const updated = [...msgs];
+      updated[i] = { ...m, payload: { ...m.payload, answer: answerText } };
+      const next = new Map(store.messages);
+      next.set(sessionId, updated);
+      setStoreState({ messages: next });
+      return;
+    }
+  }
+}
+
 export function approve(
   permissionId: string,
   sessionId: string,
@@ -109,6 +131,7 @@ export function answer(
     payload: { questionId, answer: answerText },
   });
   getStore().removeQuestion(questionId);
+  resolveQuestionMessage(sessionId, questionId, answerText);
 }
 
 export function killSession(

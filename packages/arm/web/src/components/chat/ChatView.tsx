@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
+import { useEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
@@ -54,6 +54,7 @@ export function ChatView() {
   const isAtBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const prevMsgLenRef: MutableRefObject<number> = useRef(0);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -68,9 +69,26 @@ export function ChatView() {
     if (isAtBottomRef.current) {
       scrollToBottom();
     } else {
-      setUnreadCount((c) => c + 1);
-      setShowScrollBtn(true);
+      // Only count messages from others (agent, system) as unread — not the user's own
+      const prevLen = prevMsgLenRef.current;
+      const curLen = messages.length;
+      if (curLen > prevLen) {
+        const lastMsg = messages[curLen - 1];
+        const isFromUser = lastMsg && (
+          lastMsg.type === 'user_message' ||
+          lastMsg.type === 'pending_input' ||
+          lastMsg.type === 'answer' ||
+          lastMsg.type === 'send_input'
+        );
+        if (!isFromUser) {
+          setUnreadCount((c) => c + 1);
+          setShowScrollBtn(true);
+        }
+      } else if (streaming) {
+        setShowScrollBtn(true);
+      }
     }
+    prevMsgLenRef.current = messages.length;
   }, [messages, streaming, scrollToBottom]);
 
   // Reset when switching sessions

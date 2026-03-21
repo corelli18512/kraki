@@ -157,7 +157,22 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
       );
     }
 
-    case 'question':
+    case 'question': {
+      const answer = (message.payload as any).answer as string | undefined;
+      if (answer) {
+        return (
+          <div className="flex gap-2">
+            <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
+            <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+              <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
+                Question · <span className="text-emerald-600 dark:text-emerald-400">Answered</span>
+              </p>
+              <p className="mt-0.5 text-sm text-text-primary">{message.payload.question}</p>
+              <p className="mt-1.5 rounded-lg bg-surface-tertiary px-3 py-1.5 text-sm text-text-primary">{answer}</p>
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="flex gap-2">
           <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
@@ -169,6 +184,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
           </div>
         </div>
       );
+    }
 
     case 'approve':
     case 'deny':

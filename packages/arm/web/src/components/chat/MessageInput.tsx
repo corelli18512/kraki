@@ -48,6 +48,10 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     if (!trimmed) return;
     wsClient.sendInput(sessionId, trimmed);
     setDraft(sessionId, '');
+    // On mobile, blur to dismiss the keyboard after sending
+    if (!shouldAutoFocus) {
+      textareaRef.current?.blur();
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
