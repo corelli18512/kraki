@@ -62,6 +62,9 @@ let mockSessions: MockSession[];
 let capturedSessionConfigs: any[];
 let capturedResumeConfigs: any[];
 let mockListSessions: Mock;
+const mockExistsSync = vi.fn();
+const mockReadFileSync = vi.fn();
+const mockWriteFileSync = vi.fn();
 
 vi.mock('@github/copilot-sdk', () => {
   return {
@@ -85,6 +88,12 @@ vi.mock('@github/copilot-sdk', () => {
   };
 });
 
+vi.mock('node:fs', () => ({
+  existsSync: (...args: any[]) => mockExistsSync(...args),
+  readFileSync: (...args: any[]) => mockReadFileSync(...args),
+  writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
+}));
+
 // Mock execSync so we don't actually call `gh auth token`
 import { execSync as realExecSync } from 'node:child_process';
 vi.mock('node:child_process', () => ({
@@ -95,6 +104,7 @@ const mockedExecSync = realExecSync as unknown as Mock;
 // ── Import after mocking ────────────────────────────────
 
 import { CopilotAdapter, AgentAdapter } from '../index.js';
+import { patchCopilotSdkSessionImport, resolveCopilotSdkSessionPath } from '../copilot.js';
 
 // ── Tests ───────────────────────────────────────────────
 
@@ -106,6 +116,9 @@ describe('CopilotAdapter', () => {
     capturedSessionConfigs = [];
     capturedResumeConfigs = [];
     mockListSessions = vi.fn().mockResolvedValue([]);
+    mockExistsSync.mockImplementation((path: string) => path === '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js');
+    mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
+    mockWriteFileSync.mockReset();
     adapter = new CopilotAdapter();
   });
 
@@ -125,6 +138,18 @@ describe('CopilotAdapter', () => {
       // No error = success (CopilotClient constructor + start were called)
     });
 
+    it('patches the SDK import when the installed session file is incompatible', () => {
+      mockReadFileSync.mockReturnValue('import { x } from "vscode-jsonrpc/node";\n');
+
+      expect(patchCopilotSdkSessionImport('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts')).toBe(true);
+
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js',
+        'import { x } from "vscode-jsonrpc/node.js";\n',
+        'utf8',
+      );
+    });
+
     it('stop() clears client and sessions', async () => {
       await adapter.start();
       await adapter.createSession({ model: 'gpt-5' });
@@ -136,6 +161,29 @@ describe('CopilotAdapter', () => {
 
     it('stop() is safe to call without start', async () => {
       await adapter.stop(); // should not throw
+    });
+  });
+
+  describe('patchCopilotSdkSessionImport', () => {
+    it('returns false when no patch is needed', () => {
+      mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
+
+      expect(patchCopilotSdkSessionImport('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts')).toBe(false);
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveCopilotSdkSessionPath', () => {
+    it('finds the sdk session file by walking up to node_modules', () => {
+      expect(resolveCopilotSdkSessionPath('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+        .toBe('/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js');
+    });
+
+    it('returns null when no sdk session file exists', () => {
+      mockExistsSync.mockReturnValue(false);
+
+      expect(resolveCopilotSdkSessionPath('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+        .toBeNull();
     });
   });
 

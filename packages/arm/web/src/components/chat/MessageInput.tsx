@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
+import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
 const MAX_INPUT_HEIGHT = 160;
 
@@ -8,14 +9,18 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shouldAutoFocus = shouldAutoFocusTextInput();
 
   // Auto-focus on mount (when navigating into a session)
   useEffect(() => {
+    if (!shouldAutoFocus) return;
     textareaRef.current?.focus();
-  }, [sessionId]);
+  }, [sessionId, shouldAutoFocus]);
 
   // Auto-focus on keypress when no other input is focused
   useEffect(() => {
+    if (!shouldAutoFocus) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.activeElement === textareaRef.current) return;
@@ -26,7 +31,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [shouldAutoFocus]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -91,7 +96,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Send a message…"
-          className="min-h-[40px] flex-1 resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-sm text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500"
+          className="min-h-[40px] flex-1 resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
         />
         <button
           onClick={handleSend}

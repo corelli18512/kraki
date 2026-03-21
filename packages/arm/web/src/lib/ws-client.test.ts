@@ -521,6 +521,26 @@ describe('KrakiWSClient', () => {
       lastWsInstance._receive({ type: 'auth_error', message: 'Invalid token' });
       expect(useStore.getState().status).toBe('error');
     });
+
+    it('clears stale stored device auth and retries without leaving the app stuck', async () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+
+      lastWsInstance._receive({ type: 'auth_error', message: 'Signature mismatch' });
+
+      await vi.waitFor(() => {
+        const msg = JSON.parse(lastWsInstance.sentMessages.at(-1));
+        expect(msg.type).toBe('auth_info');
+      });
+
+      expect(localStorage.getItem('kraki_device')).toBeNull();
+      expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
+    });
   });
 
   describe('WebSocket constructor failure', () => {

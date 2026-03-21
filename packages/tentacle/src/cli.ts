@@ -104,7 +104,15 @@ async function cmdStart(): Promise<void> {
     }
   }
 
-  const pid = startDaemon(config);
+  let pid: number;
+  try {
+    pid = await startDaemon(config);
+  } catch (err) {
+    console.log('');
+    console.log(chalk.red(`  Failed to start Kraki: ${(err as Error).message}`));
+    console.log('');
+    return;
+  }
   console.log('');
   console.log(chalk.green(`  🦑 Kraki started (PID ${pid})`));
 

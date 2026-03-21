@@ -5,19 +5,30 @@
  * processes are spawned and no files are written to ~/.kraki.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ───────────────────────────────────────────────
 
 const mockSpawn = vi.fn();
+const mockExecSync = vi.fn();
 
 vi.mock('node:child_process', () => ({
   spawn: (...args: any[]) => mockSpawn(...args),
+  execSync: (...args: any[]) => mockExecSync(...args),
 }));
 
 const mockSaveDaemonPid = vi.fn();
 const mockLoadDaemonPid = vi.fn();
 const mockClearDaemonPid = vi.fn();
+const mockMkdirSync = vi.fn();
+const mockOpenSync = vi.fn();
+const mockCloseSync = vi.fn();
+
+vi.mock('node:fs', () => ({
+  mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+  openSync: (...args: any[]) => mockOpenSync(...args),
+  closeSync: (...args: any[]) => mockCloseSync(...args),
+}));
 
 vi.mock('../config.js', () => ({
   saveDaemonPid: (...args: any[]) => mockSaveDaemonPid(...args),
@@ -25,11 +36,40 @@ vi.mock('../config.js', () => ({
   clearDaemonPid: (...args: any[]) => mockClearDaemonPid(...args),
 }));
 
-import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '../daemon.js';
+import {
+  isDaemonRunning,
+  getDaemonStatus,
+  startDaemon,
+  stopDaemon,
+  resolveDaemonLaunch,
+  getDaemonBootstrapLogPath,
+} from '../daemon.js';
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.useRealTimers();
+  mockLoadDaemonPid.mockReturnValue(null);
+  mockExecSync.mockReturnValue('');
+  mockOpenSync.mockReturnValue(99);
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function makeFakeChild(pid = 42) {
+  const listeners = new Map<string, (...args: any[]) => void>();
+  const child = {
+    pid,
+    unref: vi.fn(),
+    once: vi.fn((event: string, cb: (...args: any[]) => void) => {
+      listeners.set(event, cb);
+      return child;
+    }),
+    off: vi.fn(() => child),
+  };
+  return { child, listeners };
+}
 
 // ── isDaemonRunning ─────────────────────────────────────
 
@@ -81,27 +121,65 @@ describe('startDaemon()', () => {
     device: { name: 'test' },
   };
 
-  it('spawns a detached node process with the worker script', () => {
-    const fakeChild = { unref: vi.fn(), pid: 42 };
-    mockSpawn.mockReturnValue(fakeChild);
+  it('resolves source launch paths from the workspace root', () => {
+    const launch = resolveDaemonLaunch('file:///tmp/repo/packages/tentacle/src/daemon.ts');
 
-    const pid = startDaemon(fakeConfig);
+    expect(launch.runtime).toBe(process.execPath);
+    expect(launch.args).toEqual([
+      '--import',
+      'tsx',
+      '/tmp/repo/packages/tentacle/src/daemon-worker.ts',
+    ]);
+    expect(launch.cwd).toBe('/tmp/repo');
+    expect(launch.env.NODE_ENV).toBe('production');
+    expect(launch.env.PATH).toContain('/tmp/repo/node_modules/.bin');
+  });
+
+  it('resolves published launch paths from the installed package root', () => {
+    const launch = resolveDaemonLaunch('file:///tmp/npx/node_modules/kraki/dist/daemon.js');
+
+    expect(launch.args).toEqual(['/tmp/npx/node_modules/kraki/dist/daemon-worker.js']);
+    expect(launch.cwd).toBe('/tmp/npx/node_modules/kraki');
+    expect(launch.env.PATH).toContain('/tmp/npx/node_modules/kraki/node_modules/.bin');
+  });
+
+  it('waits for bootstrap before saving the PID', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(42);
+    mockSpawn.mockReturnValue(child);
+
+    const startPromise = startDaemon(fakeConfig);
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = mockSpawn.mock.calls[0];
-    expect(cmd).toBe(process.execPath); // full path to node
+    expect(cmd).toBe(process.execPath);
     expect(args.some((a: string) => /daemon-worker\.(js|ts)$/.test(a))).toBe(true);
     expect(opts.detached).toBe(true);
-    expect(opts.stdio).toBe('ignore');
+    expect(opts.stdio).toEqual(['ignore', 99, 99]);
     expect(opts.env.NODE_ENV).toBe('production');
-    expect(fakeChild.unref).toHaveBeenCalled();
-    expect(pid).toBe(42);
+    expect(mockMkdirSync).toHaveBeenCalled();
+    expect(mockOpenSync).toHaveBeenCalledWith(getDaemonBootstrapLogPath(), 'w');
+    expect(mockCloseSync).toHaveBeenCalledWith(99);
+    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1500);
+
+    await expect(startPromise).resolves.toBe(42);
+    expect(mockSaveDaemonPid).toHaveBeenCalledWith(42);
+    expect(child.unref).toHaveBeenCalled();
   });
 
-  it('saves the PID after spawning', () => {
-    mockSpawn.mockReturnValue({ unref: vi.fn(), pid: 100 });
-    startDaemon(fakeConfig);
-    expect(mockSaveDaemonPid).toHaveBeenCalledWith(100);
+  it('fails fast when the child exits during bootstrap', async () => {
+    vi.useFakeTimers();
+    const { child, listeners } = makeFakeChild(100);
+    mockSpawn.mockReturnValue(child);
+
+    const startPromise = startDaemon(fakeConfig);
+    listeners.get('exit')?.(1, null);
+
+    await expect(startPromise).rejects.toThrow(getDaemonBootstrapLogPath());
+    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
+    expect(child.unref).not.toHaveBeenCalled();
   });
 });
 

@@ -44,12 +44,62 @@ export interface TransportCallbacks {
   onParsedMessage: (msg: Message) => void;
 }
 
-const OAUTH_STATE_KEY = 'kraki_oauth_state';
+export const OAUTH_STATE_KEY = 'kraki_oauth_state';
 
-/** Generate a random OAuth state param and store in sessionStorage for CSRF protection */
+function safeGetItem(storage: Storage | undefined, key: string): string | null {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(storage: Storage | undefined, key: string, value: string): void {
+  if (!storage) return;
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Ignore storage failures and fall back to the remaining transport flow.
+  }
+}
+
+function safeRemoveItem(storage: Storage | undefined, key: string): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage failures and continue cleaning up other stores.
+  }
+}
+
+function getSessionStorage(): Storage | undefined {
+  return typeof sessionStorage !== 'undefined' ? sessionStorage : undefined;
+}
+
+function getLocalStorage(): Storage | undefined {
+  return typeof localStorage !== 'undefined' ? localStorage : undefined;
+}
+
+export function storeOAuthState(state: string): void {
+  safeSetItem(getSessionStorage(), OAUTH_STATE_KEY, state);
+  safeSetItem(getLocalStorage(), OAUTH_STATE_KEY, state);
+}
+
+export function consumeOAuthState(returnedState: string | undefined): boolean {
+  const sessionState = safeGetItem(getSessionStorage(), OAUTH_STATE_KEY);
+  const localState = safeGetItem(getLocalStorage(), OAUTH_STATE_KEY);
+
+  safeRemoveItem(getSessionStorage(), OAUTH_STATE_KEY);
+  safeRemoveItem(getLocalStorage(), OAUTH_STATE_KEY);
+
+  return !!returnedState && (returnedState === sessionState || returnedState === localState);
+}
+
+/** Generate a random OAuth state param and store it persistently for CSRF protection */
 export function startOAuthFlow(clientId: string): void {
   const state = crypto.randomUUID();
-  sessionStorage.setItem(OAUTH_STATE_KEY, state);
+  storeOAuthState(state);
   const redirectUri = window.location.origin + window.location.pathname;
   const params = new URLSearchParams({
     client_id: clientId,
@@ -85,12 +135,13 @@ export class KrakiTransport {
 
     // Validate and extract GitHub OAuth code from callback
     if (params.githubCode) {
-      const savedState = sessionStorage.getItem(OAUTH_STATE_KEY);
-      if (savedState && params.oauthState === savedState) {
+      if (consumeOAuthState(params.oauthState)) {
         this.githubCode = params.githubCode;
-        sessionStorage.removeItem(OAUTH_STATE_KEY);
-      } else if (import.meta.env.DEV) {
-        console.warn('[Kraki] OAuth state mismatch — ignoring code');
+      } else {
+        getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
+        if (import.meta.env.DEV) {
+          console.warn('[Kraki] OAuth state mismatch — ignoring code');
+        }
       }
     }
 

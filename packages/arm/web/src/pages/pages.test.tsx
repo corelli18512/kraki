@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../hooks/useStore';
@@ -263,6 +263,53 @@ describe('MessageInput', () => {
       </MemoryRouter>,
     );
     expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+  });
+
+  it('auto-focuses the composer on desktop devices', async () => {
+    render(
+      <MemoryRouter>
+        <MessageInput sessionId="sess-1" />
+      </MemoryRouter>,
+    );
+
+    const input = screen.getByPlaceholderText('Send a message…');
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it('does not auto-focus the composer on coarse-pointer devices', () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(pointer: coarse)' ? true : query === '(prefers-color-scheme: dark)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      render(
+        <MemoryRouter>
+          <MessageInput sessionId="sess-1" />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByPlaceholderText('Send a message…')).not.toHaveFocus();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('uses mobile-safe input sizing to avoid iOS zoom', () => {
+    render(
+      <MemoryRouter>
+        <MessageInput sessionId="sess-1" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByPlaceholderText('Send a message…').className).toContain('text-base');
   });
 
   it('sends message on button click', async () => {

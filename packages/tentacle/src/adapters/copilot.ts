@@ -13,8 +13,8 @@
  *    remote user approves/denies/answers via the tentacle runtime.
  */
 
-import { CopilotClient } from '@github/copilot-sdk';
 import type {
+  CopilotClient as CopilotClientType,
   CopilotSession,
   SessionConfig,
   ResumeSessionConfig,
@@ -24,6 +24,9 @@ import type {
   SessionMetadata,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -34,6 +37,8 @@ import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('copilot-adapter');
+type CopilotClientCtor = typeof import('@github/copilot-sdk').CopilotClient;
+let copilotClientCtorPromise: Promise<CopilotClientCtor> | null = null;
 
 // ── Local type aliases for SDK handler params ───────────
 // (UserInputRequest / UserInputResponse are not re-exported by the SDK)
@@ -76,10 +81,67 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function patchCopilotSdkSessionImport(currentUrl: string = import.meta.url): boolean {
+  const sessionPath = resolveCopilotSdkSessionPath(currentUrl);
+  if (!sessionPath) {
+    return false;
+  }
+  const source = readFileSync(sessionPath, 'utf8');
+  const patched = source.replace(/from ['"]vscode-jsonrpc\/node['"]/g, 'from "vscode-jsonrpc/node.js"');
+
+  if (patched === source) {
+    return false;
+  }
+
+  writeFileSync(sessionPath, patched, 'utf8');
+  return true;
+}
+
+export function resolveCopilotSdkSessionPath(currentUrl: string = import.meta.url): string | null {
+  let dir = dirname(fileURLToPath(currentUrl));
+
+  while (true) {
+    const candidate = join(dir, 'node_modules', '@github', 'copilot-sdk', 'dist', 'session.js');
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+}
+
+async function loadCopilotClient(): Promise<CopilotClientCtor> {
+  if (!copilotClientCtorPromise) {
+    copilotClientCtorPromise = (async () => {
+      try {
+        if (patchCopilotSdkSessionImport()) {
+          logger.info('Patched @github/copilot-sdk ESM import compatibility');
+        }
+      } catch {
+        // If the SDK layout changes, let the dynamic import surface the real error.
+      }
+
+      try {
+        const mod = await import('@github/copilot-sdk');
+        return mod.CopilotClient;
+      } catch (err) {
+        copilotClientCtorPromise = null;
+        throw err;
+      }
+    })();
+  }
+
+  return copilotClientCtorPromise;
+}
+
 // ── Adapter ─────────────────────────────────────────────
 
 export class CopilotAdapter extends AgentAdapter {
-  private client: CopilotClient | null = null;
+  private client: CopilotClientType | null = null;
   private sessions = new Map<string, SessionEntry>();
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
@@ -112,6 +174,7 @@ export class CopilotAdapter extends AgentAdapter {
       ...(this.cliPath && { cliPath: this.cliPath }),
     };
 
+    const CopilotClient = await loadCopilotClient();
     this.client = new CopilotClient(opts);
     await this.client.start();
     logger.info('started');

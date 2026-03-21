@@ -5,8 +5,10 @@
  * Its PID is tracked in ~/.kraki/daemon.pid.
  */
 
-import { spawn, execSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -17,6 +19,77 @@ import {
 } from './config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const STARTUP_GRACE_MS = 1500;
+const BOOTSTRAP_LOG_PATH = join(homedir(), '.kraki', 'logs', 'daemon-bootstrap.log');
+
+export interface DaemonLaunchSpec {
+  runtime: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  workerPath: string;
+}
+
+export function getDaemonBootstrapLogPath(): string {
+  return BOOTSTRAP_LOG_PATH;
+}
+
+export function resolveDaemonLaunch(currentUrl: string = import.meta.url): DaemonLaunchSpec {
+  const moduleDir = dirname(fileURLToPath(currentUrl));
+  const isTsSource = currentUrl.endsWith('.ts');
+  const packageRoot = resolve(moduleDir, '..');
+  const workspaceRoot = resolve(packageRoot, '..', '..');
+  const workerFile = isTsSource ? 'daemon-worker.ts' : 'daemon-worker.js';
+  const workerPath = join(moduleDir, workerFile);
+
+  const binPaths = isTsSource
+    ? [join(workspaceRoot, 'node_modules', '.bin'), join(packageRoot, 'node_modules', '.bin')]
+    : [join(packageRoot, 'node_modules', '.bin')];
+
+  return {
+    runtime: process.execPath,
+    args: isTsSource ? ['--import', 'tsx', workerPath] : [workerPath],
+    cwd: isTsSource ? workspaceRoot : packageRoot,
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      PATH: [...binPaths, process.env.PATH ?? ''].filter(Boolean).join(':'),
+    },
+    workerPath,
+  };
+}
+
+function waitForDaemonBootstrap(child: ChildProcess, timeoutMs = STARTUP_GRACE_MS): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off('error', onError);
+      child.off('exit', onExit);
+    };
+
+    const onError = (err: Error) => {
+      cleanup();
+      reject(new Error(`Kraki failed to start: ${err.message}. Check ${getDaemonBootstrapLogPath()}`));
+    };
+
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(
+        new Error(
+          `Kraki exited during startup (code ${code ?? 'null'}, signal ${signal ?? 'none'}). Check ${getDaemonBootstrapLogPath()}`,
+        ),
+      );
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, timeoutMs);
+
+    child.once('error', onError);
+    child.once('exit', onExit);
+  });
+}
 
 // ── Status ──────────────────────────────────────────────
 
@@ -53,48 +126,41 @@ export function getDaemonStatus(): DaemonStatus {
 
 // ── Start / Stop ────────────────────────────────────────
 
-export function startDaemon(_config: KrakiConfig): number {
+export async function startDaemon(_config: KrakiConfig): Promise<number> {
   // Kill any existing daemon(s) before starting a new one
   stopDaemon();
-  // Detect if running from source (.ts) or built (.js)
-  const currentUrl = import.meta.url;
-  const isTsSource = currentUrl.endsWith('.ts');
-  const workerFile = isTsSource ? 'daemon-worker.ts' : 'daemon-worker.js';
-  const workerPath = join(__dirname, workerFile);
 
-  let runtime: string;
-  let args: string[];
-  if (isTsSource) {
-    // In dev: use node with --import tsx for ESM TypeScript support
-    runtime = process.execPath; // full path to node
-    args = ['--import', 'tsx', workerPath];
-  } else {
-    runtime = process.execPath;
-    args = [workerPath];
-  }
+  const launch = resolveDaemonLaunch();
+  mkdirSync(dirname(BOOTSTRAP_LOG_PATH), { recursive: true });
+  const bootstrapFd = openSync(BOOTSTRAP_LOG_PATH, 'w');
 
-  // Ensure node_modules/.bin is in PATH for tsx resolution
-  const projectRoot = join(__dirname, '..', '..');
-  const binPath = join(projectRoot, 'node_modules', '.bin');
-  const env = {
-    ...process.env,
-    NODE_ENV: 'production',
-    NODE_PATH: join(projectRoot, 'node_modules'),
-    PATH: `${binPath}:${process.env.PATH ?? ''}`,
-  };
-
-  const child = spawn(runtime, args, {
+  const child = spawn(launch.runtime, launch.args, {
     detached: true,
-    stdio: 'ignore',
-    cwd: projectRoot,
-    env,
+    stdio: ['ignore', bootstrapFd, bootstrapFd],
+    cwd: launch.cwd,
+    env: launch.env,
   });
 
-  child.unref();
+  closeSync(bootstrapFd);
 
-  const pid = child.pid!;
-  saveDaemonPid(pid);
-  return pid;
+  if (!child.pid) {
+    throw new Error(`Kraki failed to start: no daemon PID returned. Check ${getDaemonBootstrapLogPath()}`);
+  }
+
+  try {
+    await waitForDaemonBootstrap(child);
+  } catch (err) {
+    try {
+      process.kill(child.pid, 'SIGTERM');
+    } catch {
+      // Child may already be gone
+    }
+    throw err;
+  }
+
+  child.unref();
+  saveDaemonPid(child.pid);
+  return child.pid;
 }
 
 export function stopDaemon(): boolean {

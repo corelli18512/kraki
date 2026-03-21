@@ -2,15 +2,18 @@ import { useState, useRef, useEffect } from 'react';
 import { wsClient } from '../../lib/ws-client';
 import type { PendingQuestion } from '../../types/store';
 import { HelpCircle } from 'lucide-react';
+import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
 export function QuestionInput({ question, sessionId }: { question: PendingQuestion; sessionId: string }) {
   const { id, question: text, choices } = question;
   const [freeform, setFreeform] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const shouldAutoFocus = shouldAutoFocusTextInput();
 
   useEffect(() => {
+    if (!shouldAutoFocus) return;
     inputRef.current?.focus();
-  }, [id]);
+  }, [id, shouldAutoFocus]);
 
   const handleAnswer = (answer: string) => {
     wsClient.answer(id, sessionId, answer);
@@ -46,7 +49,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
               if (e.key === 'Enter' && freeform.trim()) handleAnswer(freeform.trim());
             }}
             placeholder="Type your answer…"
-            className="flex-1 rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-sm text-text-primary placeholder-text-muted focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            className="flex-1 rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 sm:text-sm"
           />
           <button
             onClick={() => { if (freeform.trim()) handleAnswer(freeform.trim()); }}

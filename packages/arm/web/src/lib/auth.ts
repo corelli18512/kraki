@@ -126,7 +126,8 @@ export function processAuthError(
     localStorage.removeItem(STORAGE_KEY);
     deps.clearStoredDeviceId();
     store.setLastError('Authentication failed. Please sign in again or scan a new pairing QR code.');
-    store.setStatus('error');
+    deps.disconnect();
+    deps.connect();
   } else {
     store.setLastError('Authentication failed. Sign in with GitHub or scan a pairing QR code.');
     store.setStatus('error');

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { wsClient } from '../../lib/ws-client';
+import { version } from '../../../package.json';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
@@ -60,7 +61,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
           About
         </h3>
         <div className="space-y-1 text-xs text-text-secondary">
-          <p>Kraki v0.1.0</p>
+          <p>Client version: {version}</p>
           <p>Agent-agnostic relay for AI coding agents</p>
         </div>
       </section>
