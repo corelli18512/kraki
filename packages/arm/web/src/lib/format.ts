@@ -20,7 +20,7 @@ export function sessionTime(iso: string): string {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
   if (isToday) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   }
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
@@ -29,11 +29,12 @@ export function sessionTime(iso: string): string {
   return `${days}d ago`;
 }
 
-/** Format an ISO timestamp to HH:MM */
+/** Format an ISO timestamp to HH:MM (24-hour) */
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
   });
 }
 

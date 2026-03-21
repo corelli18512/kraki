@@ -158,17 +158,69 @@ wss.on('connection', (ws) => {
 // --- Send initial session history ---
 
 function sendSessionHistory(ws: WebSocket) {
-  // Session 1 (copilot) — some chat history
+  // Session 1 (copilot) — diverse tool call history
   send(ws, envelope('session_created', 'sess-1', { agent: 'copilot', model: 'gpt-4o' }));
   send(ws, envelope('user_message', 'sess-1', { content: 'Help me refactor the authentication module' }));
   send(ws, envelope('agent_message', 'sess-1', {
-    content: "I'll help you refactor the authentication module. Let me start by reading the current implementation.\n\n```typescript\n// Current auth.ts\nexport class AuthService {\n  async login(email: string, password: string) {\n    // TODO: implement\n  }\n}\n```\n\nI see several areas we can improve:\n1. Add proper token management\n2. Implement refresh token flow\n3. Add rate limiting",
+    content: "I'll help you refactor the authentication module. Let me start by reading the current implementation.",
   }));
-  send(ws, envelope('tool_start', 'sess-1', { toolName: 'read_file', args: { path: 'src/auth.ts' } }));
+
+  // Tool: read_file
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-1', toolName: 'read_file', args: { path: 'src/auth.ts' } }));
   send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-1',
     toolName: 'read_file',
     args: { path: 'src/auth.ts' },
-    result: 'export class AuthService {\n  // ...\n}',
+    result: 'export class AuthService {\n  async login(email: string, password: string) {\n    // TODO: implement\n  }\n}',
+  }));
+
+  // Tool: edit
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-2', toolName: 'edit', args: { path: 'src/auth.ts', old_str: '// TODO: implement', new_str: 'const hash = await bcrypt.hash(password, 10);\n    return this.db.insert({ email, hash });' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-2',
+    toolName: 'edit',
+    args: { path: 'src/auth.ts', old_str: '// TODO: implement', new_str: 'const hash = await bcrypt.hash(password, 10);\n    return this.db.insert({ email, hash });' },
+    result: 'File edited successfully.',
+  }));
+
+  // Tool: bash
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-3', toolName: 'bash', args: { command: 'npm test -- --grep "auth"' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-3',
+    toolName: 'bash',
+    args: { command: 'npm test -- --grep "auth"' },
+    result: 'PASS src/auth.test.ts\n  AuthService\n    ✓ login creates user (12ms)\n    ✓ login hashes password (8ms)\n\nTest Suites: 1 passed, 1 total\nTests:       2 passed, 2 total',
+  }));
+
+  // Tool: grep
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-4', toolName: 'grep', args: { pattern: 'bcrypt', path: 'src/' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-4',
+    toolName: 'grep',
+    args: { pattern: 'bcrypt', path: 'src/' },
+    result: 'src/auth.ts:2:import bcrypt from "bcrypt";\nsrc/auth.ts:5:    const hash = await bcrypt.hash(password, 10);',
+  }));
+
+  // Tool: create
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-5', toolName: 'create', args: { path: 'src/auth.test.ts', file_text: 'import { AuthService } from "./auth";\n\ntest("login", async () => {\n  const svc = new AuthService();\n  await svc.login("test@example.com", "pw");\n});' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-5',
+    toolName: 'create',
+    args: { path: 'src/auth.test.ts' },
+    result: 'File created.',
+  }));
+
+  // Tool: glob
+  send(ws, envelope('tool_start', 'sess-1', { toolCallId: 'tc-6', toolName: 'glob', args: { pattern: 'src/**/*.test.ts' } }));
+  send(ws, envelope('tool_complete', 'sess-1', {
+    toolCallId: 'tc-6',
+    toolName: 'glob',
+    args: { pattern: 'src/**/*.test.ts' },
+    result: 'src/auth.test.ts\nsrc/cache.test.ts\nsrc/middleware.test.ts',
+  }));
+
+  send(ws, envelope('agent_message', 'sess-1', {
+    content: "Done! I've refactored the auth module, added bcrypt hashing, and all tests pass. ✅",
   }));
 
   // Session 2 (claude) — idle session

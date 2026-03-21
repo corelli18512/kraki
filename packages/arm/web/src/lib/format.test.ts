@@ -35,10 +35,10 @@ describe('format utilities', () => {
   });
 
   describe('formatTime', () => {
-    it('formats time as HH:MM', () => {
+    it('formats time as 24-hour HH:MM without AM/PM', () => {
       const result = formatTime('2026-03-18T14:30:00.000Z');
-      // Accept any locale-formatted time string
-      expect(result).toMatch(/\d{1,2}:\d{2}/);
+      expect(result).toMatch(/^\d{2}:\d{2}$/);
+      expect(result).not.toMatch(/[AP]M/i);
     });
   });
 

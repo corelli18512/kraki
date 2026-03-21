@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
+import { X } from 'lucide-react';
 
 const MAX_INPUT_HEIGHT = 160;
 
@@ -93,6 +94,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           </button>
         </div>
         <div className="flex items-end gap-2">
+        <div className="relative flex-1">
         <textarea
           ref={textareaRef}
           value={text}
@@ -100,8 +102,18 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Send a message…"
-          className="min-h-[40px] flex-1 resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
+          className="min-h-[40px] w-full resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 pr-9 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
         />
+        {text && (
+          <button
+            onClick={() => { setDraft(sessionId, ''); textareaRef.current?.focus(); }}
+            aria-label="Clear input"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+        </div>
         <button
           onClick={handleSend}
           disabled={!text.trim()}
