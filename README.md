@@ -40,10 +40,13 @@ Kraki is a little sea creature with a job: the `head` stays in the middle, the `
 
 Native iOS and additional agent adapters will be added later without changing the core message flow. Any feedback and contributions are welcome.
 
-## Quick start
+## Set up
 
 ```bash
 npx kraki
+#or
+npm i -g kraki
+kraki
 ```
 
 On first run, Kraki guides setup, connects to the hosted relay, and shows a QR code / pairing flow for your browser or phone.
