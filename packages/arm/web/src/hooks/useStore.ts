@@ -48,6 +48,7 @@ const initialState = {
   sessionModes: new Map<string, 'ask' | 'auto'>(),
   githubClientId: null,
   lastSeq: 0,
+  replaying: false,
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -229,6 +230,14 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setLastSeq: (seq) => set({ lastSeq: seq }),
 
+  setReplaying: (replaying) => set({ replaying }),
+
+  clearTransientState: () => set({
+    streamingContent: new Map(),
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+  }),
+
   reset: () => set({
     ...initialState,
     sessions: new Map(),
@@ -247,6 +256,7 @@ export const useStore = create<Store>()(persist((set) => ({
     sessionModes: new Map(),
     githubClientId: null,
     lastSeq: 0,
+    replaying: false,
   }),
 }), {
   name: 'kraki-store',

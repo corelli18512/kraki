@@ -87,6 +87,9 @@ export interface AppState {
 
   // Last sequence number seen (for replay resume after refresh)
   lastSeq: number;
+
+  // Whether we are currently replaying messages from the server
+  replaying: boolean;
 }
 
 export interface AppActions {
@@ -120,6 +123,8 @@ export interface AppActions {
   setSessionMode: (sessionId: string, mode: 'ask' | 'auto') => void;
   setGithubClientId: (clientId: string | null) => void;
   setLastSeq: (seq: number) => void;
+  setReplaying: (replaying: boolean) => void;
+  clearTransientState: () => void;
   reset: () => void;
 }
 

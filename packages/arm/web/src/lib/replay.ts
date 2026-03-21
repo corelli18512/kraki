@@ -23,11 +23,13 @@ export class ReplayState {
   startReplay(send: (msg: Record<string, unknown>) => void): void {
     this.lastSeq = Math.max(this.lastSeq, getStore().lastSeq);
     this.replaying = true;
+    getStore().setReplaying(true);
     send({ type: 'replay', afterSeq: this.lastSeq });
   }
 
   reset(): void {
     this.replaying = false;
+    getStore().setReplaying(false);
     if (this.replayEndTimer) {
       clearTimeout(this.replayEndTimer);
       this.replayEndTimer = null;
@@ -44,6 +46,7 @@ export class ReplayState {
   private onReplayComplete(): void {
     this.replaying = false;
     const store = getStore();
+    store.setReplaying(false);
     const messages = store.messages;
 
     for (const [sessionId, msgs] of messages) {
