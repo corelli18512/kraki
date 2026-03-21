@@ -29,6 +29,20 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
       preview = truncate(payload.content, PREVIEW_MAX_LENGTH);
     } else if ('message' in payload && typeof payload.message === 'string') {
       preview = truncate(payload.message, PREVIEW_MAX_LENGTH);
+    } else if (lastMsg.type === 'tool_start' || lastMsg.type === 'tool_complete') {
+      const toolName = typeof payload.toolName === 'string' ? payload.toolName : 'tool';
+      const args = payload.args as Record<string, unknown> | undefined;
+      const summary = args && typeof args.command === 'string' ? `$ ${truncate(args.command, PREVIEW_MAX_LENGTH - 4)}`
+        : args && typeof args.path === 'string' ? truncate(args.path as string, PREVIEW_MAX_LENGTH)
+        : '';
+      preview = summary ? `${toolName} ${summary}` : toolName;
+    } else if (lastMsg.type === 'question') {
+      preview = truncate(typeof payload.question === 'string' ? `❓ ${payload.question}` : '❓', PREVIEW_MAX_LENGTH);
+    } else if (lastMsg.type === 'permission') {
+      const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
+      preview = truncate(`🔒 ${toolName}`, PREVIEW_MAX_LENGTH);
+    } else if (lastMsg.type === 'answer') {
+      preview = truncate(typeof payload.answer === 'string' ? payload.answer as string : '', PREVIEW_MAX_LENGTH);
     }
   }
 

@@ -2,7 +2,7 @@ import type { Message } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 import { isViewingSession } from './replay';
 import type { CommandState } from './commands';
-import { resolvePermissionMessage } from './commands';
+import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import type { PendingPermission, PendingQuestion } from '../types/store';
 
 export interface RouterContext {
@@ -180,7 +180,10 @@ export function handleDataMessage(msg: Message, ctx: RouterContext): void {
 
     case 'answer': {
       const qId = msg.payload?.questionId;
-      if (qId) store.removeQuestion(qId);
+      if (qId) {
+        store.removeQuestion(qId);
+        resolveQuestionMessage(sid, qId, msg.payload?.answer as string);
+      }
       store.appendMessage(sid, msg);
       break;
     }

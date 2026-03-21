@@ -17,6 +17,10 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
 
   const handleAnswer = (answer: string) => {
     wsClient.answer(id, sessionId, answer);
+    // On mobile, blur to dismiss the keyboard after answering
+    if (!shouldAutoFocus) {
+      inputRef.current?.blur();
+    }
   };
 
   return (
