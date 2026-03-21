@@ -30,6 +30,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
+        onClose: () => this.replay.reset(),
       },
       url,
     );
@@ -149,6 +150,12 @@ export class KrakiWSClient {
     // Decrypt E2E encrypted messages
     if (msg.type === 'encrypted') {
       this.encryption.handleEncrypted(msg as any, this.encryptionCallbacks());
+      if ('seq' in msg && typeof msg.seq === 'number') {
+        this.replay.updateSeq(msg.seq);
+      }
+      if (this.replay.replaying) {
+        this.replay.scheduleReplayEnd();
+      }
       return;
     }
 
@@ -196,6 +203,7 @@ export class KrakiWSClient {
       case 'server_error': {
         const serverErr = msg as any;
         console.error('[Kraki] Server error:', serverErr.message);
+        this.replay.reset();
         if (serverErr.requestId) {
           this.cmdState.clearRequest(serverErr.requestId);
         }
