@@ -1,6 +1,6 @@
 {
   "name": "kraki",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
   "type": "module",
   "main": "dist/index.js",

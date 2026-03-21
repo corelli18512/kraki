@@ -25,6 +25,7 @@ import type {
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import * as moduleApi from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -39,6 +40,33 @@ import { createLogger } from '../logger.js';
 const logger = createLogger('copilot-adapter');
 type CopilotClientCtor = typeof import('@github/copilot-sdk').CopilotClient;
 let copilotClientCtorPromise: Promise<CopilotClientCtor> | null = null;
+
+const VSCODE_JSONRPC_NODE_SPECIFIER = 'vscode-jsonrpc/node';
+const VSCODE_JSONRPC_NODE_JS_SPECIFIER = 'vscode-jsonrpc/node.js';
+const COPILOT_SDK_COMPATIBILITY_LOADER_SOURCE = `
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === ${JSON.stringify(VSCODE_JSONRPC_NODE_SPECIFIER)}) {
+    return nextResolve(${JSON.stringify(VSCODE_JSONRPC_NODE_JS_SPECIFIER)}, context);
+  }
+  return nextResolve(specifier, context);
+}
+`.trim();
+
+type ModuleApiCompat = typeof moduleApi & {
+  register?: (specifier: string, parentURL?: string) => void;
+  registerHooks?: (hooks: {
+    resolve: (
+      specifier: string,
+      context: Readonly<Record<string, unknown>>,
+      nextResolve: (
+        specifier: string,
+        context: Readonly<Record<string, unknown>>,
+      ) => unknown,
+    ) => unknown;
+  }) => void;
+};
+
+const moduleCompat = moduleApi as ModuleApiCompat;
 
 // ── Local type aliases for SDK handler params ───────────
 // (UserInputRequest / UserInputResponse are not re-exported by the SDK)
@@ -87,7 +115,10 @@ export function patchCopilotSdkSessionImport(currentUrl: string = import.meta.ur
     return false;
   }
   const source = readFileSync(sessionPath, 'utf8');
-  const patched = source.replace(/from ['"]vscode-jsonrpc\/node['"]/g, 'from "vscode-jsonrpc/node.js"');
+  const patched = source.replace(
+    /from ['"]vscode-jsonrpc\/node['"]/g,
+    `from "${VSCODE_JSONRPC_NODE_JS_SPECIFIER}"`,
+  );
 
   if (patched === source) {
     return false;
@@ -114,15 +145,42 @@ export function resolveCopilotSdkSessionPath(currentUrl: string = import.meta.ur
   }
 }
 
+export function installCopilotSdkImportCompatibility(currentUrl: string = import.meta.url): 'hook' | 'patch' | null {
+  if (typeof moduleCompat.registerHooks === 'function') {
+    moduleCompat.registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (specifier === VSCODE_JSONRPC_NODE_SPECIFIER) {
+          return nextResolve(VSCODE_JSONRPC_NODE_JS_SPECIFIER, context);
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+    return 'hook';
+  }
+
+  if (typeof moduleCompat.register === 'function') {
+    moduleCompat.register(
+      `data:text/javascript,${encodeURIComponent(COPILOT_SDK_COMPATIBILITY_LOADER_SOURCE)}`,
+      currentUrl,
+    );
+    return 'hook';
+  }
+
+  if (patchCopilotSdkSessionImport(currentUrl)) {
+    return 'patch';
+  }
+
+  return null;
+}
+
 async function loadCopilotClient(): Promise<CopilotClientCtor> {
   if (!copilotClientCtorPromise) {
     copilotClientCtorPromise = (async () => {
-      try {
-        if (patchCopilotSdkSessionImport()) {
-          logger.info('Patched @github/copilot-sdk ESM import compatibility');
-        }
-      } catch {
-        // If the SDK layout changes, let the dynamic import surface the real error.
+      const compatibility = installCopilotSdkImportCompatibility();
+      if (compatibility === 'hook') {
+        logger.info('Installed @github/copilot-sdk ESM import compatibility hook');
+      } else if (compatibility === 'patch') {
+        logger.info('Patched @github/copilot-sdk ESM import compatibility');
       }
 
       try {
