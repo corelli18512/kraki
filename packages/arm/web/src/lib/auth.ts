@@ -96,6 +96,8 @@ export function processAuthOk(
   if ((msg as any).githubClientId) {
     store.setGithubClientId((msg as any).githubClientId);
   }
+  // Clear transient state that may be stale from previous connection
+  store.clearTransientState();
   store.setSessions(msg.sessions);
   store.setDevices(msg.devices);
   deps.setE2eEnabled(msg.e2e);

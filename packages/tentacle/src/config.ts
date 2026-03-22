@@ -13,11 +13,18 @@ import { randomUUID } from 'node:crypto';
 
 // ── Types ───────────────────────────────────────────────
 
+export type KrakiLogVerbosity = 'normal' | 'verbose';
+
 export interface KrakiConfig {
   relay: string;
   authMethod: 'github' | 'channel-key' | 'open';
   device: { name: string; id?: string };
+  logging?: {
+    verbosity?: KrakiLogVerbosity;
+  };
 }
+
+export const DEFAULT_LOG_VERBOSITY: KrakiLogVerbosity = 'normal';
 
 // ── Paths ───────────────────────────────────────────────
 
@@ -58,10 +65,22 @@ export function configExists(): boolean {
   return existsSync(CONFIG_PATH);
 }
 
+export function getLogVerbosity(config: Pick<KrakiConfig, 'logging'> | null | undefined): KrakiLogVerbosity {
+  return config?.logging?.verbosity === 'verbose' ? 'verbose' : DEFAULT_LOG_VERBOSITY;
+}
+
+function normalizeConfig(config: KrakiConfig): KrakiConfig {
+  return {
+    ...config,
+    device: { ...config.device },
+    logging: { verbosity: getLogVerbosity(config) },
+  };
+}
+
 export function loadConfig(): KrakiConfig | null {
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf8');
-    return JSON.parse(raw) as KrakiConfig;
+    return normalizeConfig(JSON.parse(raw) as KrakiConfig);
   } catch {
     return null;
   }
@@ -69,7 +88,7 @@ export function loadConfig(): KrakiConfig | null {
 
 export function saveConfig(config: KrakiConfig): void {
   getConfigDir();
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  writeFileSync(CONFIG_PATH, JSON.stringify(normalizeConfig(config), null, 2) + '\n', 'utf8');
 }
 
 // ── Channel key ─────────────────────────────────────────

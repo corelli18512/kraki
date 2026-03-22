@@ -58,7 +58,7 @@ export async function startWorker(): Promise<WorkerResult> {
   if (config.authMethod === 'github') {
     try {
       token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
-      if (token) logger.info('Resolved GitHub token from `gh auth token`');
+      if (token) logger.debug('Resolved GitHub token from `gh auth token`');
     } catch {
       logger.warn('Could not resolve GitHub token from gh CLI');
     }
@@ -66,7 +66,7 @@ export async function startWorker(): Promise<WorkerResult> {
     const channelKey = loadChannelKey();
     if (channelKey) {
       token = channelKey;
-      logger.info('Loaded channel key from ~/.kraki/channel.key');
+      logger.debug('Loaded channel key from ~/.kraki/channel.key');
     } else {
       logger.warn('No channel key found at ~/.kraki/channel.key');
     }
@@ -89,7 +89,7 @@ export async function startWorker(): Promise<WorkerResult> {
   let models: string[] = [];
   try {
     models = await adapter.listModels();
-    logger.info({ count: models.length }, 'Fetched available models');
+    logger.debug({ count: models.length }, 'Fetched available models');
   } catch {
     logger.warn('Could not fetch available models');
   }
@@ -114,7 +114,7 @@ export async function startWorker(): Promise<WorkerResult> {
   );
 
   relay.onStateChange = (state) => {
-    logger.info({ state }, 'Relay connection state changed');
+    logger.debug({ state }, 'Relay connection state changed');
   };
 
   relay.onAuthenticated = (info) => {

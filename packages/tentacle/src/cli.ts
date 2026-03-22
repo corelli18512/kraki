@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { select } from '@inquirer/prompts';
 
-import { configExists, loadConfig, getConfigDir, loadChannelKey } from './config.js';
+import { loadConfig, saveConfig, getConfigDir, getLogVerbosity, loadChannelKey } from './config.js';
 import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
@@ -54,6 +54,9 @@ function printHelp(): void {
   kraki connect           Generate QR code to connect a mobile device
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
+  kraki config log     Show current log verbosity
+  kraki config log <normal|verbose>
+                       Set log verbosity for future daemon starts
   kraki config reset   Delete config and re-run setup
   kraki --help         Show this help
   kraki --version      Show version
@@ -161,6 +164,7 @@ function cmdStatus(): void {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
     console.log(`  Auth:    ${config.authMethod}`);
     console.log(`  Device:  ${config.device.name}`);
+    console.log(`  Logs:    ${getLogVerbosity(config)}`);
   } else {
     console.log(chalk.dim('  No config found. Run `kraki` to set up.'));
   }
@@ -197,6 +201,33 @@ function cmdConfig(): void {
     return;
   }
   console.log(JSON.stringify(config, null, 2));
+}
+
+function cmdConfigLog(verbosity?: string): void {
+  const config = loadConfig();
+  if (!config) {
+    console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    return;
+  }
+
+  if (!verbosity) {
+    console.log(`Log verbosity: ${getLogVerbosity(config)}`);
+    return;
+  }
+
+  if (verbosity !== 'normal' && verbosity !== 'verbose') {
+    console.log(chalk.red(`Invalid log verbosity: ${verbosity}`));
+    console.log(chalk.dim('Use `kraki config log normal` or `kraki config log verbose`.'));
+    process.exit(1);
+    return;
+  }
+
+  saveConfig({
+    ...config,
+    logging: { verbosity },
+  });
+  console.log(chalk.green(`Log verbosity set to ${verbosity}.`));
+  console.log(chalk.dim('Restart Kraki to apply the new log level.'));
 }
 
 async function cmdConfigReset(): Promise<void> {
@@ -285,6 +316,10 @@ async function main(): Promise<void> {
   if (cmd === 'config') {
     if (args[1] === 'reset') {
       await cmdConfigReset();
+      return;
+    }
+    if (args[1] === 'log') {
+      cmdConfigLog(args[2]);
       return;
     }
     cmdConfig();

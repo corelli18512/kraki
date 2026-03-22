@@ -62,6 +62,7 @@ let mockSessions: MockSession[];
 let capturedSessionConfigs: any[];
 let capturedResumeConfigs: any[];
 let mockListSessions: Mock;
+let mockResumeSessionError: Error | null;
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
@@ -81,6 +82,9 @@ vi.mock('@github/copilot-sdk', () => {
       }),
       resumeSession: vi.fn().mockImplementation(async (sessionId: string, config: any) => {
         capturedResumeConfigs.push({ sessionId, config });
+        if (mockResumeSessionError) {
+          throw mockResumeSessionError;
+        }
         const session = createMockSession(sessionId);
         mockSessions.push(session);
         return session;
@@ -131,6 +135,7 @@ describe('CopilotAdapter', () => {
     capturedSessionConfigs = [];
     capturedResumeConfigs = [];
     mockListSessions = vi.fn().mockResolvedValue([]);
+    mockResumeSessionError = null;
     mockRegisterHooks = vi.fn();
     mockRegister = vi.fn();
     mockExistsSync.mockImplementation((path: string) => path === '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js');
@@ -370,6 +375,50 @@ describe('CopilotAdapter', () => {
         prompt: 'check this',
         attachments: [{ type: 'file', path: 'file.png' }],
       });
+    });
+
+    it('resumes and retries when the SDK says the session is not found', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0].send.mockRejectedValueOnce(new Error(`Request session.send failed with message: Session not found: ${sessionId}`));
+
+      await adapter.sendMessage(sessionId, 'hello again');
+
+      expect(capturedResumeConfigs).toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+      expect(mockSessions[1].send).toHaveBeenCalledWith({ prompt: 'hello again' });
+    });
+
+    it('resumes and retries when the SDK connection is disposed', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0].send.mockRejectedValueOnce(new Error('Connection is disposed'));
+
+      await adapter.sendMessage(sessionId, 'retry after reconnect');
+
+      expect(capturedResumeConfigs).toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+      expect(mockSessions[1].send).toHaveBeenCalledWith({ prompt: 'retry after reconnect' });
+    });
+
+    it('emits error and session_ended when recovery resume fails', async () => {
+      const errorSpy = vi.fn();
+      const endedSpy = vi.fn();
+      adapter.onError = errorSpy;
+      adapter.onSessionEnded = endedSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0].send.mockRejectedValueOnce(new Error(`Request session.send failed with message: Session not found: ${sessionId}`));
+      mockResumeSessionError = new Error('resume blew up');
+
+      await expect(adapter.sendMessage(sessionId, 'retry me')).rejects.toThrow('resume blew up');
+
+      expect(errorSpy).toHaveBeenCalledWith(sessionId, {
+        message: 'Session is no longer active in Copilot. Please start a new session.',
+      });
+      expect(endedSpy).toHaveBeenCalledWith(sessionId, { reason: 'session unavailable' });
     });
   });
 

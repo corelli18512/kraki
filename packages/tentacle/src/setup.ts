@@ -11,7 +11,13 @@ import ora from 'ora';
 import { hostname } from 'node:os';
 import { WebSocket } from 'ws';
 
-import { type KrakiConfig, saveConfig, saveChannelKey, getOrCreateDeviceId } from './config.js';
+import {
+  DEFAULT_LOG_VERBOSITY,
+  type KrakiConfig,
+  saveConfig,
+  saveChannelKey,
+  getOrCreateDeviceId,
+} from './config.js';
 import { checkGhAuth, checkCopilotCli, withRetry } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 
@@ -219,6 +225,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
     device: { name: deviceName, id: deviceId },
+    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 
   // 6. Save
@@ -232,6 +239,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     `${chalk.dim('Relay')}   ${chalk.cyan(relay)}`,
     `${chalk.dim('Auth')}    ${chalk.cyan(authMethod)}`,
     `${chalk.dim('Device')}  ${chalk.cyan(deviceName)}`,
+    `${chalk.dim('Logs')}    ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
     '',
     chalk.dim('Config saved to ~/.kraki/config.json'),
   ]);

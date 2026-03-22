@@ -119,7 +119,7 @@ describe('daemon-worker: startWorker()', () => {
     const { adapter, relay, shutdown } = await startWorker();
 
     expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Daemon starting'));
-    expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Resolved GitHub token'));
+    expect(mockLoggerFns.debug).toHaveBeenCalledWith(expect.stringContaining('Resolved GitHub token'));
     expect(mockAdapter.start).toHaveBeenCalled();
     expect(mockRelay.connect).toHaveBeenCalled();
     expect(process.env.GITHUB_TOKEN).toBe('fake-token');
@@ -152,7 +152,7 @@ describe('daemon-worker: startWorker()', () => {
     mockConfig.authMethod = 'channel-key';
     mockChannelKey = 'my-secret-key';
     await startWorker();
-    expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Loaded channel key'));
+    expect(mockLoggerFns.debug).toHaveBeenCalledWith(expect.stringContaining('Loaded channel key'));
   });
 
   it('warns when channel key is missing', async () => {

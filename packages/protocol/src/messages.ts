@@ -297,6 +297,12 @@ export interface ReplayMessage {
   sessionId?: string;
 }
 
+export interface ReplayCompleteMessage {
+  type: 'replay_complete';
+  /** The highest seq in the channel — covers both sent and skipped messages */
+  lastSeq: number;
+}
+
 export interface MarkReadMessage {
   type: 'mark_read';
   sessionId: string;
@@ -365,6 +371,7 @@ export type ControlMessage =
   | AuthResponseMessage
   | ServerErrorMessage
   | ReplayMessage
+  | ReplayCompleteMessage
   | MarkReadMessage
   | CreatePairingTokenMessage
   | RequestPairingTokenMessage

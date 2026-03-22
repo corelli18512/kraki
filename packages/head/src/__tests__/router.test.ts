@@ -225,12 +225,15 @@ describe('Router', () => {
       // Phone requests replay after seq 1
       router.replay(phone, 1);
 
-      // Should get messages 2 and 3
-      expect(phoneSend).toHaveBeenCalledTimes(2);
+      // Should get messages 2 and 3 + replay_complete
+      expect(phoneSend).toHaveBeenCalledTimes(3);
       const msg1 = JSON.parse(phoneSend.mock.calls[0][0]);
       const msg2 = JSON.parse(phoneSend.mock.calls[1][0]);
       expect(msg1.seq).toBe(2);
       expect(msg2.seq).toBe(3);
+      const complete = JSON.parse(phoneSend.mock.calls[2][0]);
+      expect(complete.type).toBe('replay_complete');
+      expect(complete.lastSeq).toBe(3);
     });
 
     it('should replay filtered by session', () => {
@@ -246,7 +249,7 @@ describe('Router', () => {
       phoneSend.mockClear();
 
       router.replay(phone, 0, 'sess_1');
-      expect(phoneSend).toHaveBeenCalledTimes(1);
+      expect(phoneSend).toHaveBeenCalledTimes(2); // 1 message + replay_complete
       const msg = JSON.parse(phoneSend.mock.calls[0][0]);
       expect(msg.sessionId).toBe('sess_1');
     });
@@ -261,7 +264,9 @@ describe('Router', () => {
       phoneSend.mockClear();
 
       router.replay(phone, 100);
-      expect(phoneSend).not.toHaveBeenCalled();
+      expect(phoneSend).toHaveBeenCalledTimes(1); // only replay_complete
+      const complete = JSON.parse(phoneSend.mock.calls[0][0]);
+      expect(complete.type).toBe('replay_complete');
     });
   });
 
@@ -461,9 +466,9 @@ describe('Router', () => {
 
       phoneSend.mockClear();
 
-      // Replay should skip the corrupt one, send the two valid ones
+      // Replay should skip the corrupt one, send the two valid ones + replay_complete
       router.replay(phone, 0);
-      expect(phoneSend).toHaveBeenCalledTimes(2);
+      expect(phoneSend).toHaveBeenCalledTimes(3);
     });
   });
 

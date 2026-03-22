@@ -17,11 +17,23 @@ export class ReplayState {
 
   updateSeq(seq: number): void {
     this.lastSeq = Math.max(this.lastSeq, seq);
+    getStore().setLastSeq(this.lastSeq);
   }
 
   startReplay(send: (msg: Record<string, unknown>) => void): void {
+    this.lastSeq = Math.max(this.lastSeq, getStore().lastSeq);
     this.replaying = true;
+    getStore().setReplaying(true);
     send({ type: 'replay', afterSeq: this.lastSeq });
+  }
+
+  reset(): void {
+    this.replaying = false;
+    getStore().setReplaying(false);
+    if (this.replayEndTimer) {
+      clearTimeout(this.replayEndTimer);
+      this.replayEndTimer = null;
+    }
   }
 
   /** Debounce end-of-replay detection — call after each replayed message. */
@@ -30,10 +42,21 @@ export class ReplayState {
     this.replayEndTimer = setTimeout(() => this.onReplayComplete(), 300);
   }
 
+  /** Explicit replay completion signal from head (replaces debounce). */
+  completeReplay(lastSeq: number): void {
+    this.updateSeq(lastSeq);
+    if (this.replayEndTimer) {
+      clearTimeout(this.replayEndTimer);
+      this.replayEndTimer = null;
+    }
+    this.onReplayComplete();
+  }
+
   /** Called when replay messages stop arriving — compute unread from readState. */
   private onReplayComplete(): void {
     this.replaying = false;
     const store = getStore();
+    store.setReplaying(false);
     const messages = store.messages;
 
     for (const [sessionId, msgs] of messages) {
