@@ -223,6 +223,11 @@ export interface SetSessionModeMessage extends BaseEnvelope {
   };
 }
 
+export interface DeleteSessionMessage extends BaseEnvelope {
+  type: 'delete_session';
+  payload: Record<string, never>;
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -232,7 +237,8 @@ export type ConsumerMessage =
   | KillSessionMessage
   | AbortSessionMessage
   | CreateSessionMessage
-  | SetSessionModeMessage;
+  | SetSessionModeMessage
+  | DeleteSessionMessage;
 
 // ============================================================
 // Control messages (device ↔ head)
@@ -354,6 +360,7 @@ export type HeadNotice =
   | { type: 'head_notice'; event: 'device_added';    data: { device: DeviceSummary } }
   | { type: 'head_notice'; event: 'device_removed';  data: { deviceId: string } }
   | { type: 'head_notice'; event: 'session_updated'; data: { session: SessionSummary } }
+  | { type: 'head_notice'; event: 'session_removed'; data: { sessionId: string } }
   | { type: 'head_notice'; event: 'update_allow_list'; data: { allowedTools: string[] } };
 
 export type ControlMessage =

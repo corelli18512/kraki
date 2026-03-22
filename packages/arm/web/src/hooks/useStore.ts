@@ -70,6 +70,31 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessions: next };
     }),
 
+  removeSession: (sessionId) =>
+    set((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.delete(sessionId);
+      const messages = new Map(state.messages);
+      messages.delete(sessionId);
+      const pendingPermissions = new Map(state.pendingPermissions);
+      for (const [id, p] of pendingPermissions) {
+        if (p.sessionId === sessionId) pendingPermissions.delete(id);
+      }
+      const pendingQuestions = new Map(state.pendingQuestions);
+      for (const [id, q] of pendingQuestions) {
+        if (q.sessionId === sessionId) pendingQuestions.delete(id);
+      }
+      const streamingContent = new Map(state.streamingContent);
+      streamingContent.delete(sessionId);
+      const unreadCount = new Map(state.unreadCount);
+      unreadCount.delete(sessionId);
+      const drafts = new Map(state.drafts);
+      drafts.delete(sessionId);
+      const pinnedSessions = new Set(state.pinnedSessions);
+      pinnedSessions.delete(sessionId);
+      return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions };
+    }),
+
   setDevices: (devices) =>
     set({ devices: new Map(devices.map((d) => [d.id, d])) }),
 

@@ -4,11 +4,20 @@ import type { SessionSummary } from '@kraki/protocol';
 import { agentInfo, truncate, sessionTime } from '../../lib/format';
 import { useStore } from '../../hooks/useStore';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Pin, PinOff } from 'lucide-react';
+import { wsClient } from '../../lib/ws-client';
+import { SwipeableCard } from './SwipeableCard';
+import { Pin, PinOff, Trash2 } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
-export function SessionCard({ session, pinned }: { session: SessionSummary; pinned?: boolean }) {
+interface SessionCardProps {
+  session: SessionSummary;
+  pinned?: boolean;
+  openSwipeId?: string | null;
+  setOpenSwipeId?: (id: string | null) => void;
+}
+
+export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: SessionCardProps) {
   const navigate = useNavigate();
   const { sessionId } = useParams();
   const isActive = sessionId === session.id;
@@ -52,6 +61,7 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
 
   // Context menu
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setMenuPos({ x: e.clientX, y: e.clientY });
@@ -59,8 +69,22 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
     window.addEventListener('click', close);
   }, []);
 
-  return (
-    <>
+  const swipeActions = [
+    {
+      icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />,
+      label: pinned ? 'Unpin' : 'Pin',
+      bgClass: 'bg-blue-500',
+      onClick: () => { togglePin(session.id); setOpenSwipeId?.(null); },
+    },
+    {
+      icon: <Trash2 className="h-4 w-4" />,
+      label: 'Delete',
+      bgClass: 'bg-red-500',
+      onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); },
+    },
+  ];
+
+  const cardContent = (
       <button
         onClick={() => navigate(`/session/${session.id}`)}
         onContextMenu={handleContextMenu}
@@ -109,6 +133,18 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
           </p>
         </div>
       </button>
+  );
+
+  return (
+    <>
+      <SwipeableCard
+        actions={swipeActions}
+        isOpen={openSwipeId === session.id}
+        onSwipeOpen={() => setOpenSwipeId?.(session.id)}
+        onSwipeClose={() => { if (openSwipeId === session.id) setOpenSwipeId?.(null); }}
+      >
+        {cardContent}
+      </SwipeableCard>
 
       {menuPos && (
         <div
@@ -121,6 +157,37 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
           >
             {pinned ? <><PinOff className="h-3.5 w-3.5" /> Unpin</> : <><Pin className="h-3.5 w-3.5" /> Pin to top</>}
           </button>
+          <button
+            onClick={() => { setMenuPos(null); setConfirmDelete(true); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-red-600 hover:bg-surface-tertiary dark:text-red-400"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete session
+          </button>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirmDelete(false)}>
+          <div className="mx-4 w-full max-w-sm rounded-xl bg-surface-primary p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-text-primary">Delete session?</h3>
+            <p className="mt-2 text-sm text-text-secondary">
+              This will permanently delete this session and all its messages. This cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

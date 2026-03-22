@@ -101,6 +101,7 @@ export interface AppActions {
   // Data
   setSessions: (sessions: SessionSummary[]) => void;
   upsertSession: (session: SessionSummary) => void;
+  removeSession: (sessionId: string) => void;
   setDevices: (devices: DeviceSummary[]) => void;
   upsertDevice: (device: DeviceSummary) => void;
   removeDevice: (deviceId: string) => void;

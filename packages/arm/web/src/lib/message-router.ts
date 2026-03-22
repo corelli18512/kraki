@@ -30,6 +30,13 @@ export function handleHeadNotice(msg: Extract<Message, { type: 'head_notice' }>)
     case 'session_updated':
       store.upsertSession(msg.data.session);
       break;
+    case 'session_removed':
+      store.removeSession(msg.data.sessionId);
+      // Navigate away if currently viewing the deleted session
+      if (store.activeSessionId === msg.data.sessionId) {
+        window.history.replaceState({}, '', '/');
+      }
+      break;
   }
 }
 

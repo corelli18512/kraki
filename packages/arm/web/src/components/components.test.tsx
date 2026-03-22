@@ -67,11 +67,12 @@ describe('SessionList', () => {
       { id: 's3', deviceId: 'd3', deviceName: '', agent: 'claude', messageCount: 0 },
     ]);
     renderWithRouter(<SessionList />);
-    const items = screen.getAllByRole('button').filter(btn => btn.getAttribute('title') !== 'New session');
+    // Find the agent labels in order (they appear as text within session cards)
+    const labels = screen.getAllByText(/^(Codex|Copilot|Claude)$/);
     // No timestamps, so fallback to alphabetical by ID: s1, s2, s3
-    expect(within(items[0]).getByText('Codex')).toBeInTheDocument();
-    expect(within(items[1]).getByText('Copilot')).toBeInTheDocument();
-    expect(within(items[2]).getByText('Claude')).toBeInTheDocument();
+    expect(labels[0].textContent).toBe('Codex');
+    expect(labels[1].textContent).toBe('Copilot');
+    expect(labels[2].textContent).toBe('Claude');
   });
 });
 
@@ -113,7 +114,8 @@ describe('SessionCard', () => {
   it('navigates on click', async () => {
     const user = userEvent.setup();
     renderWithRouter(<SessionCard session={session} />);
-    await user.click(screen.getByRole('button'));
+    const buttons = screen.getAllByRole('button');
+    await user.click(buttons[0]); // main card button
     // Can't easily verify navigation in unit test, but click shouldn't throw
   });
 
@@ -143,14 +145,15 @@ describe('SessionCard', () => {
 
   it('applies active style when route matches', () => {
     renderWithRouter(<SessionCard session={session} />, { route: '/session/s1' });
-    const button = screen.getByRole('button');
-    expect(button.className).toContain('kraki-500');
+    // Main card button contains the agent label text
+    const cardButton = screen.getByText('Copilot').closest('button')!;
+    expect(cardButton.className).toContain('kraki-500');
   });
 
   it('applies inactive style when route does not match', () => {
     renderWithRouter(<SessionCard session={session} />, { route: '/' });
-    const button = screen.getByRole('button');
-    expect(button.className).toContain('hover:bg-surface-tertiary');
+    const cardButton = screen.getByText('Copilot').closest('button')!;
+    expect(cardButton.className).toContain('hover:bg-surface-tertiary');
   });
 
   it('renders without model', () => {
