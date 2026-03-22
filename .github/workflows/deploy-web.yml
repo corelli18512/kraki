@@ -1,11 +1,12 @@
 name: Deploy Web
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - packages/arm/web/package.json
   workflow_dispatch:
 
 permissions:
@@ -19,6 +20,8 @@ jobs:
   detect-version-bump:
     name: Detect web version bump
     runs-on: ubuntu-latest
+    # Skip if triggered by workflow_run and CI failed
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     outputs:
       should_deploy: ${{ steps.detect.outputs.should_deploy }}
       previous_version: ${{ steps.detect.outputs.previous_version }}
