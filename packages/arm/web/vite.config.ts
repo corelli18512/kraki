@@ -8,8 +8,30 @@ export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, __dirname, '');
   assertSafeProductionRelayUrl(command, mode, env.VITE_WS_URL);
 
+  const plugins: any[] = [react(), tailwindcss()];
+
+  // When launched by `pnpm dev:local`, redirect bare page loads to the auth
+  // server so every refresh gets a fresh pairing token automatically.
+  const devAuthPort = process.env.KRAKI_DEV_AUTH_PORT;
+  if (devAuthPort) {
+    plugins.push({
+      name: 'kraki-dev-auth-redirect',
+      configureServer(server: any) {
+        server.middlewares.use((req: any, res: any, next: any) => {
+          const url = new URL(req.url!, `http://${req.headers.host}`);
+          if (req.method === 'GET' && url.pathname === '/' && !url.searchParams.has('token')) {
+            res.writeHead(302, { Location: `http://localhost:${devAuthPort}` });
+            res.end();
+            return;
+          }
+          next();
+        });
+      },
+    });
+  }
+
   return {
-    plugins: [react(), tailwindcss()],
+    plugins,
     server: {
       port: 3000,
     },

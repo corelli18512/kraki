@@ -17,9 +17,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createTestEnv, connectApp, createTmpSessionDir, waitMs, type TestEnv, type MockApp } from "./helpers.js";
-import { CopilotAdapter, SessionManager, RelayClient, KeyManager } from "kraki";
-import type { AgentAdapter } from "kraki";
-import { getOrCreateDeviceId } from "kraki";
+import { CopilotAdapter, SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
+import type { AgentAdapter } from "@kraki/tentacle";
+import { getOrCreateDeviceId } from "@kraki/tentacle";
 
 let env: TestEnv;
 let adapter: CopilotAdapter;

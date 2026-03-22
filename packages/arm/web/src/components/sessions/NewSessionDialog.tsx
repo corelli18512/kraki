@@ -112,7 +112,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
             <p className="text-sm text-text-secondary">No devices online</p>
             <p className="mt-1 text-xs text-text-muted">Connect a tentacle to create sessions</p>
             <code className="mt-3 inline-block rounded bg-surface-tertiary px-2.5 py-1 text-[11px] text-text-secondary">
-              npx kraki
+              npx @kraki/tentacle
             </code>
           </div>
         ) : (

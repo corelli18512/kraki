@@ -218,15 +218,15 @@ importers:
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@kraki/head':
+        specifier: workspace:*
+        version: link:../head
       '@kraki/protocol':
         specifier: workspace:*
         version: link:../protocol
-      kraki:
+      '@kraki/tentacle':
         specifier: workspace:*
         version: link:../tentacle
-      kraki-relay:
-        specifier: workspace:*
-        version: link:../head
       ws:
         specifier: ^8.19.0
         version: 8.19.0

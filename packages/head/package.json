@@ -1,5 +1,5 @@
 {
-  "name": "kraki-relay",
+  "name": "@kraki/head",
   "version": "0.1.0",
   "description": "Kraki relay server — the brain that routes messages between tentacles and apps",
   "type": "module",
@@ -8,6 +8,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "kraki-relay": "dist/cli.js"
   },

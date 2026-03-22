@@ -11,8 +11,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      'kraki-relay': resolve(__dirname, '../head/src/index.ts'),
-      'kraki': resolve(__dirname, '../tentacle/src/index.ts'),
+      '@kraki/head': resolve(__dirname, '../head/src/index.ts'),
+      '@kraki/tentacle': resolve(__dirname, '../tentacle/src/index.ts'),
       '@kraki/protocol': resolve(__dirname, '../protocol/src/index.ts'),
       '@kraki/crypto': resolve(__dirname, '../crypto/src/index.ts'),
     },

@@ -8,8 +8,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateKeyPair, encrypt, decrypt, exportPublicKey, importPublicKey } from "@kraki/crypto";
 import { createTestEnv, connectApp, connectAppWithKeys, connectAppWithCrypto, createRelayClient, createTmpSessionDir, waitMs, type TestEnv, type MockApp } from "./helpers.js";
-import { SessionManager, RelayClient, KeyManager } from "kraki";
-import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from "kraki";
+import { SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
+import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from "@kraki/tentacle";
 
 class MockAdapter {
   onSessionCreated: any = null;

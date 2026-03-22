@@ -5,11 +5,11 @@
  */
 import { createServer, type Server } from 'http';
 import { WebSocket } from 'ws';
-import { Storage, ChannelManager, Router, HeadServer, OpenAuthProvider } from 'kraki-relay';
-import type { AuthProvider } from 'kraki-relay';
-import { SessionManager, RelayClient } from 'kraki';
-import type { AgentAdapter } from 'kraki';
-import type { RelayClientOptions } from 'kraki';
+import { Storage, ChannelManager, Router, HeadServer, OpenAuthProvider } from '@kraki/head';
+import type { AuthProvider } from '@kraki/head';
+import { SessionManager, RelayClient } from '@kraki/tentacle';
+import type { AgentAdapter } from '@kraki/tentacle';
+import type { RelayClientOptions } from '@kraki/tentacle';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';

@@ -12,7 +12,7 @@ Get started on your coding machine:
 ```bash
 # Only supports Github Copilot CLI for now
 # Requires Copilot CLI installed and `gh auth login` completed
-npx kraki
+npx @kraki/tentacle
 ```
 
 Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
@@ -43,9 +43,9 @@ Native iOS and additional agent adapters will be added later without changing th
 ## Set up
 
 ```bash
-npx kraki
+npx @kraki/tentacle
 #or
-npm i -g kraki
+npm i -g @kraki/tentacle
 kraki
 ```
 
@@ -54,10 +54,12 @@ On first run, Kraki guides setup, connects to the hosted relay, and shows a QR c
 ### Self-host your own relay
 
 ```bash
-npx kraki-relay
+npx @kraki/head
 ```
 
 By default the relay listens on `ws://localhost:4000`.
+
+The published package is `@kraki/head`; if you install it globally, the executable stays `kraki-relay`.
 
 After the relay is running, use the same CLI flow on the coding machine:
 
@@ -74,7 +76,7 @@ By default, users connect the web app via QR code pairing from the terminal. You
 ```bash
 GITHUB_CLIENT_ID=your_client_id \
 GITHUB_CLIENT_SECRET=your_client_secret \
-npx kraki-relay --auth github
+npx @kraki/head --auth github
 ```
 
 The web app will automatically show a "Sign in with GitHub" button when the relay has OAuth configured. QR pairing continues to work alongside GitHub login.

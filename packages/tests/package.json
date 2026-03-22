@@ -12,8 +12,8 @@
   "dependencies": {
     "@kraki/protocol": "workspace:*",
     "@kraki/crypto": "workspace:*",
-    "kraki-relay": "workspace:*",
-    "kraki": "workspace:*",
+    "@kraki/head": "workspace:*",
+    "@kraki/tentacle": "workspace:*",
     "ws": "^8.19.0"
   },
   "devDependencies": {

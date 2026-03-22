@@ -1,0 +1,131 @@
+name: Publish Packages
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release mode
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PUBLISH_MODE: ${{ github.event_name == 'release' && 'publish' || github.event.inputs.mode || 'dry-run' }}
+      ARTIFACT_DIR: ${{ github.workspace }}/.artifacts
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure publish source is main
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            git merge-base --is-ancestor "${GITHUB_SHA}" origin/main || {
+              echo "Release tag must point to a commit on main."
+              exit 1
+            }
+          else
+            test "${GITHUB_REF_NAME}" = "main"
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Update npm CLI
+        run: npm install --global npm@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate repository
+        run: pnpm validate
+
+      - name: Pack release tarballs
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+
+          specs=(
+            "packages/protocol|@kraki/protocol"
+            "packages/crypto|@kraki/crypto"
+            "packages/head|@kraki/head"
+            "packages/tentacle|@kraki/tentacle"
+          )
+
+          for spec in "${specs[@]}"; do
+            dir="${spec%%|*}"
+            pkg="${spec##*|}"
+            echo "::group::Packing $pkg"
+            pnpm --dir "$dir" pack --pack-destination "$ARTIFACT_DIR"
+            echo "::endgroup::"
+          done
+
+          ls -lh "$ARTIFACT_DIR"
+
+      - name: Upload release tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages-${{ github.sha }}
+          path: ${{ env.ARTIFACT_DIR }}
+
+      - name: Publish packages
+        if: github.event_name == 'release' || github.event.inputs.mode == 'publish'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          specs=(
+            "packages/protocol|@kraki/protocol"
+            "packages/crypto|@kraki/crypto"
+            "packages/head|@kraki/head"
+            "packages/tentacle|@kraki/tentacle"
+          )
+
+          for spec in "${specs[@]}"; do
+            dir="${spec%%|*}"
+            pkg="${spec##*|}"
+            version="$(node -p "require('./${dir}/package.json').version")"
+
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${pkg}@${version}; it is already published."
+              continue
+            fi
+
+            echo "::group::Publishing ${pkg}@${version}"
+            pnpm --dir "$dir" publish --access public --provenance --no-git-checks
+            echo "::endgroup::"
+          done

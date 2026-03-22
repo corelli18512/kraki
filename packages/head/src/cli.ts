@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * kraki-relay — CLI entry point for the Kraki relay server.
+ * @kraki/head — CLI entry point for the Kraki relay server.
  *
  * Usage:
- *   npx kraki-relay
- *   npx kraki-relay --port 8080
- *   npx kraki-relay --auth github --e2e true
+ *   npx @kraki/head
+ *   npx @kraki/head --port 8080
+ *   npx @kraki/head --auth github --e2e true
  *
  * Environment variables:
  *   PORT         Server port (default: 4000)
@@ -44,7 +44,7 @@ const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-  🦑 kraki-relay v${VERSION}
+  🦑 @kraki/head v${VERSION}
 
   Usage: kraki-relay [options]
 
@@ -146,7 +146,7 @@ const head = new HeadServer(cm, router, {
 
 const httpServer = createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ name: 'kraki-relay', version: VERSION, status: 'ok' }));
+  res.end(JSON.stringify({ name: '@kraki/head', version: VERSION, status: 'ok' }));
 });
 
 head.attach(httpServer);

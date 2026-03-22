@@ -52,7 +52,7 @@ export function SessionList() {
             </button>
           ) : (
             <code className="mt-3 rounded bg-surface-tertiary px-2.5 py-1 text-[11px] text-text-secondary">
-              npx kraki
+              npx @kraki/tentacle
             </code>
           )}
         </div>
