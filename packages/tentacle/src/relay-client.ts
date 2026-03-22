@@ -53,6 +53,14 @@ export class RelayClient {
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
 
+  // Stale connection detection — tracks server pings to detect sleep/network changes
+  private lastServerPingAt = 0;
+  private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
+  /** How long without a server ping before we consider the connection stale (ms) */
+  private static readonly STALE_THRESHOLD = 60_000; // 60s (server pings every 30s, so 2 missed pings)
+  /** How often to check for stale connection (ms) */
+  private static readonly STALE_CHECK_INTERVAL = 10_000;
+
   /** Called when relay state changes */
   onStateChange: ((state: RelayClientState) => void) | null = null;
   /** Called on auth success */
@@ -86,6 +94,8 @@ export class RelayClient {
     ws.on('open', () => {
       this.setState('authenticating');
       this.reconnectAttempts = 0;
+      this.lastServerPingAt = Date.now();
+      this.startStaleCheck();
       const authMsg: Record<string, unknown> = {
         type: 'auth',
         token: this.options.token,
@@ -98,6 +108,7 @@ export class RelayClient {
     });
 
     ws.on('message', (data) => {
+      this.lastServerPingAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
         this.handleMessage(msg);
@@ -107,6 +118,7 @@ export class RelayClient {
     });
 
     ws.on('close', () => {
+      this.stopStaleCheck();
       this.ws = null;
       this.setState('disconnected');
       this.scheduleReconnect();
@@ -115,12 +127,18 @@ export class RelayClient {
     ws.on('error', () => {
       // Error triggers close, which handles reconnect
     });
+
+    // Track server pings for stale connection detection
+    ws.on('ping', () => {
+      this.lastServerPingAt = Date.now();
+    });
   }
 
   /**
    * Disconnect from the relay. No reconnect.
    */
   disconnect(): void {
+    this.stopStaleCheck();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -535,6 +553,27 @@ export class RelayClient {
     }
     // Flush queued messages now that we have consumer keys
     this.flushE2eQueue();
+  }
+
+  // ── Stale connection detection ───────────────────────
+
+  private startStaleCheck(): void {
+    this.stopStaleCheck();
+    this.staleCheckTimer = setInterval(() => {
+      if (this.state !== 'connected' && this.state !== 'authenticating') return;
+      const elapsed = Date.now() - this.lastServerPingAt;
+      if (elapsed > RelayClient.STALE_THRESHOLD) {
+        logger.warn(`No server ping for ${Math.round(elapsed / 1000)}s — connection stale, reconnecting`);
+        this.ws?.close();
+      }
+    }, RelayClient.STALE_CHECK_INTERVAL);
+  }
+
+  private stopStaleCheck(): void {
+    if (this.staleCheckTimer) {
+      clearInterval(this.staleCheckTimer);
+      this.staleCheckTimer = null;
+    }
   }
 
   // ── Reconnect logic ─────────────────────────────────
