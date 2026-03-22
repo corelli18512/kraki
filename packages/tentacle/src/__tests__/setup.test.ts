@@ -63,6 +63,7 @@ vi.mock("chalk", () => {
 const mockSaveConfig = vi.fn();
 const mockSaveChannelKey = vi.fn();
 vi.mock("../config.js", () => ({
+  DEFAULT_LOG_VERBOSITY: "normal",
   saveConfig: (...args: any[]) => mockSaveConfig(...args),
   saveChannelKey: (...args: any[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: () => "dev_test123",
@@ -103,6 +104,7 @@ describe("runSetup — official relay + github", () => {
       relay: "wss://kraki.corelli.cloud",
       authMethod: "github",
       device: { name: "my-laptop", id: "dev_test123" },
+      logging: { verbosity: "normal" },
     });
     expect(mockSaveConfig).toHaveBeenCalledWith(result);
   });

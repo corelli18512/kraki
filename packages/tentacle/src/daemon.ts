@@ -12,6 +12,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  getLogVerbosity,
   type KrakiConfig,
   saveDaemonPid,
   loadDaemonPid,
@@ -126,11 +127,12 @@ export function getDaemonStatus(): DaemonStatus {
 
 // ── Start / Stop ────────────────────────────────────────
 
-export async function startDaemon(_config: KrakiConfig): Promise<number> {
+export async function startDaemon(config: KrakiConfig): Promise<number> {
   // Kill any existing daemon(s) before starting a new one
   stopDaemon();
 
   const launch = resolveDaemonLaunch();
+  launch.env.LOG_LEVEL = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   mkdirSync(dirname(BOOTSTRAP_LOG_PATH), { recursive: true });
   const bootstrapFd = openSync(BOOTSTRAP_LOG_PATH, 'w');
 

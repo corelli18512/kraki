@@ -31,6 +31,7 @@ vi.mock('node:fs', () => ({
 }));
 
 vi.mock('../config.js', () => ({
+  getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
   saveDaemonPid: (...args: any[]) => mockSaveDaemonPid(...args),
   loadDaemonPid: (...args: any[]) => mockLoadDaemonPid(...args),
   clearDaemonPid: (...args: any[]) => mockClearDaemonPid(...args),
@@ -119,6 +120,7 @@ describe('startDaemon()', () => {
     relay: 'wss://relay.test',
     authMethod: 'github' as const,
     device: { name: 'test' },
+    logging: { verbosity: 'normal' as const },
   };
 
   it('resolves source launch paths from the workspace root', () => {
@@ -157,6 +159,7 @@ describe('startDaemon()', () => {
     expect(opts.detached).toBe(true);
     expect(opts.stdio).toEqual(['ignore', 99, 99]);
     expect(opts.env.NODE_ENV).toBe('production');
+    expect(opts.env.LOG_LEVEL).toBe('info');
     expect(mockMkdirSync).toHaveBeenCalled();
     expect(mockOpenSync).toHaveBeenCalledWith(getDaemonBootstrapLogPath(), 'w');
     expect(mockCloseSync).toHaveBeenCalledWith(99);
@@ -167,6 +170,23 @@ describe('startDaemon()', () => {
     await expect(startPromise).resolves.toBe(42);
     expect(mockSaveDaemonPid).toHaveBeenCalledWith(42);
     expect(child.unref).toHaveBeenCalled();
+  });
+
+  it('uses debug LOG_LEVEL when verbose logging is configured', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(55);
+    mockSpawn.mockReturnValue(child);
+
+    const startPromise = startDaemon({
+      ...fakeConfig,
+      logging: { verbosity: 'verbose' },
+    });
+
+    const [, , opts] = mockSpawn.mock.calls[0];
+    expect(opts.env.LOG_LEVEL).toBe('debug');
+
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(startPromise).resolves.toBe(55);
   });
 
   it('fails fast when the child exits during bootstrap', async () => {

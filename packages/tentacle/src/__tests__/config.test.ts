@@ -75,6 +75,7 @@ describe('loadConfig() / saveConfig()', () => {
     relay: 'wss://kraki.corelli.cloud',
     authMethod: 'github' as const,
     device: { name: 'my-laptop' },
+    logging: { verbosity: 'normal' as const },
   };
 
   it('returns null when no config exists', () => {
@@ -104,6 +105,31 @@ describe('loadConfig() / saveConfig()', () => {
     const updated = { ...sampleConfig, device: { name: 'other-machine' } };
     config.saveConfig(updated);
     expect(config.loadConfig()).toEqual(updated);
+  });
+
+  it('defaults missing logging verbosity to normal', () => {
+    mkdirSync(join(tempHome, '.kraki'), { recursive: true });
+    writeFileSync(join(tempHome, '.kraki', 'config.json'), JSON.stringify({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'legacy-device' },
+    }), 'utf8');
+
+    expect(config.loadConfig()).toEqual({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'legacy-device' },
+      logging: { verbosity: 'normal' },
+    });
+  });
+
+  it('preserves verbose logging verbosity', () => {
+    const verboseConfig = {
+      ...sampleConfig,
+      logging: { verbosity: 'verbose' as const },
+    };
+    config.saveConfig(verboseConfig);
+    expect(config.loadConfig()).toEqual(verboseConfig);
   });
 });
 
