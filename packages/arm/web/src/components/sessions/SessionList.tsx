@@ -9,6 +9,7 @@ export function SessionList() {
   const messages = useStore((s) => s.messages);
   const devices = useStore((s) => s.devices);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
 
   const hasTentacle = [...devices.values()].some((d) => d.role === 'tentacle' && d.online);
 
@@ -83,13 +84,13 @@ export function SessionList() {
       {pinnedList.length > 0 && (
         <div className="mb-1 rounded-lg bg-amber-500/5 p-1 dark:bg-amber-500/10">
           {pinnedList.map((session) => (
-            <SessionCard key={session.id} session={session} pinned />
+            <SessionCard key={session.id} session={session} pinned openSwipeId={openSwipeId} setOpenSwipeId={setOpenSwipeId} />
           ))}
         </div>
       )}
       <div className="space-y-1">
         {unpinnedList.map((session) => (
-          <SessionCard key={session.id} session={session} />
+          <SessionCard key={session.id} session={session} openSwipeId={openSwipeId} setOpenSwipeId={setOpenSwipeId} />
         ))}
       </div>
     </div>

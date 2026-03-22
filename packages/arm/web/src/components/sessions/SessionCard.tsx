@@ -5,11 +5,19 @@ import { agentInfo, truncate, sessionTime } from '../../lib/format';
 import { useStore } from '../../hooks/useStore';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { wsClient } from '../../lib/ws-client';
+import { SwipeableCard } from './SwipeableCard';
 import { Pin, PinOff, Trash2 } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
-export function SessionCard({ session, pinned }: { session: SessionSummary; pinned?: boolean }) {
+interface SessionCardProps {
+  session: SessionSummary;
+  pinned?: boolean;
+  openSwipeId?: string | null;
+  setOpenSwipeId?: (id: string | null) => void;
+}
+
+export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: SessionCardProps) {
   const navigate = useNavigate();
   const { sessionId } = useParams();
   const isActive = sessionId === session.id;
@@ -61,8 +69,22 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
     window.addEventListener('click', close);
   }, []);
 
-  return (
-    <>
+  const swipeActions = [
+    {
+      icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />,
+      label: pinned ? 'Unpin' : 'Pin',
+      bgClass: 'bg-blue-500',
+      onClick: () => { togglePin(session.id); setOpenSwipeId?.(null); },
+    },
+    {
+      icon: <Trash2 className="h-4 w-4" />,
+      label: 'Delete',
+      bgClass: 'bg-red-500',
+      onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); },
+    },
+  ];
+
+  const cardContent = (
       <button
         onClick={() => navigate(`/session/${session.id}`)}
         onContextMenu={handleContextMenu}
@@ -111,6 +133,18 @@ export function SessionCard({ session, pinned }: { session: SessionSummary; pinn
           </p>
         </div>
       </button>
+  );
+
+  return (
+    <>
+      <SwipeableCard
+        actions={swipeActions}
+        isOpen={openSwipeId === session.id}
+        onSwipeOpen={() => setOpenSwipeId?.(session.id)}
+        onSwipeClose={() => { if (openSwipeId === session.id) setOpenSwipeId?.(null); }}
+      >
+        {cardContent}
+      </SwipeableCard>
 
       {menuPos && (
         <div
