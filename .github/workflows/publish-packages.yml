@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 30
     env:
       PUBLISH_MODE: ${{ github.event_name == 'release' && 'publish' || github.event.inputs.mode || 'dry-run' }}
-      ARTIFACT_DIR: ${{ github.workspace }}/.artifacts
+      ARTIFACT_DIR: ${{ github.workspace }}/artifacts
 
     steps:
       - name: Check out repository
@@ -119,6 +119,8 @@ jobs:
             dir="${spec%%|*}"
             pkg="${spec##*|}"
             version="$(node -p "require('./${dir}/package.json').version")"
+            tarball_name="$(node -p "const pkg = require('./${dir}/package.json'); pkg.name.replace(/^@/, '').replace('/', '-') + '-' + pkg.version + '.tgz'")"
+            tarball_path="$ARTIFACT_DIR/$tarball_name"
 
             if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
               echo "Skipping ${pkg}@${version}; it is already published."
@@ -126,6 +128,7 @@ jobs:
             fi
 
             echo "::group::Publishing ${pkg}@${version}"
-            pnpm --dir "$dir" publish --access public --provenance --no-git-checks
+            test -f "$tarball_path"
+            npm publish "$tarball_path" --access public --provenance
             echo "::endgroup::"
           done
