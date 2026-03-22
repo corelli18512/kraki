@@ -2,6 +2,15 @@
   "name": "@kraki/tentacle",
   "version": "0.1.1",
   "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/corelli18512/kraki",
+    "directory": "packages/tentacle"
+  },
+  "homepage": "https://github.com/corelli18512/kraki/tree/main/packages/tentacle#readme",
+  "bugs": {
+    "url": "https://github.com/corelli18512/kraki/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
