@@ -84,6 +84,12 @@ export interface AppState {
 
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
+
+  // Last sequence number seen (for replay resume after refresh)
+  lastSeq: number;
+
+  // Whether we are currently replaying messages from the server
+  replaying: boolean;
 }
 
 export interface AppActions {
@@ -116,6 +122,9 @@ export interface AppActions {
   setActiveSessionId: (sessionId: string | null) => void;
   setSessionMode: (sessionId: string, mode: 'ask' | 'auto') => void;
   setGithubClientId: (clientId: string | null) => void;
+  setLastSeq: (seq: number) => void;
+  setReplaying: (replaying: boolean) => void;
+  clearTransientState: () => void;
   reset: () => void;
 }
 

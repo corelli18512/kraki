@@ -412,6 +412,30 @@ export class Storage {
     ).all(channelId, afterSeq, limit) as MessageRow[]).map(row => this.mapMessageRow(row));
   }
 
+  /**
+   * Get messages deliverable to a specific device.
+   * Filters out encrypted messages where the device has no wrapped key.
+   */
+  getMessagesForDevice(channelId: string, afterSeq: number, deviceId: string, sessionId?: string, limit = 1000): StoredMessage[] {
+    const filter = `(type != 'encrypted' OR json_extract(payload, '$.keys.' || ?) IS NOT NULL)`;
+    if (sessionId) {
+      return (this.db.prepare(
+        `SELECT * FROM messages WHERE channel_id = ? AND session_id = ? AND seq > ? AND ${filter} ORDER BY seq ASC LIMIT ?`
+      ).all(channelId, sessionId, afterSeq, deviceId, limit) as MessageRow[]).map(row => this.mapMessageRow(row));
+    }
+    return (this.db.prepare(
+      `SELECT * FROM messages WHERE channel_id = ? AND seq > ? AND ${filter} ORDER BY seq ASC LIMIT ?`
+    ).all(channelId, afterSeq, deviceId, limit) as MessageRow[]).map(row => this.mapMessageRow(row));
+  }
+
+  /** Get the highest seq number for a channel. */
+  getMaxSeq(channelId: string): number {
+    const row = this.db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) as max_seq FROM messages WHERE channel_id = ?'
+    ).get(channelId) as { max_seq: number };
+    return row.max_seq;
+  }
+
   /** Delete messages with seq ≤ threshold for a channel (retention pruning). */
   pruneMessages(channelId: string, beforeSeq: number): number {
     const result = this.db.prepare(
@@ -426,13 +450,6 @@ export class Storage {
       "DELETE FROM messages WHERE created_at < datetime('now', ?)"
     ).run(`-${maxAgeDays} days`);
     return result.changes;
-  }
-
-  getMaxSeq(channelId: string): number {
-    const row = this.db.prepare(
-      'SELECT COALESCE(MAX(seq), 0) as max_seq FROM messages WHERE channel_id = ?'
-    ).get(channelId) as { max_seq: number };
-    return row.max_seq;
   }
 
   // --- Read state ---

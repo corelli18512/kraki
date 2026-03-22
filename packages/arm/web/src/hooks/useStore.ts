@@ -1,6 +1,32 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Store, ChatMessage, PendingPermission, PendingQuestion } from '../types/store';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
+
+// --- Custom Map/Set JSON serialization ---
+
+function replacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) {
+    return { __type: 'Map', entries: [...value.entries()] };
+  }
+  if (value instanceof Set) {
+    return { __type: 'Set', values: [...value.values()] };
+  }
+  return value;
+}
+
+function reviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === 'object' && '__type' in value) {
+    const obj = value as Record<string, unknown>;
+    if (obj.__type === 'Map' && Array.isArray(obj.entries)) {
+      return new Map(obj.entries as [unknown, unknown][]);
+    }
+    if (obj.__type === 'Set' && Array.isArray(obj.values)) {
+      return new Set(obj.values as unknown[]);
+    }
+  }
+  return value;
+}
 
 const initialState = {
   status: 'disconnected' as const,
@@ -21,9 +47,11 @@ const initialState = {
   activeSessionId: null,
   sessionModes: new Map<string, 'ask' | 'auto'>(),
   githubClientId: null,
+  lastSeq: 0,
+  replaying: false,
 };
 
-export const useStore = create<Store>()((set) => ({
+export const useStore = create<Store>()(persist((set) => ({
   ...initialState,
 
   setStatus: (status) => set({ status }),
@@ -200,6 +228,16 @@ export const useStore = create<Store>()((set) => ({
 
   setGithubClientId: (clientId) => set({ githubClientId: clientId }),
 
+  setLastSeq: (seq) => set({ lastSeq: seq }),
+
+  setReplaying: (replaying) => set({ replaying }),
+
+  clearTransientState: () => set({
+    streamingContent: new Map(),
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+  }),
+
   reset: () => set({
     ...initialState,
     sessions: new Map(),
@@ -217,5 +255,23 @@ export const useStore = create<Store>()((set) => ({
     user: null,
     sessionModes: new Map(),
     githubClientId: null,
+    lastSeq: 0,
+    replaying: false,
+  }),
+}), {
+  name: 'kraki-store',
+  storage: createJSONStorage(() => localStorage, {
+    replacer,
+    reviver,
+  }),
+  partialize: (state) => ({
+    messages: state.messages,
+    sessions: state.sessions,
+    devices: state.devices,
+    unreadCount: state.unreadCount,
+    pinnedSessions: state.pinnedSessions,
+    sessionModes: state.sessionModes,
+    drafts: state.drafts,
+    lastSeq: state.lastSeq,
   }),
 }));
