@@ -328,6 +328,11 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'delete_session') {
+      this.handleDeleteSession(ws, state, msg as { sessionId?: string });
+      return;
+    }
+
     // Handle producer, consumer, and encrypted messages
     if (state.deviceId) {
       this.router.handleMessage(state.deviceId, msg as unknown as ProducerMessage | ConsumerMessage);
@@ -356,6 +361,33 @@ export class HeadServer {
       token,
       expiresIn: ttl,
     }));
+  }
+
+  private handleDeleteSession(ws: WebSocket, state: ClientState, msg: { sessionId?: string }): void {
+    const logger = getLogger();
+    if (!state.channelId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+    if (!msg.sessionId || typeof msg.sessionId !== 'string') {
+      this.sendError(ws, 'sessionId required for delete_session');
+      return;
+    }
+
+    const session = this.cm.getStorage().getSessionById(msg.sessionId);
+    if (!session || session.channelId !== state.channelId) {
+      this.sendError(ws, 'Session not found');
+      return;
+    }
+
+    this.cm.deleteSession(msg.sessionId, state.channelId);
+    logger.info('Session deleted', { sessionId: msg.sessionId, channelId: state.channelId });
+
+    this.router.broadcastNotice(state.channelId, {
+      type: 'head_notice',
+      event: 'session_removed',
+      data: { sessionId: msg.sessionId },
+    });
   }
 
   /**

@@ -374,6 +374,18 @@ export class Storage {
     return { id: row.id, channelId: row.channel_id, deviceId: row.device_id, agent: row.agent, model: row.model };
   }
 
+  deleteSession(sessionId: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+  }
+
+  deleteSessionMessages(channelId: string, sessionId: string): void {
+    this.db.prepare('DELETE FROM messages WHERE channel_id = ? AND session_id = ?').run(channelId, sessionId);
+  }
+
+  deleteSessionReadState(channelId: string, sessionId: string): void {
+    this.db.prepare('DELETE FROM read_state WHERE channel_id = ? AND session_id = ?').run(channelId, sessionId);
+  }
+
   // --- Messages ---
 
   storeMessage(input: StoreMessageInput): StoredMessage {

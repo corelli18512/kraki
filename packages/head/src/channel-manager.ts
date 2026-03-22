@@ -116,6 +116,25 @@ export class ChannelManager {
   }
 
   /**
+   * Delete a session and all its associated data (messages, read state).
+   * Returns true if the session existed.
+   */
+  deleteSession(sessionId: string, channelId: string): boolean {
+    const existed = this.sessions.has(sessionId) || !!this.storage.getSessionById(sessionId);
+    // Remove from in-memory maps
+    const record = this.sessions.get(sessionId);
+    if (record) {
+      this.sessions.delete(sessionId);
+      this.deviceSessions.get(record.deviceId)?.delete(sessionId);
+    }
+    // Remove from persistent storage
+    this.storage.deleteSessionMessages(channelId, sessionId);
+    this.storage.deleteSessionReadState(channelId, sessionId);
+    this.storage.deleteSession(sessionId);
+    return existed;
+  }
+
+  /**
    * Get the tentacle deviceId that owns a session.
    * Checks in-memory first, then falls back to persistent storage.
    */

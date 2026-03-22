@@ -99,6 +99,16 @@ export class KrakiWSClient {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
   }
 
+  deleteSession(sessionId: string) {
+    // delete_session is a control message handled by head, not routed to tentacle
+    this.transport.send({
+      type: 'delete_session',
+      sessionId,
+      channel: getStore().channel,
+      deviceId: getStore().deviceId,
+    });
+  }
+
   createSession(opts: { targetDeviceId: string; model: string; prompt?: string; cwd?: string }) {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
