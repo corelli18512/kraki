@@ -23,6 +23,7 @@ afterAll(() => {
 
 const mockConfigExists = vi.fn();
 const mockLoadConfig = vi.fn();
+const mockSaveConfig = vi.fn();
 const mockGetConfigDir = vi.fn().mockReturnValue('/tmp/fake-kraki');
 const mockIsDaemonRunning = vi.fn();
 const mockGetDaemonStatus = vi.fn();
@@ -33,7 +34,9 @@ const mockRunSetup = vi.fn();
 vi.mock('../config.js', () => ({
   configExists: (...args: any[]) => mockConfigExists(...args),
   loadConfig: (...args: any[]) => mockLoadConfig(...args),
+  saveConfig: (...args: any[]) => mockSaveConfig(...args),
   getConfigDir: (...args: any[]) => mockGetConfigDir(...args),
+  getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
 }));
 
 vi.mock('../daemon.js', () => ({
@@ -196,12 +199,14 @@ describe('CLI status', () => {
       relay: 'wss://relay.test',
       authMethod: 'github',
       device: { name: 'laptop' },
+      logging: { verbosity: 'normal' },
     });
     await runCli(['status']);
     const output = consoleOutput.join('\n');
     expect(output).toContain('running');
     expect(output).toContain('42');
     expect(output).toContain('relay.test');
+    expect(output).toContain('normal');
   });
 
   it('shows stopped status when no daemon', async () => {
@@ -227,7 +232,7 @@ describe('CLI logs', () => {
 
 describe('CLI config', () => {
   it('prints config JSON when config exists', async () => {
-    const cfg = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'x' } };
+    const cfg = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'x' }, logging: { verbosity: 'normal' } };
     mockLoadConfig.mockReturnValue(cfg);
     await runCli(['config']);
     const output = consoleOutput.join('\n');
@@ -239,6 +244,34 @@ describe('CLI config', () => {
     mockLoadConfig.mockReturnValue(null);
     await runCli(['config']);
     expect(consoleOutput.join('\n')).toContain('No config found');
+  });
+
+  it('shows current log verbosity', async () => {
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'normal' },
+    });
+    await runCli(['config', 'log']);
+    expect(consoleOutput.join('\n')).toContain('Log verbosity: normal');
+  });
+
+  it('updates log verbosity', async () => {
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'normal' },
+    });
+    await runCli(['config', 'log', 'verbose']);
+    expect(mockSaveConfig).toHaveBeenCalledWith({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'verbose' },
+    });
+    expect(consoleOutput.join('\n')).toContain('Log verbosity set to verbose');
   });
 });
 
@@ -256,7 +289,12 @@ describe('CLI config reset', () => {
 
 describe('CLI default (no args)', () => {
   it('starts daemon when config exists and daemon not running', async () => {
-    mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github', device: { name: 'x' } });
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://r',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'normal' },
+    });
     mockIsDaemonRunning.mockReturnValue(false);
     mockStartDaemon.mockReturnValue(99);
     await runCli([]);
@@ -268,7 +306,12 @@ describe('CLI default (no args)', () => {
     mockLoadConfig
       .mockReturnValueOnce(null)   // first call in cmdStart: loadConfig()
       .mockReturnValueOnce(null);  // possibly called again
-    mockRunSetup.mockResolvedValue({ relay: 'wss://r', authMethod: 'github', device: { name: 'x' } });
+    mockRunSetup.mockResolvedValue({
+      relay: 'wss://r',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'normal' },
+    });
     mockIsDaemonRunning.mockReturnValue(false);
     mockStartDaemon.mockReturnValue(77);
     await runCli([]);
@@ -276,7 +319,12 @@ describe('CLI default (no args)', () => {
   });
 
   it('prompts when daemon already running, user chooses exit', async () => {
-    mockLoadConfig.mockReturnValue({ relay: 'wss://r', authMethod: 'github', device: { name: 'x' } });
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://r',
+      authMethod: 'github',
+      device: { name: 'x' },
+      logging: { verbosity: 'normal' },
+    });
     mockIsDaemonRunning.mockReturnValue(true);
     mockGetDaemonStatus.mockReturnValue({ running: true, pid: 55 });
     mockSelect.mockResolvedValueOnce('exit');

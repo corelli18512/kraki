@@ -109,6 +109,16 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function isRecoverableSessionError(err: unknown): boolean {
+  const message = getErrorMessage(err);
+  return message.includes('Session not found:') || message.includes('Connection is disposed');
+}
+
 export function patchCopilotSdkSessionImport(currentUrl: string = import.meta.url): boolean {
   const sessionPath = resolveCopilotSdkSessionPath(currentUrl);
   if (!sessionPath) {
@@ -178,9 +188,9 @@ async function loadCopilotClient(): Promise<CopilotClientCtor> {
     copilotClientCtorPromise = (async () => {
       const compatibility = installCopilotSdkImportCompatibility();
       if (compatibility === 'hook') {
-        logger.info('Installed @github/copilot-sdk ESM import compatibility hook');
+        logger.debug('Installed @github/copilot-sdk ESM import compatibility hook');
       } else if (compatibility === 'patch') {
-        logger.info('Patched @github/copilot-sdk ESM import compatibility');
+        logger.debug('Patched @github/copilot-sdk ESM import compatibility');
       }
 
       try {
@@ -220,7 +230,7 @@ export class CopilotAdapter extends AgentAdapter {
     if (!githubToken) {
       try {
         githubToken = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
-        if (githubToken) logger.info('Using GitHub token from `gh auth token`');
+        if (githubToken) logger.debug('Using GitHub token from `gh auth token`');
       } catch {
         // gh CLI unavailable — SDK will use its own auth chain
       }
@@ -235,7 +245,7 @@ export class CopilotAdapter extends AgentAdapter {
     const CopilotClient = await loadCopilotClient();
     this.client = new CopilotClient(opts);
     await this.client.start();
-    logger.info('started');
+    logger.debug('started');
   }
 
   async stop(): Promise<void> {
@@ -244,7 +254,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.client = null;
     }
     this.sessions.clear();
-    logger.info('stopped');
+    logger.debug('stopped');
   }
 
   // ── Session management ──────────────────────────────
@@ -282,32 +292,47 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> {
-    this.ensureClient();
-
-    const pendingPermissions = new Map<string, PendingPermission>();
-    const pendingQuestions = new Map<string, PendingQuestion>();
-
-    const resumeConfig: ResumeSessionConfig = {
-      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
-      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
-    };
-
-    const session = await this.client!.resumeSession(sessionId, resumeConfig);
-
-    this.sessions.set(sessionId, { session, pendingPermissions, pendingQuestions });
-    this.wireEvents(sessionId, session);
-    logger.info(`session resumed: ${sessionId}`);
-
+    await this.resumeTrackedSession(sessionId);
     return { sessionId };
   }
 
   async sendMessage(sessionId: string, text: string, attachments?: string[]): Promise<void> {
-    const entry = this.getSession(sessionId);
     const opts: MessageOptions = { prompt: text };
     if (attachments?.length) {
       opts.attachments = attachments.map((path) => ({ type: 'file' as const, path }));
     }
-    await entry.session.send(opts);
+
+    let entry = this.getSession(sessionId);
+
+    try {
+      await entry.session.send(opts);
+      return;
+    } catch (err) {
+      if (!isRecoverableSessionError(err)) {
+        this.onError?.(sessionId, { message: getErrorMessage(err) });
+        throw err;
+      }
+
+      logger.warn({ err, sessionId }, 'Session send failed; attempting resume');
+
+      try {
+        entry = await this.resumeTrackedSession(sessionId);
+      } catch (resumeErr) {
+        this.handleUnavailableSession(sessionId, resumeErr);
+        throw resumeErr;
+      }
+
+      try {
+        await entry.session.send(opts);
+      } catch (retryErr) {
+        if (isRecoverableSessionError(retryErr)) {
+          this.handleUnavailableSession(sessionId, retryErr);
+        } else {
+          this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
+        }
+        throw retryErr;
+      }
+    }
   }
 
   async respondToPermission(
@@ -332,7 +357,7 @@ export class CopilotAdapter extends AgentAdapter {
         this.sessionAllowSets.set(sessionId, new Set());
       }
       this.sessionAllowSets.get(sessionId)!.add(pending.toolKind);
-      logger.info(`Always allow "${pending.toolKind}" for session ${sessionId}`);
+      logger.debug({ sessionId, toolKind: pending.toolKind }, 'Always allow enabled for tool kind');
 
       // Auto-approve any OTHER pending permissions of the same tool kind in this session
       for (const [otherId, otherPending] of entry.pendingPermissions) {
@@ -340,7 +365,7 @@ export class CopilotAdapter extends AgentAdapter {
           otherPending.resolve({ kind: 'approved' });
           entry.pendingPermissions.delete(otherId);
           this.onPermissionAutoResolved?.(sessionId, otherId);
-          logger.info(`permission ${otherId}: auto-approved (same tool kind as always_allow)`);
+          logger.debug({ permissionId: otherId, sessionId, toolKind: pending.toolKind }, 'permission auto-approved');
         }
       }
     }
@@ -353,7 +378,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     pending.resolve(kindMap[decision] ?? { kind: 'denied-interactively-by-user' });
     entry.pendingPermissions.delete(permissionId);
-    logger.info(`permission ${permissionId}: ${decision}`);
+    logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
   }
 
   async respondToQuestion(
@@ -375,7 +400,6 @@ export class CopilotAdapter extends AgentAdapter {
 
     pending.resolve({ answer, wasFreeform });
     entry.pendingQuestions.delete(questionId);
-    logger.info(`question ${questionId}: "${answer}" (freeform: ${wasFreeform})`);
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -400,7 +424,7 @@ export class CopilotAdapter extends AgentAdapter {
       entry.pendingPermissions.clear();
       entry.pendingQuestions.clear();
       await entry.session.abort();
-      logger.info(`session aborted: ${sessionId}`);
+      logger.debug({ sessionId }, 'session aborted');
     }
   }
 
@@ -429,13 +453,59 @@ export class CopilotAdapter extends AgentAdapter {
   /** Set permission mode for a session ('ask' or 'auto') */
   setSessionMode(sessionId: string, mode: 'ask' | 'auto'): void {
     this.sessionModes.set(sessionId, mode);
-    logger.info(`Session ${sessionId} permission mode: ${mode}`);
+    logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 
   /** Clean up session-scoped permission state */
   private cleanupSessionPermissions(sessionId: string): void {
     this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
+  }
+
+  private makeResumeConfig(
+    pendingPermissions: Map<string, PendingPermission>,
+    pendingQuestions: Map<string, PendingQuestion>,
+  ): ResumeSessionConfig {
+    return {
+      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
+      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
+    };
+  }
+
+  private async resumeTrackedSession(sessionId: string): Promise<SessionEntry> {
+    this.ensureClient();
+
+    const pendingPermissions = new Map<string, PendingPermission>();
+    const pendingQuestions = new Map<string, PendingQuestion>();
+    const session = await this.client!.resumeSession(
+      sessionId,
+      this.makeResumeConfig(pendingPermissions, pendingQuestions),
+    );
+    const entry = { session, pendingPermissions, pendingQuestions };
+
+    this.sessions.set(sessionId, entry);
+    this.wireEvents(sessionId, session);
+    logger.debug({ sessionId }, 'session resumed');
+
+    return entry;
+  }
+
+  private handleUnavailableSession(sessionId: string, err: unknown): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry) {
+      for (const [, p] of entry.pendingPermissions) p.resolve({ kind: 'denied-interactively-by-user' });
+      for (const [, q] of entry.pendingQuestions) q.resolve({ answer: '', wasFreeform: true });
+      entry.pendingPermissions.clear();
+      entry.pendingQuestions.clear();
+    }
+
+    this.sessions.delete(sessionId);
+    this.cleanupSessionPermissions(sessionId);
+    logger.warn({ err, sessionId }, 'Session became unavailable');
+    this.onError?.(sessionId, {
+      message: 'Session is no longer active in Copilot. Please start a new session.',
+    });
+    this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
   }
 
   // ── SDK → callback wiring ─────────────────────────
@@ -499,13 +569,13 @@ export class CopilotAdapter extends AgentAdapter {
 
       // Layer 1: Auto mode — approve everything in this session
       if (this.sessionModes.get(sessionId) === 'auto') {
-        logger.info(`permission auto-approved (auto mode): ${toolKind}`);
+        logger.debug({ sessionId, toolKind }, 'permission auto-approved');
         return { kind: 'approved' };
       }
 
       // Layer 3: Session allow set — auto-approve if previously "Always Allowed"
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
-        logger.info(`permission auto-approved (session allow): ${toolKind}`);
+        logger.debug({ sessionId, toolKind }, 'permission auto-approved');
         return { kind: 'approved' };
       }
 
@@ -513,7 +583,12 @@ export class CopilotAdapter extends AgentAdapter {
       const permId = makeId('perm');
       const parsed = parsePermission(req);
 
-      logger.info(`permission [${permId}]: ${parsed.toolArgs.toolName} — ${parsed.description}`);
+      logger.debug({
+        permissionId: permId,
+        sessionId,
+        toolKind,
+        toolName: parsed.toolArgs.toolName,
+      }, 'permission requested');
 
       this.onPermissionRequest?.(sessionId, {
         id: permId,
@@ -534,7 +609,12 @@ export class CopilotAdapter extends AgentAdapter {
     return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> => {
       const qId = makeId('q');
 
-      logger.debug(`question [${qId}]: ${req.question}`);
+      logger.debug({
+        questionId: qId,
+        sessionId: invocation.sessionId,
+        choicesCount: req.choices?.length ?? 0,
+        allowFreeform: req.allowFreeform !== false,
+      }, 'question requested');
 
       this.onQuestionRequest?.(invocation.sessionId, {
         id: qId,
