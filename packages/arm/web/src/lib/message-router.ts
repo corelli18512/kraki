@@ -37,6 +37,10 @@ export function handleHeadNotice(msg: Extract<Message, { type: 'head_notice' }>)
         window.history.replaceState({}, '', '/');
       }
       break;
+    case 'read_state_updated':
+      // Another device marked a session as read — clear our unread badge
+      store.clearUnread(msg.data.sessionId);
+      break;
   }
 }
 

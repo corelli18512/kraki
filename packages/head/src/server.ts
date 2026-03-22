@@ -319,6 +319,12 @@ export class HeadServer {
       const { sessionId, seq } = msg as { sessionId: string; seq: number };
       if (sessionId && typeof seq === 'number') {
         this.cm.getStorage().markRead(state.channelId, sessionId, seq);
+        // Notify other devices so they can sync unread state
+        this.router.broadcastNotice(state.channelId, {
+          type: 'head_notice',
+          event: 'read_state_updated',
+          data: { sessionId, lastSeq: seq },
+        });
       }
       return;
     }

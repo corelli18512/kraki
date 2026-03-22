@@ -257,10 +257,22 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setReplaying: (replaying) => set({ replaying }),
 
-  clearTransientState: () => set({
-    streamingContent: new Map(),
-    pendingPermissions: new Map(),
-    pendingQuestions: new Map(),
+  clearTransientState: () => set((state) => {
+    // Remove pending_input messages from all sessions (fix #12)
+    const cleanedMessages = new Map(state.messages);
+    for (const [sid, msgs] of cleanedMessages) {
+      const filtered = msgs.filter((m) => m.type !== 'pending_input');
+      if (filtered.length !== msgs.length) {
+        cleanedMessages.set(sid, filtered);
+      }
+    }
+    return {
+      streamingContent: new Map(),
+      pendingPermissions: new Map(),
+      pendingQuestions: new Map(),
+      unreadCount: new Map(),
+      messages: cleanedMessages,
+    };
   }),
 
   reset: () => set({

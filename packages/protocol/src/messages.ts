@@ -361,7 +361,8 @@ export type HeadNotice =
   | { type: 'head_notice'; event: 'device_removed';  data: { deviceId: string } }
   | { type: 'head_notice'; event: 'session_updated'; data: { session: SessionSummary } }
   | { type: 'head_notice'; event: 'session_removed'; data: { sessionId: string } }
-  | { type: 'head_notice'; event: 'update_allow_list'; data: { allowedTools: string[] } };
+  | { type: 'head_notice'; event: 'update_allow_list'; data: { allowedTools: string[] } }
+  | { type: 'head_notice'; event: 'read_state_updated'; data: { sessionId: string; lastSeq: number } };
 
 export type ControlMessage =
   | AuthMessage
