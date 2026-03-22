@@ -26,6 +26,7 @@ import type {
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as moduleApi from 'node:module';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -269,6 +270,7 @@ export class CopilotAdapter extends AgentAdapter {
       ...(config.sessionId && { sessionId: config.sessionId }),
       ...(config.model && { model: config.model }),
       ...(config.cwd && { workingDirectory: config.cwd }),
+      configDir: join(homedir(), '.copilot'),
       streaming: true,
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
@@ -467,6 +469,7 @@ export class CopilotAdapter extends AgentAdapter {
     pendingQuestions: Map<string, PendingQuestion>,
   ): ResumeSessionConfig {
     return {
+      configDir: join(homedir(), '.copilot'),
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
     };

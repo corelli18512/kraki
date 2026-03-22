@@ -1,5 +1,6 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { ToolActivity } from './ToolActivity';
@@ -8,6 +9,12 @@ import { Lock, HelpCircle, Check, X, Ban, LockOpen, CircleStop } from 'lucide-re
 
 const ID_DISPLAY_LENGTH = 8;
 
+const markdownComponents = {
+  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+  ),
+};
+
 export function MessageBubble({ message, agent }: { message: ChatMessage; agent?: string }) {
   switch (message.type) {
     case 'user_message':
@@ -15,7 +22,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
         <div className="flex justify-end">
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             <div className="markdown-content text-sm leading-relaxed">
-              <Markdown rehypePlugins={[rehypeHighlight]}>
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {message.payload.content}
               </Markdown>
             </div>
@@ -34,7 +41,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
           </div>
           <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
             <div className="markdown-content text-sm leading-relaxed text-text-primary">
-              <Markdown rehypePlugins={[rehypeHighlight]}>
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {message.payload.content}
               </Markdown>
             </div>
