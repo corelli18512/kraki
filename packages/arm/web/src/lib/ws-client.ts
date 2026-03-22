@@ -44,6 +44,7 @@ export class KrakiWSClient {
       });
     }
     this.transport.connect();
+    this.listenForVisibilityChange();
   }
 
   disconnect() {
@@ -154,6 +155,16 @@ export class KrakiWSClient {
       }),
       getHandlers: () => this.handlers,
     };
+  }
+
+  /** Catch up on missed messages when the tab returns from background. */
+  private listenForVisibilityChange(): void {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.transport.isConnected()) {
+        // Request messages since lastSeq to catch anything missed while backgrounded
+        this.replay.startReplay((m) => this.transport.send(m));
+      }
+    });
   }
 
   private handleMessage(msg: Message) {

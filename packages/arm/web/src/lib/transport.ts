@@ -125,6 +125,10 @@ export class KrakiTransport {
 
   get url(): string { return this._url; }
 
+  isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
   constructor(callbacks: TransportCallbacks, url?: string) {
     const params = getUrlParams();
     const stored = loadStoredDevice();
