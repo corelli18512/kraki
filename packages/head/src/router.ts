@@ -108,14 +108,16 @@ export class Router {
 
   /**
    * Replay stored messages to a device after a given seq.
+   * Filters out encrypted messages the device cannot decrypt.
    */
   replay(deviceId: string, afterSeq: number, sessionId?: string): void {
     const device = this.cm.getConnection(deviceId);
     if (!device) return;
 
     const logger = getLogger();
-    const messages = this.cm.getStorage().getMessagesAfterSeq(
-      device.channelId, afterSeq, sessionId,
+    const storage = this.cm.getStorage();
+    const messages = storage.getMessagesForDevice(
+      device.channelId, afterSeq, deviceId, sessionId,
     );
 
     let sent = 0;
@@ -165,7 +167,12 @@ export class Router {
       }
     }
 
-    logger.debug('Replay complete', { deviceId, afterSeq, sent, skipped });
+    // Send replay_complete with the channel's max seq so the client
+    // advances past skipped messages and doesn't re-request them.
+    const lastSeq = storage.getMaxSeq(device.channelId);
+    device.send(JSON.stringify({ type: 'replay_complete', lastSeq }));
+
+    logger.debug('Replay complete', { deviceId, afterSeq, sent, skipped, lastSeq });
   }
 
   /**

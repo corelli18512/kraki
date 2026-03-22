@@ -215,6 +215,14 @@ export class KrakiWSClient {
         handleHeadNotice(msg);
         break;
 
+      case 'replay_complete': {
+        const rc = msg as any;
+        if (typeof rc.lastSeq === 'number') {
+          this.replay.completeReplay(rc.lastSeq);
+        }
+        break;
+      }
+
       default:
         if ('seq' in msg && typeof msg.seq === 'number') {
           this.replay.updateSeq(msg.seq);

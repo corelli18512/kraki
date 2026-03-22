@@ -42,6 +42,16 @@ export class ReplayState {
     this.replayEndTimer = setTimeout(() => this.onReplayComplete(), 300);
   }
 
+  /** Explicit replay completion signal from head (replaces debounce). */
+  completeReplay(lastSeq: number): void {
+    this.updateSeq(lastSeq);
+    if (this.replayEndTimer) {
+      clearTimeout(this.replayEndTimer);
+      this.replayEndTimer = null;
+    }
+    this.onReplayComplete();
+  }
+
   /** Called when replay messages stop arriving — compute unread from readState. */
   private onReplayComplete(): void {
     this.replaying = false;
