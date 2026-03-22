@@ -21,14 +21,18 @@ interface Props {
 
 export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, children }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const trayRef = useRef<HTMLDivElement>(null);
   const startX = useRef(0);
   const startY = useRef(0);
   const currentX = useRef(0);
   const swiping = useRef(false);
-  const decided = useRef(false); // whether we've decided swipe vs scroll
+  const decided = useRef(false);
 
   const trayWidth = actions.length * ACTION_WIDTH;
   const maxTranslate = -trayWidth;
+
+  const showTray = () => { if (trayRef.current) trayRef.current.style.visibility = 'visible'; };
+  const hideTray = () => { if (trayRef.current) trayRef.current.style.visibility = 'hidden'; };
 
   const setTranslate = (px: number, animate: boolean) => {
     const el = contentRef.current;
@@ -66,6 +70,7 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
       }
       decided.current = true;
       swiping.current = true;
+      showTray();
     }
 
     if (!swiping.current) return;
@@ -84,20 +89,20 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
     const offset = currentX.current + dx;
 
     if (isOpen) {
-      // Was open — close if dragged right past threshold
       if (offset > maxTranslate * (1 - SWIPE_THRESHOLD)) {
         setTranslate(0, true);
+        setTimeout(hideTray, 200); // hide after animation
         onSwipeClose();
       } else {
         setTranslate(maxTranslate, true);
       }
     } else {
-      // Was closed — open if dragged left past threshold
       if (offset < maxTranslate * SWIPE_THRESHOLD) {
         setTranslate(maxTranslate, true);
         onSwipeOpen();
       } else {
         setTranslate(0, true);
+        setTimeout(hideTray, 200); // hide after animation
         onSwipeClose();
       }
     }
@@ -107,13 +112,18 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
   const prevOpen = useRef(isOpen);
   if (prevOpen.current !== isOpen) {
     prevOpen.current = isOpen;
+    if (isOpen) {
+      showTray();
+    } else {
+      setTimeout(hideTray, 200);
+    }
     setTranslate(isOpen ? maxTranslate : 0, true);
   }
 
   return (
     <div className="relative overflow-hidden rounded-lg">
-      {/* Action tray (behind card) */}
-      <div className="absolute inset-y-0 right-0 flex">
+      {/* Action tray (behind card) — hidden at rest to avoid subpixel bleed */}
+      <div ref={trayRef} className="absolute inset-y-0 right-0 flex overflow-hidden rounded-r-lg" style={{ visibility: isOpen ? 'visible' : 'hidden' }}>
         {actions.map((action, i) => (
           <button
             key={i}
@@ -122,7 +132,7 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
             aria-label={action.label}
           >
             {action.icon}
-            <span className="mt-0.5 text-[9px] font-medium">{action.label}</span>
+            <span className="mt-0.5 text-[10px] font-medium">{action.label}</span>
           </button>
         ))}
       </div>
@@ -133,7 +143,7 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="relative bg-surface-secondary will-change-transform"
+        className="relative bg-surface-secondary will-change-transform touch-pan-y"
         style={{ transform: isOpen ? `translateX(${maxTranslate}px)` : 'translateX(0)' }}
       >
         {children}

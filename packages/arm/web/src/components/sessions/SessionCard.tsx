@@ -59,10 +59,11 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
   const isDeviceOnline = device?.online ?? false;
   const machineName = session.deviceName || device?.name;
 
-  // Context menu
+  // Context menu (desktop right-click only, not mobile long-press)
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if ('ontouchstart' in window) return; // skip on touch devices — use swipe instead
     e.preventDefault();
     setMenuPos({ x: e.clientX, y: e.clientY });
     const close = () => { setMenuPos(null); window.removeEventListener('click', close); };
@@ -73,13 +74,13 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
     {
       icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />,
       label: pinned ? 'Unpin' : 'Pin',
-      bgClass: 'bg-blue-500',
+      bgClass: 'bg-teal-400 dark:bg-teal-800',
       onClick: () => { togglePin(session.id); setOpenSwipeId?.(null); },
     },
     {
       icon: <Trash2 className="h-4 w-4" />,
       label: 'Delete',
-      bgClass: 'bg-red-500',
+      bgClass: 'bg-red-400 dark:bg-red-900',
       onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); },
     },
   ];
@@ -88,10 +89,12 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
       <button
         onClick={() => navigate(`/session/${session.id}`)}
         onContextMenu={handleContextMenu}
-        className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-all ${
+        className={`flex w-full items-start gap-2.5 px-2.5 py-2 text-left transition-all ${
           isActive
             ? 'border-l-2 border-kraki-500 bg-surface-primary shadow-sm dark:bg-surface-tertiary'
-            : 'border-l-2 border-transparent hover:bg-surface-primary hover:shadow-sm dark:hover:bg-surface-tertiary active:scale-[0.98]'
+            : pinned
+              ? 'border-l-2 border-transparent bg-black/[0.03] hover:bg-black/[0.06] dark:bg-white/[0.06] dark:hover:bg-white/[0.09] active:scale-[0.98]'
+              : 'border-l-2 border-transparent hover:bg-surface-primary hover:shadow-sm dark:hover:bg-surface-tertiary active:scale-[0.98]'
         }`}
       >
         <div className="relative self-start shrink-0">
@@ -102,7 +105,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            {pinned && <Pin className="h-3 w-3 text-text-muted" />}
+            {pinned && null}
             <span className="text-xs font-semibold text-text-primary">{label}</span>
             {session.model && (
               <span className="text-[10px] text-text-muted">{session.model}</span>

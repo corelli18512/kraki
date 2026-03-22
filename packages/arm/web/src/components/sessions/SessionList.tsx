@@ -82,7 +82,7 @@ export function SessionList() {
           </button>
         </div>
       {pinnedList.length > 0 && (
-        <div className="mb-1 rounded-lg bg-amber-500/5 p-1 dark:bg-amber-500/10">
+        <div className="mb-1 space-y-1">
           {pinnedList.map((session) => (
             <SessionCard key={session.id} session={session} pinned openSwipeId={openSwipeId} setOpenSwipeId={setOpenSwipeId} />
           ))}
