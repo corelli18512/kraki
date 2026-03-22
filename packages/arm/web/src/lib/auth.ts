@@ -112,7 +112,7 @@ export function processAuthOk(
   deps.startReplay();
 }
 
-/** Process auth_error: clear stored device and reconnect, or set error status. */
+/** Process auth_error: return to login page with error message. */
 export function processAuthError(
   storedDeviceId: string | undefined,
   deps: {
@@ -131,7 +131,8 @@ export function processAuthError(
     deps.disconnect();
     deps.connect();
   } else {
+    // Token/OAuth failed — return to login page
     store.setLastError('Authentication failed. Sign in with GitHub or scan a pairing QR code.');
-    store.setStatus('error');
+    store.setStatus('awaiting_login');
   }
 }

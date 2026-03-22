@@ -58,6 +58,7 @@ describe('DashboardPage', () => {
   });
 
   it('shows connecting spinner', () => {
+    localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:4000', deviceId: 'dev_test' }));
     useStore.getState().setStatus('connecting');
     renderWithRoute('/', <DashboardPage />);
     expect(screen.getByText('Connecting to relay…')).toBeInTheDocument();

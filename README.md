@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Remote control for coding agents from anywhere through an E2E encrypted relay</strong></p>
 
-> 🚧 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
+> 🐣 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
 
 Kraki lets you watch agent sessions, respond to permission requests, answer questions, and send follow-up input from a phone or browser while the agent keeps running on another machine. 
 
@@ -67,6 +67,8 @@ On first run, Kraki will:
 1. guide you through setup in the terminal
 2. connect to the hosted relay by default
 3. show a QR code / pairing flow for your browser or phone
+
+> 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications (shipping), full-screen mode, and instant access without opening a browser.
 
 Package names and executables are different on purpose:
 

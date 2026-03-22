@@ -509,8 +509,8 @@ describe('KrakiWSClient', () => {
   });
 
   describe('auth_error', () => {
-    it('sets status to error on auth_error', async () => {
-      // Ensure no stored device so the else branch (setStatus error) is hit
+    it('sets status to awaiting_login on auth_error without stored device', async () => {
+      // Ensure no stored device so the else branch (awaiting_login) is hit
       localStorage.removeItem('kraki_device');
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
@@ -520,7 +520,7 @@ describe('KrakiWSClient', () => {
       });
 
       lastWsInstance._receive({ type: 'auth_error', message: 'Invalid token' });
-      expect(useStore.getState().status).toBe('error');
+      expect(useStore.getState().status).toBe('awaiting_login');
     });
 
     it('clears stale stored device auth and retries without leaving the app stuck', async () => {

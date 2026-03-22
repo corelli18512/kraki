@@ -1,6 +1,6 @@
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
-import { startOAuthFlow } from '../lib/transport';
+import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -20,10 +20,20 @@ export function DashboardPage() {
   const githubClientId = useStore((s) => s.githubClientId);
   const envClientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined;
   const clientId = githubClientId || envClientId;
+  const hasCredentials = !!loadStoredDevice()?.deviceId;
 
-  if (status === 'awaiting_login') {
+  if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
+    const isAuthenticating = status === 'connecting';
     return (
-      <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+      <div className="relative flex flex-1 flex-col items-center justify-center p-8 text-center">
+        {isAuthenticating && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface-primary/80">
+            <div className="flex flex-col items-center gap-3">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
+              <p className="text-sm text-text-secondary">Authenticating…</p>
+            </div>
+          </div>
+        )}
         <img src="/logo.png" alt="Kraki" className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
         <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
         <p className="mt-2 max-w-sm text-sm text-text-secondary animate-fade-up">
