@@ -1,6 +1,6 @@
 {
   "name": "@kraki/tentacle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
   "type": "module",
   "main": "dist/index.js",
@@ -25,10 +25,10 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@kraki/crypto": "workspace:*",
-    "@kraki/protocol": "workspace:*",
     "@github/copilot-sdk": "^0.1.32",
     "@inquirer/prompts": "^8.3.2",
+    "@kraki/crypto": "workspace:*",
+    "@kraki/protocol": "workspace:*",
     "chalk": "^5.6.2",
     "ora": "^9.3.0",
     "pino": "^10.3.1",

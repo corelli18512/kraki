@@ -103,8 +103,6 @@ jobs:
 
       - name: Publish packages
         if: github.event_name == 'release' || github.event.inputs.mode == 'publish'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
 
