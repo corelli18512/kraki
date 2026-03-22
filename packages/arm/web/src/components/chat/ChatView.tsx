@@ -90,7 +90,7 @@ export function ChatView() {
       }
     }
     prevMsgLenRef.current = messages.length;
-  }, [messages, streaming, scrollToBottom]);
+  }, [messages, streaming, permissions, questions, scrollToBottom]);
 
   // Reset when switching sessions
   useEffect(() => {
@@ -164,6 +164,11 @@ export function ChatView() {
           )}
         </div>
 
+        {/* Subtle dim overlay when a blocking card is shown */}
+        {(permissions.length > 0 || questions.length > 0) && (
+          <div className="pointer-events-none absolute inset-0 bg-black/5 dark:bg-black/15 transition-opacity" />
+        )}
+
         {/* Scroll to bottom button */}
         {showScrollBtn && (
           <button
@@ -184,7 +189,7 @@ export function ChatView() {
 
       {isDeviceOnline && (
         permissions.length > 0 ? (
-          <div className="flex flex-col">
+          <div className="flex max-h-[40vh] flex-col overflow-y-auto">
             {permissions.map((perm) => (
               <PermissionInput key={perm.id} permission={perm} />
             ))}

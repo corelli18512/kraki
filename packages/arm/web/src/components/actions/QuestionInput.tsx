@@ -24,7 +24,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
   };
 
   return (
-    <div className="shrink-0 border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
+    <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
       <div className="mx-auto max-w-3xl">
         <div className="mb-2 flex items-start gap-2">
           <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />

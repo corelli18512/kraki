@@ -20,7 +20,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
     case 'user_message':
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             <div className="markdown-content text-sm leading-relaxed">
               <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {message.payload.content}
@@ -39,7 +39,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
           <div className="mt-0.5 shrink-0">
             <AgentAvatar agent={agent ?? ''} size="sm" />
           </div>
-          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
             <div className="markdown-content text-sm leading-relaxed text-text-primary">
               <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {message.payload.content}
@@ -99,7 +99,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
     case 'send_input':
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             <p className="text-sm">{message.payload.text}</p>
             <p className="mt-1 text-right text-[10px] text-white/60">
               {formatTime(message.timestamp)}
@@ -129,7 +129,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
           : 'Denied';
         return (
           <div className="flex justify-end">
-            <div className={`max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 shadow-sm sm:max-w-[70%] ${isApproved ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
+            <div className={`min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-br-md px-4 py-2.5 shadow-sm sm:max-w-[70%] ${isApproved ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
               <p className={`flex items-center gap-1 text-xs font-medium ${isApproved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                 <ResIcon className="h-3.5 w-3.5" />
                 {label} · <span className="font-mono">{toolName}</span>
@@ -149,7 +149,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
       return (
         <div className="flex gap-2">
           <Lock className="mt-1 h-4 w-4 text-amber-500" />
-          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-amber-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md bg-amber-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
             <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
               Permission requested · <span className="font-mono">{toolName}</span>
             </p>
@@ -170,7 +170,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
         return (
           <div className="flex gap-2">
             <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
-            <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
               <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
                 Question · <span className="text-emerald-600 dark:text-emerald-400">Answered</span>
               </p>
@@ -183,7 +183,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
       return (
         <div className="flex gap-2">
           <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
-          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
             <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
               Question
             </p>
@@ -201,7 +201,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
     case 'answer':
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kraki-600 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-br-md bg-kraki-600 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             <p className="text-[10px] font-medium text-white/70">Answer</p>
             <p className="text-sm">{message.payload.answer}</p>
           </div>
@@ -214,7 +214,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
     case 'pending_input':
       return (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kraki-500/70 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-br-md bg-kraki-500/70 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             <p className="text-sm">{message.text}</p>
             <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-white/60">
               <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/90" />
