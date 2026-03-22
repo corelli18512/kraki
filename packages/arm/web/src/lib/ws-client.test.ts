@@ -24,7 +24,8 @@ afterEach(() => {
 
 describe('KrakiWSClient', () => {
   describe('connect', () => {
-    it('sets status to connecting', () => {
+    it('sets status to connecting when credentials exist', () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
       expect(useStore.getState().status).toBe('connecting');
@@ -563,6 +564,7 @@ describe('KrakiWSClient', () => {
 
   describe('malformed message handling', () => {
     it('ignores malformed JSON without crashing', async () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
       await vi.waitFor(() => expect(lastWsInstance).toBeDefined());

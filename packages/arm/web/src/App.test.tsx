@@ -32,6 +32,7 @@ describe('App', () => {
   });
 
   it('renders header with kraki branding', () => {
+    useStore.getState().setStatus('connected');
     const { getAllByText, getAllByAltText } = render(
       <MemoryRouter>
         <App />

@@ -6,13 +6,21 @@
 
 <p align="center"><strong>Remote control for coding agents from anywhere through an E2E encrypted relay</strong></p>
 
+> 🚧 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
+
 Kraki lets you watch agent sessions, respond to permission requests, answer questions, and send follow-up input from a phone or browser while the agent keeps running on another machine. 
 
 Get started on your coding machine:
 ```bash
-# Only supports Github Copilot CLI for now
+# Only supports GitHub Copilot CLI for now
 # Requires Copilot CLI installed and `gh auth login` completed
+
+# One-off run
 npx @kraki/tentacle
+
+# Or install globally
+npm i -g @kraki/tentacle
+kraki
 ```
 
 Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
@@ -42,28 +50,44 @@ Native iOS and additional agent adapters will be added later without changing th
 
 ## Set up
 
+### Hosted setup
+
+Run the tentacle package on the coding machine:
+
 ```bash
 npx @kraki/tentacle
-#or
+
+# or
 npm i -g @kraki/tentacle
 kraki
 ```
 
-On first run, Kraki guides setup, connects to the hosted relay, and shows a QR code / pairing flow for your browser or phone.
+On first run, Kraki will:
+
+1. guide you through setup in the terminal
+2. connect to the hosted relay by default
+3. show a QR code / pairing flow for your browser or phone
+
+Package names and executables are different on purpose:
+
+- `@kraki/tentacle` installs the `kraki` CLI
+- `@kraki/head` installs the `kraki-relay` CLI
 
 ### Self-host your own relay
 
+Start the relay:
+
 ```bash
 npx @kraki/head
+
+# or
+npm i -g @kraki/head
+kraki-relay
 ```
 
 By default the relay listens on `ws://localhost:4000`.
 
-The published package is `@kraki/head`; if you install it globally, the executable stays `kraki-relay`.
-
-After the relay is running, use the same CLI flow on the coding machine:
-
-During setup, point the CLI at your relay URL instead of the hosted default.
+Then run the same tentacle setup flow on the coding machine, but point it at your relay URL instead of the hosted default.
 
 ### Enable GitHub Login for the web app
 
@@ -76,7 +100,7 @@ By default, users connect the web app via QR code pairing from the terminal. You
 ```bash
 GITHUB_CLIENT_ID=your_client_id \
 GITHUB_CLIENT_SECRET=your_client_secret \
-npx @kraki/head --auth github
+kraki-relay --auth github
 ```
 
 The web app will automatically show a "Sign in with GitHub" button when the relay has OAuth configured. QR pairing continues to work alongside GitHub login.
@@ -122,18 +146,35 @@ For the runtime design, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 ## Development
 
 ```bash
-git clone https://github.com/user/kraki.git
+git clone https://github.com/corelli18512/kraki.git
 cd kraki
 pnpm install
 
 # Validate the repo
 pnpm validate
-
-# Run the pieces locally
-pnpm dev:head
-pnpm dev:tentacle
-pnpm dev:web
 ```
+
+### Run the pieces individually
+
+```bash
+pnpm dev:head       # relay on ws://localhost:4000 (GitHub auth, E2E, pairing)
+pnpm dev:tentacle   # CLI bridge (connects to relay, bridges agent events)
+pnpm dev:web        # web app → auto-pairs with prod relay, opens Chrome
+```
+
+### Web app against a local relay
+
+```bash
+pnpm dev:web --local-relay   # web app → ws://localhost:4000
+```
+
+### All-in-one local dev
+
+```bash
+pnpm dev:local
+```
+
+Starts the relay, a mock tentacle with an interactive REPL, and the web app in one command. The mock tentacle lets you send fake agent messages, permission requests, and tool calls from the terminal to test the full pipeline without a real agent.
 
 ## Company / enterprise use
 

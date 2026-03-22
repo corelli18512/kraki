@@ -76,9 +76,9 @@ const mockQuestion: PendingQuestion = {
 
 describe('useStore', () => {
   describe('connection state', () => {
-    it('initializes with disconnected status', () => {
+    it('initializes with awaiting_login when no credentials', () => {
       const state = useStore.getState();
-      expect(state.status).toBe('disconnected');
+      expect(state.status).toBe('awaiting_login');
       expect(state.channel).toBeNull();
       expect(state.deviceId).toBeNull();
     });
@@ -295,7 +295,7 @@ describe('useStore', () => {
       useStore.getState().reset();
 
       const state = useStore.getState();
-      expect(state.status).toBe('disconnected');
+      expect(state.status).toBe('awaiting_login');
       expect(state.channel).toBeNull();
       expect(state.deviceId).toBeNull();
       expect(state.sessions.size).toBe(0);

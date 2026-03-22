@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Store, ChatMessage, PendingPermission, PendingQuestion } from '../types/store';
+import type { Store, ChatMessage, PendingPermission, PendingQuestion, ConnectionStatus } from '../types/store';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
+import { loadStoredDevice, getUrlParams } from '../lib/transport';
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -28,8 +29,18 @@ function reviver(_key: string, value: unknown): unknown {
   return value;
 }
 
+// Determine initial status: if no credentials exist, go straight to awaiting_login
+function getInitialStatus(): ConnectionStatus {
+  const stored = loadStoredDevice();
+  const params = getUrlParams();
+  if (stored?.deviceId || params.token || params.githubCode) {
+    return 'disconnected'; // has credentials — will attempt connect
+  }
+  return 'awaiting_login'; // no credentials — show login immediately
+}
+
 const initialState = {
-  status: 'disconnected' as const,
+  status: getInitialStatus(),
   channel: null,
   deviceId: null,
   user: null,

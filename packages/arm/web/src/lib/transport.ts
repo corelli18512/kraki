@@ -153,7 +153,11 @@ export class KrakiTransport {
   }
 
   connect() {
-    getStore().setStatus('connecting');
+    // Only show "connecting" spinner if we have credentials to authenticate with.
+    // New devices stay in awaiting_login while connecting in the background.
+    if (this.storedDeviceId || this.pairingToken || this.githubCode) {
+      getStore().setStatus('connecting');
+    }
     this.intentionalClose = false;
 
     try {

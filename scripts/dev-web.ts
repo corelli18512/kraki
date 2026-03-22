@@ -1,8 +1,9 @@
 /**
- * Dev helper: start the web app with auto-pairing to the production relay.
+ * Dev helper: start the web app and open Chrome.
  *
- * Reads ~/.kraki/config.json, requests a pairing token from the relay,
- * starts Vite, and opens Chrome at localhost:3000 with the token in the URL.
+ * Usage:
+ *   pnpm dev:web              — auto-pair with prod relay (from ~/.kraki/config.json)
+ *   pnpm dev:web --local-relay — point at ws://localhost:4000
  */
 
 import { execSync, spawn } from 'node:child_process';
@@ -11,15 +12,11 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { WebSocket } from 'ws';
 
+const LOCAL_RELAY = 'ws://localhost:4000';
+
 interface KrakiConfig {
   relay: string;
   authMethod: 'github' | 'channel-key' | 'open';
-}
-
-interface PairingInfo {
-  relay: string;
-  pairingToken: string;
-  expiresIn: number;
 }
 
 function loadConfig(): KrakiConfig {
@@ -49,7 +46,7 @@ function getAuthToken(authMethod: string): string | undefined {
   return undefined;
 }
 
-function requestPairingToken(relayUrl: string, authToken?: string): Promise<PairingInfo> {
+function requestPairingToken(relayUrl: string, authToken?: string): Promise<{ relay: string; token: string; expiresIn: number }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl);
     const timeout = setTimeout(() => {
@@ -67,7 +64,7 @@ function requestPairingToken(relayUrl: string, authToken?: string): Promise<Pair
 
       if (msg.type === 'pairing_token_created') {
         clearTimeout(timeout);
-        resolve({ relay: relayUrl, pairingToken: msg.token, expiresIn: msg.expiresIn });
+        resolve({ relay: relayUrl, token: msg.token, expiresIn: msg.expiresIn });
         ws.close();
       }
       if (msg.type === 'auth_error' || msg.type === 'server_error') {
@@ -85,20 +82,36 @@ function requestPairingToken(relayUrl: string, authToken?: string): Promise<Pair
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const relay = config.relay;
+  const localRelay = process.argv.includes('--local-relay');
 
-  console.log(`🦑 Requesting pairing token from ${relay}...`);
-  const authToken = getAuthToken(config.authMethod);
+  let relay: string;
+  let authToken: string | undefined;
+
+  if (localRelay) {
+    relay = LOCAL_RELAY;
+    authToken = 'dev'; // open auth accepts any token
+    console.log(`🦑 Using local relay: ${relay}`);
+  } else {
+    const config = loadConfig();
+    relay = config.relay;
+    authToken = getAuthToken(config.authMethod);
+    console.log(`🦑 Using relay: ${relay}`);
+  }
+
+  console.log('🔑 Requesting pairing token...');
   const info = await requestPairingToken(relay, authToken);
   console.log(`✅ Got pairing token (expires in ${info.expiresIn}s)`);
 
-  const params = new URLSearchParams({ relay: info.relay, token: info.pairingToken });
+  const params = new URLSearchParams({ relay, token: info.token });
 
-  // Start Vite and capture its output to detect the actual port
+  // Start Vite
+  const viteEnv = { ...process.env };
+  if (localRelay) viteEnv.VITE_WS_URL = LOCAL_RELAY;
+
   const vite = spawn('pnpm', ['--filter', '@kraki/arm-web', 'dev'], {
     stdio: ['inherit', 'pipe', 'inherit'],
     cwd: process.cwd(),
+    env: viteEnv,
   });
 
   let opened = false;
@@ -107,18 +120,12 @@ async function main(): Promise<void> {
     process.stdout.write(text);
 
     if (!opened) {
-      // Match Vite's "Local: http://localhost:XXXX/" line
       const match = text.match(/Local:\s+http:\/\/localhost:(\d+)/);
       if (match) {
         opened = true;
-        const port = match[1];
-        const url = `http://localhost:${port}?${params.toString()}`;
+        const url = `http://localhost:${match[1]}?${params.toString()}`;
         console.log(`\n🌐 Opening Chrome: ${url}\n`);
-        try {
-          execSync(`open -a "Google Chrome" "${url}"`);
-        } catch {
-          execSync(`open "${url}"`);
-        }
+        try { execSync(`open -a "Google Chrome" "${url}"`); } catch { execSync(`open "${url}"`); }
       }
     }
   });

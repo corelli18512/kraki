@@ -46,6 +46,7 @@ beforeEach(() => {
 
 describe('DashboardPage', () => {
   it('shows disconnected state', () => {
+    useStore.getState().setStatus('disconnected');
     renderWithRoute('/', <DashboardPage />);
     expect(screen.getByText('Disconnected')).toBeInTheDocument();
   });
