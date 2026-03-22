@@ -1,10 +1,10 @@
-import type { Message } from '@kraki/protocol';
+import type { Message, InnerMessage } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { ReplayState } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError } from './auth';
-import { handleHeadNotice, handleDataMessage } from './message-router';
+import { handleDataMessage } from './message-router';
 import { getStore } from './store-adapter';
 import { CommandState } from './commands';
 import * as commands from './commands';
@@ -40,11 +40,10 @@ export class KrakiWSClient {
     // Initialize key store (async, but we start connecting in parallel)
     if (!this.encryption.keyStore.isReady()) {
       this.encryption.keyStore.init().catch(() => {
-        // Key init failed — auth will work without E2E
+        // Key init failed — E2E will not work
       });
     }
     this.transport.connect();
-    this.listenForVisibilityChange();
   }
 
   disconnect() {
@@ -64,7 +63,7 @@ export class KrakiWSClient {
 
   // --- Actions ---
 
-  /** Send through encryption layer (E2E when enabled, plaintext fallback). */
+  /** Send through encryption layer as UnicastEnvelope. */
   private sendEncrypted(msg: Record<string, unknown>) {
     this.encryption.encryptOutbound(msg, (m) => this.transport.send(m));
   }
@@ -102,12 +101,11 @@ export class KrakiWSClient {
   }
 
   deleteSession(sessionId: string) {
-    // delete_session is a control message handled by head, not routed to tentacle
-    this.transport.send({
+    // delete_session is now an encrypted unicast to the tentacle
+    this.sendEncrypted({
       type: 'delete_session',
       sessionId,
-      channel: getStore().channel,
-      deviceId: getStore().deviceId,
+      payload: {},
     });
   }
 
@@ -116,7 +114,8 @@ export class KrakiWSClient {
   }
 
   markRead(sessionId: string): void {
-    this.replay.markRead(sessionId, (msg) => this.transport.send(msg));
+    // Local-only in thin relay — no relay message needed
+    this.replay.markRead(sessionId);
   }
 
   // --- Internal ---
@@ -147,8 +146,7 @@ export class KrakiWSClient {
 
   private encryptionCallbacks() {
     return {
-      updateSeq: (seq: number) => this.replay.updateSeq(seq),
-      handleDataMessage: (msg: Message) => handleDataMessage(msg, {
+      handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
         replaying: this.replay.replaying,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
@@ -157,38 +155,22 @@ export class KrakiWSClient {
     };
   }
 
-  /** Catch up on missed messages when the tab returns from background. */
-  private listenForVisibilityChange(): void {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && this.transport.isConnected()) {
-        // Request messages since lastSeq to catch anything missed while backgrounded
-        this.replay.startReplay((m) => this.transport.send(m));
-      }
-    });
-  }
-
   private handleMessage(msg: Message) {
-    // Decrypt E2E encrypted messages
-    if (msg.type === 'encrypted') {
-      this.encryption.handleEncrypted(msg as any, this.encryptionCallbacks());
-      if ('seq' in msg && typeof msg.seq === 'number') {
-        this.replay.updateSeq(msg.seq);
-      }
-      if (this.replay.replaying) {
-        this.replay.scheduleReplayEnd();
-      }
-      return;
-    }
+    // Handle pong (keepalive response) — not in typed Message union
+    if ((msg as any).type === 'pong') return;
 
     switch (msg.type) {
+      // --- Encrypted envelopes ---
+      case 'unicast':
+      case 'broadcast':
+        this.encryption.handleEncrypted(msg as any, this.encryptionCallbacks());
+        return;
+
+      // --- Control messages ---
       case 'auth_ok':
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
-          setE2eEnabled: (v) => { this.encryption.e2eEnabled = v; },
-          setReadState: (rs) => { this.replay.readState = rs; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
-          send: (m) => this.transport.send(m),
-          startReplay: () => this.replay.startReplay((m) => this.transport.send(m)),
         });
         break;
 
@@ -209,9 +191,6 @@ export class KrakiWSClient {
         });
         break;
 
-      case 'pong':
-        break;
-
       case 'auth_info_response': {
         const info = msg as any;
         if (info.githubClientId) {
@@ -224,7 +203,6 @@ export class KrakiWSClient {
       case 'server_error': {
         const serverErr = msg as any;
         console.error('[Kraki] Server error:', serverErr.message);
-        this.replay.reset();
         if (serverErr.requestId) {
           this.cmdState.clearRequest(serverErr.requestId);
         }
@@ -232,31 +210,7 @@ export class KrakiWSClient {
         break;
       }
 
-      case 'head_notice':
-        handleHeadNotice(msg);
-        break;
-
-      case 'replay_complete': {
-        const rc = msg as any;
-        if (typeof rc.lastSeq === 'number') {
-          this.replay.completeReplay(rc.lastSeq);
-        }
-        break;
-      }
-
       default:
-        if ('seq' in msg && typeof msg.seq === 'number') {
-          this.replay.updateSeq(msg.seq);
-        }
-        handleDataMessage(msg, {
-          replaying: this.replay.replaying,
-          cmdState: this.cmdState,
-          sendEncrypted: (m) => this.sendEncrypted(m),
-        });
-        // During replay, debounce end-of-replay detection
-        if (this.replay.replaying) {
-          this.replay.scheduleReplayEnd();
-        }
         break;
     }
   }

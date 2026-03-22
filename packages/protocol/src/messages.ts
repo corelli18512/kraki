@@ -1,11 +1,51 @@
 // ------------------------------------------------------------
-// Message types and envelope
+// Kraki Protocol — Message types and envelopes
+// ------------------------------------------------------------
+//
+// The relay is a thin encrypted forwarder. It never reads message
+// content — only the envelope fields visible to it.
+//
+// Two envelope directions:
+//   Unicast   — app → specific tentacle (has `to` field)
+//   Broadcast — tentacle → all devices (has optional `notify`)
+//
+// Inner messages (ProducerMessage / ConsumerMessage) are encrypted
+// inside the blob and only visible to endpoints after decryption.
 // ------------------------------------------------------------
 
-// --- Base envelope fields shared by all messages ---
+// ============================================================
+// Relay envelopes (visible to relay)
+// ============================================================
+
+/** App → specific tentacle. Relay reads `to` for routing. */
+export interface UnicastEnvelope {
+  type: 'unicast';
+  /** Target device ID */
+  to: string;
+  /** Encrypted payload: base64(iv + ciphertext + tag) */
+  blob: string;
+  /** Per-device RSA-OAEP encrypted AES key (base64) */
+  keys: Record<string, string>;
+}
+
+/** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
+export interface BroadcastEnvelope {
+  type: 'broadcast';
+  /** If true, relay sends APNs push to offline app devices */
+  notify?: boolean;
+  /** Encrypted payload: base64(iv + ciphertext + tag) */
+  blob: string;
+  /** Per-device RSA-OAEP encrypted AES key (base64) */
+  keys: Record<string, string>;
+}
+
+export type RelayEnvelope = UnicastEnvelope | BroadcastEnvelope;
+
+// ============================================================
+// Inner message base (inside encrypted blob, invisible to relay)
+// ============================================================
 
 interface BaseEnvelope {
-  channel: string;
   deviceId: string;
   seq: number;
   timestamp: string;
@@ -13,7 +53,7 @@ interface BaseEnvelope {
 }
 
 // ============================================================
-// Producer messages (tentacle → head → app)
+// Producer messages (tentacle → app, inside encrypted blob)
 // ============================================================
 
 export interface SessionCreatedMessage extends BaseEnvelope {
@@ -122,33 +162,8 @@ export type ProducerMessage =
   | ErrorMessage
   | SessionModeSetMessage;
 
-/** Message types the head persists for session recovery */
-export type StoredMessageType =
-  | 'session_created'
-  | 'session_ended'
-  | 'user_message'
-  | 'agent_message'
-  | 'permission'
-  | 'question'
-  | 'tool_start'
-  | 'tool_complete'
-  | 'error'
-  | 'send_input'
-  | 'approve'
-  | 'deny'
-  | 'always_allow'
-  | 'answer'
-  | 'kill_session'
-  | 'session_mode_set';
-
-/** Message types forwarded in real-time only (not persisted) */
-export type TransientMessageType =
-  | 'agent_message_delta'
-  | 'idle'
-  | 'create_session';
-
 // ============================================================
-// Consumer messages (app → head → tentacle)
+// Consumer messages (app → tentacle, inside encrypted blob)
 // ============================================================
 
 export interface SendInputMessage extends BaseEnvelope {
@@ -228,6 +243,14 @@ export interface DeleteSessionMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+export interface MarkReadMessage extends BaseEnvelope {
+  type: 'mark_read';
+  payload: {
+    /** The highest seq the client has seen for this session */
+    seq: number;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -238,17 +261,17 @@ export type ConsumerMessage =
   | AbortSessionMessage
   | CreateSessionMessage
   | SetSessionModeMessage
-  | DeleteSessionMessage;
+  | DeleteSessionMessage
+  | MarkReadMessage;
 
 // ============================================================
-// Control messages (device ↔ head)
+// Control messages (device ↔ relay, unencrypted)
 // ============================================================
 
 export interface AuthMessage {
   type: 'auth';
   token?: string;
-  channelKey?: string;
-  /** One-time pairing token from QR code (alternative to token/channelKey) */
+  /** One-time pairing token from QR code (alternative to token) */
   pairingToken?: string;
   /** GitHub OAuth authorization code (exchanged server-side for access token) */
   githubCode?: string;
@@ -257,15 +280,11 @@ export interface AuthMessage {
 
 export interface AuthOkMessage {
   type: 'auth_ok';
-  channel: string;
   deviceId: string;
-  e2e: boolean;
+  user: { id: string; login: string; provider: string; email?: string };
   devices: DeviceSummary[];
-  sessions: SessionSummary[];
-  /** Per-session last-read seq for this device (for unread tracking) */
-  readState?: Record<string, number>;
-  /** Channel owner identity (login, provider) for profile display */
-  user?: { id: string; login: string; provider: string; email?: string };
+  /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
+  githubClientId?: string;
 }
 
 export interface AuthErrorMessage {
@@ -287,31 +306,6 @@ export interface AuthResponseMessage {
 export interface ServerErrorMessage {
   type: 'server_error';
   message: string;
-  /** Echoed from create_session for request tracking */
-  requestId?: string;
-}
-
-export interface ReplayMessage {
-  type: 'replay';
-  afterSeq: number;
-  sessionId?: string;
-}
-
-export interface ReplayCompleteMessage {
-  type: 'replay_complete';
-  /** The highest seq in the channel — covers both sent and skipped messages */
-  lastSeq: number;
-}
-
-export interface MarkReadMessage {
-  type: 'mark_read';
-  sessionId: string;
-  /** The highest seq the client has seen for this session */
-  seq: number;
-}
-
-export interface CreatePairingTokenMessage {
-  type: 'create_pairing_token';
 }
 
 /** One-shot pairing token request — no device registration needed */
@@ -327,12 +321,8 @@ export interface PairingTokenCreatedMessage {
   expiresIn: number;
 }
 
-export interface PingMessage {
-  type: 'ping';
-}
-
-export interface PongMessage {
-  type: 'pong';
+export interface CreatePairingTokenMessage {
+  type: 'create_pairing_token';
 }
 
 /** Pre-auth request to discover server capabilities. */
@@ -343,26 +333,13 @@ export interface AuthInfoRequest {
 /** Server response with supported auth modes and features. */
 export interface AuthInfoResponse {
   type: 'auth_info_response';
-  /** Supported auth modes (e.g. ['github', 'apikey', 'open']) */
+  /** Supported auth modes (e.g. ['github']) */
   authModes: string[];
-  /** Whether E2E encryption is enabled */
-  e2e: boolean;
   /** Whether device pairing is enabled */
   pairing: boolean;
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
 }
-
-/** Global notification from head to all connected devices (tentacles + apps) */
-export type HeadNotice =
-  | { type: 'head_notice'; event: 'device_online';   data: { device: DeviceSummary } }
-  | { type: 'head_notice'; event: 'device_offline';  data: { deviceId: string } }
-  | { type: 'head_notice'; event: 'device_added';    data: { device: DeviceSummary } }
-  | { type: 'head_notice'; event: 'device_removed';  data: { deviceId: string } }
-  | { type: 'head_notice'; event: 'session_updated'; data: { session: SessionSummary } }
-  | { type: 'head_notice'; event: 'session_removed'; data: { sessionId: string } }
-  | { type: 'head_notice'; event: 'update_allow_list'; data: { allowedTools: string[] } }
-  | { type: 'head_notice'; event: 'read_state_updated'; data: { sessionId: string; lastSeq: number } };
 
 export type ControlMessage =
   | AuthMessage
@@ -371,58 +348,24 @@ export type ControlMessage =
   | AuthChallengeMessage
   | AuthResponseMessage
   | ServerErrorMessage
-  | ReplayMessage
-  | ReplayCompleteMessage
-  | MarkReadMessage
-  | CreatePairingTokenMessage
   | RequestPairingTokenMessage
   | PairingTokenCreatedMessage
+  | CreatePairingTokenMessage
   | AuthInfoRequest
-  | AuthInfoResponse
-  | PingMessage
-  | PongMessage
-  | HeadNotice;
-
-// ============================================================
-// E2E Encrypted message
-// ============================================================
-// In E2E mode, any ProducerMessage or ConsumerMessage is wrapped
-// in this envelope. The head cannot read the inner message.
-//
-// The ciphertext is encrypted ONCE with a random AES key.
-// The AES key is then encrypted separately for each recipient
-// device using their RSA public key. This avoids duplicating
-// the (potentially large) ciphertext per device.
-// ============================================================
-
-export interface EncryptedMessage extends BaseEnvelope {
-  type: 'encrypted';
-  /** AES-256-GCM initialization vector (base64) */
-  iv: string;
-  /** AES-256-GCM encrypted payload (base64) — same for all recipients */
-  ciphertext: string;
-  /** AES-256-GCM authentication tag (base64) — tamper detection */
-  tag: string;
-  /** Per-device RSA-OAEP encrypted AES key (base64) */
-  keys: Record<string, string>;
-  /** Agent name exposed from session_created for head session registration */
-  agent?: string;
-  /** Model exposed from session_created for head session registration */
-  model?: string;
-  /** Target device ID for encrypted create_session routing */
-  targetDeviceId?: string;
-  /** Delivery hint: if true, head should forward but not persist (e.g. deltas, idle) */
-  ephemeral?: boolean;
-}
+  | AuthInfoResponse;
 
 // ============================================================
 // Union of all messages
 // ============================================================
 
-export type Message = ProducerMessage | ConsumerMessage | ControlMessage | EncryptedMessage;
+/** Inner message (decrypted from blob) */
+export type InnerMessage = ProducerMessage | ConsumerMessage;
+
+/** Everything that flows over the WebSocket */
+export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
-import type { DeviceSummary, DeviceRole, DeviceInfo } from './devices.js';
+import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
 import type { SessionSummary } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, SessionSummary, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, ToolArgs };

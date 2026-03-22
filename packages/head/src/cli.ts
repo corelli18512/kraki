@@ -1,18 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * @kraki/head — CLI entry point for the Kraki relay server.
+ * @kraki/head — CLI entry point for the Kraki thin relay server.
  *
  * Usage:
  *   npx @kraki/head
  *   npx @kraki/head --port 8080
- *   npx @kraki/head --auth github --e2e true
  *
  * Environment variables:
  *   PORT         Server port (default: 4000)
  *   DB_PATH      SQLite database path (default: kraki-head.db)
  *   AUTH_MODE    Auth mode: open | github | apikey (default: open)
- *   E2E_MODE     Enable E2E encryption: true | false (default: false)
  *   API_KEY               API key for apikey auth mode
  *   GITHUB_CLIENT_ID      GitHub OAuth App client ID (for web login)
  *   GITHUB_CLIENT_SECRET  GitHub OAuth App client secret (for web login)
@@ -30,21 +28,19 @@ dotenvConfig({ path: resolve(__dirname, '..', '.env') });
 
 import { createServer } from 'http';
 import { Storage } from './storage.js';
-import { ChannelManager } from './channel-manager.js';
-import { Router } from './router.js';
 import { HeadServer } from './server.js';
 import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider } from './auth.js';
 import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 // --- CLI flags ---
 const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-  🦑 @kraki/head v${VERSION}
+  🦑 @kraki/head v${VERSION} — thin encrypted relay
 
   Usage: kraki-relay [options]
 
@@ -52,7 +48,6 @@ if (args.includes('--help') || args.includes('-h')) {
     --port <n>      Server port (default: 4000, env: PORT)
     --db <path>     SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>   Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
-    --e2e <bool>    Enable E2E encryption (default: false, env: E2E_MODE)
     --log <level>   Log level: debug | info | warn | error (default: info)
     --help, -h      Show this help
     --version, -v   Show version
@@ -81,7 +76,6 @@ const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(
 const API_KEY = process.env.API_KEY;
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const E2E = flag('e2e', process.env.E2E_MODE || 'false') === 'true';
 const PAIRING = process.env.PAIRING_ENABLED !== 'false'; // default true
 const LOG_LEVEL = flag('log', process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error';
 const LOG_PATH = process.env.LOG_PATH;
@@ -135,12 +129,9 @@ logger.info('Kraki Head starting...');
 
 const authProviders = createAuthProviders();
 const storage = new Storage(DB_PATH);
-const cm = new ChannelManager(storage);
-const router = new Router(cm);
-const head = new HeadServer(cm, router, {
+const head = new HeadServer(storage, {
   authProviders,
   authModes: AUTH_MODES,
-  e2e: E2E,
   pairingEnabled: PAIRING,
 });
 
@@ -155,7 +146,6 @@ httpServer.listen(PORT, () => {
   logger.info(`Kraki Head listening on port ${PORT}`, {
     ws: `ws://localhost:${PORT}`,
     auth: AUTH_MODES.join(', '),
-    e2e: E2E,
     pairing: PAIRING,
     db: DB_PATH,
   });

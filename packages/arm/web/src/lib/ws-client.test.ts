@@ -2,6 +2,30 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { KrakiWSClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 
+// Mock encryption so data messages pass through without real crypto
+vi.mock('./encryption', () => ({
+  EncryptionHandler: class {
+    keyStore: any;
+    constructor(keyStore: any) { this.keyStore = keyStore; }
+    async handleEncrypted(msg: any, callbacks: any) {
+      const inner = JSON.parse(msg.blob);
+      callbacks.handleDataMessage(inner);
+      callbacks.getHandlers().forEach((h: any) => h(inner));
+    }
+    async encryptOutbound(msg: any, send: any) { send(msg); }
+    async drainEncryptedQueue() {}
+  },
+}));
+
+vi.mock('./e2e', () => ({
+  createAppKeyStore: () => ({
+    isReady: () => true,
+    init: async () => {},
+    getSigningPublicKey: async () => 'mock-signing-key',
+    getPublicKey: async () => 'mock-encryption-key',
+  }),
+}));
+
 // Access the mock WebSocket instances
 let lastWsInstance: any;
 const OriginalWebSocket = globalThis.WebSocket;
@@ -21,6 +45,15 @@ afterEach(() => {
   globalThis.WebSocket = OriginalWebSocket;
   vi.restoreAllMocks();
 });
+
+/** Simulate receiving a decrypted inner message through the encryption layer. */
+function receiveInner(data: Record<string, unknown>) {
+  lastWsInstance._receive({
+    type: 'broadcast',
+    blob: JSON.stringify(data),
+    keys: { 'dev-web-123': 'mock-key' },
+  });
+}
 
 describe('KrakiWSClient', () => {
   describe('connect', () => {
@@ -101,23 +134,16 @@ describe('KrakiWSClient', () => {
       // Simulate auth_ok from server
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [
           { id: 'dev-1', name: 'MacBook', role: 'tentacle', online: true },
-        ],
-        sessions: [
-          { id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook', agent: 'copilot', state: 'active', messageCount: 3 },
         ],
       });
 
       const state = useStore.getState();
       expect(state.status).toBe('connected');
-      expect(state.channel).toBe('ch-test');
       expect(state.deviceId).toBe('dev-web-123');
       expect(state.devices.size).toBe(1);
-      expect(state.sessions.size).toBe(1);
     });
   });
 
@@ -129,13 +155,12 @@ describe('KrakiWSClient', () => {
       });
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [],
-        sessions: [
-          { id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook', agent: 'copilot', state: 'active', messageCount: 0 },
-        ],
+      });
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'copilot', state: 'active', messageCount: 0,
       });
     }
 
@@ -143,9 +168,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'agent_message',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -162,18 +186,16 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'agent_message_delta',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
         payload: { content: 'Hel' },
       });
-      lastWsInstance._receive({
+      receiveInner({
         type: 'agent_message_delta',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
@@ -189,9 +211,8 @@ describe('KrakiWSClient', () => {
       await connectAndAuth(client);
 
       useStore.getState().appendDelta('sess-1', 'streaming...');
-      lastWsInstance._receive({
+      receiveInner({
         type: 'agent_message',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
@@ -206,9 +227,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'session_created',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -227,9 +247,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'session_ended',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
@@ -244,9 +263,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'permission',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
@@ -269,9 +287,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'question',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 4,
         timestamp: new Date().toISOString(),
@@ -289,56 +306,12 @@ describe('KrakiWSClient', () => {
       expect(q?.choices).toEqual(['React', 'Vue']);
     });
 
-    it('routes head_notice device_online', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-
-      lastWsInstance._receive({
-        type: 'head_notice',
-        event: 'device_online',
-        data: { device: { id: 'dev-new', name: 'New Machine', role: 'tentacle', online: true } },
-      });
-
-      expect(useStore.getState().devices.get('dev-new')).toBeDefined();
-    });
-
-    it('routes head_notice device_offline', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-      useStore.getState().setDevices([{ id: 'dev-1', name: 'Mac', role: 'tentacle', online: true }]);
-
-      lastWsInstance._receive({
-        type: 'head_notice',
-        event: 'device_offline',
-        data: { deviceId: 'dev-1' },
-      });
-
-      expect(useStore.getState().devices.get('dev-1')?.online).toBe(false);
-    });
-
-    it('routes head_notice session_updated', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-
-      lastWsInstance._receive({
-        type: 'head_notice',
-        event: 'session_updated',
-        data: {
-          session: { id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 10 },
-        },
-      });
-
-      expect(useStore.getState().sessions.get('sess-1')?.state).toBe('idle');
-      expect(useStore.getState().sessions.get('sess-1')?.messageCount).toBe(10);
-    });
-
     it('routes idle message and updates session state', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'idle',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 5,
         timestamp: new Date().toISOString(),
@@ -359,11 +332,8 @@ describe('KrakiWSClient', () => {
       });
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [],
-        sessions: [],
       });
       // Clear auth message
       lastWsInstance.sentMessages = [];
@@ -671,100 +641,17 @@ describe('KrakiWSClient', () => {
     });
   });
 
-  describe('replay on reconnect', () => {
-    it('sends replay message when lastSeq > 0', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      client.connect();
-      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
-
-      // First auth — establish some lastSeq by receiving a message with seq
-      lastWsInstance._receive({
-        type: 'auth_ok',
-        channel: 'ch-test',
-        deviceId: 'dev-web-123',
-        e2e: false,
-        devices: [],
-        sessions: [{ id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac', agent: 'copilot', state: 'active', messageCount: 0 }],
-      });
-
-      // Receive a message with seq to set lastSeq
-      lastWsInstance._receive({
-        type: 'agent_message',
-        channel: 'ch-test',
-        deviceId: 'dev-1',
-        seq: 42,
-        timestamp: new Date().toISOString(),
-        sessionId: 'sess-1',
-        payload: { content: 'hello' },
-      });
-
-      lastWsInstance.sentMessages = [];
-
-      // Simulate reconnect — new auth_ok
-      lastWsInstance._receive({
-        type: 'auth_ok',
-        channel: 'ch-test',
-        deviceId: 'dev-web-456',
-        e2e: false,
-        devices: [],
-        sessions: [],
-      });
-
-      // Should have sent a replay message
-      const replayMsg = lastWsInstance.sentMessages.find(
-        (m: string) => JSON.parse(m).type === 'replay',
-      );
-      expect(replayMsg).toBeDefined();
-      expect(JSON.parse(replayMsg!).afterSeq).toBe(42);
-    });
-  });
-
-  describe('head_notice device_added and device_removed', () => {
-    async function connectAndAuth(client: KrakiWSClient) {
-      client.connect();
-      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
-      lastWsInstance._receive({
-        type: 'auth_ok', channel: 'ch-test', deviceId: 'dev-web-123', e2e: false,
-        devices: [{ id: 'dev-1', name: 'Mac', role: 'tentacle', online: true }],
-        sessions: [],
-      });
-    }
-
-    it('routes head_notice device_added', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-
-      lastWsInstance._receive({
-        type: 'head_notice',
-        event: 'device_added',
-        data: { device: { id: 'dev-new', name: 'New Server', role: 'tentacle', online: true } },
-      });
-
-      expect(useStore.getState().devices.get('dev-new')?.name).toBe('New Server');
-    });
-
-    it('routes head_notice device_removed', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-
-      lastWsInstance._receive({
-        type: 'head_notice',
-        event: 'device_removed',
-        data: { deviceId: 'dev-1' },
-      });
-
-      expect(useStore.getState().devices.has('dev-1')).toBe(false);
-    });
-  });
-
   describe('default data message handler', () => {
     async function connectAndAuth(client: KrakiWSClient) {
       client.connect();
       await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
       lastWsInstance._receive({
-        type: 'auth_ok', channel: 'ch-test', deviceId: 'dev-web-123', e2e: false,
+        type: 'auth_ok', deviceId: 'dev-web-123',
         devices: [],
-        sessions: [{ id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac', agent: 'copilot', state: 'active', messageCount: 0 }],
+      });
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac',
+        agent: 'copilot', state: 'active', messageCount: 0,
       });
     }
 
@@ -772,9 +659,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'user_message',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 10,
         timestamp: new Date().toISOString(),
@@ -791,9 +677,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'some_unknown',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 11,
         timestamp: new Date().toISOString(),
@@ -857,13 +742,10 @@ describe('KrakiWSClient', () => {
       });
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [
           { id: 'dev-tent', name: 'Mac', role: 'tentacle', online: true },
         ],
-        sessions: [],
       });
     }
 
@@ -898,9 +780,8 @@ describe('KrakiWSClient', () => {
       const requestId = JSON.parse(createMsg).payload.requestId;
 
       // Simulate session_created with matching requestId
-      lastWsInstance._receive({
+      receiveInner({
         type: 'session_created',
-        channel: 'ch-test',
         deviceId: 'dev-tent',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -921,9 +802,8 @@ describe('KrakiWSClient', () => {
       client.createSession({ targetDeviceId: 'dev-tent', model: 'gpt-4.1', prompt: 'Fix the bug' });
 
       // Simulate session_created with WRONG requestId
-      lastWsInstance._receive({
+      receiveInner({
         type: 'session_created',
-        channel: 'ch-test',
         deviceId: 'dev-tent',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -945,11 +825,8 @@ describe('KrakiWSClient', () => {
       });
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [],
-        sessions: [],
       });
     }
 
@@ -983,9 +860,8 @@ describe('KrakiWSClient', () => {
       });
 
       // Now if session_created arrives with this requestId, no prompt should be inserted
-      lastWsInstance._receive({
+      receiveInner({
         type: 'session_created',
-        channel: 'ch-test',
         deviceId: 'dev-tent',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -1007,13 +883,12 @@ describe('KrakiWSClient', () => {
       });
       lastWsInstance._receive({
         type: 'auth_ok',
-        channel: 'ch-test',
         deviceId: 'dev-web-123',
-        e2e: false,
         devices: [],
-        sessions: [
-          { id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac', agent: 'copilot', state: 'active', messageCount: 0 },
-        ],
+      });
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac',
+        agent: 'copilot', state: 'active', messageCount: 0,
       });
     }
 
@@ -1022,9 +897,8 @@ describe('KrakiWSClient', () => {
       await connectAndAuth(client);
 
       // Simulate tool_start
-      lastWsInstance._receive({
+      receiveInner({
         type: 'tool_start',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -1033,9 +907,8 @@ describe('KrakiWSClient', () => {
       });
 
       // Simulate tool_complete with same toolCallId
-      lastWsInstance._receive({
+      receiveInner({
         type: 'tool_complete',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
@@ -1057,9 +930,8 @@ describe('KrakiWSClient', () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'tool_start',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -1067,9 +939,8 @@ describe('KrakiWSClient', () => {
         payload: { toolName: 'shell', args: { command: 'ls' } },
       });
 
-      lastWsInstance._receive({
+      receiveInner({
         type: 'tool_complete',
-        channel: 'ch-test',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),

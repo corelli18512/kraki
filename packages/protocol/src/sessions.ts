@@ -1,17 +1,8 @@
 // ------------------------------------------------------------
-// Session types
+// Session types — managed by tentacle and frontend, not relay
 // ------------------------------------------------------------
 
-export interface Session {
-  id: string;
-  channelId: string;
-  deviceId: string;
-  agent: string;
-  model?: string;
-  messageCount: number;
-  lastSeq: number;
-  createdAt: string;
-}
+export type SessionState = 'active' | 'idle' | 'ended';
 
 export interface SessionSummary {
   id: string;
@@ -19,5 +10,6 @@ export interface SessionSummary {
   deviceName: string;
   agent: string;
   model?: string;
+  state: SessionState;
   messageCount: number;
 }

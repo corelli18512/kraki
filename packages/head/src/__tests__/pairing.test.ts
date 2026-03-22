@@ -1,66 +1,129 @@
+/**
+ * Pairing token tests.
+ * Pairing tokens are now in-memory on the HeadServer — tested through the WebSocket API.
+ */
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { Storage } from '../storage.js';
+import { WebSocket } from 'ws';
+import { createTestEnv, connectDevice, type TestEnv } from './integration-helpers.js';
 
-describe('Storage: pairing tokens', () => {
-  let storage: Storage;
+describe('Pairing (in-memory tokens)', () => {
+  let env: TestEnv;
 
-  beforeEach(() => {
-    storage = new Storage(':memory:');
-    storage.upsertUser('user1', 'testuser');
-    storage.createChannel('ch_1', 'user1');
+  beforeEach(async () => {
+    env = await createTestEnv();
   });
 
-  afterEach(() => { storage.close(); });
-
-  it('should create and consume a valid token', () => {
-    const expires = new Date(Date.now() + 300_000).toISOString();
-    storage.createPairingToken('pt_abc', 'ch_1', expires);
-    const channelId = storage.consumePairingToken('pt_abc');
-    expect(channelId).toBe('ch_1');
+  afterEach(async () => {
+    await env.cleanup();
   });
 
-  it('should reject already used token (single-use)', () => {
-    const expires = new Date(Date.now() + 300_000).toISOString();
-    storage.createPairingToken('pt_once', 'ch_1', expires);
+  it('should create and use a pairing token', async () => {
+    const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
 
-    expect(storage.consumePairingToken('pt_once')).toBe('ch_1');
-    expect(storage.consumePairingToken('pt_once')).toBeNull();
+    tentacle.send({ type: 'create_pairing_token' });
+    const tokenMsg = await tentacle.waitFor('pairing_token_created');
+    expect(tokenMsg.token).toMatch(/^pt_/);
+    expect(tokenMsg.expiresIn).toBeGreaterThan(0);
+
+    const app = await connectDevice(env.port, 'Phone', 'app', { pairingToken: tokenMsg.token });
+    expect(app.deviceId).toMatch(/^dev_/);
+
+    // Both devices should appear in the paired app's device list
+    const authOk = app.messages.find(m => m.type === 'auth_ok');
+    expect(authOk.devices.length).toBeGreaterThanOrEqual(2);
+
+    tentacle.close();
+    app.close();
   });
 
-  it('should reject expired token', () => {
-    const expired = new Date(Date.now() - 1000).toISOString();
-    storage.createPairingToken('pt_old', 'ch_1', expired);
-    expect(storage.consumePairingToken('pt_old')).toBeNull();
+  it('should reject already-used pairing token (single-use)', async () => {
+    const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
+
+    tentacle.send({ type: 'create_pairing_token' });
+    const tokenMsg = await tentacle.waitFor('pairing_token_created');
+
+    // First use succeeds
+    const app1 = await connectDevice(env.port, 'Phone', 'app', { pairingToken: tokenMsg.token });
+    expect(app1.deviceId).toBeTruthy();
+
+    // Second use fails
+    const ws = new WebSocket(`ws://127.0.0.1:${env.port}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    ws.send(JSON.stringify({
+      type: 'auth',
+      pairingToken: tokenMsg.token,
+      device: { name: 'Browser', role: 'app' },
+    }));
+    const res = await new Promise<any>((resolve) => {
+      ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+    });
+    expect(res.type).toBe('auth_error');
+
+    ws.close();
+    app1.close();
+    tentacle.close();
   });
 
-  it('should reject non-existent token', () => {
-    expect(storage.consumePairingToken('pt_nonexistent')).toBeNull();
+  it('should reject invalid pairing token', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${env.port}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    ws.send(JSON.stringify({
+      type: 'auth',
+      pairingToken: 'pt_nonexistent',
+      device: { name: 'Phone', role: 'app' },
+    }));
+    const res = await new Promise<any>((resolve) => {
+      ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+    });
+    expect(res.type).toBe('auth_error');
+    expect(res.message).toContain('Invalid or expired');
+    ws.close();
   });
 
-  it('should store hashed token (DB does not contain raw token)', () => {
-    const expires = new Date(Date.now() + 300_000).toISOString();
-    storage.createPairingToken('pt_secret123', 'ch_1', expires);
+  it('should reject create_pairing_token when pairing is disabled', async () => {
+    await env.cleanup();
+    env = await createTestEnv({ pairingEnabled: false });
 
-    // Direct DB query — the stored token should be a hash, not the raw value
-    const rows = (storage as any).db.prepare('SELECT token FROM pairing_tokens').all();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].token).not.toBe('pt_secret123');
-    expect(rows[0].token.length).toBe(64); // SHA-256 hex = 64 chars
+    const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
+    tentacle.send({ type: 'create_pairing_token' });
+    const res = await tentacle.waitFor('server_error');
+    expect(res.message).toContain('disabled');
+
+    tentacle.close();
   });
 
-  it('should clean expired and used tokens', () => {
-    const expired = new Date(Date.now() - 1000).toISOString();
-    const valid = new Date(Date.now() + 300_000).toISOString();
+  it('should support one-shot pairing via request_pairing_token', async () => {
+    // request_pairing_token is a pre-auth message that authenticates
+    // and immediately returns a pairing token (used for QR code flow)
+    const ws = new WebSocket(`ws://127.0.0.1:${env.port}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
 
-    storage.createPairingToken('pt_expired', 'ch_1', expired);
-    storage.createPairingToken('pt_used', 'ch_1', valid);
-    storage.consumePairingToken('pt_used'); // mark as used
-    storage.createPairingToken('pt_valid', 'ch_1', valid);
+    // In open mode, any token is accepted
+    ws.send(JSON.stringify({
+      type: 'request_pairing_token',
+      token: 'anything',
+    }));
 
-    const cleaned = storage.cleanExpiredPairingTokens();
-    expect(cleaned).toBe(2); // expired + used
+    const tokenMsg = await new Promise<any>((resolve) => {
+      ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+    });
+    expect(tokenMsg.type).toBe('pairing_token_created');
+    expect(tokenMsg.token).toMatch(/^pt_/);
+    ws.close();
 
-    // pt_valid should still work
-    expect(storage.consumePairingToken('pt_valid')).toBe('ch_1');
+    // Now use that token to pair a new device
+    const app = await connectDevice(env.port, 'Phone', 'app', { pairingToken: tokenMsg.token });
+    expect(app.deviceId).toBeTruthy();
+    app.close();
   });
 });

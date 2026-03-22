@@ -76,40 +76,30 @@ export async function handleAuthChallenge(
   }
 }
 
-/** Process auth_ok: populate store, save device, drain encrypted queue, start replay. */
+/** Process auth_ok: populate store, save device, drain encrypted queue. */
 export function processAuthOk(
   msg: any,
   transportUrl: string,
   deps: {
     setStoredDeviceId: (id: string) => void;
-    setE2eEnabled: (v: boolean) => void;
-    setReadState: (rs: Record<string, number>) => void;
     drainEncryptedQueue: () => void;
-    send: (msg: Record<string, unknown>) => void;
-    startReplay: () => void;
   },
 ): void {
   const store = getStore();
   store.setStatus('connected');
-  store.setAuth(msg.channel, msg.deviceId);
+  store.setAuth(msg.deviceId);
   store.setUser((msg as any).user ?? null);
   if ((msg as any).githubClientId) {
     store.setGithubClientId((msg as any).githubClientId);
   }
   // Clear transient state that may be stale from previous connection
   store.clearTransientState();
-  store.setSessions(msg.sessions);
   store.setDevices(msg.devices);
-  deps.setE2eEnabled(msg.e2e);
-  // Store read state for computing unread after replay
-  deps.setReadState((msg as any).readState ?? {});
   // Save device for return visits
   saveStoredDevice({ relay: transportUrl, deviceId: msg.deviceId });
   deps.setStoredDeviceId(msg.deviceId);
   // Drain any encrypted messages queued before auth
   deps.drainEncryptedQueue();
-  // Replay messages (always request full replay on fresh load)
-  deps.startReplay();
 }
 
 /** Process auth_error: return to login page with error message. */

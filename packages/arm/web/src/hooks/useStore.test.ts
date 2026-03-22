@@ -47,7 +47,6 @@ const mockDevice2: DeviceSummary = {
 
 const mockMessage: ChatMessage = {
   type: 'agent_message',
-  channel: 'ch-1',
   deviceId: 'dev-1',
   seq: 1,
   timestamp: new Date().toISOString(),
@@ -94,10 +93,9 @@ describe('useStore', () => {
       expect(useStore.getState().status).toBe('error');
     });
 
-    it('setAuth stores channel and deviceId', () => {
-      useStore.getState().setAuth('ch-1', 'dev-web-1');
+    it('setAuth stores deviceId', () => {
+      useStore.getState().setAuth('dev-web-1');
       const state = useStore.getState();
-      expect(state.channel).toBe('ch-1');
       expect(state.deviceId).toBe('dev-web-1');
     });
   });
@@ -282,7 +280,7 @@ describe('useStore', () => {
     it('resets all state to initial values', () => {
       // Populate everything
       useStore.getState().setStatus('connected');
-      useStore.getState().setAuth('ch-1', 'dev-1');
+      useStore.getState().setAuth('dev-1');
       useStore.getState().setSessions([mockSession]);
       useStore.getState().setDevices([mockDevice]);
       useStore.getState().appendMessage('sess-1', mockMessage);

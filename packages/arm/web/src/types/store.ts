@@ -95,7 +95,7 @@ export interface AppState {
 export interface AppActions {
   // Connection
   setStatus: (status: ConnectionStatus) => void;
-  setAuth: (channel: string, deviceId: string) => void;
+  setAuth: (deviceId: string) => void;
   setUser: (user: AppState['user']) => void;
 
   // Data

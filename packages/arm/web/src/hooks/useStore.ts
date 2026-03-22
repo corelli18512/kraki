@@ -67,7 +67,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setStatus: (status) => set({ status }),
 
-  setAuth: (channel, deviceId) => set({ channel, deviceId }),
+  setAuth: (deviceId) => set({ deviceId }),
 
   setUser: (user) => set({ user }),
 
@@ -154,7 +154,6 @@ export const useStore = create<Store>()(persist((set) => ({
               sessionId: m.sessionId,
               deviceId: '',
               seq: 0,
-              channel: '',
               timestamp: m.timestamp,
               payload: { content: m.text },
             }
