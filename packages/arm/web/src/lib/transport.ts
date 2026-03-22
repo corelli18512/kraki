@@ -42,6 +42,7 @@ export function saveStoredDevice(device: StoredDevice): void {
 export interface TransportCallbacks {
   onOpen: () => Promise<void>;
   onParsedMessage: (msg: Message) => void;
+  onClose?: () => void;
 }
 
 export const OAUTH_STATE_KEY = 'kraki_oauth_state';
@@ -182,6 +183,7 @@ export class KrakiTransport {
 
     this.ws.onclose = () => {
       this.cleanup();
+      this.callbacks.onClose?.();
       if (!this.intentionalClose) {
         getStore().setStatus('disconnected');
         this.scheduleReconnect();
