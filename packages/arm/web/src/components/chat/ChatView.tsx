@@ -184,7 +184,11 @@ export function ChatView() {
 
       {isDeviceOnline && (
         permissions.length > 0 ? (
-          <PermissionInput permission={permissions[0]} />
+          <div className="flex flex-col">
+            {permissions.map((perm) => (
+              <PermissionInput key={perm.id} permission={perm} />
+            ))}
+          </div>
         ) : questions.length > 0 ? (
           <QuestionInput question={questions[0]} sessionId={sessionId} />
         ) : (

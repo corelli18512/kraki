@@ -131,6 +131,13 @@
   text-decoration: underline;
 }
 
+/* Links inside user message bubbles (white text on coral bg) */
+.bg-kraki-500 .markdown-content a {
+  color: inherit;
+  text-decoration: underline;
+  opacity: 0.9;
+}
+
 .markdown-content blockquote {
   border-left: 3px solid var(--color-kraki-500);
   padding-left: 0.75rem;
