@@ -67,6 +67,7 @@ vi.mock("../config.js", () => ({
   saveConfig: (...args: any[]) => mockSaveConfig(...args),
   saveChannelKey: (...args: any[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: () => "dev_test123",
+  getConfigPath: () => "/tmp/fake-kraki/config.json",
   loadChannelKey: () => null,
 }));
 

@@ -79,6 +79,8 @@ vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => mockConfig),
   loadChannelKey: vi.fn(() => mockChannelKey),
   getOrCreateDeviceId: vi.fn(() => 'dev_test123'),
+  getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
+  getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
 }));
 
 let mockExecSyncReturn = 'fake-token\n';
@@ -132,7 +134,10 @@ describe('daemon-worker: startWorker()', () => {
   it('exits if no config found', async () => {
     mockConfig = null;
     await startWorker().catch(() => {});
-    expect(mockLoggerFns.fatal).toHaveBeenCalledWith(expect.stringContaining('No config found'));
+    expect(mockLoggerFns.fatal).toHaveBeenCalledWith(
+      expect.objectContaining({ configPath: '/tmp/fake-kraki/config.json' }),
+      expect.stringContaining('No config found'),
+    );
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
@@ -152,14 +157,20 @@ describe('daemon-worker: startWorker()', () => {
     mockConfig.authMethod = 'channel-key';
     mockChannelKey = 'my-secret-key';
     await startWorker();
-    expect(mockLoggerFns.debug).toHaveBeenCalledWith(expect.stringContaining('Loaded channel key'));
+    expect(mockLoggerFns.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ channelKeyPath: '/tmp/fake-kraki/channel.key' }),
+      expect.stringContaining('Loaded channel key'),
+    );
   });
 
   it('warns when channel key is missing', async () => {
     mockConfig.authMethod = 'channel-key';
     mockChannelKey = null;
     await startWorker();
-    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('No channel key'));
+    expect(mockLoggerFns.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ channelKeyPath: '/tmp/fake-kraki/channel.key' }),
+      expect.stringContaining('No channel key'),
+    );
   });
 
   it('sets up relay state change and auth callbacks', async () => {

@@ -4,7 +4,8 @@ import { v4 as uuid } from 'uuid';
 import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
 import type {
-  AuthMessage, UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
+  AuthMessage, AuthErrorCode, AuthMethod,
+  UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import type { AuthProvider, AuthUser, AuthOutcome } from './auth.js';
@@ -353,6 +354,10 @@ export class HeadServer {
     }
   }
 
+  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string): void {
+    ws.send(JSON.stringify({ type: 'auth_error', code, message }));
+  }
+
   // --- Auth ---
 
   private async handleAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
@@ -377,7 +382,7 @@ export class HeadServer {
           ws.send(JSON.stringify({ type: 'auth_challenge', nonce }));
           return;
         }
-        ws.send(JSON.stringify({ type: 'auth_error', message: 'Unknown device' }));
+        this.sendAuthError(ws, 'unknown_device', 'Unknown device');
         return;
       }
 
@@ -386,7 +391,7 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.token, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'github_token', ip: state.ip, reason: result.message });
-          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          this.sendAuthError(ws, 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'github_token');
@@ -398,7 +403,7 @@ export class HeadServer {
         const result = await provider.authenticate({ githubCode: auth.code, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'github_oauth', ip: state.ip, reason: result.message });
-          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          this.sendAuthError(ws, 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'github_oauth');
@@ -410,7 +415,7 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.key, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'apikey', ip: state.ip, reason: result.message });
-          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          this.sendAuthError(ws, 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'apikey');
@@ -422,22 +427,24 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.sharedKey, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'open', ip: state.ip, reason: result.message });
-          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          this.sendAuthError(ws, 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'open');
         return;
       }
 
-      default:
-        ws.send(JSON.stringify({ type: 'auth_error', message: `Unknown auth method: ${(auth as any).method}` }));
+      default: {
+        const method = (auth as { method: string }).method;
+        this.sendAuthError(ws, 'unknown_auth_method', `Unknown auth method: ${method}`);
+      }
     }
   }
 
   private handlePairingAuth(ws: WebSocket, state: ClientState, pairingToken: string, msg: AuthMessage): void {
     const logger = getLogger();
     if (!(this.options.pairingEnabled ?? true)) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'Pairing is disabled.' }));
+      this.sendAuthError(ws, 'pairing_disabled', 'Pairing is disabled.');
       return;
     }
 
@@ -446,7 +453,7 @@ export class HeadServer {
     if (!tokenData || tokenData.expiresAt < Date.now()) {
       if (tokenData) this.pairingTokens.delete(pairingToken);
       logger.warn('Pairing auth failed: invalid or expired token', { ip: state.ip });
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'Invalid or expired pairing token' }));
+      this.sendAuthError(ws, 'invalid_pairing_token', 'Invalid or expired pairing token');
       return;
     }
 
@@ -455,7 +462,7 @@ export class HeadServer {
 
     const user = this.storage.getUser(tokenData.userId);
     if (!user) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'User not found' }));
+      this.sendAuthError(ws, 'user_not_found', 'User not found');
       return;
     }
 
@@ -474,13 +481,13 @@ export class HeadServer {
     state.pendingDeviceInfo = undefined;
 
     if (!deviceId || !nonce) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'No pending challenge' }));
+      this.sendAuthError(ws, 'no_pending_challenge', 'No pending challenge');
       return;
     }
 
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'Device not found' }));
+      this.sendAuthError(ws, 'device_not_found', 'Device not found');
       return;
     }
 
@@ -489,7 +496,7 @@ export class HeadServer {
 
     if (!valid) {
       logger.warn('Challenge-response auth failed', { deviceId, ip: state.ip });
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'Invalid signature' }));
+      this.sendAuthError(ws, 'invalid_signature', 'Invalid signature');
       return;
     }
 
@@ -502,7 +509,7 @@ export class HeadServer {
 
     const user = this.storage.getUser(device.userId);
     if (!user) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'User not found' }));
+      this.sendAuthError(ws, 'user_not_found', 'User not found');
       return;
     }
 
@@ -528,7 +535,13 @@ export class HeadServer {
     this.broadcastDeviceJoined(user.userId, deviceId);
   }
 
-  private completeAuth(ws: WebSocket, state: ClientState, user: AuthUser, msg: AuthMessage, authMethod: string): void {
+  private completeAuth(
+    ws: WebSocket,
+    state: ClientState,
+    user: AuthUser,
+    msg: AuthMessage,
+    authMethod: AuthMethod['method'],
+  ): void {
     const logger = getLogger();
 
     // Persist user
@@ -543,7 +556,7 @@ export class HeadServer {
       );
     } catch (err) {
       logger.warn('Device registration failed', { ip: state.ip, error: (err as Error).message });
-      ws.send(JSON.stringify({ type: 'auth_error', message: (err as Error).message }));
+      this.sendAuthError(ws, 'device_registration_failed', (err as Error).message);
       return;
     }
 
@@ -625,7 +638,7 @@ export class HeadServer {
     }
 
     if (!authResult.ok) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: authResult.message }));
+      this.sendAuthError(ws, 'auth_rejected', authResult.message);
       return;
     }
 

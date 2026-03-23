@@ -34,14 +34,16 @@ function getInitialStatus(): ConnectionStatus {
   const stored = loadStoredDevice();
   const params = getUrlParams();
   if (stored?.deviceId || params.token || params.githubCode) {
-    return 'disconnected'; // has credentials — will attempt connect
+    return 'connecting';
   }
-  return 'awaiting_login'; // no credentials — show login immediately
+  return 'awaiting_login';
 }
 
 const initialState = {
   status: getInitialStatus(),
   deviceId: null,
+  reconnectAttempts: 0,
+  nextReconnectDelayMs: null,
   user: null,
   sessions: new Map<string, SessionSummary>(),
   devices: new Map<string, DeviceSummary>(),
@@ -67,6 +69,12 @@ export const useStore = create<Store>()(persist((set) => ({
   setAuth: (deviceId) => set({ deviceId }),
 
   setUser: (user) => set({ user }),
+
+  setReconnectState: (attempts, nextDelayMs) =>
+    set({
+      reconnectAttempts: attempts,
+      nextReconnectDelayMs: nextDelayMs,
+    }),
 
   setSessions: (sessions) =>
     set({ sessions: new Map(sessions.map((s) => [s.id, s])) }),
@@ -295,6 +303,8 @@ export const useStore = create<Store>()(persist((set) => ({
     user: null,
     sessionModes: new Map(),
     githubClientId: null,
+    reconnectAttempts: 0,
+    nextReconnectDelayMs: null,
   }),
 }), {
   name: 'kraki-store',

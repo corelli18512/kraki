@@ -1,7 +1,7 @@
 /**
  * Unit tests for config.ts — config/key/PID file management.
  *
- * Uses a temp directory instead of the real ~/.kraki to keep tests isolated.
+ * Uses a temp directory instead of the real Kraki home to keep tests isolated.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -32,6 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  delete process.env.KRAKI_HOME;
   rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -41,6 +42,17 @@ describe('getConfigDir()', () => {
   it('returns ~/.kraki path', () => {
     const dir = config.getConfigDir();
     expect(dir).toBe(join(tempHome, '.kraki'));
+  });
+
+  it('respects KRAKI_HOME override', async () => {
+    const customHome = join(tempHome, 'custom-kraki-home');
+    process.env.KRAKI_HOME = customHome;
+    vi.resetModules();
+    config = await import('../config.js');
+
+    expect(config.getKrakiHome()).toBe(customHome);
+    expect(config.getConfigDir()).toBe(customHome);
+    expect(existsSync(customHome)).toBe(true);
   });
 
   it('creates the directory if it does not exist', () => {

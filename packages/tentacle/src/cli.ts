@@ -16,14 +16,13 @@
 
 import chalk from 'chalk';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { select } from '@inquirer/prompts';
 
-import { loadConfig, saveConfig, getConfigDir, getLogVerbosity, loadChannelKey } from './config.js';
+import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, loadChannelKey } from './config.js';
 import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
@@ -97,11 +96,10 @@ async function cmdStart(): Promise<void> {
 
     if (action === 'clean') {
       const { rmSync } = await import('node:fs');
-      const { join } = await import('node:path');
-      const { homedir } = await import('node:os');
+      const krakiHome = getKrakiHome();
       try {
-        rmSync(join(homedir(), '.kraki'), { recursive: true });
-        console.log(chalk.dim('   Cleared ~/.kraki'));
+        rmSync(krakiHome, { recursive: true, force: true });
+        console.log(chalk.dim(`   Cleared ${krakiHome}`));
       } catch { /* already clean */ }
       config = await runSetup();
     }
@@ -173,10 +171,10 @@ function cmdStatus(): void {
 }
 
 function cmdLogs(follow: boolean): void {
-  const logDir = join(homedir(), '.kraki', 'logs');
+  const logDir = join(getKrakiHome(), 'logs');
 
   if (!existsSync(logDir)) {
-    console.log(chalk.yellow('No log directory found at ~/.kraki/logs/'));
+    console.log(chalk.yellow(`No log directory found at ${logDir}`));
     return;
   }
 
@@ -231,7 +229,7 @@ function cmdConfigLog(verbosity?: string): void {
 }
 
 async function cmdConfigReset(): Promise<void> {
-  const configPath = join(getConfigDir(), 'config.json');
+  const configPath = getConfigPath();
   try {
     unlinkSync(configPath);
     console.log(chalk.dim('Config deleted.'));
@@ -263,6 +261,8 @@ async function cmdConnect(): Promise<void> {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       } catch { /* ignore */ }
+    } else if (config.authMethod === 'open') {
+      token = 'dev';
     } else {
       token = loadChannelKey() ?? undefined;
     }

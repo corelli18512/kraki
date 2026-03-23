@@ -1,9 +1,8 @@
 /**
  * Configuration management for Kraki tentacle.
  *
- * Config is stored at ~/.kraki/config.json (no secrets).
- * Channel keys are stored separately at ~/.kraki/channel.key with 0o600 permissions.
- * Daemon PID is tracked at ~/.kraki/daemon.pid.
+ * By default Kraki stores state under ~/.kraki. For local development and tests,
+ * the root can be overridden with KRAKI_HOME.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'node:fs';
@@ -28,41 +27,56 @@ export const DEFAULT_LOG_VERBOSITY: KrakiLogVerbosity = 'normal';
 
 // ── Paths ───────────────────────────────────────────────
 
-const CONFIG_DIR = join(homedir(), '.kraki');
-const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
-const CHANNEL_KEY_PATH = join(CONFIG_DIR, 'channel.key');
-const DAEMON_PID_PATH = join(CONFIG_DIR, 'daemon.pid');
-const DEVICE_ID_PATH = join(CONFIG_DIR, 'device-id');
+export function getKrakiHome(): string {
+  const override = process.env.KRAKI_HOME?.trim();
+  return override ? join(override) : join(homedir(), '.kraki');
+}
 
 export function getConfigDir(): string {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  return CONFIG_DIR;
+  const dir = getKrakiHome();
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function getConfigPath(): string {
+  return join(getKrakiHome(), 'config.json');
+}
+
+export function getLogsDir(): string {
+  const dir = join(getKrakiHome(), 'logs');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getDeviceIdPath(): string {
+  return join(getKrakiHome(), 'device-id');
 }
 
 // ── Device ID ───────────────────────────────────────────
 
 /**
  * Get the stable device ID for this machine.
- * Generated once and persisted at ~/.kraki/device-id.
+ * Generated once and persisted under the current Kraki home.
  * Sent to the head on auth so reconnections don't create ghost devices.
  */
 export function getOrCreateDeviceId(): string {
+  const deviceIdPath = getDeviceIdPath();
   try {
-    const existing = readFileSync(DEVICE_ID_PATH, 'utf8').trim();
+    const existing = readFileSync(deviceIdPath, 'utf8').trim();
     if (existing) return existing;
   } catch {
     // File doesn't exist — generate one
   }
   const id = `dev_${randomUUID().slice(0, 12)}`;
   getConfigDir();
-  writeFileSync(DEVICE_ID_PATH, id, 'utf8');
+  writeFileSync(deviceIdPath, id, 'utf8');
   return id;
 }
 
 // ── Config ──────────────────────────────────────────────
 
 export function configExists(): boolean {
-  return existsSync(CONFIG_PATH);
+  return existsSync(getConfigPath());
 }
 
 export function getLogVerbosity(config: Pick<KrakiConfig, 'logging'> | null | undefined): KrakiLogVerbosity {
@@ -79,7 +93,7 @@ function normalizeConfig(config: KrakiConfig): KrakiConfig {
 
 export function loadConfig(): KrakiConfig | null {
   try {
-    const raw = readFileSync(CONFIG_PATH, 'utf8');
+    const raw = readFileSync(getConfigPath(), 'utf8');
     return normalizeConfig(JSON.parse(raw) as KrakiConfig);
   } catch {
     return null;
@@ -88,24 +102,25 @@ export function loadConfig(): KrakiConfig | null {
 
 export function saveConfig(config: KrakiConfig): void {
   getConfigDir();
-  writeFileSync(CONFIG_PATH, JSON.stringify(normalizeConfig(config), null, 2) + '\n', 'utf8');
+  writeFileSync(getConfigPath(), JSON.stringify(normalizeConfig(config), null, 2) + '\n', 'utf8');
 }
 
 // ── Channel key ─────────────────────────────────────────
 
 export function getChannelKeyPath(): string {
-  return CHANNEL_KEY_PATH;
+  return join(getKrakiHome(), 'channel.key');
 }
 
 export function saveChannelKey(key: string): void {
   getConfigDir();
-  writeFileSync(CHANNEL_KEY_PATH, key, 'utf8');
-  chmodSync(CHANNEL_KEY_PATH, 0o600);
+  const keyPath = getChannelKeyPath();
+  writeFileSync(keyPath, key, 'utf8');
+  chmodSync(keyPath, 0o600);
 }
 
 export function loadChannelKey(): string | null {
   try {
-    return readFileSync(CHANNEL_KEY_PATH, 'utf8').trim();
+    return readFileSync(getChannelKeyPath(), 'utf8').trim();
   } catch {
     return null;
   }
@@ -114,17 +129,17 @@ export function loadChannelKey(): string | null {
 // ── Daemon PID ──────────────────────────────────────────
 
 export function getDaemonPidPath(): string {
-  return DAEMON_PID_PATH;
+  return join(getKrakiHome(), 'daemon.pid');
 }
 
 export function saveDaemonPid(pid: number): void {
   getConfigDir();
-  writeFileSync(DAEMON_PID_PATH, String(pid), 'utf8');
+  writeFileSync(getDaemonPidPath(), String(pid), 'utf8');
 }
 
 export function loadDaemonPid(): number | null {
   try {
-    const raw = readFileSync(DAEMON_PID_PATH, 'utf8').trim();
+    const raw = readFileSync(getDaemonPidPath(), 'utf8').trim();
     const pid = parseInt(raw, 10);
     return Number.isFinite(pid) ? pid : null;
   } catch {
@@ -134,7 +149,7 @@ export function loadDaemonPid(): number | null {
 
 export function clearDaemonPid(): void {
   try {
-    unlinkSync(DAEMON_PID_PATH);
+    unlinkSync(getDaemonPidPath());
   } catch {
     // File may not exist — that's fine
   }

@@ -168,10 +168,25 @@ pnpm dev:web --local-relay   # web app → ws://localhost:4000
 ### All-in-one local dev
 
 ```bash
-pnpm dev:local
+pnpm dev
 ```
 
-Starts the relay, a mock tentacle with an interactive REPL, and the web app in one command. The mock tentacle lets you send fake agent messages, permission requests, and tool calls from the terminal to test the full pipeline without a real agent.
+Starts a real local stack in one command:
+
+- local `head` on `ws://localhost:4000`
+- the real Kraki daemon with isolated state under `.tmp/kraki-local`
+- the real local web app with a stable pairing entry URL
+
+It prints the local entry URL, log directory, and SQLite DB path, then opens the browser automatically. This is the fastest way to do end-to-end local feature testing without touching your real `~/.kraki` state.
+
+Useful helpers:
+
+```bash
+pnpm dev:logs    # tail local stack logs
+pnpm dev:stop    # stop the local stack
+pnpm dev:reset   # stop + delete .tmp/kraki-local
+pnpm dev:demo          # old mock tentacle / REPL demo flow
+```
 
 ## Company / enterprise use
 

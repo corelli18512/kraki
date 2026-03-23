@@ -46,6 +46,8 @@ export interface AppState {
   // Connection
   status: ConnectionStatus;
   deviceId: string | null;
+  reconnectAttempts: number;
+  nextReconnectDelayMs: number | null;
 
   // Authenticated user
   user: { id: string; login: string; provider: string; email?: string } | null;
@@ -90,6 +92,7 @@ export interface AppActions {
   setStatus: (status: ConnectionStatus) => void;
   setAuth: (deviceId: string) => void;
   setUser: (user: AppState['user']) => void;
+  setReconnectState: (attempts: number, nextDelayMs: number | null) => void;
 
   // Data
   setSessions: (sessions: SessionSummary[]) => void;

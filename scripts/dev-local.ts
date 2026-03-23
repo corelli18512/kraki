@@ -1,115 +1,178 @@
+#!/usr/bin/env node
+
 /**
- * Local development orchestrator.
+ * Real local Kraki stack launcher.
  *
- * One command to start:
- *   1. Head relay (open auth, port 4000)
- *   2. Mock tentacle with interactive REPL
- *   3. Vite web app pointed at local relay
- *   4. Auto-opens Chrome
+ * Boots:
+ *   1. Local head relay (open auth, pairing enabled, E2E on)
+ *   2. Real Kraki daemon using an isolated local KRAKI_HOME
+ *   3. Real local web app with a stable pairing redirect URL
  *
- * Usage: pnpm dev:local
+ * Usage:
+ *   pnpm dev
+ *   pnpm dev -- --no-open
+ *   pnpm dev:stop
+ *   pnpm dev:logs
+ *   pnpm dev:reset
  */
 
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, createWriteStream } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline';
-import { createServer as createHttpServer } from 'node:http';
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
 
-import { RelayClient } from '../packages/tentacle/src/relay-client.js';
-import { SessionManager } from '../packages/tentacle/src/session-manager.js';
-import { AgentAdapter } from '../packages/tentacle/src/adapters/base.js';
-import type {
-  CreateSessionConfig,
-  SessionInfo,
-  SessionContext,
-  PermissionDecision,
-} from '../packages/tentacle/src/adapters/base.js';
+import { getOrCreateDeviceId, saveConfig, type KrakiConfig } from '../packages/tentacle/src/config.js';
+import { startDaemon, stopDaemon } from '../packages/tentacle/src/daemon.js';
 
-// ── Mock adapter ────────────────────────────────────────
-
-class MockAdapter extends AgentAdapter {
-  private sessionCounter = 0;
-  private sessions = new Map<string, { ended: boolean }>();
-
-  async start() {}
-  async stop() {}
-
-  async createSession(config?: CreateSessionConfig): Promise<{ sessionId: string }> {
-    const sessionId = config?.sessionId ?? `mock_sess_${++this.sessionCounter}`;
-    this.sessions.set(sessionId, { ended: false });
-    this.onSessionCreated?.({ sessionId, agent: 'mock-agent', model: 'mock-v1' });
-    return { sessionId };
-  }
-
-  async resumeSession(sessionId: string, _context?: SessionContext): Promise<{ sessionId: string }> {
-    this.sessions.set(sessionId, { ended: false });
-    this.onSessionCreated?.({ sessionId, agent: 'mock-agent', model: 'mock-v1' });
-    return { sessionId };
-  }
-
-  async sendMessage(_sid: string, _text: string) {}
-  async respondToPermission(_sid: string, _pid: string, _d: PermissionDecision) {}
-  async respondToQuestion(_sid: string, _qid: string, _a: string, _f: boolean) {}
-
-  async killSession(sessionId: string) {
-    const s = this.sessions.get(sessionId);
-    if (s) s.ended = true;
-    this.onSessionEnded?.(sessionId, { reason: 'stopped' });
-  }
-
-  async listSessions(): Promise<SessionInfo[]> {
-    return Array.from(this.sessions.entries()).map(([id, s]) => ({
-      id, state: s.ended ? 'ended' as const : 'active' as const,
-    }));
-  }
-
-  async listModels(): Promise<string[]> { return ['mock-v1']; }
-
-  // Simulation helpers
-  msg(sid: string, content: string) { this.onMessage?.(sid, { content }); }
-  delta(sid: string, content: string) { this.onMessageDelta?.(sid, { content }); }
-  perm(sid: string, id: string, tool: string, desc: string) {
-    this.onPermissionRequest?.(sid, { id, toolArgs: { toolName: tool, args: {} }, description: desc });
-  }
-  question(sid: string, id: string, q: string, choices?: string[]) {
-    this.onQuestionRequest?.(sid, { id, question: q, choices, allowFreeform: true });
-  }
-  toolStart(sid: string, tool: string, args: Record<string, unknown> = {}) {
-    this.onToolStart?.(sid, { toolName: tool, args });
-  }
-  toolEnd(sid: string, tool: string, result: string) {
-    this.onToolComplete?.(sid, { toolName: tool, result });
-  }
-  idle(sid: string) { this.onIdle?.(sid); }
-  error(sid: string, message: string) { this.onError?.(sid, { message }); }
-}
-
-// ── Helpers ─────────────────────────────────────────────
-
+const ROOT_DIR = resolve(process.cwd(), '.tmp/kraki-local');
+const LOG_DIR = join(ROOT_DIR, 'logs');
+const RUN_DIR = join(ROOT_DIR, 'run');
+const HEAD_DB_PATH = join(ROOT_DIR, 'kraki-head.db');
+const HEAD_LOG_PATH = join(LOG_DIR, 'head.log');
+const WEB_LOG_PATH = join(LOG_DIR, 'web.log');
 const RELAY_PORT = 4000;
 const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
-const children: ChildProcess[] = [];
+const REDIRECT_PORT = 3100;
+const ENTRY_URL = `http://localhost:${REDIRECT_PORT}`;
+const STATE_VERSION = 'thin-relay-v1';
+const STATE_VERSION_PATH = join(ROOT_DIR, '.state-version');
 
-function cleanup() {
-  for (const child of children) {
-    try { child.kill('SIGTERM'); } catch {}
+const PID_FILES = {
+  launcher: join(RUN_DIR, 'launcher.pid'),
+  head: join(RUN_DIR, 'head.pid'),
+  web: join(RUN_DIR, 'web.pid'),
+};
+
+process.env.KRAKI_HOME = ROOT_DIR;
+
+let headProcess: ChildProcess | null = null;
+let webProcess: ChildProcess | null = null;
+let redirectServer: HttpServer | null = null;
+let shuttingDown = false;
+
+function ensureDirs(): void {
+  mkdirSync(ROOT_DIR, { recursive: true });
+  mkdirSync(LOG_DIR, { recursive: true });
+  mkdirSync(RUN_DIR, { recursive: true });
+}
+
+function ensureLocalStateVersion(): void {
+  let currentVersion: string | null = null;
+  try {
+    currentVersion = readFileSync(STATE_VERSION_PATH, 'utf8').trim() || null;
+  } catch {
+    currentVersion = null;
+  }
+
+  if (currentVersion !== STATE_VERSION && existsSync(ROOT_DIR)) {
+    console.log(`♻️ Resetting local Kraki state for ${STATE_VERSION}`);
+    rmSync(ROOT_DIR, { recursive: true, force: true });
+  }
+
+  ensureDirs();
+  writeFileSync(STATE_VERSION_PATH, `${STATE_VERSION}\n`, 'utf8');
+}
+
+function readPid(pidPath: string): number | null {
+  try {
+    const raw = readFileSync(pidPath, 'utf8').trim();
+    const pid = parseInt(raw, 10);
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
   }
 }
 
-process.on('SIGINT', () => { cleanup(); process.exit(0); });
-process.on('SIGTERM', () => { cleanup(); process.exit(0); });
+function writePid(pidPath: string, pid: number): void {
+  writeFileSync(pidPath, `${pid}\n`, 'utf8');
+}
 
-function waitForRelay(url: string, timeout = 15_000): Promise<void> {
+function clearPidFiles(): void {
+  for (const pidPath of Object.values(PID_FILES)) {
+    try {
+      unlinkSync(pidPath);
+    } catch {
+      // Already gone
+    }
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!isPidAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isPidAlive(pid);
+}
+
+async function terminatePid(pid: number | null, label: string): Promise<void> {
+  if (!pid || pid === process.pid) return;
+  if (!isPidAlive(pid)) return;
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  if (await waitForProcessExit(pid, 1500)) return;
+
+  try {
+    process.kill(pid, 'SIGKILL');
+    await waitForProcessExit(pid, 500);
+  } catch {
+    console.warn(`⚠️  Failed to fully stop ${label} (PID ${pid})`);
+  }
+}
+
+async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {
+  const launcherPid = readPid(PID_FILES.launcher);
+  const headPid = readPid(PID_FILES.head);
+  const webPid = readPid(PID_FILES.web);
+
+  if (options.includeLauncher) {
+    await terminatePid(launcherPid, 'launcher');
+  }
+
+  await terminatePid(headPid, 'head');
+  await terminatePid(webPid, 'web');
+  stopDaemon();
+  clearPidFiles();
+
+  if (!options.silent) {
+    console.log(`🧹 Local Kraki stack stopped (${ROOT_DIR})`);
+  }
+}
+
+function waitForRelay(url: string, timeoutMs = 15_000): Promise<void> {
   return new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error('Relay did not start in time')), timeout);
+    const deadline = setTimeout(() => reject(new Error('Local relay did not start in time')), timeoutMs);
+
     const attempt = () => {
       const ws = new WebSocket(url);
-      ws.on('open', () => { ws.close(); clearTimeout(deadline); resolve(); });
-      ws.on('error', () => { setTimeout(attempt, 500); });
+      ws.on('open', () => {
+        clearTimeout(deadline);
+        ws.close();
+        resolve();
+      });
+      ws.on('error', () => {
+        ws.close();
+        setTimeout(attempt, 300);
+      });
     };
+
     attempt();
   });
 }
@@ -117,73 +180,199 @@ function waitForRelay(url: string, timeout = 15_000): Promise<void> {
 function requestPairingToken(relayUrl: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl);
-    const timeout = setTimeout(() => { ws.close(); reject(new Error('Pairing token request timed out')); }, 10_000);
-    ws.on('open', () => { ws.send(JSON.stringify({ type: 'request_pairing_token', token: 'dev' })); });
+    const timeout = setTimeout(() => {
+      ws.close();
+      reject(new Error('Pairing token request timed out'));
+    }, 10_000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'request_pairing_token', token: 'dev' }));
+    });
+
     ws.on('message', (data) => {
       let msg: any;
-      try { msg = JSON.parse(data.toString()); } catch { return; }
-      if (msg.type === 'pairing_token_created') { clearTimeout(timeout); resolve(msg.token); ws.close(); }
-      if (msg.type === 'auth_error' || msg.type === 'server_error') { clearTimeout(timeout); reject(new Error(msg.message)); ws.close(); }
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+
+      if (msg.type === 'pairing_token_created') {
+        clearTimeout(timeout);
+        resolve(msg.token);
+        ws.close();
+        return;
+      }
+
+      if (msg.type === 'auth_error' || msg.type === 'server_error') {
+        clearTimeout(timeout);
+        reject(new Error(msg.message));
+        ws.close();
+      }
     });
-    ws.on('error', (err) => { clearTimeout(timeout); reject(err); });
+
+    ws.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(new Error(`Relay connection failed: ${err.message}`));
+    });
   });
 }
 
-// ── Main ────────────────────────────────────────────────
+function buildLocalConfig(): KrakiConfig {
+  return {
+    relay: RELAY_URL,
+    authMethod: 'open',
+    device: {
+      name: `Local ${hostname()}`,
+      id: getOrCreateDeviceId(),
+    },
+    logging: {
+      verbosity: 'verbose',
+    },
+  };
+}
 
-async function main(): Promise<void> {
-  // 1. Build prerequisites
+function startHead(): ChildProcess {
+  const headLog = createWriteStream(HEAD_LOG_PATH, { flags: 'w' });
+  const child = spawn('pnpm', ['exec', 'tsx', 'packages/head/src/cli.ts', '--port', String(RELAY_PORT), '--db', HEAD_DB_PATH], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      AUTH_MODE: 'open',
+      E2E_MODE: 'true',
+      PAIRING_ENABLED: 'true',
+      LOG_LEVEL: 'debug',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  child.stdout?.pipe(headLog);
+  child.stderr?.pipe(headLog);
+
+  if (!child.pid) {
+    throw new Error('Failed to start local head process');
+  }
+
+  writePid(PID_FILES.head, child.pid);
+  return child;
+}
+
+function startWeb(viteEnv: NodeJS.ProcessEnv): { child: ChildProcess; ready: Promise<string> } {
+  const webLog = createWriteStream(WEB_LOG_PATH, { flags: 'w' });
+  const child = spawn('pnpm', ['--filter', '@kraki/arm-web', 'dev'], {
+    cwd: process.cwd(),
+    env: viteEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (!child.pid) {
+    throw new Error('Failed to start local web process');
+  }
+
+  writePid(PID_FILES.web, child.pid);
+
+  const ready = new Promise<string>((resolve, reject) => {
+    let settled = false;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      webLog.write(chunk);
+      const match = text.match(/Local:\s+http:\/\/localhost:(\d+)/);
+      if (match) {
+        settle(() => resolve(match[1]));
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      webLog.write(chunk);
+    });
+
+    child.once('error', (err) => settle(() => reject(err)));
+    child.once('exit', (code) => {
+      settle(() => reject(new Error(`Web dev server exited early (code ${code ?? 'null'})`)));
+    });
+  });
+
+  return { child, ready };
+}
+
+async function openBrowser(url: string): Promise<void> {
+  try {
+    execSync(`open -a "Google Chrome" "${url}"`);
+  } catch {
+    execSync(`open "${url}"`);
+  }
+}
+
+async function shutdown(code = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  if (redirectServer) {
+    await new Promise((resolve) => redirectServer?.close(() => resolve(undefined)));
+    redirectServer = null;
+  }
+
+  await stopLocalStack({ includeLauncher: false, silent: true });
+  clearPidFiles();
+  process.exit(code);
+}
+
+function hookChildExit(child: ChildProcess, label: string): void {
+  child.once('error', (err) => {
+    if (shuttingDown) return;
+    console.error(`❌ ${label} failed: ${err.message}`);
+    void shutdown(1);
+  });
+
+  child.once('exit', (code, signal) => {
+    if (shuttingDown) return;
+    console.error(`❌ ${label} exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
+    void shutdown(typeof code === 'number' ? code : 1);
+  });
+}
+
+async function start(args: string[]): Promise<void> {
+  const noOpen = args.includes('--no-open');
+
+  ensureDirs();
+  await stopLocalStack({ includeLauncher: true, silent: true });
+  ensureLocalStateVersion();
+  writePid(PID_FILES.launcher, process.pid);
+
   console.log('🔨 Building protocol + crypto...');
   execSync('pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build', {
-    stdio: 'inherit', cwd: process.cwd(),
+    cwd: process.cwd(),
+    stdio: 'inherit',
   });
 
-  // 2. Start head relay (open auth, no GitHub token needed)
-  //    Logs go to a file to keep the REPL clean.
-  const logPath = join(tmpdir(), 'kraki-dev-head.log');
-  console.log(`🦑 Starting local relay on port ${RELAY_PORT} (logs → ${logPath})`);
-  const head = spawn('pnpm', ['exec', 'tsx', 'packages/head/src/cli.ts', '--port', String(RELAY_PORT)], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: process.cwd(),
-    env: { ...process.env, AUTH_MODE: 'open', E2E_MODE: 'false', PAIRING_ENABLED: 'true', LOG_LEVEL: 'info' },
-  });
-  children.push(head);
-  const logStream = createWriteStream(logPath);
-  head.stdout!.pipe(logStream);
-  head.stderr!.pipe(logStream);
+  console.log('🧠 Starting local head...');
+  headProcess = startHead();
+  hookChildExit(headProcess, 'Local head');
 
   await waitForRelay(RELAY_URL);
-  console.log('✅ Relay is up\n');
 
-  // 3. Connect mock tentacle
-  console.log('🐙 Connecting mock tentacle...');
-  const adapter = new MockAdapter();
-  const sessDir = mkdtempSync(join(tmpdir(), 'kraki-mock-'));
-  const sm = new SessionManager(sessDir);
-  const relay = new RelayClient(adapter as unknown as AgentAdapter, sm, {
-    relayUrl: RELAY_URL,
-    device: { name: 'Mock Tentacle', role: 'tentacle', kind: 'desktop' },
-  });
+  const localConfig = buildLocalConfig();
+  saveConfig(localConfig);
 
-  await new Promise<void>((resolve, reject) => {
-    relay.onAuthenticated = () => resolve();
-    relay.onFatalError = (msg: string) => reject(new Error(`Auth failed: ${msg}`));
-    relay.connect();
-  });
-  console.log('✅ Mock tentacle connected\n');
+  console.log('🦑 Starting real Kraki daemon...');
+  const daemonPid = await startDaemon(localConfig);
 
-  // 4. Create a default session
-  const { sessionId } = await adapter.createSession({ sessionId: 'demo' });
-  console.log(`📋 Session created: ${sessionId}`);
+  let vitePort = '3000';
+  let viteReady = false;
+  redirectServer = createHttpServer(async (_req, res) => {
+    if (!viteReady) {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('Web app is still starting. Try again in a moment.');
+      return;
+    }
 
-  // Send a welcome message
-  adapter.msg(sessionId, 'Mock tentacle connected. Waiting for input from REPL...');
-  adapter.idle(sessionId);
-
-  // 5. Start auth redirect server (must be before Vite so env var is ready)
-  //    Every visit gets a fresh pairing token so page refresh always works.
-  const REDIRECT_PORT = 3100;
-  const redirectServer = createHttpServer(async (_req, res) => {
     try {
       const token = await requestPairingToken(RELAY_URL);
       const params = new URLSearchParams({ relay: RELAY_URL, token });
@@ -194,117 +383,115 @@ async function main(): Promise<void> {
       res.end(`Failed to get pairing token: ${(err as Error).message}`);
     }
   });
-  await new Promise<void>(resolve => redirectServer.listen(REDIRECT_PORT, resolve));
 
-  // 6. Start Vite web app (with dev redirect middleware)
-  let vitePort = '3000';
-  console.log('\n🌐 Starting web dev server...');
-  const vite = spawn('pnpm', ['--filter', '@kraki/arm-web', 'dev'], {
-    stdio: ['ignore', 'pipe', 'inherit'],
-    cwd: process.cwd(),
-    env: { ...process.env, VITE_WS_URL: RELAY_URL, KRAKI_DEV_AUTH_PORT: String(REDIRECT_PORT) },
-  });
-  children.push(vite);
-
-  // Detect Vite port
-  await new Promise<void>((resolve) => {
-    vite.stdout!.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      process.stdout.write(text);
-      const match = text.match(/Local:\s+http:\/\/localhost:(\d+)/);
-      if (match) { vitePort = match[1]; resolve(); }
-    });
+  await new Promise<void>((resolve, reject) => {
+    redirectServer?.once('error', reject);
+    redirectServer?.listen(REDIRECT_PORT, () => resolve());
   });
 
-  const entryUrl = `http://localhost:${REDIRECT_PORT}`;
-  console.log(`\n🔑 Dev entry point: ${entryUrl} (generates fresh token on every visit/refresh)`);
-  console.log(`   Vite direct: http://localhost:${vitePort}\n`);
-  try { execSync(`open -a "Google Chrome" "${entryUrl}"`); } catch { execSync(`open "${entryUrl}"`); }
+  console.log('🌐 Starting local web app...');
+  const { child: webChild, ready } = startWeb({
+    ...process.env,
+    VITE_WS_URL: RELAY_URL,
+    KRAKI_DEV_AUTH_PORT: String(REDIRECT_PORT),
+  });
+  webProcess = webChild;
+  hookChildExit(webProcess, 'Local web app');
+  vitePort = await ready;
+  viteReady = true;
+  const webUrl = `http://localhost:${vitePort}`;
 
-  // 6. Interactive REPL
-  console.log('\n─── Mock Tentacle REPL ───────────────────────');
-  console.log('Commands:');
-  console.log('  <text>                Send agent message');
-  console.log('  /delta <text>         Send streaming delta');
-  console.log('  /perm <tool> <desc>   Send permission request');
-  console.log('  /question <text>      Send question');
-  console.log('  /tool <name>          Simulate tool start');
-  console.log('  /toolend <name> <res> Simulate tool complete');
-  console.log('  /idle                 Signal idle');
-  console.log('  /error <text>         Send error');
-  console.log('  /session              Create new session');
-  console.log('  /logs                 Tail relay logs');
-  console.log('  /quit                 Exit');
-  console.log('──────────────────────────────────────────────\n');
+  console.log('');
+  console.log('✅ Local Kraki stack is ready');
+  console.log(`   Entry URL:   ${ENTRY_URL}`);
+  console.log(`   Web URL:     ${webUrl}`);
+  console.log(`   Relay URL:   ${RELAY_URL}`);
+  console.log(`   Daemon PID:  ${daemonPid}`);
+  console.log(`   Kraki home:  ${ROOT_DIR}`);
+  console.log(`   Logs:        ${LOG_DIR}`);
+  console.log(`   Head DB:     ${HEAD_DB_PATH}`);
+  console.log('');
+  console.log('   Helpers:');
+  console.log('     pnpm dev:logs');
+  console.log('     pnpm dev:stop');
+  console.log('     pnpm dev:reset');
+  console.log('');
 
-  let currentSession = sessionId;
-  let permCounter = 0;
-  let questionCounter = 0;
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: 'mock> ' });
-  rl.prompt();
-
-  rl.on('line', async (line) => {
-    const input = line.trim();
-    if (!input) { rl.prompt(); return; }
-
+  if (!noOpen) {
+    let openUrl = ENTRY_URL;
     try {
-      if (input === '/quit') {
-        cleanup();
-        relay.disconnect();
-        process.exit(0);
-      } else if (input === '/logs') {
-        try {
-          const tail = execSync(`tail -30 "${logPath}"`, { encoding: 'utf8' });
-          console.log(`\n── Last 30 lines of relay log (${logPath}) ──\n${tail}──────────────────────────────────────────────`);
-        } catch { console.log('  ✗ Could not read log file'); }
-      } else if (input === '/idle') {
-        adapter.idle(currentSession);
-        console.log('  → idle');
-      } else if (input.startsWith('/error ')) {
-        adapter.error(currentSession, input.slice(7));
-        console.log('  → error sent');
-      } else if (input.startsWith('/delta ')) {
-        adapter.delta(currentSession, input.slice(7));
-        console.log('  → delta sent');
-      } else if (input.startsWith('/perm ')) {
-        const parts = input.slice(6).split(' ');
-        const tool = parts[0];
-        const desc = parts.slice(1).join(' ') || `Run ${tool}?`;
-        adapter.perm(currentSession, `perm_${++permCounter}`, tool, desc);
-        console.log(`  → permission request: ${tool}`);
-      } else if (input.startsWith('/question ')) {
-        adapter.question(currentSession, `q_${++questionCounter}`, input.slice(10));
-        console.log('  → question sent');
-      } else if (input.startsWith('/tool ')) {
-        adapter.toolStart(currentSession, input.slice(6));
-        console.log(`  → tool start: ${input.slice(6)}`);
-      } else if (input.startsWith('/toolend ')) {
-        const parts = input.slice(9).split(' ');
-        adapter.toolEnd(currentSession, parts[0], parts.slice(1).join(' ') || 'done');
-        console.log(`  → tool complete: ${parts[0]}`);
-      } else if (input === '/session') {
-        const s = await adapter.createSession();
-        currentSession = s.sessionId;
-        adapter.msg(currentSession, 'New session started.');
-        adapter.idle(currentSession);
-        console.log(`  → new session: ${currentSession}`);
-      } else {
-        // Plain text → agent message
-        adapter.msg(currentSession, input);
-        adapter.idle(currentSession);
-      }
+      const token = await requestPairingToken(RELAY_URL);
+      const params = new URLSearchParams({ relay: RELAY_URL, token });
+      openUrl = `${webUrl}?${params.toString()}`;
     } catch (err) {
-      console.error(`  ✗ ${(err as Error).message}`);
+      console.warn(`⚠️  Could not pre-pair browser automatically, falling back to entry URL: ${(err as Error).message}`);
     }
-    rl.prompt();
+
+    console.log('🌐 Opening browser with fresh pairing...');
+    try {
+      await openBrowser(openUrl);
+    } catch (err) {
+      console.warn(`⚠️  Could not open browser automatically: ${(err as Error).message}`);
+    }
+  }
+}
+
+function showLogs(): void {
+  if (!existsSync(LOG_DIR)) {
+    console.log(`No local log directory found at ${LOG_DIR}`);
+    return;
+  }
+
+  const child = spawn('tail', ['-n', '80', '-f', join(LOG_DIR, '*.log')], {
+    stdio: 'inherit',
+    shell: true,
   });
 
-  rl.on('close', () => { cleanup(); relay.disconnect(); process.exit(0); });
+  child.on('error', (err) => {
+    console.error(`Failed to tail logs: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+async function reset(): Promise<void> {
+  await stopLocalStack({ includeLauncher: true, silent: true });
+  rmSync(ROOT_DIR, { recursive: true, force: true });
+  console.log(`🧼 Reset local Kraki state at ${ROOT_DIR}`);
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2).filter((arg) => arg !== '--');
+  const command = args[0] ?? 'start';
+
+  process.on('SIGINT', () => { void shutdown(0); });
+  process.on('SIGTERM', () => { void shutdown(0); });
+
+  if (command === 'stop') {
+    await stopLocalStack({ includeLauncher: true });
+    return;
+  }
+
+  if (command === 'logs') {
+    showLogs();
+    return;
+  }
+
+  if (command === 'reset') {
+    await reset();
+    return;
+  }
+
+  if (command === 'start' || command === '--no-open') {
+    await start(args);
+    return;
+  }
+
+  console.error(`Unknown command: ${command}`);
+  console.error('Usage: pnpm dev | pnpm dev:stop | pnpm dev:logs | pnpm dev:reset');
+  process.exit(1);
 }
 
 main().catch((err) => {
-  console.error(`❌ ${err.message}`);
-  cleanup();
-  process.exit(1);
+  console.error(`❌ ${(err as Error).message}`);
+  void shutdown(1);
 });

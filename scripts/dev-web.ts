@@ -2,31 +2,15 @@
  * Dev helper: start the web app and open Chrome.
  *
  * Usage:
- *   pnpm dev:web              — auto-pair with prod relay (from ~/.kraki/config.json)
+ *   pnpm dev:web              — auto-pair with the current Kraki config
  *   pnpm dev:web --local-relay — point at ws://localhost:4000
  */
 
 import { execSync, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { WebSocket } from 'ws';
+import { loadConfig, loadChannelKey, getConfigPath } from '../packages/tentacle/src/config.js';
 
 const LOCAL_RELAY = 'ws://localhost:4000';
-
-interface KrakiConfig {
-  relay: string;
-  authMethod: 'github' | 'channel-key' | 'open';
-}
-
-function loadConfig(): KrakiConfig {
-  const configPath = join(homedir(), '.kraki', 'config.json');
-  try {
-    return JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    throw new Error('No ~/.kraki/config.json found. Run `pnpm kraki` to set up first.');
-  }
-}
 
 function getAuthToken(authMethod: string): string | undefined {
   if (authMethod === 'github') {
@@ -36,12 +20,11 @@ function getAuthToken(authMethod: string): string | undefined {
       return undefined;
     }
   }
+  if (authMethod === 'open') {
+    return 'dev';
+  }
   if (authMethod === 'channel-key') {
-    try {
-      return readFileSync(join(homedir(), '.kraki', 'channel.key'), 'utf8').trim() || undefined;
-    } catch {
-      return undefined;
-    }
+    return loadChannelKey() ?? undefined;
   }
   return undefined;
 }
@@ -93,6 +76,9 @@ async function main(): Promise<void> {
     console.log(`🦑 Using local relay: ${relay}`);
   } else {
     const config = loadConfig();
+    if (!config) {
+      throw new Error(`No ${getConfigPath()} found. Run \`pnpm kraki\` to set up first.`);
+    }
     relay = config.relay;
     authToken = getAuthToken(config.authMethod);
     console.log(`🦑 Using relay: ${relay}`);

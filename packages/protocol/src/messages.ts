@@ -337,8 +337,22 @@ export interface AuthOkMessage {
   githubClientId?: string;
 }
 
+export type AuthErrorCode =
+  | 'auth_rejected'
+  | 'unknown_auth_method'
+  | 'pairing_disabled'
+  | 'invalid_pairing_token'
+  | 'unknown_device'
+  | 'no_pending_challenge'
+  | 'device_not_found'
+  | 'invalid_signature'
+  | 'user_not_found'
+  | 'device_registration_failed';
+
 export interface AuthErrorMessage {
   type: 'auth_error';
+  /** Machine-readable auth failure reason for client behavior */
+  code: AuthErrorCode;
   message: string;
 }
 

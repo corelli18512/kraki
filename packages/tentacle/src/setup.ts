@@ -17,6 +17,7 @@ import {
   saveConfig,
   saveChannelKey,
   getOrCreateDeviceId,
+  getConfigPath,
 } from './config.js';
 import { checkGhAuth, checkCopilotCli, withRetry } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
@@ -241,7 +242,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     `${chalk.dim('Device')}  ${chalk.cyan(deviceName)}`,
     `${chalk.dim('Logs')}    ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
     '',
-    chalk.dim('Config saved to ~/.kraki/config.json'),
+    chalk.dim(`Config saved to ${getConfigPath()}`),
   ]);
 
   return config;
@@ -261,6 +262,8 @@ export async function showPairingQr(config: KrakiConfig): Promise<void> {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       } catch { /* ignore */ }
+    } else if (config.authMethod === 'open') {
+      token = 'dev';
     } else if (config.authMethod === 'channel-key') {
       const { loadChannelKey: loadKey } = await import('./config.js');
       token = loadKey() ?? undefined;

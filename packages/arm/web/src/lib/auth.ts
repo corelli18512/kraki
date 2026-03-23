@@ -1,6 +1,7 @@
 import type { AppKeyStore } from './e2e';
 import { getStore } from './store-adapter';
 import { saveStoredDevice, STORAGE_KEY } from './transport';
+import { supportsOAuthLogin } from './oauth';
 
 /** Send the initial auth message. Returns true if a pairing token was consumed. */
 export async function sendAuth(
@@ -90,6 +91,7 @@ export function processAuthOk(
 ): void {
   const store = getStore();
   store.setStatus('connected');
+  store.setReconnectState(0, null);
   store.setAuth(msg.deviceId);
   store.setUser((msg as any).user ?? null);
   if ((msg as any).githubClientId) {
@@ -115,17 +117,25 @@ export function processAuthError(
   },
 ): void {
   const store = getStore();
+  const oauthAvailable = supportsOAuthLogin(store.githubClientId);
   if (storedDeviceId) {
-    // Challenge-response failed (keys changed or device removed)
     console.warn('[Kraki] Auth failed for stored device, clearing credentials');
     localStorage.removeItem(STORAGE_KEY);
     deps.clearStoredDeviceId();
-    store.setLastError('Authentication failed. Please sign in again or scan a new pairing QR code.');
+    store.setLastError(
+      oauthAvailable
+        ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
+        : 'Authentication failed. Please scan a new pairing QR code.',
+    );
     deps.disconnect();
     deps.connect();
   } else {
-    // Token/OAuth failed — return to login page
-    store.setLastError('Authentication failed. Sign in with GitHub or scan a pairing QR code.');
+    store.setReconnectState(0, null);
+    store.setLastError(
+      oauthAvailable
+        ? 'Authentication failed. Sign in with GitHub or scan a pairing QR code.'
+        : 'Authentication failed. Scan a pairing QR code.',
+    );
     store.setStatus('awaiting_login');
   }
 }

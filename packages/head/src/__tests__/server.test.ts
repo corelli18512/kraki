@@ -166,6 +166,7 @@ describe('HeadServer (thin relay)', () => {
       }));
       const res = await waitForMessage(ws);
       expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('auth_rejected');
       ws.close();
     });
 
@@ -180,6 +181,7 @@ describe('HeadServer (thin relay)', () => {
       }));
       const res = await waitForMessage(ws);
       expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('auth_rejected');
       expect(res.message).toContain('Token required');
       ws.close();
     });
@@ -391,6 +393,7 @@ describe('HeadServer (thin relay)', () => {
       }));
       const res = await waitForMessage(ws);
       expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('invalid_pairing_token');
       expect(res.message).toContain('Invalid or expired');
       ws.close();
     });
@@ -417,6 +420,7 @@ describe('HeadServer (thin relay)', () => {
       }));
       const res = await waitForMessage(ws);
       expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('invalid_pairing_token');
       ws.close();
     });
   });
@@ -474,6 +478,24 @@ describe('HeadServer (thin relay)', () => {
       ws2.close();
     });
 
+    it('should reject unknown device for challenge auth', async () => {
+      head = await createHead();
+
+      const ws = connect(head.port);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({
+        type: 'auth',
+        auth: { method: 'challenge', deviceId: 'dev_missing' },
+        device: { name: 'Laptop', role: 'tentacle', deviceId: 'dev_missing' },
+      }));
+
+      const res = await waitForMessage(ws);
+      expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('unknown_device');
+      expect(res.message).toContain('Unknown device');
+      ws.close();
+    });
+
     it('should reject invalid signature', async () => {
       head = await createHead();
       const { compact } = generateKeys();
@@ -500,6 +522,7 @@ describe('HeadServer (thin relay)', () => {
       }));
       const res = await waitForMessage(ws2);
       expect(res.type).toBe('auth_error');
+      expect(res.code).toBe('invalid_signature');
       expect(res.message).toContain('Invalid signature');
       ws2.close();
     });

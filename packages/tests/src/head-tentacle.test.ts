@@ -727,6 +727,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
         if (m.type === "auth_error") r(m);
       });
     });
+    expect(error.code).toBe("invalid_signature");
     expect(error.message).toContain("Invalid signature");
 
     ws2.close();
@@ -765,6 +766,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     }));
     const err = await new Promise<any>(r => ws2.on("message", (d: any) => r(JSON.parse(d.toString()))));
     expect(err.type).toBe("auth_error");
+    expect(err.code).toBe("invalid_pairing_token");
     expect(err.message).toContain("Invalid or expired");
     ws2.close();
   });
@@ -926,4 +928,3 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 });
-

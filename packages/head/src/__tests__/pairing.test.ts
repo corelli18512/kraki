@@ -62,6 +62,7 @@ describe('Pairing (in-memory tokens)', () => {
       ws.once('message', (data) => resolve(JSON.parse(data.toString())));
     });
     expect(res.type).toBe('auth_error');
+    expect(res.code).toBe('invalid_pairing_token');
 
     ws.close();
     app1.close();
@@ -83,6 +84,7 @@ describe('Pairing (in-memory tokens)', () => {
       ws.once('message', (data) => resolve(JSON.parse(data.toString())));
     });
     expect(res.type).toBe('auth_error');
+    expect(res.code).toBe('invalid_pairing_token');
     expect(res.message).toContain('Invalid or expired');
     ws.close();
   });

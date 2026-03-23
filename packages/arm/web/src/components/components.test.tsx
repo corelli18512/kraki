@@ -11,6 +11,7 @@ import { EmptyState } from '../components/common/EmptyState';
 import { ActionQueue } from '../components/actions/ActionQueue';
 import { StreamingText } from '../components/chat/StreamingText';
 import { ToolActivity } from '../components/chat/ToolActivity';
+import { ProfileBar } from '../components/layout/ProfileBar';
 
 // Helper: wrap in MemoryRouter for components using react-router
 function renderWithRouter(ui: React.ReactElement, { route = '/' } = {}) {
@@ -37,6 +38,21 @@ describe('Sidebar', () => {
     renderWithRouter(<Sidebar />);
     expect(screen.getAllByText('K').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByAltText('Kraki').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('ProfileBar', () => {
+  it('hides the profile bar for open auth', () => {
+    useStore.getState().setUser({ id: 'u1', login: 'open-user', provider: 'open' });
+    const { container } = renderWithRouter(<ProfileBar />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders the profile bar for GitHub auth', () => {
+    useStore.getState().setUser({ id: 'u1', login: 'octocat', provider: 'github', email: 'octo@example.com' });
+    renderWithRouter(<ProfileBar />);
+    expect(screen.getByText('octocat')).toBeInTheDocument();
+    expect(screen.getByText('octo@example.com')).toBeInTheDocument();
   });
 });
 

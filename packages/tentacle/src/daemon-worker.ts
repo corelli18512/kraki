@@ -11,7 +11,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
@@ -44,11 +44,13 @@ export interface WorkerResult {
 
 export async function startWorker(): Promise<WorkerResult> {
   logger.info('Daemon starting…');
+  const configPath = getConfigPath();
+  const channelKeyPath = getChannelKeyPath();
 
   // 1. Load config
   const config = loadConfig();
   if (!config) {
-    logger.fatal('No config found at ~/.kraki/config.json — run `kraki` to set up');
+    logger.fatal({ configPath }, `No config found at ${configPath} — run \`kraki\` to set up`);
     process.exit(1);
   }
 
@@ -66,9 +68,9 @@ export async function startWorker(): Promise<WorkerResult> {
     const channelKey = loadChannelKey();
     if (channelKey) {
       token = channelKey;
-      logger.debug('Loaded channel key from ~/.kraki/channel.key');
+      logger.debug({ channelKeyPath }, `Loaded channel key from ${channelKeyPath}`);
     } else {
-      logger.warn('No channel key found at ~/.kraki/channel.key');
+      logger.warn({ channelKeyPath }, `No channel key found at ${channelKeyPath}`);
     }
   }
 
@@ -107,6 +109,7 @@ export async function startWorker(): Promise<WorkerResult> {
         deviceId,
         capabilities: models.length > 0 ? { models } : undefined,
       },
+      authMethod: config.authMethod,
       token,
       reconnectDelay: 3000,
     },

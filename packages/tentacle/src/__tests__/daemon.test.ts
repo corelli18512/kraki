@@ -2,7 +2,7 @@
  * Unit tests for daemon.ts — daemon start/stop/status.
  *
  * Mocks child_process.spawn and config functions so no real
- * processes are spawned and no files are written to ~/.kraki.
+ * processes are spawned and no files are written to the real Kraki home.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -10,11 +10,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ── Mocks ───────────────────────────────────────────────
 
 const mockSpawn = vi.fn();
-const mockExecSync = vi.fn();
-
 vi.mock('node:child_process', () => ({
   spawn: (...args: any[]) => mockSpawn(...args),
-  execSync: (...args: any[]) => mockExecSync(...args),
 }));
 
 const mockSaveDaemonPid = vi.fn();
@@ -31,6 +28,7 @@ vi.mock('node:fs', () => ({
 }));
 
 vi.mock('../config.js', () => ({
+  getLogsDir: vi.fn(() => '/tmp/fake-kraki/logs'),
   getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
   saveDaemonPid: (...args: any[]) => mockSaveDaemonPid(...args),
   loadDaemonPid: (...args: any[]) => mockLoadDaemonPid(...args),
@@ -50,7 +48,6 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.useRealTimers();
   mockLoadDaemonPid.mockReturnValue(null);
-  mockExecSync.mockReturnValue('');
   mockOpenSync.mockReturnValue(99);
 });
 

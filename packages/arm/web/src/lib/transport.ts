@@ -6,6 +6,7 @@ export type MessageHandler = (msg: Message) => void;
 const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://kraki.corelli.cloud';
 const RECONNECT_BASE = 1000;
 const RECONNECT_MAX = 30000;
+const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
 const PING_INTERVAL = 25000;
 export const STORAGE_KEY = 'kraki_device';
 
@@ -121,6 +122,7 @@ export class KrakiTransport {
   private reconnectDelay = RECONNECT_BASE;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   intentionalClose = false;
+  private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
 
   get url(): string { return this._url; }
@@ -157,10 +159,15 @@ export class KrakiTransport {
   }
 
   connect() {
-    // Only show "connecting" spinner if we have credentials to authenticate with.
-    // New devices stay in awaiting_login while connecting in the background.
     if (this.storedDeviceId || this.pairingToken || this.githubCode) {
       getStore().setStatus('connecting');
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.reconnectAttempts > 0) {
+      getStore().setReconnectState(this.reconnectAttempts, null);
     }
     this.intentionalClose = false;
 
@@ -174,6 +181,7 @@ export class KrakiTransport {
 
     this.ws.onopen = async () => {
       this.reconnectDelay = RECONNECT_BASE;
+      this.reconnectAttempts = 0;
       await this.callbacks.onOpen();
       this.startPing();
     };
@@ -208,6 +216,8 @@ export class KrakiTransport {
     this.cleanup();
     this.ws?.close();
     this.ws = null;
+    this.reconnectAttempts = 0;
+    getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
   }
 
@@ -225,10 +235,17 @@ export class KrakiTransport {
 
   private scheduleReconnect() {
     if (this.reconnectTimer) return;
+    if (this.reconnectAttempts >= MAX_AUTO_RECONNECT_ATTEMPTS) {
+      getStore().setReconnectState(this.reconnectAttempts, null);
+      return;
+    }
+    const delayMs = this.reconnectDelay;
+    this.reconnectAttempts += 1;
+    getStore().setReconnectState(this.reconnectAttempts, delayMs);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.reconnectDelay);
+    }, delayMs);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX);
   }
 

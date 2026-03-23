@@ -5,6 +5,7 @@ import type { PendingPermission, PendingQuestion, ChatMessage } from '../types/s
 
 // Helper to reset store before each test
 beforeEach(() => {
+  localStorage.clear();
   useStore.getState().reset();
 });
 
@@ -96,6 +97,13 @@ describe('useStore', () => {
       useStore.getState().setAuth('dev-web-1');
       const state = useStore.getState();
       expect(state.deviceId).toBe('dev-web-1');
+    });
+
+    it('setReconnectState stores reconnect metadata', () => {
+      useStore.getState().setReconnectState(5, 30000);
+      const state = useStore.getState();
+      expect(state.reconnectAttempts).toBe(5);
+      expect(state.nextReconnectDelayMs).toBe(30000);
     });
   });
 

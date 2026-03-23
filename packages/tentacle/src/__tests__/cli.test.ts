@@ -25,6 +25,9 @@ const mockConfigExists = vi.fn();
 const mockLoadConfig = vi.fn();
 const mockSaveConfig = vi.fn();
 const mockGetConfigDir = vi.fn().mockReturnValue('/tmp/fake-kraki');
+const mockGetConfigPath = vi.fn().mockReturnValue('/tmp/fake-kraki/config.json');
+const mockGetKrakiHome = vi.fn().mockReturnValue('/tmp/fake-kraki');
+const mockLoadChannelKey = vi.fn();
 const mockIsDaemonRunning = vi.fn();
 const mockGetDaemonStatus = vi.fn();
 const mockStartDaemon = vi.fn();
@@ -36,7 +39,10 @@ vi.mock('../config.js', () => ({
   loadConfig: (...args: any[]) => mockLoadConfig(...args),
   saveConfig: (...args: any[]) => mockSaveConfig(...args),
   getConfigDir: (...args: any[]) => mockGetConfigDir(...args),
+  getConfigPath: (...args: any[]) => mockGetConfigPath(...args),
+  getKrakiHome: (...args: any[]) => mockGetKrakiHome(...args),
   getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
+  loadChannelKey: (...args: any[]) => mockLoadChannelKey(...args),
 }));
 
 vi.mock('../daemon.js', () => ({
@@ -109,6 +115,9 @@ beforeEach(() => {
   originalArgv = process.argv;
   // Reset mock defaults
   mockGetConfigDir.mockReturnValue('/tmp/fake-kraki');
+  mockGetConfigPath.mockReturnValue('/tmp/fake-kraki/config.json');
+  mockGetKrakiHome.mockReturnValue('/tmp/fake-kraki');
+  mockLoadChannelKey.mockReset();
 });
 
 afterEach(() => {

@@ -22,6 +22,7 @@ export function ProfileBar() {
   const [confirming, setConfirming] = useState(false);
 
   if (!user) return null;
+  if (user.provider === 'open') return null;
 
   const isGitHub = user.provider === 'github';
   const initial = user.login.charAt(0).toUpperCase();

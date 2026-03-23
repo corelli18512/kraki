@@ -2,16 +2,16 @@
  * Daemon process management for Kraki tentacle.
  *
  * The daemon runs as a detached child process executing daemon-worker.js.
- * Its PID is tracked in ~/.kraki/daemon.pid.
+ * Its PID is tracked under the current Kraki home.
  */
 
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  getLogsDir,
   getLogVerbosity,
   type KrakiConfig,
   saveDaemonPid,
@@ -19,9 +19,7 @@ import {
   clearDaemonPid,
 } from './config.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const STARTUP_GRACE_MS = 1500;
-const BOOTSTRAP_LOG_PATH = join(homedir(), '.kraki', 'logs', 'daemon-bootstrap.log');
 
 export interface DaemonLaunchSpec {
   runtime: string;
@@ -32,7 +30,7 @@ export interface DaemonLaunchSpec {
 }
 
 export function getDaemonBootstrapLogPath(): string {
-  return BOOTSTRAP_LOG_PATH;
+  return join(getLogsDir(), 'daemon-bootstrap.log');
 }
 
 export function resolveDaemonLaunch(currentUrl: string = import.meta.url): DaemonLaunchSpec {
@@ -60,7 +58,11 @@ export function resolveDaemonLaunch(currentUrl: string = import.meta.url): Daemo
   };
 }
 
-function waitForDaemonBootstrap(child: ChildProcess, timeoutMs = STARTUP_GRACE_MS): Promise<void> {
+function waitForDaemonBootstrap(
+  child: ChildProcess,
+  bootstrapLogPath: string,
+  timeoutMs = STARTUP_GRACE_MS,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
@@ -70,14 +72,14 @@ function waitForDaemonBootstrap(child: ChildProcess, timeoutMs = STARTUP_GRACE_M
 
     const onError = (err: Error) => {
       cleanup();
-      reject(new Error(`Kraki failed to start: ${err.message}. Check ${getDaemonBootstrapLogPath()}`));
+      reject(new Error(`Kraki failed to start: ${err.message}. Check ${bootstrapLogPath}`));
     };
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       reject(
         new Error(
-          `Kraki exited during startup (code ${code ?? 'null'}, signal ${signal ?? 'none'}). Check ${getDaemonBootstrapLogPath()}`,
+          `Kraki exited during startup (code ${code ?? 'null'}, signal ${signal ?? 'none'}). Check ${bootstrapLogPath}`,
         ),
       );
     };
@@ -133,8 +135,9 @@ export async function startDaemon(config: KrakiConfig): Promise<number> {
 
   const launch = resolveDaemonLaunch();
   launch.env.LOG_LEVEL = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
-  mkdirSync(dirname(BOOTSTRAP_LOG_PATH), { recursive: true });
-  const bootstrapFd = openSync(BOOTSTRAP_LOG_PATH, 'w');
+  const bootstrapLogPath = getDaemonBootstrapLogPath();
+  mkdirSync(dirname(bootstrapLogPath), { recursive: true });
+  const bootstrapFd = openSync(bootstrapLogPath, 'w');
 
   const child = spawn(launch.runtime, launch.args, {
     detached: true,
@@ -146,11 +149,11 @@ export async function startDaemon(config: KrakiConfig): Promise<number> {
   closeSync(bootstrapFd);
 
   if (!child.pid) {
-    throw new Error(`Kraki failed to start: no daemon PID returned. Check ${getDaemonBootstrapLogPath()}`);
+    throw new Error(`Kraki failed to start: no daemon PID returned. Check ${bootstrapLogPath}`);
   }
 
   try {
-    await waitForDaemonBootstrap(child);
+    await waitForDaemonBootstrap(child, bootstrapLogPath);
   } catch (err) {
     try {
       process.kill(child.pid, 'SIGTERM');
@@ -176,28 +179,5 @@ export function stopDaemon(): boolean {
     clearDaemonPid();
   }
 
-  // Kill any orphaned daemon-worker processes (missed by PID tracking)
-  killOrphanedWorkers();
-
   return pid !== null;
-}
-
-/**
- * Find and kill any daemon-worker processes not tracked by the PID file.
- */
-function killOrphanedWorkers(): void {
-  try {
-    const output = execSync('ps -eo pid,command', { encoding: 'utf8' });
-    for (const line of output.split('\n')) {
-      if (line.includes('daemon-worker') && !line.includes('grep')) {
-        const pidStr = line.trim().split(/\s+/)[0];
-        const orphanPid = parseInt(pidStr, 10);
-        if (orphanPid && orphanPid !== process.pid) {
-          try { process.kill(orphanPid, 'SIGTERM'); } catch { /* already gone */ }
-        }
-      }
-    }
-  } catch {
-    // ps not available — skip orphan cleanup
-  }
 }

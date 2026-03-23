@@ -36,8 +36,10 @@ function renderWithRoute(route: string, ui: React.ReactElement) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   useStore.getState().reset();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // ============================================================
@@ -45,16 +47,27 @@ beforeEach(() => {
 // ============================================================
 
 describe('DashboardPage', () => {
-  it('shows disconnected state', () => {
-    useStore.getState().setStatus('disconnected');
+  it('shows sign-in copy when oauth login is available', () => {
+    useStore.getState().setStatus('awaiting_login');
+    useStore.getState().setGithubClientId('github-client-id');
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Disconnected')).toBeInTheDocument();
+
+    expect(screen.getByText('Sign in to connect to your coding agent sessions.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeInTheDocument();
+    expect(screen.getByText(/^or$/)).toBeInTheDocument();
+    expect(screen.getByText('Scan a pairing QR code from your terminal to connect.')).toBeInTheDocument();
   });
 
-  it('shows error state', () => {
-    useStore.getState().setStatus('error');
+  it('shows only pairing copy when oauth login is unavailable', () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', '');
+    useStore.getState().setStatus('awaiting_login');
+    useStore.getState().setGithubClientId(null);
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Connection Error')).toBeInTheDocument();
+
+    expect(screen.queryByText('Sign in to connect to your coding agent sessions.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^or$/)).not.toBeInTheDocument();
+    expect(screen.getByText('Scan a pairing QR code from your terminal to connect.')).toBeInTheDocument();
   });
 
   it('shows connecting spinner', () => {

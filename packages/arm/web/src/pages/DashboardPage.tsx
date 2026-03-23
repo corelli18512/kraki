@@ -1,6 +1,7 @@
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
 import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
+import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -18,8 +19,8 @@ function GitHubMark({ className }: { className?: string }) {
 export function DashboardPage() {
   const status = useStore((s) => s.status);
   const githubClientId = useStore((s) => s.githubClientId);
-  const envClientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined;
-  const clientId = githubClientId || envClientId;
+  const clientId = getOAuthClientId(githubClientId);
+  const oauthAvailable = supportsOAuthLogin(githubClientId);
   const hasCredentials = !!loadStoredDevice()?.deviceId;
 
   if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
@@ -36,9 +37,11 @@ export function DashboardPage() {
         )}
         <img src="/logo.png" alt="Kraki" className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
         <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
-        <p className="mt-2 max-w-sm text-sm text-text-secondary animate-fade-up">
-          Sign in to connect to your coding agent sessions.
-        </p>
+        {oauthAvailable && (
+          <p className="mt-2 max-w-sm text-sm text-text-secondary animate-fade-up">
+            Sign in to connect to your coding agent sessions.
+          </p>
+        )}
 
         {clientId && (
           <button
@@ -50,13 +53,15 @@ export function DashboardPage() {
           </button>
         )}
 
-        <div className="mt-6 flex items-center gap-3 text-text-muted animate-fade-up-d2">
-          <div className="h-px w-12 bg-border-primary" />
-          <span className="text-xs">or</span>
-          <div className="h-px w-12 bg-border-primary" />
-        </div>
+        {oauthAvailable && (
+          <div className="mt-6 flex items-center gap-3 text-text-muted animate-fade-up-d2">
+            <div className="h-px w-12 bg-border-primary" />
+            <span className="text-xs">or</span>
+            <div className="h-px w-12 bg-border-primary" />
+          </div>
+        )}
 
-        <p className="mt-4 max-w-sm text-xs text-text-muted animate-fade-up-d3">
+        <p className={`${oauthAvailable ? 'mt-4' : 'mt-6'} max-w-sm text-xs text-text-muted animate-fade-up-d3`}>
           Scan a pairing QR code from your terminal to connect.
         </p>
         <p className="mt-2 max-w-sm text-xs text-text-muted animate-fade-up-d3">
@@ -64,25 +69,6 @@ export function DashboardPage() {
         </p>
 
         <p className="mt-6 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted animate-fade-up-d3">
-          {wsClient.url}
-        </p>
-      </div>
-    );
-  }
-
-  if (status === 'disconnected' || status === 'error') {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-        <img src="/logo.png" alt="Kraki" className="h-16 w-16 object-contain" />
-        <h2 className="mt-4 text-lg font-semibold text-text-primary">
-          {status === 'error' ? 'Connection Error' : 'Disconnected'}
-        </h2>
-        <p className="mt-2 max-w-sm text-sm text-text-secondary">
-          {status === 'error'
-            ? 'Could not connect to the relay server. Make sure the head is running.'
-            : 'Not connected to a relay server. Reconnecting…'}
-        </p>
-        <p className="mt-4 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted">
           {wsClient.url}
         </p>
       </div>

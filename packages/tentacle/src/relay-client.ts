@@ -9,7 +9,7 @@
 import { WebSocket } from 'ws';
 import type {
   ProducerMessage, ConsumerMessage,
-  DeviceInfo, AuthOkMessage, DeviceSummary,
+  DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
   BroadcastEnvelope, UnicastEnvelope,
 } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -26,7 +26,9 @@ export interface RelayClientOptions {
   relayUrl: string;
   /** Device info for auth */
   device: DeviceInfo;
-  /** GitHub token or channel key */
+  /** How the relay should authenticate this device */
+  authMethod: 'github' | 'channel-key' | 'open';
+  /** Auth token, such as a GitHub token or channel/shared key */
   token?: string;
   /** Reconnect delay in ms. Default: 3000 */
   reconnectDelay?: number;
@@ -56,6 +58,8 @@ export class RelayClient {
   private seqCounter = 0;
   /** Tool kinds auto-approved via always_allow from apps */
   private allowedTools = new Set<string>();
+  /** Prefer challenge auth when the relay already knows this device */
+  private preferChallengeAuth = true;
 
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
@@ -104,16 +108,7 @@ export class RelayClient {
         ...this.options.device,
         publicKey: this.keyManager?.getCompactPublicKey(),
       };
-      // Determine auth method from available credentials
-      const auth: Record<string, unknown> = this.options.token
-        ? { method: 'github_token', token: this.options.token }
-        : { method: 'open' };
-      // If we have a stored deviceId with keys, use challenge auth
-      if (device.deviceId && this.keyManager) {
-        auth.method = 'challenge';
-        auth.deviceId = device.deviceId;
-        delete auth.token;
-      }
+      const auth = this.buildAuthPayload(device);
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
@@ -179,6 +174,7 @@ export class RelayClient {
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
       this.authInfo = msg as unknown as AuthOkMessage;
+      this.preferChallengeAuth = true;
       // Cache consumer device public keys for E2E
       if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
@@ -190,7 +186,14 @@ export class RelayClient {
     }
 
     if (msg.type === 'auth_error') {
-      this.onFatalError?.(msg.message as string);
+      const authError = msg as unknown as AuthErrorMessage;
+      if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
+        logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
+        this.preferChallengeAuth = false;
+        this.ws?.close();
+        return;
+      }
+      this.onFatalError?.(authError.message);
       this.disconnect();
       return;
     }
@@ -260,6 +263,38 @@ export class RelayClient {
 
     // Plaintext consumer messages (fallback when no keyManager)
     this.handleConsumerMessage(msg as unknown as ConsumerMessage);
+  }
+
+  private buildAuthPayload(device: DeviceInfo): AuthMethod {
+    if (this.preferChallengeAuth && device.deviceId && this.keyManager) {
+      return {
+        method: 'challenge',
+        deviceId: device.deviceId,
+      };
+    }
+
+    switch (this.options.authMethod) {
+      case 'github':
+        if (!this.options.token) {
+          throw new Error('GitHub auth requires a token or an already-known device for challenge auth');
+        }
+        return {
+          method: 'github_token',
+          token: this.options.token,
+        };
+
+      case 'channel-key':
+        return {
+          method: 'open',
+          sharedKey: this.options.token,
+        };
+
+      case 'open':
+      default:
+        return this.options.token
+          ? { method: 'open', sharedKey: this.options.token }
+          : { method: 'open' };
+    }
   }
 
   private handleConsumerMessage(msg: ConsumerMessage): void {

@@ -480,7 +480,6 @@ describe('KrakiWSClient', () => {
 
   describe('auth_error', () => {
     it('sets status to awaiting_login on auth_error without stored device', async () => {
-      // Ensure no stored device so the else branch (awaiting_login) is hit
       localStorage.removeItem('kraki_device');
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
@@ -489,8 +488,23 @@ describe('KrakiWSClient', () => {
         expect(lastWsInstance).toBeDefined();
       });
 
-      lastWsInstance._receive({ type: 'auth_error', message: 'Invalid token' });
+      lastWsInstance._receive({ type: 'auth_error', code: 'auth_rejected', message: 'Invalid token' });
       expect(useStore.getState().status).toBe('awaiting_login');
+      expect(useStore.getState().lastError).toBe('Authentication failed. Scan a pairing QR code.');
+    });
+
+    it('mentions sign-in on auth_error without stored device when oauth login is available', async () => {
+      localStorage.removeItem('kraki_device');
+      useStore.getState().setGithubClientId('github-client-id');
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+
+      await vi.waitFor(() => {
+        expect(lastWsInstance).toBeDefined();
+      });
+
+      lastWsInstance._receive({ type: 'auth_error', code: 'auth_rejected', message: 'Invalid token' });
+      expect(useStore.getState().lastError).toBe('Authentication failed. Sign in with GitHub or scan a pairing QR code.');
     });
 
     it('clears stale stored device auth and retries without leaving the app stuck', async () => {
@@ -502,7 +516,7 @@ describe('KrakiWSClient', () => {
         expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
       });
 
-      lastWsInstance._receive({ type: 'auth_error', message: 'Signature mismatch' });
+      lastWsInstance._receive({ type: 'auth_error', code: 'invalid_signature', message: 'Signature mismatch' });
 
       await vi.waitFor(() => {
         const msg = JSON.parse(lastWsInstance.sentMessages.at(-1));
@@ -510,23 +524,41 @@ describe('KrakiWSClient', () => {
       });
 
       expect(localStorage.getItem('kraki_device')).toBeNull();
+      expect(useStore.getState().lastError).toBe('Authentication failed. Please scan a new pairing QR code.');
+    });
+
+    it('mentions sign-in when stale stored device auth fails and oauth login is available', async () => {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
+      useStore.getState().setGithubClientId('github-client-id');
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+
+      lastWsInstance._receive({ type: 'auth_error', code: 'invalid_signature', message: 'Signature mismatch' });
+
+      await vi.waitFor(() => {
+        const msg = JSON.parse(lastWsInstance.sentMessages.at(-1));
+        expect(msg.type).toBe('auth_info');
+      });
+
       expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
     });
   });
 
   describe('WebSocket constructor failure', () => {
-    it('sets error status and schedules reconnect when constructor throws', () => {
+    it('does not crash when the WebSocket constructor throws', () => {
       vi.useFakeTimers();
-      // Make WebSocket constructor throw
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
       globalThis.WebSocket = class {
         constructor() { throw new Error('network unavailable'); }
       } as any;
 
       const client = new KrakiWSClient('ws://localhost:9999');
-      client.connect();
-      expect(useStore.getState().status).toBe('error');
+      expect(() => client.connect()).not.toThrow();
 
-      // Should schedule reconnect — advance timers and check connect is retried
       globalThis.WebSocket = OriginalWebSocket;
       vi.useRealTimers();
     });
@@ -572,12 +604,13 @@ describe('KrakiWSClient', () => {
       firstWs.onclose?.({} as CloseEvent);
 
       expect(useStore.getState().status).toBe('disconnected');
+      expect(useStore.getState().reconnectAttempts).toBe(1);
+      expect(useStore.getState().nextReconnectDelayMs).toBe(1000);
 
-      // Advance past reconnect delay (1000ms base) — should call connect() again
       await vi.advanceTimersByTimeAsync(1500);
 
-      // A new WebSocket should have been created (connect called again)
       expect(lastWsInstance).not.toBe(firstWs);
+      expect(useStore.getState().nextReconnectDelayMs).toBeNull();
 
       vi.useRealTimers();
     });
