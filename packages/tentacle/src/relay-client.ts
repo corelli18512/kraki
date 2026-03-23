@@ -46,14 +46,13 @@ export class RelayClient {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private authInfo: AuthOkMessage | null = null;
-  private e2eEnabled = false;
   /** Cached consumer public keys for E2E encryption */
   private consumerKeys = new Map<string, string>();
   /** Messages queued when E2E is enabled but no consumer keys are available yet */
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
-  /** Monotonic sequence counter — tentacle assigns seq to outgoing messages */
+  /** Monotonic seq counter — per tentacle, shared across all sessions. */
   private seqCounter = 0;
   /** Tool kinds auto-approved via always_allow from apps */
   private allowedTools = new Set<string>();
@@ -177,12 +176,11 @@ export class RelayClient {
 
   // ── Message handling ────────────────────────────────
 
-  private handleMessage(msg: any): void {
+  private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
-      this.authInfo = msg as AuthOkMessage;
-      this.e2eEnabled = !!this.keyManager;
+      this.authInfo = msg as unknown as AuthOkMessage;
       // Cache consumer device public keys for E2E
-      if (this.e2eEnabled && this.authInfo.devices) {
+      if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
       }
       this.setState('connected');
@@ -192,7 +190,7 @@ export class RelayClient {
     }
 
     if (msg.type === 'auth_error') {
-      this.onFatalError?.(msg.message);
+      this.onFatalError?.(msg.message as string);
       this.disconnect();
       return;
     }
@@ -200,7 +198,7 @@ export class RelayClient {
     if (msg.type === 'auth_challenge') {
       if (this.keyManager && this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
-          const signature = signChallenge(msg.nonce, this.keyManager.getKeyPair().privateKey);
+          const signature = signChallenge(msg.nonce as string, this.keyManager.getKeyPair().privateKey);
           this.ws.send(JSON.stringify({ type: 'auth_response', signature }));
         } catch (err) {
           logger.error({ err }, 'Failed to sign auth challenge');
@@ -210,7 +208,7 @@ export class RelayClient {
     }
 
     if (msg.type === 'server_error') {
-      logger.error({ message: msg.message }, 'Server error');
+      logger.error({ message: msg.message as string }, 'Server error');
       return;
     }
 
@@ -222,7 +220,7 @@ export class RelayClient {
     if (msg.type === 'unicast' && this.keyManager && this.authInfo) {
       try {
         const decrypted = decryptFromBlob(
-          { blob: msg.blob, keys: msg.keys },
+          { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
           this.authInfo.deviceId,
           this.keyManager.getKeyPair().privateKey,
         );
@@ -234,8 +232,8 @@ export class RelayClient {
       return;
     }
 
-    // Plaintext consumer messages (fallback for non-E2E)
-    this.handleConsumerMessage(msg as ConsumerMessage);
+    // Plaintext consumer messages (fallback when no keyManager)
+    this.handleConsumerMessage(msg as unknown as ConsumerMessage);
   }
 
   private handleConsumerMessage(msg: ConsumerMessage): void {
@@ -502,13 +500,14 @@ export class RelayClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     // Tentacle assigns seq and timestamp before encryption
-    (msg as any).seq = ++this.seqCounter;
-    (msg as any).timestamp = new Date().toISOString();
+    const enriched = msg as Record<string, unknown>;
+    enriched.seq = ++this.seqCounter;
+    enriched.timestamp = new Date().toISOString();
     if (this.authInfo) {
-      (msg as any).deviceId = this.authInfo.deviceId;
+      enriched.deviceId = this.authInfo.deviceId;
     }
 
-    if (this.e2eEnabled && this.keyManager) {
+    if (this.keyManager) {
       if (this.consumerKeys.size === 0) {
         // No consumers online — queue (bounded to prevent memory growth)
         if (this.pendingE2eQueue.length < 1000) {

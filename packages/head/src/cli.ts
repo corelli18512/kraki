@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @kraki/head — CLI entry point for the Kraki thin relay server.
+ * @kraki/head — CLI entry point for the Kraki relay server.
  *
  * Usage:
  *   npx @kraki/head
@@ -19,12 +19,16 @@
  */
 
 import { config as dotenvConfig } from 'dotenv';
+import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 // Load .env from the head package directory (works regardless of cwd)
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenvConfig({ path: resolve(__dirname, '..', '.env') });
+
+const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
+const VERSION: string = pkg.version;
 
 import { createServer } from 'http';
 import { Storage } from './storage.js';
@@ -33,14 +37,12 @@ import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuth
 import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
 
-const VERSION = '0.2.0';
-
 // --- CLI flags ---
 const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-  🦑 @kraki/head v${VERSION} — thin encrypted relay
+  🦑 @kraki/head v${VERSION} — CLI entry point for the Kraki relay server.
 
   Usage: kraki-relay [options]
 

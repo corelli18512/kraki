@@ -23,13 +23,8 @@ export interface EncryptedPayload {
   keys: Record<string, string>;
 }
 
-/** Consolidated blob payload matching the thin relay protocol */
-export interface BlobPayload {
-  /** base64(iv ‖ ciphertext ‖ tag) */
-  blob: string;
-  /** Per-recipient RSA-OAEP encrypted AES key (base64), keyed by deviceId */
-  keys: Record<string, string>;
-}
+export type { BlobPayload } from '@kraki/protocol';
+import type { BlobPayload } from '@kraki/protocol';
 
 export interface AppKeyStore {
   /** Initialize: load existing keys from storage or generate new ones */
@@ -153,10 +148,14 @@ export class BrowserAppKeyStore implements AppKeyStore {
       await idbPut(db, ENCRYPT_KEY_ID, this.encryptKeyPair);
     }
 
+    if (!this.encryptKeyPair || !this.signKeyPair) {
+      throw new Error('Key pair generation failed');
+    }
+
     // The public key we send to the head is the ENCRYPTION public key
     // (so tentacles can encrypt messages for us)
-    this.encryptPublicKeyBase64 = await this.exportPublicKey(this.encryptKeyPair!.publicKey);
-    this.signPublicKeyBase64 = await this.exportPublicKey(this.signKeyPair!.publicKey);
+    this.encryptPublicKeyBase64 = await this.exportPublicKey(this.encryptKeyPair.publicKey);
+    this.signPublicKeyBase64 = await this.exportPublicKey(this.signKeyPair.publicKey);
     this.ready = true;
   }
 

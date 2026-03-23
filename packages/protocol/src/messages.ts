@@ -41,6 +41,14 @@ export interface BroadcastEnvelope {
 
 export type RelayEnvelope = UnicastEnvelope | BroadcastEnvelope;
 
+/** Encrypted blob payload — shared between crypto and app layers. */
+export interface BlobPayload {
+  /** base64(iv ‖ ciphertext ‖ tag) */
+  blob: string;
+  /** Per-recipient RSA-OAEP encrypted AES key (base64), keyed by deviceId */
+  keys: Record<string, string>;
+}
+
 // ============================================================
 // Inner message base (inside encrypted blob, invisible to relay)
 // ============================================================

@@ -2,7 +2,7 @@ import type { Message, InnerMessage } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
-import { ReplayState } from './replay';
+import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore } from './store-adapter';
@@ -12,7 +12,6 @@ import * as commands from './commands';
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
-  private replay: ReplayState;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
 
@@ -21,8 +20,9 @@ export class KrakiWSClient {
   constructor(url?: string) {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
-    this.replay = new ReplayState();
 
+    // Visibility change listener removed — replay is now handled by tentacle,
+    // not the relay. Tab focus/blur doesn't trigger relay-side replay anymore.
     this.transport = new KrakiTransport(
       {
         onOpen: () => this.authenticate(),
@@ -30,7 +30,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
-        onClose: () => this.replay.reset(),
+        onClose: () => { /* no-op — thin relay has no server-side replay state to reset */ },
       },
       url,
     );
@@ -115,7 +115,7 @@ export class KrakiWSClient {
 
   markRead(sessionId: string): void {
     // Local-only in thin relay — no relay message needed
-    this.replay.markRead(sessionId);
+    markSessionRead(sessionId);
   }
 
   // --- Internal ---
@@ -147,7 +147,7 @@ export class KrakiWSClient {
   private encryptionCallbacks() {
     return {
       handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        replaying: this.replay.replaying,
+        replaying: false,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
       }),

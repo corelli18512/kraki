@@ -32,23 +32,13 @@ export class EncryptionHandler {
     }
 
     const store = getStore();
-    const recipients: RecipientKey[] = [];
-    // Include ALL devices so everyone can decrypt
-    for (const [id, dev] of store.devices) {
-      const key = dev.encryptionKey ?? dev.publicKey;
-      if (key) recipients.push({ deviceId: id, publicKeyBase64: key });
-    }
-
-    if (recipients.length === 0) {
-      console.error('[Kraki] Cannot send — no recipient keys available');
-      return;
-    }
 
     // Determine the target tentacle device for unicast routing
     let targetDeviceId: string | undefined;
     const sessionId = msg.sessionId as string | undefined;
     if (msg.type === 'create_session') {
-      targetDeviceId = (msg.payload as any)?.targetDeviceId;
+      const payload = msg.payload as Record<string, unknown> | undefined;
+      targetDeviceId = payload?.targetDeviceId as string | undefined;
     } else if (sessionId) {
       const session = store.sessions.get(sessionId);
       targetDeviceId = session?.deviceId;
@@ -58,6 +48,15 @@ export class EncryptionHandler {
       console.error('[Kraki] Cannot send — no target device for unicast');
       return;
     }
+
+    // For unicast, only encrypt for the target device
+    const targetDev = store.devices.get(targetDeviceId);
+    const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
+    if (!targetKey) {
+      console.error('[Kraki] Cannot send — no encryption key for target device');
+      return;
+    }
+    const recipients: RecipientKey[] = [{ deviceId: targetDeviceId, publicKeyBase64: targetKey }];
 
     try {
       const plaintext = JSON.stringify(msg);
