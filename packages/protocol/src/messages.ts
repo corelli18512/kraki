@@ -265,22 +265,56 @@ export type ConsumerMessage =
   | MarkReadMessage;
 
 // ============================================================
+// Auth credentials — discriminated union by method
+// ============================================================
+
+export interface GithubTokenAuth {
+  method: 'github_token';
+  token: string;
+}
+
+export interface GithubOAuthAuth {
+  method: 'github_oauth';
+  code: string;
+}
+
+export interface PairingAuth {
+  method: 'pairing';
+  token: string;
+}
+
+export interface ChallengeAuth {
+  method: 'challenge';
+  deviceId: string;
+}
+
+export interface ApiKeyAuth {
+  method: 'apikey';
+  key: string;
+}
+
+export interface OpenAuth {
+  method: 'open';
+  sharedKey?: string;
+}
+
+export type AuthMethod = GithubTokenAuth | GithubOAuthAuth | PairingAuth | ChallengeAuth | ApiKeyAuth | OpenAuth;
+
+// ============================================================
 // Control messages (device ↔ relay, unencrypted)
 // ============================================================
 
 export interface AuthMessage {
   type: 'auth';
-  token?: string;
-  /** One-time pairing token from QR code (alternative to token) */
-  pairingToken?: string;
-  /** GitHub OAuth authorization code (exchanged server-side for access token) */
-  githubCode?: string;
+  auth: AuthMethod;
   device: DeviceInfo;
 }
 
 export interface AuthOkMessage {
   type: 'auth_ok';
   deviceId: string;
+  /** The auth method that was used */
+  authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string };
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
@@ -330,14 +364,12 @@ export interface AuthInfoRequest {
   type: 'auth_info';
 }
 
-/** Server response with supported auth modes and features. */
+/** Server response with supported auth methods and features. */
 export interface AuthInfoResponse {
   type: 'auth_info_response';
-  /** Supported auth modes (e.g. ['github']) */
-  authModes: string[];
-  /** Whether device pairing is enabled */
-  pairing: boolean;
-  /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
+  /** Supported auth methods (e.g. ['github_token', 'github_oauth', 'pairing']) */
+  methods: AuthMethod['method'][];
+  /** GitHub OAuth client ID (present when github_oauth is available) */
   githubClientId?: string;
 }
 

@@ -55,7 +55,7 @@ describe('Pairing (in-memory tokens)', () => {
     });
     ws.send(JSON.stringify({
       type: 'auth',
-      pairingToken: tokenMsg.token,
+      auth: { method: 'pairing', token: tokenMsg.token },
       device: { name: 'Browser', role: 'app' },
     }));
     const res = await new Promise<any>((resolve) => {
@@ -76,7 +76,7 @@ describe('Pairing (in-memory tokens)', () => {
     });
     ws.send(JSON.stringify({
       type: 'auth',
-      pairingToken: 'pt_nonexistent',
+      auth: { method: 'pairing', token: 'pt_nonexistent' },
       device: { name: 'Phone', role: 'app' },
     }));
     const res = await new Promise<any>((resolve) => {

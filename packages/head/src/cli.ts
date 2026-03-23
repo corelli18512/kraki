@@ -131,7 +131,6 @@ const authProviders = createAuthProviders();
 const storage = new Storage(DB_PATH);
 const head = new HeadServer(storage, {
   authProviders,
-  authModes: AUTH_MODES,
   pairingEnabled: PAIRING,
 });
 

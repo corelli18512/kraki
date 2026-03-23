@@ -85,10 +85,13 @@ export async function connectDevice(
 
   const authMsg: any = {
     type: 'auth',
+    auth: options?.pairingToken
+      ? { method: 'pairing', token: options.pairingToken }
+      : options?.token
+        ? { method: 'open', sharedKey: options.token }
+        : { method: 'open' },
     device: { name, role, kind: options?.kind, deviceId: options?.deviceId },
   };
-  if (options?.token) authMsg.token = options.token;
-  if (options?.pairingToken) authMsg.pairingToken = options.pairingToken;
   ws.send(JSON.stringify(authMsg));
 
   const authOk = await waitFor('auth_ok');

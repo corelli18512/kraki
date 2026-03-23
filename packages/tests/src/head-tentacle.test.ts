@@ -399,7 +399,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const bMessages: any[] = [];
     wsB.on("message", (d) => bMessages.push(JSON.parse(d.toString())));
     wsB.send(JSON.stringify({
-      type: "auth", token: "user_b",
+      type: "auth", auth: { method: "open", sharedKey: "user_b" },
       device: { name: "B Phone", role: "app", kind: "web" },
     }));
     // Wait for auth_ok
@@ -517,7 +517,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await new Promise<void>(r => pairWs.on("open", r));
     pairWs.send(JSON.stringify({
       type: "auth",
-      pairingToken: tokenMsg.token,
+      auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Paired Phone", role: "app", kind: "ios", deviceId: pairDeviceId, publicKey: pairCompactKey },
     }));
     const authOk = await new Promise<any>((resolve) => {
@@ -582,7 +582,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await new Promise<void>(r => ws1.on("open", r));
     ws1.send(JSON.stringify({
       type: "auth",
-      pairingToken: tokenMsg.token,
+      auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Challenge Phone", role: "app", kind: "web", publicKey: compactPubKey, deviceId },
     }));
     const authOk1 = await new Promise<any>(r => {
@@ -696,7 +696,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await new Promise<void>(r => ws1.on("open", r));
     ws1.send(JSON.stringify({
       type: "auth",
-      pairingToken: tokenMsg.token,
+      auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "WrongSig", role: "app", publicKey: exportPublicKey(kp.publicKey), deviceId },
     }));
     await new Promise<any>(r => ws1.on("message", (d: any) => {
@@ -712,6 +712,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await new Promise<void>(r => ws2.on("open", r));
     ws2.send(JSON.stringify({
       type: "auth",
+      auth: { method: "challenge", deviceId },
       device: { name: "WrongSig", role: "app", deviceId },
     }));
 
@@ -753,7 +754,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const ws1 = new WebSocket(`ws://127.0.0.1:${env.port}`);
     await new Promise<void>(r => ws1.on("open", r));
     ws1.send(JSON.stringify({
-      type: "auth", pairingToken: tokenMsg.token,
+      type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "First", role: "app" },
     }));
     const ok = await new Promise<any>(r => ws1.on("message", (d: any) => r(JSON.parse(d.toString()))));
@@ -764,7 +765,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const ws2 = new WebSocket(`ws://127.0.0.1:${env.port}`);
     await new Promise<void>(r => ws2.on("open", r));
     ws2.send(JSON.stringify({
-      type: "auth", pairingToken: tokenMsg.token,
+      type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Second", role: "app" },
     }));
     const err = await new Promise<any>(r => ws2.on("message", (d: any) => r(JSON.parse(d.toString()))));

@@ -21,28 +21,31 @@ export async function sendAuth(
   const encryptionKey = keyStore.isReady() ? await keyStore.getPublicKey() : undefined;
 
   const usedToken = !!pairingToken;
+  const device = { name: deviceName, role: 'app', kind: 'web', deviceId: storedDeviceId, publicKey, encryptionKey };
 
   if (pairingToken) {
     send({
       type: 'auth',
-      pairingToken,
-      device: { name: deviceName, role: 'app', kind: 'web', deviceId: storedDeviceId, publicKey, encryptionKey },
+      auth: { method: 'pairing', token: pairingToken },
+      device,
     });
   } else if (githubCode) {
     send({
       type: 'auth',
-      githubCode,
-      device: { name: deviceName, role: 'app', kind: 'web', publicKey, encryptionKey },
+      auth: { method: 'github_oauth', code: githubCode },
+      device,
     });
   } else if (storedDeviceId) {
     send({
       type: 'auth',
-      device: { name: deviceName, role: 'app', kind: 'web', deviceId: storedDeviceId, publicKey, encryptionKey },
+      auth: { method: 'challenge', deviceId: storedDeviceId },
+      device,
     });
   } else {
     send({
       type: 'auth',
-      device: { name: deviceName, role: 'app', kind: 'web', publicKey, encryptionKey },
+      auth: { method: 'open' },
+      device,
     });
   }
 

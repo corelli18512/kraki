@@ -131,9 +131,11 @@ export async function connectApp(
   // Auth
   const authMsg: Record<string, unknown> = {
     type: 'auth',
+    auth: opts?.token
+      ? { method: 'open', sharedKey: opts.token }
+      : { method: 'open' },
     device: { name, role: 'app', kind: 'web', deviceId, publicKey: compactPubKey },
   };
-  if (opts?.token) authMsg.token = opts.token;
   ws.send(JSON.stringify(authMsg));
 
   const authOk = await waitForType('auth_ok');
@@ -238,9 +240,10 @@ export async function connectAppWithCrypto(
     for (const l of listeners.slice()) l(msg);
   });
 
-  // Auth with keys
+  // Auth with challenge (reconnecting known device)
   ws.send(JSON.stringify({
     type: 'auth',
+    auth: { method: 'challenge', deviceId },
     device: {
       name: opts.name ?? 'E2E App',
       role: 'app',

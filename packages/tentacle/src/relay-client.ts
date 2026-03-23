@@ -101,15 +101,21 @@ export class RelayClient {
       this.reconnectAttempts = 0;
       this.lastActivityAt = Date.now();
       this.startStaleCheck();
-      const authMsg: Record<string, unknown> = {
-        type: 'auth',
-        token: this.options.token,
-        device: {
-          ...this.options.device,
-          publicKey: this.keyManager?.getCompactPublicKey(),
-        },
+      const device = {
+        ...this.options.device,
+        publicKey: this.keyManager?.getCompactPublicKey(),
       };
-      ws.send(JSON.stringify(authMsg));
+      // Determine auth method from available credentials
+      const auth: Record<string, unknown> = this.options.token
+        ? { method: 'github_token', token: this.options.token }
+        : { method: 'open' };
+      // If we have a stored deviceId with keys, use challenge auth
+      if (device.deviceId && this.keyManager) {
+        auth.method = 'challenge';
+        auth.deviceId = device.deviceId;
+        delete auth.token;
+      }
+      ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
     ws.on('message', (data) => {

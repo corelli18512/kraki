@@ -30,6 +30,7 @@ interface ClientState {
   pendingNonce?: string;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
+  pendingAuthMethod?: string;
 }
 
 interface PairingToken {
@@ -39,7 +40,6 @@ interface PairingToken {
 
 export interface HeadServerOptions {
   authProviders?: Map<string, AuthProvider>;
-  authModes?: string[];
   authProvider?: AuthProvider;
   maxPayload?: number;
   pairingEnabled?: boolean;
@@ -59,6 +59,9 @@ function isValidAuth(msg: Record<string, unknown>): boolean {
   const dev = msg.device as Record<string, unknown>;
   if (typeof dev.name !== 'string' || typeof dev.role !== 'string') return false;
   if (dev.role !== 'tentacle' && dev.role !== 'app') return false;
+  if (!msg.auth || typeof msg.auth !== 'object') return false;
+  const auth = msg.auth as Record<string, unknown>;
+  if (typeof auth.method !== 'string') return false;
   return true;
 }
 
@@ -100,12 +103,6 @@ export class HeadServer {
       return this.options.authProviders.values().next().value!;
     }
     return this.options.authProvider!;
-  }
-
-  private getAuthModes(): string[] {
-    if (this.options.authModes?.length) return this.options.authModes;
-    if (this.options.authProviders?.size) return [...this.options.authProviders.keys()];
-    return [this.options.authProvider?.name ?? 'open'];
   }
 
   private getAuthProviderForMode(mode?: string): AuthProvider {
@@ -193,10 +190,19 @@ export class HeadServer {
     // Pre-auth: auth_info, auth, auth_response
     if (!state.authenticated) {
       if (msg.type === 'auth_info') {
+        const methods: string[] = [];
+        if (this.options.authProviders?.has('github')) {
+          methods.push('github_token');
+          const ghProvider = this.findGitHubProvider();
+          if (ghProvider?.oauthConfigured) methods.push('github_oauth');
+        }
+        if (this.options.authProviders?.has('apikey')) methods.push('apikey');
+        if (this.options.authProviders?.has('open')) methods.push('open');
+        if (this.options.pairingEnabled !== false) methods.push('pairing');
+        methods.push('challenge');
         ws.send(JSON.stringify({
           type: 'auth_info_response',
-          authModes: this.getAuthModes(),
-          pairing: this.options.pairingEnabled !== false,
+          methods,
           githubClientId: this.getGitHubClientId(),
         }));
         return;
@@ -310,56 +316,90 @@ export class HeadServer {
 
   private async handleAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
     const logger = getLogger();
+    const { auth } = msg;
 
-    // Pairing token auth
-    if (msg.pairingToken) {
-      this.handlePairingAuth(ws, state, msg);
-      return;
-    }
-
-    // Challenge-response for returning devices with publicKey
-    if (msg.device.deviceId && !msg.token && !msg.githubCode) {
-      const device = this.storage.getDevice(msg.device.deviceId);
-      if (device && device.publicKey) {
-        const nonce = randomBytes(32).toString('hex');
-        state.pendingNonce = nonce;
-        state.pendingDeviceId = msg.device.deviceId;
-        state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
-        logger.debug('Issuing auth challenge', { deviceId: msg.device.deviceId });
-        ws.send(JSON.stringify({ type: 'auth_challenge', nonce }));
+    switch (auth.method) {
+      case 'pairing': {
+        this.handlePairingAuth(ws, state, auth.token, msg);
         return;
       }
+
+      case 'challenge': {
+        const device = this.storage.getDevice(auth.deviceId);
+        if (device && device.publicKey) {
+          const nonce = randomBytes(32).toString('hex');
+          state.pendingNonce = nonce;
+          state.pendingDeviceId = auth.deviceId;
+          state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
+          state.pendingAuthMethod = 'challenge';
+          logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
+          ws.send(JSON.stringify({ type: 'auth_challenge', nonce }));
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'auth_error', message: 'Unknown device' }));
+        return;
+      }
+
+      case 'github_token': {
+        const provider = this.getAuthProviderForMode('github');
+        const result = await provider.authenticate({ token: auth.token, ip: state.ip });
+        if (!result.ok) {
+          logger.warn('Auth rejected', { method: 'github_token', ip: state.ip, reason: result.message });
+          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          return;
+        }
+        this.completeAuth(ws, state, result.user, msg, 'github_token');
+        return;
+      }
+
+      case 'github_oauth': {
+        const provider = this.getAuthProviderForMode('github');
+        const result = await provider.authenticate({ githubCode: auth.code, ip: state.ip });
+        if (!result.ok) {
+          logger.warn('Auth rejected', { method: 'github_oauth', ip: state.ip, reason: result.message });
+          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          return;
+        }
+        this.completeAuth(ws, state, result.user, msg, 'github_oauth');
+        return;
+      }
+
+      case 'apikey': {
+        const provider = this.getAuthProviderForMode('apikey');
+        const result = await provider.authenticate({ token: auth.key, ip: state.ip });
+        if (!result.ok) {
+          logger.warn('Auth rejected', { method: 'apikey', ip: state.ip, reason: result.message });
+          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          return;
+        }
+        this.completeAuth(ws, state, result.user, msg, 'apikey');
+        return;
+      }
+
+      case 'open': {
+        const provider = this.getAuthProviderForMode('open');
+        const result = await provider.authenticate({ token: auth.sharedKey, ip: state.ip });
+        if (!result.ok) {
+          logger.warn('Auth rejected', { method: 'open', ip: state.ip, reason: result.message });
+          ws.send(JSON.stringify({ type: 'auth_error', message: result.message }));
+          return;
+        }
+        this.completeAuth(ws, state, result.user, msg, 'open');
+        return;
+      }
+
+      default:
+        ws.send(JSON.stringify({ type: 'auth_error', message: `Unknown auth method: ${(auth as any).method}` }));
     }
-
-    // Token / OAuth code auth
-    const githubCode = msg.githubCode;
-    const authProvider = githubCode
-      ? this.getAuthProviderForMode('github')
-      : this.getAuthProvider();
-
-    const authResult = await authProvider.authenticate({
-      token: msg.token,
-      githubCode,
-      ip: state.ip,
-    });
-
-    if (!authResult.ok) {
-      logger.warn('Auth rejected', { ip: state.ip, reason: authResult.message });
-      ws.send(JSON.stringify({ type: 'auth_error', message: authResult.message }));
-      return;
-    }
-
-    this.completeAuth(ws, state, authResult.user, msg);
   }
 
-  private handlePairingAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): void {
+  private handlePairingAuth(ws: WebSocket, state: ClientState, pairingToken: string, msg: AuthMessage): void {
     const logger = getLogger();
     if (!(this.options.pairingEnabled ?? true)) {
-      ws.send(JSON.stringify({ type: 'auth_error', message: 'Pairing is disabled. Use OAuth to authenticate.' }));
+      ws.send(JSON.stringify({ type: 'auth_error', message: 'Pairing is disabled.' }));
       return;
     }
 
-    const pairingToken = msg.pairingToken!;
     const tokenData = this.pairingTokens.get(pairingToken);
 
     if (!tokenData || tokenData.expiresAt < Date.now()) {
@@ -379,7 +419,7 @@ export class HeadServer {
     }
 
     const authUser: AuthUser = { id: user.userId, login: user.username, provider: user.provider, email: user.email };
-    this.completeAuth(ws, state, authUser, msg);
+    this.completeAuth(ws, state, authUser, msg, 'pairing');
   }
 
   private handleChallengeResponse(ws: WebSocket, state: ClientState, msg: { deviceId: string; signature: string }): void {
@@ -437,13 +477,14 @@ export class HeadServer {
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
+      authMethod: 'challenge',
       user: { id: user.userId, login: user.username, provider: user.provider },
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
     }));
   }
 
-  private completeAuth(ws: WebSocket, state: ClientState, user: AuthUser, msg: AuthMessage): void {
+  private completeAuth(ws: WebSocket, state: ClientState, user: AuthUser, msg: AuthMessage, authMethod: string): void {
     const logger = getLogger();
 
     // Persist user
@@ -479,6 +520,7 @@ export class HeadServer {
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
+      authMethod,
       user: { id: user.id, login: user.login, provider: user.provider },
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),

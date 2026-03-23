@@ -103,6 +103,11 @@ async function authConnect(
   await waitForOpen(ws);
   const authMsg: any = {
     type: 'auth',
+    auth: extra?.pairingToken
+      ? { method: 'pairing', token: extra.pairingToken }
+      : extra?.token
+        ? { method: 'github_token', token: extra.token }
+        : { method: 'open' },
     device: {
       name,
       role,
@@ -112,8 +117,6 @@ async function authConnect(
       encryptionKey: extra?.encryptionKey,
     },
   };
-  if (extra?.token) authMsg.token = extra.token;
-  if (extra?.pairingToken) authMsg.pairingToken = extra.pairingToken;
   ws.send(JSON.stringify(authMsg));
   const authOk = await waitForMessage(ws);
   return { ws, authOk };
@@ -158,7 +161,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws);
       ws.send(JSON.stringify({
         type: 'auth',
-        token: 'bad_token',
+        auth: { method: 'github_token', token: 'bad_token' },
         device: { name: 'Laptop', role: 'tentacle' },
       }));
       const res = await waitForMessage(ws);
@@ -172,6 +175,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws);
       ws.send(JSON.stringify({
         type: 'auth',
+        auth: { method: 'github_token' },
         device: { name: 'Laptop', role: 'tentacle' },
       }));
       const res = await waitForMessage(ws);
@@ -221,8 +225,8 @@ describe('HeadServer (thin relay)', () => {
       ws.send(JSON.stringify({ type: 'auth_info' }));
       const res = await waitForMessage(ws);
       expect(res.type).toBe('auth_info_response');
-      expect(res.authModes).toBeTruthy();
-      expect(res.pairing).toBe(true);
+      expect(res.methods).toBeTruthy();
+      expect(res.methods).toContain('pairing');
       ws.close();
     });
 
@@ -382,7 +386,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws);
       ws.send(JSON.stringify({
         type: 'auth',
-        pairingToken: 'pt_bogus',
+        auth: { method: 'pairing', token: 'pt_bogus' },
         device: { name: 'Phone', role: 'app' },
       }));
       const res = await waitForMessage(ws);
@@ -408,7 +412,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws);
       ws.send(JSON.stringify({
         type: 'auth',
-        pairingToken: token,
+        auth: { method: 'pairing', token: token },
         device: { name: 'Browser', role: 'app' },
       }));
       const res = await waitForMessage(ws);
@@ -450,6 +454,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws2);
       ws2.send(JSON.stringify({
         type: 'auth',
+        auth: { method: 'challenge', deviceId },
         device: { name: 'Laptop', role: 'tentacle', deviceId },
       }));
 
@@ -484,6 +489,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws2);
       ws2.send(JSON.stringify({
         type: 'auth',
+        auth: { method: 'challenge', deviceId },
         device: { name: 'Laptop', role: 'tentacle', deviceId },
       }));
       const challenge = await waitForMessage(ws2);
@@ -587,6 +593,7 @@ describe('HeadServer (thin relay)', () => {
       await waitForOpen(ws);
       ws.send(JSON.stringify({
         type: 'auth',
+        auth: { method: 'open' },
         device: { name: 'Direct', role: 'tentacle' },
       }));
       const authOk = await waitForMessage(ws);
