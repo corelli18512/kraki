@@ -23,6 +23,9 @@ export interface EncryptedPayload {
   keys: Record<string, string>;
 }
 
+export type { BlobPayload } from '@kraki/protocol';
+import type { BlobPayload } from '@kraki/protocol';
+
 export interface AppKeyStore {
   /** Initialize: load existing keys from storage or generate new ones */
   init(): Promise<void>;
@@ -32,10 +35,14 @@ export interface AppKeyStore {
   getSigningPublicKey(): Promise<string>;
   /** Sign a challenge nonce (for return-visit auth) */
   signChallenge(nonce: string): Promise<string>;
-  /** Decrypt an E2E encrypted message */
+  /** Decrypt an E2E encrypted message (legacy separate-field format) */
   decrypt(payload: { iv: string; ciphertext: string; tag: string; keys: Record<string, string> }, deviceId: string): Promise<string>;
-  /** Encrypt a message for multiple recipient devices */
+  /** Encrypt a message for multiple recipient devices (legacy separate-field format) */
   encrypt(plaintext: string, recipients: RecipientKey[]): Promise<EncryptedPayload>;
+  /** Encrypt to consolidated blob format: base64(iv ‖ ciphertext ‖ tag) */
+  encryptToBlob(plaintext: string, recipients: RecipientKey[]): Promise<BlobPayload>;
+  /** Decrypt from consolidated blob format */
+  decryptFromBlob(payload: { blob: string; keys: Record<string, string> }, deviceId: string): Promise<string>;
   /** Has keys been initialized? */
   isReady(): boolean;
 }
@@ -139,6 +146,10 @@ export class BrowserAppKeyStore implements AppKeyStore {
       // Note: we need to be able to export the public key but not the private key.
       // Web Crypto allows exporting public keys even when extractable=false.
       await idbPut(db, ENCRYPT_KEY_ID, this.encryptKeyPair);
+    }
+
+    if (!this.encryptKeyPair || !this.signKeyPair) {
+      throw new Error('Key pair generation failed');
     }
 
     // The public key we send to the head is the ENCRYPTION public key
@@ -266,6 +277,34 @@ export class BrowserAppKeyStore implements AppKeyStore {
       tag: btoa(String.fromCharCode(...tag)),
       keys,
     };
+  }
+
+  async encryptToBlob(plaintext: string, recipients: RecipientKey[]): Promise<BlobPayload> {
+    const result = await this.encrypt(plaintext, recipients);
+    // Pack iv + ciphertext + tag into a single blob
+    const ivBytes = Uint8Array.from(atob(result.iv), c => c.charCodeAt(0));
+    const cipherBytes = Uint8Array.from(atob(result.ciphertext), c => c.charCodeAt(0));
+    const tagBytes = Uint8Array.from(atob(result.tag), c => c.charCodeAt(0));
+    const combined = new Uint8Array(ivBytes.length + cipherBytes.length + tagBytes.length);
+    combined.set(ivBytes, 0);
+    combined.set(cipherBytes, ivBytes.length);
+    combined.set(tagBytes, ivBytes.length + cipherBytes.length);
+    return {
+      blob: btoa(String.fromCharCode(...combined)),
+      keys: result.keys,
+    };
+  }
+
+  async decryptFromBlob(
+    payload: { blob: string; keys: Record<string, string> },
+    deviceId: string,
+  ): Promise<string> {
+    // Unpack blob: iv (12 bytes) + ciphertext (N) + tag (16 bytes)
+    const raw = Uint8Array.from(atob(payload.blob), c => c.charCodeAt(0));
+    const iv = btoa(String.fromCharCode(...raw.slice(0, 12)));
+    const tag = btoa(String.fromCharCode(...raw.slice(raw.length - 16)));
+    const ciphertext = btoa(String.fromCharCode(...raw.slice(12, raw.length - 16)));
+    return this.decrypt({ iv, ciphertext, tag, keys: payload.keys }, deviceId);
   }
 
   private async exportPublicKey(key: CryptoKey): Promise<string> {

@@ -119,11 +119,9 @@ export async function startWorker(): Promise<WorkerResult> {
 
   relay.onAuthenticated = (info) => {
     logger.info({
-      channel: info.channel,
       deviceId: info.deviceId,
-      e2e: info.e2e,
+      user: info.user?.login,
       devices: info.devices.length,
-      sessions: info.sessions.length,
     }, 'Connected to relay');
   };
 

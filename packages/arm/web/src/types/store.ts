@@ -45,10 +45,9 @@ export interface PendingQuestion {
 export interface AppState {
   // Connection
   status: ConnectionStatus;
-  channel: string | null;
   deviceId: string | null;
 
-  // Authenticated user (channel owner)
+  // Authenticated user
   user: { id: string; login: string; provider: string; email?: string } | null;
 
   // Data
@@ -84,18 +83,12 @@ export interface AppState {
 
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
-
-  // Last sequence number seen (for replay resume after refresh)
-  lastSeq: number;
-
-  // Whether we are currently replaying messages from the server
-  replaying: boolean;
 }
 
 export interface AppActions {
   // Connection
   setStatus: (status: ConnectionStatus) => void;
-  setAuth: (channel: string, deviceId: string) => void;
+  setAuth: (deviceId: string) => void;
   setUser: (user: AppState['user']) => void;
 
   // Data
@@ -123,8 +116,6 @@ export interface AppActions {
   setActiveSessionId: (sessionId: string | null) => void;
   setSessionMode: (sessionId: string, mode: 'ask' | 'auto') => void;
   setGithubClientId: (clientId: string | null) => void;
-  setLastSeq: (seq: number) => void;
-  setReplaying: (replaying: boolean) => void;
   clearTransientState: () => void;
   reset: () => void;
 }

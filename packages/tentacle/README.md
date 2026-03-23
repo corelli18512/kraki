@@ -50,6 +50,18 @@ The hosted web app lives at:
 
 - `https://kraki.corelli.cloud`
 
+## What tentacle handles
+
+Beyond bridging agent events, tentacle is responsible for several things that used to live on the relay:
+
+- **Sequence numbers and timestamps** — assigned locally by tentacle, not by the relay
+- **Message buffering** — tentacle buffers messages and handles replay when devices reconnect
+- **Session lifecycle** — session create, update, and close are managed here
+- **Auto-approval** — tools on a local allowed list are approved automatically without user interaction
+- **Encryption** — all outgoing messages are encrypted before leaving the machine
+
+The relay is a thin forwarder. Tentacle and the frontend own the application logic.
+
 ## Useful commands
 
 ```bash

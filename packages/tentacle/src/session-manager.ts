@@ -6,7 +6,7 @@
  * This is the tentacle's local intelligence layer.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
@@ -146,6 +146,16 @@ export class SessionManager {
       run.endedAt = new Date().toISOString();
       run.endReason = reason;
       this.writeRun(sessionId, run);
+    }
+  }
+
+  /**
+   * Delete a session permanently. Removes all files for this session.
+   */
+  deleteSession(sessionId: string): void {
+    const dir = this.sessionDir(sessionId);
+    if (existsSync(dir)) {
+      rmSync(dir, { recursive: true });
     }
   }
 

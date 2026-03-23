@@ -58,18 +58,14 @@ export class MockRelayServer {
   sendAuthOk(
     ws: WebSocket,
     options: {
-      channel?: string;
       deviceId?: string;
-      sessions?: Record<string, unknown>[];
       devices?: Record<string, unknown>[];
       readState?: Record<string, number>;
       e2e?: boolean;
     } = {},
   ): void {
     const {
-      channel = 'test-channel',
       deviceId = 'test-device',
-      sessions = [],
       devices = [],
       readState = {},
       e2e = false,
@@ -78,9 +74,9 @@ export class MockRelayServer {
     ws.send(
       JSON.stringify({
         type: 'auth_ok',
-        channel,
         deviceId,
-        sessions,
+        authMethod: 'open',
+        user: { id: 'user-1', login: 'testuser', provider: 'open' },
         devices,
         readState,
         e2e,
@@ -89,13 +85,12 @@ export class MockRelayServer {
   }
 
   /**
-   * Send a data message. Automatically stamps seq, channel, deviceId, and timestamp
+   * Send a data message. Automatically stamps seq, deviceId, and timestamp
    * unless the caller provides them.
    */
   sendMessage(ws: WebSocket, msg: Record<string, unknown>): void {
     const envelope: Record<string, unknown> = {
       seq: this._seq++,
-      channel: 'test-channel',
       deviceId: 'tentacle-1',
       timestamp: new Date().toISOString(),
       ...msg,

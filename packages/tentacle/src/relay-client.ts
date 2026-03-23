@@ -1,18 +1,19 @@
 /**
- * Relay client — connects the tentacle to the head via WebSocket.
+ * Relay client — connects the tentacle to the relay via WebSocket.
  *
- * Translates adapter events into protocol messages and sends them to the head.
- * Receives consumer actions from the head and routes them to the adapter.
- * Handles auth, reconnection, and session lifecycle.
+ * Translates adapter events into protocol messages and broadcasts them to apps.
+ * Receives unicast consumer actions from apps and routes them to the adapter.
+ * Handles auth, E2E encryption, reconnection, and session lifecycle.
  */
 
 import { WebSocket } from 'ws';
 import type {
-  ProducerMessage, ConsumerMessage, Message,
+  ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, DeviceSummary,
+  BroadcastEnvelope, UnicastEnvelope,
 } from '@kraki/protocol';
-import { importPublicKey } from '@kraki/crypto';
-import type { RecipientKey, EncryptedPayload } from '@kraki/crypto';
+import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
+import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
@@ -45,19 +46,22 @@ export class RelayClient {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private authInfo: AuthOkMessage | null = null;
-  private e2eEnabled = false;
   /** Cached consumer public keys for E2E encryption */
   private consumerKeys = new Map<string, string>();
   /** Messages queued when E2E is enabled but no consumer keys are available yet */
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
+  /** Monotonic seq counter — per tentacle, shared across all sessions. */
+  private seqCounter = 0;
+  /** Tool kinds auto-approved via always_allow from apps */
+  private allowedTools = new Set<string>();
 
-  // Stale connection detection — tracks server pings to detect sleep/network changes
-  private lastServerPingAt = 0;
+  // Stale connection detection — tracks last incoming message to detect sleep/network changes
+  private lastActivityAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
-  /** How long without a server ping before we consider the connection stale (ms) */
-  private static readonly STALE_THRESHOLD = 60_000; // 60s (server pings every 30s, so 2 missed pings)
+  /** How long without any activity before we consider the connection stale (ms) */
+  private static readonly STALE_THRESHOLD = 60_000;
   /** How often to check for stale connection (ms) */
   private static readonly STALE_CHECK_INTERVAL = 10_000;
 
@@ -94,21 +98,27 @@ export class RelayClient {
     ws.on('open', () => {
       this.setState('authenticating');
       this.reconnectAttempts = 0;
-      this.lastServerPingAt = Date.now();
+      this.lastActivityAt = Date.now();
       this.startStaleCheck();
-      const authMsg: Record<string, unknown> = {
-        type: 'auth',
-        token: this.options.token,
-        device: {
-          ...this.options.device,
-          publicKey: this.keyManager?.getCompactPublicKey(),
-        },
+      const device = {
+        ...this.options.device,
+        publicKey: this.keyManager?.getCompactPublicKey(),
       };
-      ws.send(JSON.stringify(authMsg));
+      // Determine auth method from available credentials
+      const auth: Record<string, unknown> = this.options.token
+        ? { method: 'github_token', token: this.options.token }
+        : { method: 'open' };
+      // If we have a stored deviceId with keys, use challenge auth
+      if (device.deviceId && this.keyManager) {
+        auth.method = 'challenge';
+        auth.deviceId = device.deviceId;
+        delete auth.token;
+      }
+      ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
     ws.on('message', (data) => {
-      this.lastServerPingAt = Date.now();
+      this.lastActivityAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
         this.handleMessage(msg);
@@ -128,9 +138,9 @@ export class RelayClient {
       // Error triggers close, which handles reconnect
     });
 
-    // Track server pings for stale connection detection
+    // Track any incoming frames as activity for stale detection
     ws.on('ping', () => {
-      this.lastServerPingAt = Date.now();
+      this.lastActivityAt = Date.now();
     });
   }
 
@@ -166,12 +176,11 @@ export class RelayClient {
 
   // ── Message handling ────────────────────────────────
 
-  private handleMessage(msg: any): void {
+  private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
-      this.authInfo = msg as AuthOkMessage;
-      this.e2eEnabled = this.authInfo.e2e && !!this.keyManager;
+      this.authInfo = msg as unknown as AuthOkMessage;
       // Cache consumer device public keys for E2E
-      if (this.e2eEnabled && this.authInfo.devices) {
+      if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
       }
       this.setState('connected');
@@ -181,8 +190,25 @@ export class RelayClient {
     }
 
     if (msg.type === 'auth_error') {
-      this.onFatalError?.(msg.message);
+      this.onFatalError?.(msg.message as string);
       this.disconnect();
+      return;
+    }
+
+    if (msg.type === 'auth_challenge') {
+      if (this.keyManager && this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          const signature = signChallenge(msg.nonce as string, this.keyManager.getKeyPair().privateKey);
+          this.ws.send(JSON.stringify({ type: 'auth_response', signature }));
+        } catch (err) {
+          logger.error({ err }, 'Failed to sign auth challenge');
+        }
+      }
+      return;
+    }
+
+    if (msg.type === 'server_error') {
+      logger.error({ message: msg.message as string, ref: msg.ref }, 'Server error');
       return;
     }
 
@@ -190,28 +216,39 @@ export class RelayClient {
       return;
     }
 
-    if (msg.type === 'head_notice') {
-      // Update consumer keys when devices change
-      if (this.e2eEnabled && msg.event === 'device_online') {
-        const dev = msg.data?.device;
-        const key = dev?.encryptionKey ?? dev?.publicKey;
-        if (dev && key) {
-          this.consumerKeys.set(dev.id, key);
-          this.flushE2eQueue();
-        }
-      }
-      if (msg.event === 'device_offline' || msg.event === 'device_removed') {
-        this.consumerKeys.delete(msg.data?.deviceId);
+    if (msg.type === 'ping') {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'pong' }));
       }
       return;
     }
 
-    // In E2E mode, incoming consumer messages may be encrypted
-    if (msg.type === 'encrypted' && this.keyManager && this.authInfo) {
+    // Device presence notifications — update consumer keys dynamically
+    if (msg.type === 'device_joined') {
+      const device = msg.device as DeviceSummary;
+      if (device.role === 'app') {
+        const key = device.encryptionKey ?? device.publicKey;
+        if (key) {
+          this.consumerKeys.set(device.id, key);
+          this.flushE2eQueue();
+        }
+      }
+      return;
+    }
+
+    if (msg.type === 'device_left') {
+      const deviceId = msg.deviceId as string;
+      this.consumerKeys.delete(deviceId);
+      return;
+    }
+
+    // Incoming unicast messages from apps — decrypt and handle inner message
+    if (msg.type === 'unicast' && this.keyManager && this.authInfo) {
       try {
-        const decrypted = this.keyManager.decryptForMe(
-          { iv: msg.iv, ciphertext: msg.ciphertext, tag: msg.tag, keys: msg.keys },
+        const decrypted = decryptFromBlob(
+          { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
           this.authInfo.deviceId,
+          this.keyManager.getKeyPair().privateKey,
         );
         const inner = JSON.parse(decrypted);
         this.handleConsumerMessage(inner as ConsumerMessage);
@@ -221,8 +258,8 @@ export class RelayClient {
       return;
     }
 
-    // Plaintext consumer messages
-    this.handleConsumerMessage(msg as ConsumerMessage);
+    // Plaintext consumer messages (fallback when no keyManager)
+    this.handleConsumerMessage(msg as unknown as ConsumerMessage);
   }
 
   private handleConsumerMessage(msg: ConsumerMessage): void {
@@ -256,6 +293,10 @@ export class RelayClient {
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
           break;
         case 'always_allow':
+          // Track auto-approved tool kinds for future permissions
+          if (msg.payload.toolKind) {
+            this.allowedTools.add(msg.payload.toolKind);
+          }
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
           break;
@@ -270,6 +311,12 @@ export class RelayClient {
         case 'abort_session':
           this.adapter.abortSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
+          break;
+        case 'delete_session':
+          this.adapter.killSession(sessionId)
+            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
+          this.sessionManager.deleteSession(sessionId);
+          this.send({ type: 'session_deleted', sessionId, payload: {} });
           break;
         default: {
           // Handle extended message types (e.g. set_session_mode)
@@ -361,6 +408,13 @@ export class RelayClient {
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
+      // Auto-approve if tool kind is in the always-allowed set
+      if (this.allowedTools.has(event.toolArgs.toolName)) {
+        this.adapter.respondToPermission(sessionId, event.id, 'approve')
+          .catch((err) => logger.error({ err, sessionId }, 'auto-approve failed'));
+        return;
+      }
+
       this.send({
         type: 'permission',
         sessionId,
@@ -477,7 +531,18 @@ export class RelayClient {
   private send(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    if (this.e2eEnabled && this.keyManager) {
+    // Outbound messages also prove connectivity
+    this.lastActivityAt = Date.now();
+
+    // Tentacle assigns seq and timestamp before encryption
+    const enriched = msg as Record<string, unknown>;
+    enriched.seq = ++this.seqCounter;
+    enriched.timestamp = new Date().toISOString();
+    if (this.authInfo) {
+      enriched.deviceId = this.authInfo.deviceId;
+    }
+
+    if (this.keyManager) {
       if (this.consumerKeys.size === 0) {
         // No consumers online — queue (bounded to prevent memory growth)
         if (this.pendingE2eQueue.length < 1000) {
@@ -500,7 +565,7 @@ export class RelayClient {
   }
 
   /**
-   * Encrypt and send a message to the relay.
+   * Encrypt and send a message to the relay as a BroadcastEnvelope.
    */
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
@@ -511,24 +576,19 @@ export class RelayClient {
     }
 
     const plaintext = JSON.stringify(msg);
-    const encrypted = this.keyManager.encryptForRecipients(plaintext, recipients);
-    const envelope: Record<string, unknown> = {
-      type: 'encrypted',
-      sessionId: msg.sessionId,
-      iv: encrypted.iv,
-      ciphertext: encrypted.ciphertext,
-      tag: encrypted.tag,
-      keys: encrypted.keys,
+    const { blob, keys } = encryptToBlob(plaintext, recipients);
+
+    const envelope: BroadcastEnvelope = {
+      type: 'broadcast',
+      blob,
+      keys,
     };
-    // Expose agent/model for session_created so the head can register properly
-    if (msg.type === 'session_created' && msg.payload) {
-      envelope.agent = (msg.payload as Record<string, unknown>).agent;
-      envelope.model = (msg.payload as Record<string, unknown>).model;
+
+    // Send push notifications for permission and question messages
+    if (msg.type === 'permission' || msg.type === 'question') {
+      envelope.notify = true;
     }
-    // Mark ephemeral messages — head forwards but doesn't persist
-    if (msg.type === 'agent_message_delta' || msg.type === 'idle') {
-      envelope.ephemeral = true;
-    }
+
     this.ws.send(JSON.stringify(envelope));
   }
 
@@ -561,9 +621,9 @@ export class RelayClient {
     this.stopStaleCheck();
     this.staleCheckTimer = setInterval(() => {
       if (this.state !== 'connected' && this.state !== 'authenticating') return;
-      const elapsed = Date.now() - this.lastServerPingAt;
+      const elapsed = Date.now() - this.lastActivityAt;
       if (elapsed > RelayClient.STALE_THRESHOLD) {
-        logger.warn(`No server ping for ${Math.round(elapsed / 1000)}s — connection stale, reconnecting`);
+        logger.warn(`No activity for ${Math.round(elapsed / 1000)}s — connection stale, reconnecting`);
         this.ws?.close();
       }
     }, RelayClient.STALE_CHECK_INTERVAL);

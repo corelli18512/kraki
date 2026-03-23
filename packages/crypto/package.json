@@ -1,6 +1,6 @@
 {
   "name": "@kraki/crypto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "E2E encryption library for Kraki — hybrid RSA-OAEP + AES-256-GCM",
   "repository": {
     "type": "git",

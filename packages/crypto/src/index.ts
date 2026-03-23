@@ -36,6 +36,14 @@ export interface EncryptedPayload {
   keys: Record<string, string>;
 }
 
+/** Consolidated encrypted payload — iv + ciphertext + tag packed into one blob */
+export interface BlobPayload {
+  /** base64(iv ‖ ciphertext ‖ tag) — relay sees this as an opaque string */
+  blob: string;
+  /** Per-recipient RSA-OAEP encrypted AES key (base64), keyed by deviceId */
+  keys: Record<string, string>;
+}
+
 export interface RecipientKey {
   deviceId: string;
   publicKey: string; // PEM-encoded
@@ -155,6 +163,59 @@ export function decrypt(payload: EncryptedPayload, deviceId: string, privateKey:
   ]);
 
   return decrypted.toString('utf8');
+}
+
+// ── Blob format (consolidated envelope) ────────────────
+
+const TAG_SIZE = 16; // AES-GCM auth tag is always 16 bytes
+
+/**
+ * Encrypt and pack into a single blob string.
+ * The blob is base64(iv ‖ ciphertext ‖ tag).
+ */
+export function encryptToBlob(plaintext: string, recipients: RecipientKey[]): BlobPayload {
+  const payload = encrypt(plaintext, recipients);
+  const iv = Buffer.from(payload.iv, 'base64');
+  const ciphertext = Buffer.from(payload.ciphertext, 'base64');
+  const tag = Buffer.from(payload.tag, 'base64');
+  const blob = Buffer.concat([iv, ciphertext, tag]).toString('base64');
+  return { blob, keys: payload.keys };
+}
+
+/**
+ * Unpack a blob string and decrypt.
+ * The blob is base64(iv ‖ ciphertext ‖ tag).
+ */
+export function decryptFromBlob(blobPayload: BlobPayload, deviceId: string, privateKey: string): string {
+  const raw = Buffer.from(blobPayload.blob, 'base64');
+  const iv = raw.subarray(0, IV_SIZE).toString('base64');
+  const tag = raw.subarray(raw.length - TAG_SIZE).toString('base64');
+  const ciphertext = raw.subarray(IV_SIZE, raw.length - TAG_SIZE).toString('base64');
+  return decrypt({ iv, ciphertext, tag, keys: blobPayload.keys }, deviceId, privateKey);
+}
+
+/**
+ * Convert an existing EncryptedPayload to a BlobPayload.
+ */
+export function payloadToBlob(payload: EncryptedPayload): BlobPayload {
+  const iv = Buffer.from(payload.iv, 'base64');
+  const ciphertext = Buffer.from(payload.ciphertext, 'base64');
+  const tag = Buffer.from(payload.tag, 'base64');
+  const blob = Buffer.concat([iv, ciphertext, tag]).toString('base64');
+  return { blob, keys: payload.keys };
+}
+
+/**
+ * Convert a BlobPayload back to an EncryptedPayload.
+ */
+export function blobToPayload(blobPayload: BlobPayload): EncryptedPayload {
+  const raw = Buffer.from(blobPayload.blob, 'base64');
+  return {
+    iv: raw.subarray(0, IV_SIZE).toString('base64'),
+    ciphertext: raw.subarray(IV_SIZE, raw.length - TAG_SIZE).toString('base64'),
+    tag: raw.subarray(raw.length - TAG_SIZE).toString('base64'),
+    keys: blobPayload.keys,
+  };
 }
 
 // ── Utilities ───────────────────────────────────────────

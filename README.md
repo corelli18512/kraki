@@ -26,21 +26,21 @@ kraki
 Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
 
 - `tentacle` runs next to the agent
-- `head` routes and stores messages
+- `head` forwards encrypted messages
 - `arm` gives you a UI on another device
 
 
 ## Why Kraki?
 
-- **End-to-end encrypted by default.** The relay can forward your sessions without being able to read message bodies.
+- **End-to-end encrypted.** The relay forwards your sessions without being able to read message bodies. There is no unencrypted mode.
 - **Keep one view across multiple machines.** A single relay can aggregate sessions from several computers and forward them to several receiving devices.
 - **Use another device as your control surface.** Check progress, approve actions, and answer prompts -- same experience of interactive coding agents without sitting in front of the machine.
 - **Built to grow.** The protocol, crypto layer, and adapter boundary are designed so more agents and clients can be added over time.
-- **Self-host if you want control.** You can run your own server easily and switch operating mode when that fits better.
+- **Self-host if you want control.** You can run your own relay easily — it is just auth and forward.
 
 ## What ships today
 
-- Relay server (`head`)
+- Relay server (`head`) — thin encrypted forwarder
 - CLI bridge for agent machines (`tentacle`)
 - Web receiver / PWA (`arm/web`)
 - Shared protocol and crypto packages
@@ -87,7 +87,7 @@ npm i -g @kraki/head
 kraki-relay
 ```
 
-By default the relay listens on `ws://localhost:4000`.
+By default the relay listens on `ws://localhost:4000`. It stores only user and device data — no messages, no sessions.
 
 Then run the same tentacle setup flow on the coding machine, but point it at your relay URL instead of the hosted default.
 
@@ -115,30 +115,25 @@ For local web development, put browser-only overrides like `VITE_WS_URL=ws://loc
 Agent <-> tentacle -- WebSocket --> head -- WebSocket --> arm
 ```
 
-1. `tentacle` listens to agent events on the machine doing the work.
-2. `head` authenticates devices, routes messages, and stores replay history.
-3. `arm` shows sessions and sends approvals, answers, and user input back to the right machine.
+1. `tentacle` listens to agent events on the machine doing the work, encrypts them, and sends them to `head`.
+2. `head` authenticates devices and forwards encrypted blobs to the right connections. It cannot read message contents.
+3. `arm` decrypts messages, shows sessions, and sends approvals, answers, and user input back to the right machine.
 
-On reconnect, clients ask for everything after their last seen sequence number, so sessions recover cleanly after temporary disconnects.
+Tentacle buffers messages and handles replay on reconnect so sessions recover cleanly after temporary disconnects.
 
 ## Security at a glance
 
-Kraki supports two operating modes:
+Kraki is always end-to-end encrypted. The relay sees envelope type, destination device ID, sender device ID, and blob size. Everything else — message content, session IDs, tool names, user input — is inside the encrypted blob.
 
-| Mode | Who can read message content? | Good fit for |
-|------|-------------------------------|--------------|
-| End-to-end encrypted | Only participating devices | The default hosted experience, or any relay you do not fully trust |
-| Trusted self-hosted | The relay operator | Simple private deployments you control |
-
-Even in end-to-end encrypted mode, the relay still sees some metadata needed to route traffic, such as device IDs, timestamps, message sizes, recipient lists, and limited session hints.
+The relay stores only a users table and a devices table. No messages, no sessions, no content.
 
 For the full security model, see [`SECURITY.md`](./SECURITY.md).
 
 ## Repository guide
 
-- `packages/protocol` - shared message types
-- `packages/crypto` - encryption primitives and helpers
-- `packages/head` - relay server
+- `packages/protocol` - shared message and envelope types
+- `packages/crypto` - encryption primitives and blob helpers
+- `packages/head` - thin relay server
 - `packages/tentacle` - CLI bridge next to the agent
 - `packages/arm/web` - web receiver / PWA
 - `packages/tests` - integration tests
@@ -180,7 +175,7 @@ Starts the relay, a mock tentacle with an interactive REPL, and the web app in o
 
 ## Company / enterprise use
 
-Kraki's security guarantees are limited to the model described in [`SECURITY.md`](./SECURITY.md). In end-to-end encrypted mode, the relay cannot read message bodies, but that does not cover endpoint compromise, company policy, network monitoring, logging, data residency, or other organizational controls.
+Kraki's security guarantees are limited to the model described in [`SECURITY.md`](./SECURITY.md). The relay cannot read message bodies, but that does not cover endpoint compromise, company policy, network monitoring, logging, data residency, or other organizational controls.
 
 You are responsible for deciding whether Kraki is appropriate for your environment. If you plan to use it with company-managed devices, repositories, or networks, review your organization's policies and consult your security / IT team before using it.
 

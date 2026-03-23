@@ -39,7 +39,6 @@ const nextSeq = () => ++globalSeq;
 function envelope(type: string, sessionId: string, payload: Record<string, unknown>, deviceId = 'dev-macbook') {
   return JSON.stringify({
     type,
-    channel: 'ch-demo',
     deviceId,
     seq: nextSeq(),
     timestamp: new Date().toISOString(),
@@ -85,13 +84,10 @@ wss.on('connection', (ws) => {
 
         send(ws, JSON.stringify({
           type: 'auth_ok',
-          channel: 'ch-demo',
           deviceId: clientDeviceId,
-          e2e: false,
+          authMethod: 'open',
+          user: { id: 'user-mock', login: 'mock-user', provider: 'open' },
           devices: [...devices, appDevice],
-          sessions: sessions.map(({ id, deviceId, deviceName, agent, model, state, messageCount }) => ({
-            id, deviceId, deviceName, agent, model, state, messageCount,
-          })),
         }));
 
         // Send history for active sessions
@@ -101,10 +97,6 @@ wss.on('connection', (ws) => {
         setTimeout(() => startSimulation(ws), 2000);
         break;
       }
-
-      case 'ping':
-        send(ws, JSON.stringify({ type: 'pong' }));
-        break;
 
       case 'send_input':
         console.log(`[mock] User input in ${msg.sessionId}: ${(msg.payload as Record<string, unknown>)?.text}`);
@@ -146,10 +138,6 @@ wss.on('connection', (ws) => {
       case 'kill_session':
         console.log(`[mock] Kill session: ${msg.sessionId}`);
         send(ws, envelope('session_ended', msg.sessionId as string, { reason: 'killed by user' }));
-        break;
-
-      case 'replay':
-        console.log(`[mock] Replay after seq: ${msg.afterSeq}`);
         break;
     }
   }
@@ -314,6 +302,18 @@ function startSimulation(ws: WebSocket) {
       }, 'dev-server'));
     }, 1500);
   }, 20000);
+
+  // Scenario 5: After 25s, simulate a device joining and later leaving
+  setTimeout(() => {
+    const newDevId = 'dev-tablet-' + randomUUID().slice(0, 4);
+    send(ws, JSON.stringify({
+      type: 'device_joined',
+      device: { id: newDevId, name: 'iPad Pro', role: 'app', kind: 'tablet', online: true },
+    }));
+    setTimeout(() => {
+      send(ws, JSON.stringify({ type: 'device_left', deviceId: newDevId }));
+    }, 5000);
+  }, 25000);
 }
 
 // --- Agent response simulation ---

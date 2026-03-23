@@ -1,42 +1,54 @@
 # Kraki Security Model
 
-Kraki handles prompts, code, shell commands, and agent output. The goal is to let you use a relay without automatically giving that relay full access to your content.
+Kraki handles prompts, code, shell commands, and agent output. The goal is to let you use a relay without giving that relay any access to your content.
 
-This document explains what Kraki protects, what it does not protect, and what each deployment mode still asks you to trust.
+This document explains what Kraki protects, what it does not protect, and what the relay can still see.
 
 ## Short version
 
-- In end-to-end encrypted mode, the relay cannot read message contents.
-- In trusted self-hosted mode, the relay can read stored contents because you are operating the server.
-- In both modes, the endpoints still see plaintext: the machine running the agent and the device reading the session.
-- In both modes, the relay still sees routing metadata.
+- The relay cannot read message contents. All message bodies are end-to-end encrypted.
+- The relay sees only what it needs to forward traffic: envelope type, destination device ID, sender device ID, and blob size.
+- Endpoints still see plaintext: the machine running the agent and the device reading the session.
 
 ## What Kraki is designed to protect
 
 | Threat | How Kraki helps |
 |--------|-----------------|
-| Relay operator reading content | End-to-end encryption keeps message bodies on the endpoints |
+| Relay operator reading content | E2E encryption keeps message bodies on the endpoints |
 | Network interception | Clients use TLS / WSS |
-| Message tampering | Authenticated encryption detects modification |
+| Message tampering | Authenticated encryption (AES-256-GCM) detects modification |
 | Unauthorized device access | Pairing, authentication, and device registration control who can join |
 | Unauthorized web access | GitHub OAuth code exchange keeps `client_secret` server-side; CSRF state parameter prevents forged callbacks |
-| Lost connection or reconnect gaps | Sequence numbers and replay reduce message loss and duplication |
 
-## What Kraki does not hide
+## What the relay sees
 
-Even in end-to-end encrypted mode, the relay still sees some metadata because it must route traffic and maintain state.
+The relay must route traffic, so it sees some metadata. Here is the complete list:
 
-| Still visible to the relay | Why |
-|----------------------------|-----|
-| Device IDs and device names | Needed for routing and device management |
-| Channel membership | Needed to know which devices belong together |
-| Timestamps and message ordering | Needed for replay and delivery order |
-| Message sizes | The relay forwards blobs, so size is visible |
-| Recipient lists and public keys | Needed to deliver encrypted content to the right devices |
-| Session IDs | Needed to route actions back to the correct agent machine |
-| Limited session hints | Some outer-envelope fields remain visible for routing and session state, such as agent/model on session creation and selected state markers |
+| Visible to the relay | Why |
+|----------------------|-----|
+| Envelope type (unicast or broadcast) | Needed to decide fan-out behavior |
+| `to` device ID (unicast only) | Needed to route to the right connection |
+| Sender device ID (from connection) | Needed to identify origin |
+| Blob size | The relay forwards blobs, so size is visible |
 
-That means Kraki protects content more strongly than metadata. It is honest to describe the relay as unable to read message bodies, not as unable to learn anything at all.
+That is all. The following are **not** visible to the relay:
+
+- Message content or message type
+- Session IDs
+- Tool names and agent output
+- User input and approval decisions
+- Sequence numbers (assigned by tentacle, inside the blob)
+
+Kraki protects content fully, not just partially. The relay is an encrypted forwarder with no ability to inspect payloads.
+
+## What the relay stores
+
+The relay maintains two database tables:
+
+- **users** — user identity and auth records
+- **devices** — registered devices and their public keys
+
+The relay does not store messages, sessions, message history, or any content. Message buffering and replay are handled by `tentacle`.
 
 ## What Kraki does not protect against
 
@@ -44,37 +56,12 @@ Kraki cannot remove trust from the endpoints themselves.
 
 - If the machine running the agent is compromised, the attacker can see plaintext before it is encrypted.
 - If the receiving device is compromised, the attacker can see plaintext after it is decrypted.
-- If you run a trusted self-hosted relay, the relay can read stored content because that is the model you chose.
-- End-to-end encryption does not hide traffic patterns, activity times, or other metadata listed above.
+- E2E encryption does not hide traffic patterns, activity times, or the metadata listed above.
 - A malicious or buggy agent can still misuse the permissions you give it.
-
-## Two operating modes
-
-### Trusted self-hosted mode
-
-Use this when you control the relay and want the simplest operational model.
-
-- Transport is still protected with TLS / WSS
-- The relay stores plaintext session content
-- Search and debugging are simpler
-- You are explicitly trusting the relay operator
-
-This is a good fit for a private server, home lab, or internal team deployment.
-
-### End-to-end encrypted mode
-
-Use this when you want the relay to deliver messages without being able to read their contents.
-
-- Each device has its own keypair
-- Senders encrypt content before it reaches the relay
-- The relay stores ciphertext plus routing metadata
-- Receivers decrypt locally
-
-This is a better fit for hosted or shared relays where you do not want to trust the operator with message bodies.
 
 ## How end-to-end encryption works
 
-Kraki currently uses:
+Kraki uses:
 
 - **AES-256-GCM** for message content
 - **RSA-OAEP (4096-bit)** for per-device key wrapping
@@ -83,9 +70,10 @@ At a high level, the flow is:
 
 1. A sender creates a fresh symmetric key for one message.
 2. The message body is encrypted with AES-256-GCM.
-3. That symmetric key is wrapped separately for each recipient device's public key.
-4. The relay stores the encrypted message plus the wrapped keys.
-5. Each recipient unwraps the symmetric key with its private key and decrypts locally.
+3. The IV, ciphertext, and authentication tag are concatenated into a single blob: `base64(iv ‖ ciphertext ‖ tag)`.
+4. The symmetric key is wrapped separately for each recipient device's public key.
+5. The relay forwards the blob and wrapped keys without being able to read them.
+6. Each recipient unwraps the symmetric key with its private key and decrypts locally.
 
 This keeps the large payload encryption fast while still allowing multiple receiving devices.
 
@@ -111,20 +99,22 @@ This is local-machine trust, not hardware-backed security.
 
 ## New devices and old history
 
-In end-to-end encrypted mode, a newly added device cannot automatically decrypt old messages that were encrypted for earlier devices.
+A newly added device cannot automatically decrypt old messages that were encrypted for earlier devices.
 
 To recover that history, an already-authorized online device can re-encrypt stored messages for the new device. If no existing device is online yet, the new device can still receive live traffic immediately and older history can sync later.
 
 That behavior is a normal consequence of per-device encryption.
 
-## Practical trust summary
+## Trust summary
 
-| Question | Trusted self-hosted | End-to-end encrypted |
-|----------|---------------------|----------------------|
-| Can the relay read message bodies? | Yes | No |
-| Can the relay see routing metadata? | Yes | Yes |
-| Do endpoints see plaintext? | Yes | Yes |
-| Is self-hosting still useful? | Yes, for operational control | Yes, if you want both control and content privacy |
+| Question | Answer |
+|----------|--------|
+| Can the relay read message bodies? | No |
+| Can the relay see routing metadata? | Yes — envelope type, device IDs, blob size |
+| Can the relay see session IDs, message types, or content? | No — all inside encrypted blob |
+| Do endpoints see plaintext? | Yes |
+| Does the relay store messages? | No — only user and device tables |
+| Is self-hosting still useful? | Yes, for operational control and latency |
 
 ## Open source and verification
 

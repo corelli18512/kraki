@@ -10,7 +10,7 @@
 
 # @kraki/head
 
-Relay server that routes messages between tentacles and apps.
+Thin encrypted relay that forwards messages between tentacles and apps.
 
 > Preview: `@kraki/head` is still early-stage. Expect breaking changes while the hosted and self-hosted flows stabilize.
 
@@ -39,15 +39,25 @@ Start a local relay:
 npx @kraki/head
 ```
 
-By default the relay listens on `ws://localhost:4000` and stores data in `kraki-head.db`.
+By default the relay listens on `ws://localhost:4000` and stores user/device data in `kraki-head.db`.
 
 Enable GitHub login for the web app:
 
 ```bash
 GITHUB_CLIENT_ID=your_client_id \
 GITHUB_CLIENT_SECRET=your_client_secret \
-npx @kraki/head --auth github --e2e true
+npx @kraki/head --auth github
 ```
+
+## What the relay does
+
+The relay has three jobs:
+
+1. **Authenticate** — verify device identity on connect
+2. **Forward blobs** — route unicast and broadcast envelopes to the right WebSocket connections
+3. **Track identity** — maintain users and devices tables
+
+It stores no messages, no sessions, and no content. All message bodies are encrypted blobs that the relay cannot read.
 
 ## Useful options
 
@@ -55,9 +65,13 @@ npx @kraki/head --auth github --e2e true
 kraki-relay --port 8080
 kraki-relay --db /path/to/kraki-head.db
 kraki-relay --auth open
-kraki-relay --auth github --e2e true
+kraki-relay --auth github
 kraki-relay --log debug
 ```
+
+## Auth methods
+
+The relay supports multiple authentication methods as a discriminated union: `github_token`, `github_oauth`, `pairing`, `challenge`, `apikey`, and `open`.
 
 ## Package naming
 

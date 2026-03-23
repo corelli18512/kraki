@@ -108,7 +108,6 @@ describe('setSessionMode', () => {
 describe('handleDataMessage auto-approve in auto mode', () => {
   const makePermissionMsg = (id: string, sessionId: string): PermissionRequest => ({
     type: 'permission',
-    channel: 'ch-1',
     deviceId: 'dev-tentacle',
     seq: 1,
     timestamp: new Date().toISOString(),
@@ -123,7 +122,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   const cmdState = new commands.CommandState();
 
-  it('auto-approves permission when session is in auto mode', () => {
+  it('adds permission as pending in auto mode (auto-approve moved to tentacle)', () => {
     const sendEncrypted = vi.fn();
     useStore.getState().setSessionMode('sess-1', 'auto');
 
@@ -133,14 +132,9 @@ describe('handleDataMessage auto-approve in auto mode', () => {
       sendEncrypted,
     });
 
-    // Should NOT be in pending permissions
-    expect(useStore.getState().pendingPermissions.size).toBe(0);
-    // Should send approve back to relay
-    expect(sendEncrypted).toHaveBeenCalledWith({
-      type: 'approve',
-      sessionId: 'sess-1',
-      payload: { permissionId: 'perm-1' },
-    });
+    // Auto-approve is now handled by tentacle, not the frontend
+    expect(useStore.getState().pendingPermissions.size).toBe(1);
+    expect(sendEncrypted).not.toHaveBeenCalled();
   });
 
   it('adds permission as pending when session is in ask mode', () => {
@@ -177,7 +171,6 @@ describe('handleDataMessage session_mode_set', () => {
 
   const makeModeSetMsg = (sessionId: string, mode: 'ask' | 'auto') => ({
     type: 'session_mode_set' as const,
-    channel: 'ch-1',
     deviceId: 'dev-tentacle',
     seq: 10,
     timestamp: new Date().toISOString(),

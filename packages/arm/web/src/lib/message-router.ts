@@ -1,4 +1,4 @@
-import type { Message } from '@kraki/protocol';
+import type { InnerMessage } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 import { isViewingSession } from './replay';
 import type { CommandState } from './commands';
@@ -12,39 +12,7 @@ export interface RouterContext {
   sendEncrypted?: (msg: Record<string, unknown>) => void;
 }
 
-export function handleHeadNotice(msg: Extract<Message, { type: 'head_notice' }>): void {
-  const store = getStore();
-  switch (msg.event) {
-    case 'device_online':
-      store.upsertDevice(msg.data.device);
-      break;
-    case 'device_offline':
-      store.setDeviceOnline(msg.data.deviceId, false);
-      break;
-    case 'device_added':
-      store.upsertDevice(msg.data.device);
-      break;
-    case 'device_removed':
-      store.removeDevice(msg.data.deviceId);
-      break;
-    case 'session_updated':
-      store.upsertSession(msg.data.session);
-      break;
-    case 'session_removed':
-      store.removeSession(msg.data.sessionId);
-      // Navigate away if currently viewing the deleted session
-      if (store.activeSessionId === msg.data.sessionId) {
-        window.history.replaceState({}, '', '/');
-      }
-      break;
-    case 'read_state_updated':
-      // Another device marked a session as read — clear our unread badge
-      store.clearUnread(msg.data.sessionId);
-      break;
-  }
-}
-
-export function handleDataMessage(msg: Message, ctx: RouterContext): void {
+export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
@@ -69,14 +37,13 @@ export function handleDataMessage(msg: Message, ctx: RouterContext): void {
       if (pendingPrompt) {
         ctx.cmdState.pendingPrompts.delete(reqId);
         store.appendMessage(sid, {
-          type: 'user_message' as any,
+          type: 'user_message',
           sessionId: sid,
           deviceId: '',
           seq: 0,
-          channel: '',
           timestamp: msg.timestamp,
           payload: { content: pendingPrompt },
-        });
+        } as any);
       }
       // Auto-navigate to the new session if we created it
       if (wasOurRequest) {
@@ -121,21 +88,6 @@ export function handleDataMessage(msg: Message, ctx: RouterContext): void {
         timestamp: msg.timestamp,
       };
 
-      // Auto-approve if session is in auto mode (handles race with tentacle)
-      const sessionMode = store.sessionModes.get(sid);
-      if (sessionMode === 'auto' && !ctx.replaying && ctx.sendEncrypted) {
-        ctx.sendEncrypted({
-          type: 'approve',
-          sessionId: sid,
-          payload: { permissionId: perm.id },
-        });
-        store.appendMessage(sid, {
-          ...msg,
-          payload: { ...msg.payload, resolution: 'approved' },
-        } as any);
-        break;
-      }
-
       store.addPermission(perm);
       store.appendMessage(sid, msg);
       if (!ctx.replaying && !isViewingSession(sid)) store.incrementUnread(sid);
@@ -168,6 +120,11 @@ export function handleDataMessage(msg: Message, ctx: RouterContext): void {
       if (mode === 'ask' || mode === 'auto') {
         store.setSessionMode(sid, mode);
       }
+      break;
+    }
+
+    case 'session_deleted': {
+      store.removeSession(sid);
       break;
     }
 

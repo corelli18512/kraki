@@ -6,7 +6,6 @@
 // ============================================================
 
 export * from './messages.js';
-export * from './channels.js';
 export * from './devices.js';
 export * from './sessions.js';
 export * from './tools.js';
