@@ -7,6 +7,11 @@ const markdownComponents = {
   a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
   ),
+  table: ({ children, ...props }: React.TableHTMLAttributes<HTMLTableElement>) => (
+    <div className="max-h-60 overflow-auto">
+      <table {...props}>{children}</table>
+    </div>
+  ),
 };
 
 export function StreamingText({ content, agent }: { content: string; agent?: string }) {

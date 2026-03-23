@@ -1,6 +1,6 @@
 {
   "name": "@kraki/arm-web",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Kraki web receiver — view and control your agents from any browser",
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "highlight.js": "^11.10.0",
     "lucide-react": "^0.577.0",
     "react": "^19.0.0",
+    "react-diff-viewer-continued": "^4.2.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.0",
     "react-router": "^7.0.0",

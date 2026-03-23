@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useState, lazy, Suspense } from 'react';
 import { Loader2, CheckCircle2, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
+
+const ReactDiffViewer = lazy(() => import('react-diff-viewer-continued'));
 
 interface ToolActivityProps {
   type: 'start' | 'complete';
@@ -17,6 +19,9 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
   const ToolIcon = getToolIcon(toolName);
   const detailLabel = getDetailLabel(toolName);
   const argsDetail = getArgsDetail(toolName, args as Record<string, unknown>);
+
+  const editDiff = getEditDiff(toolName, args as Record<string, unknown>);
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
   return (
     <div className="my-1">
@@ -61,12 +66,28 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
               </pre>
             </div>
           )}
-          {argsDetail && (
+          {argsDetail && !editDiff && (
             <div>
               <p className="font-semibold text-text-muted">{argsDetail.label}</p>
               <pre className="mt-1 max-h-40 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
                 {argsDetail.content}
               </pre>
+            </div>
+          )}
+          {editDiff && (
+            <div className="overflow-hidden rounded text-[11px]">
+              <Suspense fallback={<pre className="p-2 text-text-muted">Loading diff…</pre>}>
+                <ReactDiffViewer
+                  oldValue={editDiff.oldStr}
+                  newValue={editDiff.newStr}
+                  splitView={false}
+                  hideLineNumbers={false}
+                  useDarkTheme={isDark}
+                  styles={{
+                    contentText: { fontSize: '11px', lineHeight: '1.5' },
+                  }}
+                />
+              </Suspense>
             </div>
           )}
           {!summary && !argsDetail && Object.keys(args).length > 0 && (
@@ -138,6 +159,15 @@ function getDetailLabel(toolName: string): string {
     default:
       return 'Summary';
   }
+}
+
+/** Extract old/new strings for diff view from edit tool args. */
+function getEditDiff(toolName: string, args: Record<string, unknown>): { oldStr: string; newStr: string } | null {
+  if (toolName !== 'edit' && toolName !== 'edit_file') return null;
+  const oldStr = typeof args.old_str === 'string' ? args.old_str : '';
+  const newStr = typeof args.new_str === 'string' ? args.new_str : '';
+  if (!oldStr && !newStr) return null;
+  return { oldStr, newStr };
 }
 
 /** Extract additional detail args to display beyond the summary. */

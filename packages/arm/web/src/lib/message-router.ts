@@ -237,9 +237,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
             ...msg,
             payload: {
               ...(msg as any).payload,
-              args: (msg as any).payload?.args && Object.keys((msg as any).payload.args).length > 0
-                ? (msg as any).payload.args
-                : original.payload?.args ?? {},
+              args: {
+                ...(original.payload?.args ?? {}),
+                ...((msg as any).payload?.args ?? {}),
+              },
             },
           } as any;
           const next = new Map(store.messages);
