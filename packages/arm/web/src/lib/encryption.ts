@@ -46,6 +46,7 @@ export class EncryptionHandler {
 
     if (!targetDeviceId) {
       console.error('[Kraki] Cannot send — no target device for unicast');
+      getStore().setLastError('Cannot send: no target device found for this session. Try reconnecting.');
       return;
     }
 
@@ -54,6 +55,7 @@ export class EncryptionHandler {
     const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
     if (!targetKey) {
       console.error('[Kraki] Cannot send — no encryption key for target device');
+      getStore().setLastError('Cannot send: target device has no encryption key. Try reconnecting.');
       return;
     }
     const recipients: RecipientKey[] = [{ deviceId: targetDeviceId, publicKeyBase64: targetKey }];

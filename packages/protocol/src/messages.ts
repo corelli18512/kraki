@@ -26,12 +26,14 @@ export interface UnicastEnvelope {
   blob: string;
   /** Per-device RSA-OAEP encrypted AES key (base64) */
   keys: Record<string, string>;
+  /** Optional reference ID, echoed back in server_error responses */
+  ref?: string;
 }
 
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
 export interface BroadcastEnvelope {
   type: 'broadcast';
-  /** If true, relay sends APNs push to offline app devices */
+  /** Hint for future push notification support. Not yet implemented. */
   notify?: boolean;
   /** Encrypted payload: base64(iv + ciphertext + tag) */
   blob: string;
@@ -156,9 +158,15 @@ export interface SessionModeSetMessage extends BaseEnvelope {
   };
 }
 
+export interface SessionDeletedMessage extends BaseEnvelope {
+  type: 'session_deleted';
+  payload: Record<string, never>;
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
+  | SessionDeletedMessage
   | UserMessage
   | AgentMessage
   | AgentMessageDelta
@@ -348,6 +356,8 @@ export interface AuthResponseMessage {
 export interface ServerErrorMessage {
   type: 'server_error';
   message: string;
+  /** Echoed from UnicastEnvelope.ref if present */
+  ref?: string;
 }
 
 /** One-shot pairing token request — no device registration needed */
@@ -381,6 +391,18 @@ export interface AuthInfoResponse {
   githubClientId?: string;
 }
 
+/** Sent to all connected devices when a new device joins the user's account. */
+export interface DeviceJoinedMessage {
+  type: 'device_joined';
+  device: DeviceSummary;
+}
+
+/** Sent to all connected devices when a device disconnects. */
+export interface DeviceLeftMessage {
+  type: 'device_left';
+  deviceId: string;
+}
+
 export type ControlMessage =
   | AuthMessage
   | AuthOkMessage
@@ -392,7 +414,9 @@ export type ControlMessage =
   | PairingTokenCreatedMessage
   | CreatePairingTokenMessage
   | AuthInfoRequest
-  | AuthInfoResponse;
+  | AuthInfoResponse
+  | DeviceJoinedMessage
+  | DeviceLeftMessage;
 
 // ============================================================
 // Union of all messages

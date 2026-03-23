@@ -954,4 +954,48 @@ describe('KrakiWSClient', () => {
       expect(toolMsgs).toHaveLength(2);
     });
   });
+
+  describe('device_joined and device_left', () => {
+    async function connectAndAuth(client: KrakiWSClient) {
+      client.connect();
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+      lastWsInstance._receive({
+        type: 'auth_ok',
+        deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-1', name: 'MacBook', role: 'tentacle', online: true },
+        ],
+      });
+    }
+
+    it('adds device on device_joined', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      lastWsInstance._receive({
+        type: 'device_joined',
+        device: { id: 'dev-new', name: 'iPad', role: 'app', kind: 'tablet', online: true },
+      });
+
+      const devices = useStore.getState().devices;
+      expect(devices.has('dev-new')).toBe(true);
+      expect(devices.get('dev-new')?.name).toBe('iPad');
+    });
+
+    it('removes device on device_left', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      expect(useStore.getState().devices.has('dev-1')).toBe(true);
+
+      lastWsInstance._receive({
+        type: 'device_left',
+        deviceId: 'dev-1',
+      });
+
+      expect(useStore.getState().devices.has('dev-1')).toBe(false);
+    });
+  });
 });

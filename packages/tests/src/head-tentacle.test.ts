@@ -445,18 +445,17 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
     await waitMs(200);
 
-    // Tentacle sends another message — should not crash
+    // Tentacle sends another message — should not crash (queued in E2E queue)
     adapter.simulateAgentMessage(sessionId, "after disconnect");
     await waitMs(200);
 
     // Verify relay is still alive by connecting a new app
     const app2 = await connectApp(env.port);
 
-    // Force tentacle reconnect so it learns about app2's key
-    (relay as any).ws?.close();
-    await new Promise<void>((resolve) => {
-      relay.onStateChange = (s) => { if (s === "connected") resolve(); };
-    });
+    // Tentacle receives device_joined for app2 — keys update automatically (no reconnect needed)
+    // The queued "after disconnect" message gets flushed to app2
+    const flushed = await app2.waitFor("agent_message");
+    expect(flushed.payload.content).toBe("after disconnect");
 
     adapter.simulateAgentMessage(sessionId, "to new app");
     const msg = await app2.waitFor("agent_message");
@@ -529,11 +528,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     expect(authOk.type).toBe("auth_ok");
     expect(authOk.deviceId).toBe(pairDeviceId);
 
-    // Force tentacle reconnect to learn about paired app's key
-    (relay as any).ws?.close();
-    await new Promise<void>((resolve) => {
-      relay.onStateChange = (s) => { if (s === "connected") resolve(); };
-    });
+    // Tentacle receives device_joined for paired app — keys update automatically (no reconnect needed)
+    await waitMs(200);
 
     // Verify paired app can receive broadcasts
     const { sessionId } = await adapter.createSession();
@@ -606,11 +602,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     expect(app2.authOk.deviceId).toBe(deviceId);
 
     // Step 4: Verify app works after challenge auth
-    // Force tentacle reconnect so it learns about this app
-    (relay as any).ws?.close();
-    await new Promise<void>((resolve) => {
-      relay.onStateChange = (s) => { if (s === "connected") resolve(); };
-    });
+    // Tentacle receives device_joined for reconnected app — keys update automatically
+    await waitMs(200);
 
     const { sessionId } = await adapter.createSession();
     await waitMs(100);
@@ -852,6 +845,29 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await waitMs(200);
 
     expect(adapter.lastMessage).toEqual({ sessionId, text: "fix the bug" });
+
+    app.close();
+  });
+
+  // ── Extra: device_joined enables immediate E2E without reconnect ──
+
+  it("tentacle connects first → app joins → tentacle receives device_joined → can send encrypted immediately", async () => {
+    // Tentacle connects FIRST (no apps yet — E2E queue will hold messages)
+    await connectTentacle();
+
+    // Now app connects — relay sends device_joined to tentacle
+    const app = await connectApp(env.port);
+
+    // Give device_joined time to arrive and update consumerKeys
+    await waitMs(200);
+
+    // Tentacle creates session and broadcasts — should reach app without reconnect
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    adapter.simulateAgentMessage(sessionId, "hello via device_joined");
+    const msg = await app.waitFor("agent_message");
+    expect(msg.payload.content).toBe("hello via device_joined");
 
     app.close();
   });

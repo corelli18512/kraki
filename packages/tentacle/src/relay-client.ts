@@ -208,11 +208,30 @@ export class RelayClient {
     }
 
     if (msg.type === 'server_error') {
-      logger.error({ message: msg.message as string }, 'Server error');
+      logger.error({ message: msg.message as string, ref: msg.ref }, 'Server error');
       return;
     }
 
     if (msg.type === 'pong') {
+      return;
+    }
+
+    // Device presence notifications — update consumer keys dynamically
+    if (msg.type === 'device_joined') {
+      const device = msg.device as DeviceSummary;
+      if (device.role === 'app') {
+        const key = device.encryptionKey ?? device.publicKey;
+        if (key) {
+          this.consumerKeys.set(device.id, key);
+          this.flushE2eQueue();
+        }
+      }
+      return;
+    }
+
+    if (msg.type === 'device_left') {
+      const deviceId = msg.deviceId as string;
+      this.consumerKeys.delete(deviceId);
       return;
     }
 
@@ -285,6 +304,10 @@ export class RelayClient {
         case 'abort_session':
           this.adapter.abortSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
+          break;
+        case 'delete_session':
+          this.sessionManager.deleteSession(sessionId);
+          this.send({ type: 'session_deleted', sessionId, payload: {} });
           break;
         default: {
           // Handle extended message types (e.g. set_session_mode)
@@ -498,6 +521,9 @@ export class RelayClient {
   // shape per message type (e.g. user_message must have payload.content).
   private send(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    // Outbound messages also prove connectivity
+    this.lastActivityAt = Date.now();
 
     // Tentacle assigns seq and timestamp before encryption
     const enriched = msg as Record<string, unknown>;

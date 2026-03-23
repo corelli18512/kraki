@@ -210,6 +210,22 @@ export class KrakiWSClient {
         break;
       }
 
+      case 'device_joined': {
+        const joined = msg as any;
+        if (joined.device) {
+          getStore().upsertDevice(joined.device);
+        }
+        break;
+      }
+
+      case 'device_left': {
+        const left = msg as any;
+        if (left.deviceId) {
+          getStore().removeDevice(left.deviceId);
+        }
+        break;
+      }
+
       default:
         break;
     }

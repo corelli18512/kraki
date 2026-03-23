@@ -44,7 +44,7 @@ describe('ChatView', () => {
     ]);
     useStore.getState().appendMessage('s1', {
       type: 'user_message',
-      channel: 'ch', deviceId: 'd1', seq: 1,
+      deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { content: 'Hello from user' },
     } as any);
@@ -125,7 +125,7 @@ describe('ChatView', () => {
     for (let i = 0; i < 5; i++) {
       useStore.getState().appendMessage('s1', {
         type: 'agent_message',
-        channel: 'ch', deviceId: 'd1', seq: i,
+        deviceId: 'd1', seq: i,
         timestamp: new Date().toISOString(), sessionId: 's1',
         payload: { content: `Message ${i}` },
       } as any);

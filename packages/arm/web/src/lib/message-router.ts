@@ -123,6 +123,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    case 'session_deleted': {
+      store.removeSession(sid);
+      break;
+    }
+
     // Resolve permissions/questions on replay (approve/deny/always_allow/answer)
     // Merge the resolution into the original permission message so the bubble
     // shows the grant result with the full tool description.

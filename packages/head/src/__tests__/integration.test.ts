@@ -64,7 +64,7 @@ describe('Integration: Thin Relay', () => {
       app2.close();
     });
 
-    it('should deliver broadcast from app to tentacle', async () => {
+    it('should reject broadcast from app device', async () => {
       const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
       const app = await connectDevice(env.port, 'Phone', 'app');
 
@@ -74,8 +74,8 @@ describe('Integration: Thin Relay', () => {
         keys: { tentacle_key: 'k1' },
       });
 
-      const msg = await tentacle.waitFor('broadcast');
-      expect(msg.blob).toBe('app_broadcast');
+      const err = await app.waitFor('server_error');
+      expect(err.message).toContain('Only tentacle devices can broadcast');
 
       tentacle.close();
       app.close();

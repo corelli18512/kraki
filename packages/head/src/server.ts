@@ -7,7 +7,7 @@ import type {
   AuthMessage, UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
-import type { AuthProvider, AuthUser } from './auth.js';
+import type { AuthProvider, AuthUser, AuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
 
@@ -168,9 +168,16 @@ export class HeadServer {
 
     ws.on('close', () => {
       if (state.deviceId) {
-        this.connections.delete(state.deviceId);
-        this.userByDevice.delete(state.deviceId);
-        logger.info('Device disconnected', { deviceId: state.deviceId });
+        const disconnectedDeviceId = state.deviceId;
+        const disconnectedUserId = state.userId;
+        this.connections.delete(disconnectedDeviceId);
+        this.userByDevice.delete(disconnectedDeviceId);
+        logger.info('Device disconnected', { deviceId: disconnectedDeviceId });
+
+        // Notify other connected devices that this device left
+        if (disconnectedUserId) {
+          this.broadcastDeviceLeft(disconnectedUserId, disconnectedDeviceId);
+        }
       }
       this.clients.delete(ws);
     });
@@ -232,7 +239,7 @@ export class HeadServer {
         this.sendError(ws, 'Invalid unicast: to, blob, keys required');
         return;
       }
-      this.handleUnicast(state, msg as unknown as UnicastEnvelope);
+      this.handleUnicast(ws, state, msg as unknown as UnicastEnvelope);
       return;
     }
 
@@ -241,7 +248,18 @@ export class HeadServer {
         this.sendError(ws, 'Invalid broadcast: blob, keys required');
         return;
       }
+      // Only tentacles can broadcast
+      const device = this.storage.getDevice(state.deviceId!);
+      if (device?.role !== 'tentacle') {
+        this.sendError(ws, 'Only tentacle devices can broadcast');
+        return;
+      }
       this.handleBroadcast(state, msg as unknown as BroadcastEnvelope);
+      return;
+    }
+
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong' }));
       return;
     }
 
@@ -250,7 +268,7 @@ export class HeadServer {
 
   // --- Routing ---
 
-  private handleUnicast(state: ClientState, msg: UnicastEnvelope): void {
+  private handleUnicast(ws: WebSocket, state: ClientState, msg: UnicastEnvelope): void {
     const logger = getLogger();
     const senderUserId = state.userId;
     if (!senderUserId || !state.deviceId) return;
@@ -259,12 +277,14 @@ export class HeadServer {
     const targetDevice = this.storage.getDevice(msg.to);
     if (!targetDevice || targetDevice.userId !== senderUserId) {
       logger.warn('Unicast rejected: target not found or wrong user', { from: state.deviceId, to: msg.to });
+      ws.send(JSON.stringify({ type: 'server_error', message: 'Target device not found or offline', ref: msg.ref }));
       return;
     }
 
     const targetWs = this.connections.get(msg.to);
     if (!targetWs) {
       logger.debug('Unicast target offline', { to: msg.to });
+      ws.send(JSON.stringify({ type: 'server_error', message: 'Target device not found or offline', ref: msg.ref }));
       return;
     }
 
@@ -482,6 +502,9 @@ export class HeadServer {
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
     }));
+
+    // Notify other connected devices about the reconnected device
+    this.broadcastDeviceJoined(user.userId, deviceId);
   }
 
   private completeAuth(ws: WebSocket, state: ClientState, user: AuthUser, msg: AuthMessage, authMethod: string): void {
@@ -525,6 +548,9 @@ export class HeadServer {
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),
     }));
+
+    // Notify other connected devices about the new device
+    this.broadcastDeviceJoined(user.id, deviceId);
   }
 
   // --- Pairing tokens (in-memory) ---
@@ -566,10 +592,16 @@ export class HeadServer {
       return;
     }
 
-    const authResult = await this.getAuthProvider().authenticate({
-      token: msg.token,
-      ip: state.ip,
-    });
+    // Try all configured auth providers until one succeeds
+    let authResult: AuthOutcome = { ok: false, message: 'No auth provider accepted the token' };
+    for (const provider of (this.options.authProviders?.values() ?? [])) {
+      authResult = await provider.authenticate({ token: msg.token, ip: state.ip });
+      if (authResult.ok) break;
+    }
+    // Fall back to legacy single provider if no authProviders map
+    if (!authResult.ok && this.options.authProvider && !this.options.authProviders?.size) {
+      authResult = await this.options.authProvider.authenticate({ token: msg.token, ip: state.ip });
+    }
 
     if (!authResult.ok) {
       ws.send(JSON.stringify({ type: 'auth_error', message: authResult.message }));
@@ -592,6 +624,54 @@ export class HeadServer {
       token,
       expiresIn: ttl,
     }));
+  }
+
+  // --- Device presence notifications ---
+
+  private broadcastDeviceJoined(userId: string, newDeviceId: string): void {
+    let device;
+    try {
+      device = this.storage.getDevice(newDeviceId);
+    } catch { return; } // Storage may be closed during shutdown
+    if (!device) return;
+
+    const summary: DeviceSummary = {
+      id: device.id,
+      name: device.name,
+      role: device.role as DeviceRole,
+      kind: (device.kind as DeviceKind) ?? undefined,
+      publicKey: device.publicKey ?? undefined,
+      encryptionKey: device.encryptionKey ?? undefined,
+      online: true,
+    };
+
+    const msg = JSON.stringify({ type: 'device_joined', device: summary });
+    let userDevices;
+    try {
+      userDevices = this.storage.getDevicesByUser(userId);
+    } catch { return; }
+    for (const d of userDevices) {
+      if (d.id === newDeviceId) continue;
+      const ws = this.connections.get(d.id);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch { /* best effort */ }
+      }
+    }
+  }
+
+  private broadcastDeviceLeft(userId: string, leftDeviceId: string): void {
+    const msg = JSON.stringify({ type: 'device_left', deviceId: leftDeviceId });
+    let userDevices;
+    try {
+      userDevices = this.storage.getDevicesByUser(userId);
+    } catch { return; } // Storage may be closed during shutdown
+    for (const d of userDevices) {
+      if (d.id === leftDeviceId) continue;
+      const ws = this.connections.get(d.id);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch { /* best effort */ }
+      }
+    }
   }
 
   // --- Helpers ---

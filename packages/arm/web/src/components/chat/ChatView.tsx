@@ -18,7 +18,6 @@ export function ChatView() {
   const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
   const permissionsMap = useStore((s) => s.pendingPermissions);
   const questionsMap = useStore((s) => s.pendingQuestions);
-  const replaying = useStore((s) => s.replaying);
 
   const messages = sessionId ? messagesMap.get(sessionId) ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
   const streaming = sessionId ? streamingMap.get(sessionId) : undefined;
@@ -136,32 +135,12 @@ export function ChatView() {
           className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
         >
           <div className="mx-auto max-w-3xl space-y-3">
-            {replaying && visibleMessages.length === 0 && (
-              <div className="flex flex-col gap-3 animate-pulse" data-testid="replay-skeleton">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="rounded-xl bg-surface-secondary p-4">
-                    <div className="h-3 w-3/4 rounded bg-surface-tertiary" />
-                    <div className="mt-2 h-3 w-1/2 rounded bg-surface-tertiary" />
-                  </div>
-                ))}
-              </div>
-            )}
-
             {visibleMessages.map((msg, idx) => (
               <MessageBubble key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `local-${idx}`} message={msg} agent={session.agent} />
             ))}
 
             {streaming && <StreamingText content={streaming} agent={session.agent} />}
           </div>
-
-          {replaying && visibleMessages.length > 0 && (
-            <div className="mx-auto max-w-3xl py-2 text-center" data-testid="replay-indicator">
-              <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
-                <span className="h-1.5 w-1.5 rounded-full bg-kraki-500 animate-pulse" />
-                Loading history…
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Subtle dim overlay when a blocking card is shown */}

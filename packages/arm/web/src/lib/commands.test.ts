@@ -171,7 +171,6 @@ describe('handleDataMessage session_mode_set', () => {
 
   const makeModeSetMsg = (sessionId: string, mode: 'ask' | 'auto') => ({
     type: 'session_mode_set' as const,
-    channel: 'ch-1',
     deviceId: 'dev-tentacle',
     seq: 10,
     timestamp: new Date().toISOString(),

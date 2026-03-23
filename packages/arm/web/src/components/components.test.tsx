@@ -123,7 +123,7 @@ describe('SessionCard', () => {
     useStore.getState().setSessions([session]);
     useStore.getState().appendMessage('s1', {
       type: 'agent_message',
-      channel: 'ch', deviceId: 'd1', seq: 1,
+      deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { content: 'Here is the analysis result' },
     } as any);
@@ -135,7 +135,7 @@ describe('SessionCard', () => {
     useStore.getState().setSessions([session]);
     useStore.getState().appendMessage('s1', {
       type: 'error',
-      channel: 'ch', deviceId: 'd1', seq: 1,
+      deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { message: 'Something went wrong' },
     } as any);

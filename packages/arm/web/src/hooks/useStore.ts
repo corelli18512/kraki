@@ -41,7 +41,6 @@ function getInitialStatus(): ConnectionStatus {
 
 const initialState = {
   status: getInitialStatus(),
-  channel: null,
   deviceId: null,
   user: null,
   sessions: new Map<string, SessionSummary>(),
@@ -58,8 +57,6 @@ const initialState = {
   activeSessionId: null,
   sessionModes: new Map<string, 'ask' | 'auto'>(),
   githubClientId: null,
-  lastSeq: 0,
-  replaying: false,
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -263,10 +260,6 @@ export const useStore = create<Store>()(persist((set) => ({
 
   setGithubClientId: (clientId) => set({ githubClientId: clientId }),
 
-  setLastSeq: (seq) => set({ lastSeq: seq }),
-
-  setReplaying: (replaying) => set({ replaying }),
-
   clearTransientState: () => set((state) => {
     // Remove pending_input messages from all sessions (fix #12)
     const cleanedMessages = new Map(state.messages);
@@ -302,8 +295,6 @@ export const useStore = create<Store>()(persist((set) => ({
     user: null,
     sessionModes: new Map(),
     githubClientId: null,
-    lastSeq: 0,
-    replaying: false,
   }),
 }), {
   name: 'kraki-store',
@@ -319,6 +310,5 @@ export const useStore = create<Store>()(persist((set) => ({
     pinnedSessions: state.pinnedSessions,
     sessionModes: state.sessionModes,
     drafts: state.drafts,
-    lastSeq: state.lastSeq,
   }),
 }));

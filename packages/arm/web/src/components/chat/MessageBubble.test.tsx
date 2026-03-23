@@ -11,7 +11,6 @@ function renderMsg(message: ChatMessage) {
 function makeMsg(type: string, payload: Record<string, unknown>, extra?: Record<string, unknown>): ChatMessage {
   return {
     type,
-    channel: 'ch-1',
     deviceId: 'dev-1',
     seq: 1,
     timestamp: '2026-03-18T12:00:00.000Z',
@@ -195,7 +194,6 @@ describe('MessageBubble', () => {
       // Create message without timestamp to cover the fallback branch
       const msg = {
         type: 'kill_session',
-        channel: 'ch-1',
         deviceId: 'dev-1',
         seq: 1,
         sessionId: 'sess-1',

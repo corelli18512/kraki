@@ -78,7 +78,6 @@ describe('useStore', () => {
     it('initializes with awaiting_login when no credentials', () => {
       const state = useStore.getState();
       expect(state.status).toBe('awaiting_login');
-      expect(state.channel).toBeNull();
       expect(state.deviceId).toBeNull();
     });
 
@@ -294,7 +293,6 @@ describe('useStore', () => {
 
       const state = useStore.getState();
       expect(state.status).toBe('awaiting_login');
-      expect(state.channel).toBeNull();
       expect(state.deviceId).toBeNull();
       expect(state.sessions.size).toBe(0);
       expect(state.devices.size).toBe(0);
