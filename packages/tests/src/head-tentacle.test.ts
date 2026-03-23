@@ -39,6 +39,7 @@ class MockAdapter {
   lastPermissionResponse: any = null;
   lastQuestionResponse: any = null;
   lastMessage: any = null;
+  killedSessions: string[] = [];
 
   async start() { this.started = true; }
   async stop() { this.started = false; }
@@ -66,6 +67,7 @@ class MockAdapter {
     this.onSessionEnded?.(sessionId, { reason: "ended" });
   }
   async killSession(sessionId: string) {
+    this.killedSessions.push(sessionId);
     const s = this.sessions.get(sessionId);
     if (s) s.ended = true;
     this.onSessionEnded?.(sessionId, { reason: "stopped" });
@@ -896,6 +898,30 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     // Relay should send server_error with ref echoed back
     const err = await app.waitFor("server_error");
     expect(err.ref).toBe(ref);
+
+    app.close();
+  });
+
+  // ── delete_session E2E ──────────────────────────────────
+
+  it("app deletes session via unicast → tentacle kills adapter + deletes metadata + broadcasts session_deleted", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+    app.sendUnicast(tentacleId, {
+      type: "delete_session", sessionId, payload: {},
+    }, km.getCompactPublicKey());
+
+    // App should receive session_deleted broadcast
+    const deleted = await app.waitFor("session_deleted");
+    expect(deleted.sessionId).toBe(sessionId);
+
+    // Adapter's killSession should have been called
+    expect(adapter.killedSessions).toContain(sessionId);
 
     app.close();
   });

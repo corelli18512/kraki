@@ -280,6 +280,10 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'pong') {
+      return; // silently accept pong responses
+    }
+
     this.sendError(ws, `Unknown message type: ${msg.type}`);
   }
 
