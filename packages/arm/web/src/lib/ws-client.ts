@@ -203,8 +203,9 @@ export class KrakiWSClient {
       case 'server_error': {
         const serverErr = msg as any;
         console.error('[Kraki] Server error:', serverErr.message);
-        if (serverErr.requestId) {
-          this.cmdState.clearRequest(serverErr.requestId);
+        const ref = serverErr.ref;
+        if (ref) {
+          this.cmdState.clearRequest(ref);
         }
         getStore().setLastError(serverErr.message);
         break;

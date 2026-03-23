@@ -852,11 +852,11 @@ describe('KrakiWSClient', () => {
       const createMsg = sent.find((m: string) => JSON.parse(m).type === 'create_session');
       const requestId = JSON.parse(createMsg).payload.requestId;
 
-      // server_error with matching requestId
+      // server_error with ref matching the requestId (relay echoes ref from envelope)
       lastWsInstance._receive({
         type: 'server_error',
         message: 'Device offline',
-        requestId,
+        ref: requestId,
       });
 
       // Now if session_created arrives with this requestId, no prompt should be inserted

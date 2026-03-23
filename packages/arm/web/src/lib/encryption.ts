@@ -63,12 +63,20 @@ export class EncryptionHandler {
     try {
       const plaintext = JSON.stringify(msg);
       const { blob, keys } = await this.keyStore.encryptToBlob(plaintext, recipients);
-      send({
+      const envelope: Record<string, unknown> = {
         type: 'unicast',
         to: targetDeviceId,
         blob,
         keys,
-      });
+      };
+      // Set ref to requestId so relay echoes it back in server_error
+      if (msg.type === 'create_session') {
+        const payload = msg.payload as Record<string, unknown> | undefined;
+        if (payload?.requestId) {
+          envelope.ref = payload.requestId;
+        }
+      }
+      send(envelope);
     } catch (err) {
       console.error('[Kraki] Outbound encryption failed:', err);
     }

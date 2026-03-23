@@ -7,7 +7,7 @@
  * Apps send encrypted UnicastEnvelopes to specific tentacles.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { generateKeyPair, exportPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
+import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
 import {
   createTestEnv, connectApp, connectAppWithCrypto, createRelayClient,
   createTmpSessionDir, waitMs, type TestEnv, type MockApp,
@@ -868,6 +868,34 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     adapter.simulateAgentMessage(sessionId, "hello via device_joined");
     const msg = await app.waitFor("agent_message");
     expect(msg.payload.content).toBe("hello via device_joined");
+
+    app.close();
+  });
+
+  // ── Extra: server_error echoes ref from unicast envelope ──
+
+  it("server_error includes ref from unicast targeting offline tentacle", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+    const tentacleKey = km.getCompactPublicKey();
+
+    // Disconnect tentacle so it goes offline
+    relay.disconnect();
+    await waitMs(200);
+
+    // Send unicast with ref to the now-offline tentacle
+    const ref = "req_test_12345";
+    const recipientPubKey = importPublicKey(tentacleKey);
+    const innerMsg = { type: "create_session", payload: { requestId: ref } };
+    const { blob, keys } = encryptToBlob(JSON.stringify(innerMsg), [
+      { deviceId: tentacleId, publicKey: recipientPubKey },
+    ]);
+    app.ws.send(JSON.stringify({ type: "unicast", to: tentacleId, blob, keys, ref }));
+
+    // Relay should send server_error with ref echoed back
+    const err = await app.waitFor("server_error");
+    expect(err.ref).toBe(ref);
 
     app.close();
   });

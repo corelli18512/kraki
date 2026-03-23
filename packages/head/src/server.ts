@@ -80,11 +80,14 @@ export class HeadServer {
   private storage: Storage;
   private options: HeadServerOptions;
 
+  private static readonly PING_INTERVAL = 30_000;
+
   // In-memory state
   private connections = new Map<string, WebSocket>();
   private pairingTokens = new Map<string, PairingToken>();
   private userByDevice = new Map<string, string>();
   private clients = new Map<WebSocket, ClientState>();
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
     this.storage = storage;
@@ -94,6 +97,20 @@ export class HeadServer {
       maxPayload: options.maxPayload ?? DEFAULT_MAX_PAYLOAD,
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
+    this.startPingInterval();
+  }
+
+  private startPingInterval(): void {
+    this.pingTimer = setInterval(() => {
+      const msg = JSON.stringify({ type: 'ping' });
+      for (const [deviceId, ws] of this.connections) {
+        try {
+          if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+        } catch {
+          this.removeConnection(deviceId);
+        }
+      }
+    }, HeadServer.PING_INTERVAL);
   }
 
   // --- Auth provider helpers ---
@@ -696,6 +713,10 @@ export class HeadServer {
   }
 
   close(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     for (const ws of this.clients.keys()) {
       ws.close();
     }

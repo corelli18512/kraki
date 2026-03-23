@@ -216,6 +216,13 @@ export class RelayClient {
       return;
     }
 
+    if (msg.type === 'ping') {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      return;
+    }
+
     // Device presence notifications — update consumer keys dynamically
     if (msg.type === 'device_joined') {
       const device = msg.device as DeviceSummary;
@@ -306,6 +313,8 @@ export class RelayClient {
             .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
           break;
         case 'delete_session':
+          this.adapter.killSession(sessionId)
+            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           this.sessionManager.deleteSession(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
           break;
