@@ -59,6 +59,8 @@ const initialState = {
   activeSessionId: null,
   sessionModes: new Map<string, 'ask' | 'auto'>(),
   githubClientId: null,
+  relayVersion: null,
+  deviceModels: new Map<string, string[]>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -267,6 +269,18 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   setGithubClientId: (clientId) => set({ githubClientId: clientId }),
+  setRelayVersion: (version) => set({ relayVersion: version }),
+
+  setDeviceModels: (deviceId, models) =>
+    set((state) => {
+      const next = new Map(state.deviceModels);
+      if (models.length > 0) {
+        next.set(deviceId, models);
+      } else {
+        next.delete(deviceId);
+      }
+      return { deviceModels: next };
+    }),
 
   clearTransientState: () => set((state) => {
     // Remove pending_input messages from all sessions (fix #12)
@@ -303,6 +317,8 @@ export const useStore = create<Store>()(persist((set) => ({
     user: null,
     sessionModes: new Map(),
     githubClientId: null,
+  relayVersion: null,
+    deviceModels: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

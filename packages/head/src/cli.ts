@@ -134,6 +134,7 @@ const storage = new Storage(DB_PATH);
 const head = new HeadServer(storage, {
   authProviders,
   pairingEnabled: PAIRING,
+  version: VERSION,
 });
 
 const httpServer = createServer((req, res) => {

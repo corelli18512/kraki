@@ -1,7 +1,10 @@
 import type { AppKeyStore } from './e2e';
+import { createLogger } from './logger';
 import { getStore } from './store-adapter';
 import { saveStoredDevice, STORAGE_KEY } from './transport';
 import { supportsOAuthLogin } from './oauth';
+
+const logger = createLogger('auth');
 
 /** Send the initial auth message. Returns true if a pairing token was consumed. */
 export async function sendAuth(
@@ -72,9 +75,7 @@ export async function handleAuthChallenge(
       signature,
     });
   } catch (err) {
-    if (import.meta.env.DEV) {
-      console.error('[Kraki] Challenge signing failed:', err);
-    }
+    logger.error('Challenge signing failed:', err);
     // Can't sign — need to re-pair
     getStore().setStatus('error');
   }
@@ -96,6 +97,9 @@ export function processAuthOk(
   store.setUser((msg as any).user ?? null);
   if ((msg as any).githubClientId) {
     store.setGithubClientId((msg as any).githubClientId);
+  }
+  if ((msg as any).relayVersion) {
+    store.setRelayVersion((msg as any).relayVersion);
   }
   // Clear transient state that may be stale from previous connection
   store.clearTransientState();
@@ -119,7 +123,7 @@ export function processAuthError(
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
   if (storedDeviceId) {
-    console.warn('[Kraki] Auth failed for stored device, clearing credentials');
+    logger.warn('Auth failed for stored device, clearing credentials');
     localStorage.removeItem(STORAGE_KEY);
     deps.clearStoredDeviceId();
     store.setLastError(

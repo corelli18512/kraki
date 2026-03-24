@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import { useTheme } from '../../hooks/useTheme';
+import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { version } from '../../../package.json';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
+  const relayVersion = useStore((s) => s.relayVersion);
 
   // Close on Escape (overlay mode only)
   useEffect(() => {
@@ -62,6 +64,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         </h3>
         <div className="space-y-1 text-xs text-text-secondary">
           <p>Client version: {version}</p>
+          {relayVersion && <p>Relay version: {relayVersion}</p>}
           <p>Agent-agnostic relay for AI coding agents</p>
         </div>
       </section>

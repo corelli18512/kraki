@@ -45,6 +45,7 @@ export interface HeadServerOptions {
   maxPayload?: number;
   pairingEnabled?: boolean;
   pairingTtl?: number;
+  version?: string;
 }
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
@@ -264,12 +265,6 @@ export class HeadServer {
     if (msg.type === 'broadcast') {
       if (!isValidBroadcast(msg)) {
         this.sendError(ws, 'Invalid broadcast: blob, keys required');
-        return;
-      }
-      // Only tentacles can broadcast
-      const device = this.storage.getDevice(state.deviceId!);
-      if (device?.role !== 'tentacle') {
-        this.sendError(ws, 'Only tentacle devices can broadcast');
         return;
       }
       this.handleBroadcast(state, msg as unknown as BroadcastEnvelope);
@@ -529,6 +524,7 @@ export class HeadServer {
       user: { id: user.userId, login: user.username, provider: user.provider },
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
+      relayVersion: this.options.version,
     }));
 
     // Notify other connected devices about the reconnected device
@@ -581,6 +577,7 @@ export class HeadServer {
       user: { id: user.id, login: user.login, provider: user.provider },
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),
+      relayVersion: this.options.version,
     }));
 
     // Notify other connected devices about the new device

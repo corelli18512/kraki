@@ -163,6 +163,17 @@ export interface SessionDeletedMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+/** Greeting sent by tentacle to a newly joined app via unicast. */
+export interface DeviceGreetingMessage extends BaseEnvelope {
+  type: 'device_greeting';
+  payload: {
+    name: string;
+    kind?: string;
+    models?: string[];
+    version?: string;
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -176,7 +187,8 @@ export type ProducerMessage =
   | ToolCompleteMessage
   | IdleMessage
   | ErrorMessage
-  | SessionModeSetMessage;
+  | SessionModeSetMessage
+  | DeviceGreetingMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -335,6 +347,8 @@ export interface AuthOkMessage {
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
+  /** Relay server version */
+  relayVersion?: string;
 }
 
 export type AuthErrorCode =

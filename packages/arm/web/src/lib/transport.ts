@@ -1,7 +1,10 @@
 import type { Message } from '@kraki/protocol';
+import { createLogger } from './logger';
 import { getStore } from './store-adapter';
 
 export type MessageHandler = (msg: Message) => void;
+
+const logger = createLogger('transport');
 
 const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://kraki.corelli.cloud';
 const RECONNECT_BASE = 1000;
@@ -30,13 +33,13 @@ export function loadStoredDevice(): StoredDevice | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const result = raw ? JSON.parse(raw) : null;
-    if (import.meta.env.DEV) console.log('[Kraki] loadStoredDevice:', result);
+    logger.debug('loadStoredDevice:', result);
     return result;
   } catch { return null; }
 }
 
 export function saveStoredDevice(device: StoredDevice): void {
-  if (import.meta.env.DEV) console.log('[Kraki] saveStoredDevice:', device);
+  logger.debug('saveStoredDevice:', device);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
 }
 
@@ -146,9 +149,7 @@ export class KrakiTransport {
         this.githubCode = params.githubCode;
       } else {
         getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
-        if (import.meta.env.DEV) {
-          console.warn('[Kraki] OAuth state mismatch — ignoring code');
-        }
+        logger.warn('OAuth state mismatch — ignoring code');
       }
     }
 
@@ -191,9 +192,7 @@ export class KrakiTransport {
         const msg = JSON.parse(event.data as string) as Message;
         this.callbacks.onParsedMessage(msg);
       } catch (err) {
-        if (import.meta.env.DEV) {
-          console.warn('[Kraki] Malformed WS message:', event.data, err);
-        }
+        logger.warn('Malformed WS message:', event.data, err);
       }
     };
 

@@ -182,6 +182,7 @@ export class RelayClient {
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
       this.resumeDisconnectedSessions();
+      this.sendGreetingBroadcast();
       return;
     }
 
@@ -234,6 +235,8 @@ export class RelayClient {
         if (key) {
           this.consumerKeys.set(device.id, key);
           this.flushE2eQueue();
+          // Send a greeting unicast so the app learns our capabilities
+          this.sendGreetingTo(device.id, key);
         }
       }
       return;
@@ -625,6 +628,63 @@ export class RelayClient {
     }
 
     this.ws.send(JSON.stringify(envelope));
+  }
+
+  /**
+   * Encrypt and send a message to a single device as a UnicastEnvelope.
+   */
+  private sendUnicastTo(targetDeviceId: string, compactPubKey: string, msg: Record<string, unknown>): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
+
+    const recipientPubKey = importPublicKey(compactPubKey);
+    const plaintext = JSON.stringify(msg);
+    const { blob, keys } = encryptToBlob(plaintext, [
+      { deviceId: targetDeviceId, publicKey: recipientPubKey },
+    ]);
+
+    const envelope: UnicastEnvelope = {
+      type: 'unicast',
+      to: targetDeviceId,
+      blob,
+      keys,
+    };
+
+    this.ws.send(JSON.stringify(envelope));
+  }
+
+  /**
+   * Broadcast a device_greeting to all connected apps (used on auth_ok).
+   */
+  private sendGreetingBroadcast(): void {
+    this.sendEncrypted({
+      type: 'device_greeting' as any,
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: {
+        name: this.options.device.name,
+        kind: this.options.device.kind,
+        models: this.options.device.capabilities?.models,
+      },
+    } as any);
+  }
+
+  /**
+   * Send a device_greeting unicast to a newly joined app.
+   */
+  private sendGreetingTo(targetDeviceId: string, compactPubKey: string): void {
+    const greeting = {
+      type: 'device_greeting',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: {
+        name: this.options.device.name,
+        kind: this.options.device.kind,
+        models: this.options.device.capabilities?.models,
+      },
+    };
+    this.sendUnicastTo(targetDeviceId, compactPubKey, greeting);
   }
 
   /**

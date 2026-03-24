@@ -1,5 +1,8 @@
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
+import { createLogger } from '../../lib/logger';
+
+const logger = createLogger('error-boundary');
 
 interface Props {
   children: ReactNode;
@@ -18,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('[Kraki] Render error:', error, info.componentStack);
+    logger.error('Render error:', error, info.componentStack);
   }
 
   render() {

@@ -8,6 +8,9 @@ import { handleDataMessage } from './message-router';
 import { getStore } from './store-adapter';
 import { CommandState } from './commands';
 import * as commands from './commands';
+import { createLogger } from './logger';
+
+const logger = createLogger('ws-client');
 
 export class KrakiWSClient {
   private transport: KrakiTransport;
@@ -66,6 +69,11 @@ export class KrakiWSClient {
   /** Send through encryption layer as UnicastEnvelope. */
   private sendEncrypted(msg: Record<string, unknown>) {
     this.encryption.encryptOutbound(msg, (m) => this.transport.send(m));
+  }
+
+  /** Send through encryption layer as BroadcastEnvelope to all devices. */
+  sendBroadcast(msg: Record<string, unknown>) {
+    this.encryption.encryptOutbound(msg, (m) => this.transport.send(m), { broadcast: true });
   }
 
   sendInput(sessionId: string, text: string) {
@@ -203,7 +211,7 @@ export class KrakiWSClient {
 
       case 'server_error': {
         const serverErr = msg as any;
-        console.error('[Kraki] Server error:', serverErr.message);
+        logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
           this.cmdState.clearRequest(ref);
@@ -223,6 +231,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as any;
         if (left.deviceId) {
+          getStore().setDeviceModels(left.deviceId, []);
           getStore().removeDevice(left.deviceId);
         }
         break;

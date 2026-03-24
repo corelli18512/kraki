@@ -22,8 +22,9 @@ function saveModelPref(deviceId: string, model: string) {
 
 export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
+  const deviceModels = useStore((s) => s.deviceModels);
 
-  const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
+  const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && deviceModels.has(d.id));
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -41,9 +42,8 @@ export function NewSessionDialog({ open, onClose }: Props) {
     }
   }, [open, tentacles.length]);
 
-  // Get models from selected tentacle
-  const selectedTentacle = tentacles.find((d) => d.id === selectedDevice);
-  const models = selectedTentacle?.capabilities?.models ?? [];
+  // Get models from tentacle greeting
+  const models = deviceModels.get(selectedDevice) ?? [];
 
   // Restore last model for this device, or auto-select first
   useEffect(() => {

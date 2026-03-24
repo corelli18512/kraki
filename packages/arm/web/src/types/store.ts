@@ -85,6 +85,12 @@ export interface AppState {
 
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
+
+  // Relay server version
+  relayVersion: string | null;
+
+  // Live capabilities from tentacle greetings
+  deviceModels: Map<string, string[]>;
 }
 
 export interface AppActions {
@@ -119,6 +125,8 @@ export interface AppActions {
   setActiveSessionId: (sessionId: string | null) => void;
   setSessionMode: (sessionId: string, mode: 'ask' | 'auto') => void;
   setGithubClientId: (clientId: string | null) => void;
+  setRelayVersion: (version: string | null) => void;
+  setDeviceModels: (deviceId: string, models: string[]) => void;
   clearTransientState: () => void;
   reset: () => void;
 }

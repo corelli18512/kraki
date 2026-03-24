@@ -4,9 +4,11 @@
  */
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomUUID } from 'crypto';
+import { createLogger } from '../lib/logger';
 
 const PORT = 9000;
 const wss = new WebSocketServer({ port: PORT });
+const logger = createLogger('mock');
 
 // --- State ---
 
@@ -55,7 +57,7 @@ function send(ws: WebSocket, data: string) {
 
 wss.on('connection', (ws) => {
   let clientDeviceId = '';
-  console.log('[mock] Client connected');
+  logger.info('Client connected');
 
   ws.on('message', (raw) => {
     try {
@@ -67,7 +69,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('[mock] Client disconnected');
+    logger.info('Client disconnected');
   });
 
   function handleClientMessage(ws: WebSocket, msg: Record<string, unknown>) {
@@ -99,7 +101,7 @@ wss.on('connection', (ws) => {
       }
 
       case 'send_input':
-        console.log(`[mock] User input in ${msg.sessionId}: ${(msg.payload as Record<string, unknown>)?.text}`);
+        logger.info(`User input in ${msg.sessionId}: ${(msg.payload as Record<string, unknown>)?.text}`);
         // Echo as user_message then simulate agent response
         send(ws, envelope('user_message', msg.sessionId as string, {
           content: (msg.payload as Record<string, unknown>)?.text ?? '',
@@ -108,7 +110,7 @@ wss.on('connection', (ws) => {
         break;
 
       case 'approve':
-        console.log(`[mock] Approved: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        logger.info(`Approved: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
         send(ws, envelope('approve', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
         // Continue with tool complete
         setTimeout(() => {
@@ -121,22 +123,22 @@ wss.on('connection', (ws) => {
         break;
 
       case 'deny':
-        console.log(`[mock] Denied: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        logger.info(`Denied: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
         send(ws, envelope('deny', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
         break;
 
       case 'always_allow':
-        console.log(`[mock] Always allowed: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
+        logger.info(`Always allowed: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
         send(ws, envelope('always_allow', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
         break;
 
       case 'answer':
-        console.log(`[mock] Answer: ${(msg.payload as Record<string, unknown>)?.answer}`);
+        logger.info(`Answer: ${(msg.payload as Record<string, unknown>)?.answer}`);
         send(ws, envelope('answer', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
         break;
 
       case 'kill_session':
-        console.log(`[mock] Kill session: ${msg.sessionId}`);
+        logger.info(`Kill session: ${msg.sessionId}`);
         send(ws, envelope('session_ended', msg.sessionId as string, { reason: 'killed by user' }));
         break;
     }
@@ -346,10 +348,10 @@ function simulateAgentResponse(ws: WebSocket, sessionId: string) {
   }, delay + 100);
 }
 
-console.log(`\n  ◈ Kraki mock server running on ws://localhost:${PORT}\n`);
-console.log(`  Simulating:`);
-console.log(`    • 2 machines (MacBook Pro, CI Server)`);
-console.log(`    • 3 sessions (Copilot, Claude, Codex)`);
-console.log(`    • Streaming messages, permissions, questions`);
-console.log(`    • New session after ~20s\n`);
-console.log(`  Start the web app: pnpm --filter @kraki/arm-web dev\n`);
+logger.info(`\n  ◈ Kraki mock server running on ws://localhost:${PORT}\n`);
+logger.info('  Simulating:');
+logger.info('    • 2 machines (MacBook Pro, CI Server)');
+logger.info('    • 3 sessions (Copilot, Claude, Codex)');
+logger.info('    • Streaming messages, permissions, questions');
+logger.info('    • New session after ~20s\n');
+logger.info('  Start the web app: pnpm --filter @kraki/arm-web dev\n');

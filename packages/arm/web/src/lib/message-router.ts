@@ -14,6 +14,17 @@ export interface RouterContext {
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
+
+  // Handle device_greeting before sessionId check (greetings have no sessionId)
+  if (msg.type === 'device_greeting') {
+    const greeting = (msg as any).payload;
+    store.setDeviceOnline(msg.deviceId, true);
+    if (greeting?.models) {
+      store.setDeviceModels(msg.deviceId, greeting.models);
+    }
+    return;
+  }
+
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
 

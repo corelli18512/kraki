@@ -855,15 +855,17 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
   // ── Extra: device_joined enables immediate E2E without reconnect ──
 
-  it("tentacle connects first → app joins → tentacle receives device_joined → can send encrypted immediately", async () => {
+  it("tentacle connects first → app joins → tentacle receives device_joined → greeting + data arrive", async () => {
     // Tentacle connects FIRST (no apps yet — E2E queue will hold messages)
     await connectTentacle();
 
     // Now app connects — relay sends device_joined to tentacle
     const app = await connectApp(env.port);
 
-    // Give device_joined time to arrive and update consumerKeys
-    await waitMs(200);
+    // App should receive the device_greeting unicast triggered by device_joined
+    const greeting = await app.waitFor("device_greeting");
+    expect(greeting.payload.name).toBe("Test Laptop");
+    expect(greeting.payload.kind).toBe("desktop");
 
     // Tentacle creates session and broadcasts — should reach app without reconnect
     const { sessionId } = await adapter.createSession();
