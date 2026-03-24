@@ -1,0 +1,233 @@
+name: Release Binaries
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release mode
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+      tag:
+        description: Existing release tag to upload assets to (required for workflow_dispatch publish)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: release-binaries-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare Binary Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      publish_mode: ${{ steps.meta.outputs.publish_mode }}
+      release_sha: ${{ steps.meta.outputs.release_sha }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target ref
+        id: meta
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+
+          publish_mode="dry-run"
+          checkout_ref="${GITHUB_SHA}"
+          release_tag=""
+
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            publish_mode="publish"
+            release_tag="${EVENT_RELEASE_TAG}"
+            checkout_ref="${release_tag}"
+          elif [ "${INPUT_MODE}" = "publish" ]; then
+            publish_mode="publish"
+            release_tag="${INPUT_TAG}"
+            if [ -z "${release_tag}" ]; then
+              echo "workflow_dispatch publish requires inputs.tag"
+              exit 1
+            fi
+            checkout_ref="${release_tag}"
+          else
+            test "${GITHUB_REF_NAME}" = "main" || {
+              echo "Dry-run builds must run from main."
+              exit 1
+            }
+          fi
+
+          git checkout --detach "${checkout_ref}"
+          release_sha="$(git rev-parse HEAD)"
+
+          {
+            echo "checkout_ref=${checkout_ref}"
+            echo "publish_mode=${publish_mode}"
+            echo "release_sha=${release_sha}"
+            echo "release_tag=${release_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release source is main
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "${{ steps.meta.outputs.release_sha }}" origin/main || {
+            echo "Binary release target must point to a commit on main."
+            exit 1
+          }
+
+      - name: Ensure CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking CI status for ${RELEASE_SHA}..."
+
+          for i in $(seq 1 30); do
+            status=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs" \
+              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+
+            if [ "${status}" = "success" ]; then
+              echo "CI passed ✅"
+              exit 0
+            fi
+
+            case "${status}" in
+              failure|cancelled|timed_out|action_required)
+                echo "CI status is ${status}. Refusing to release."
+                exit 1
+                ;;
+            esac
+
+            echo "CI status: ${status:-pending}. Waiting 10s... (attempt ${i}/30)"
+            sleep 10
+          done
+
+          echo "CI did not complete within 5 minutes. Refusing to release."
+          exit 1
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: Linux x64
+            asset_name: kraki-linux-x64
+          - runner: macos-13
+            label: macOS x64
+            asset_name: kraki-macos-x64
+          - runner: macos-14
+            label: macOS arm64
+            asset_name: kraki-macos-arm64
+          - runner: windows-2022
+            label: Windows x64
+            asset_name: kraki-windows-x64.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install tentacle build dependencies
+        run: pnpm install --frozen-lockfile --filter @kraki/tentacle...
+
+      - name: Run tentacle binary tests
+        run: pnpm --filter @kraki/tentacle exec vitest run src/adapters/__tests__/copilot.test.ts src/__tests__/daemon.test.ts src/__tests__/cli.test.ts src/__tests__/logger.test.ts
+
+      - name: Build tentacle binary
+        run: pnpm --filter @kraki/tentacle run build:binary:local
+
+      - name: Smoke test tentacle binary
+        run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.asset_name }}
+          path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish Binary Assets
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download built binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-kraki-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          ls -lh release-assets
+          (
+            cd release-assets
+            sha256sum kraki-* > SHA256SUMS.txt
+          )
+
+      - name: Upload release assets bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tentacle-release-assets-${{ needs.prepare.outputs.release_sha }}
+          path: release-assets
+          if-no-files-found: error
+
+      - name: Ensure GitHub Release exists
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "${{ needs.prepare.outputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null
+
+      - name: Upload assets to GitHub Release
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.prepare.outputs.release_tag }}" release-assets/* --clobber --repo "${{ github.repository }}"

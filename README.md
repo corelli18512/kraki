@@ -15,7 +15,12 @@ Get started on your coding machine:
 # Only supports GitHub Copilot CLI for now
 # Requires Copilot CLI installed and `gh auth login` completed
 
-# One-off run
+# Preferred: download the matching binary from GitHub Releases
+# https://github.com/corelli18512/kraki/releases
+chmod +x ./kraki-<platform>-<arch>
+./kraki-<platform>-<arch>
+
+# npm fallback: one-off run
 npx @kraki/tentacle
 
 # Or install globally
@@ -52,9 +57,14 @@ Native iOS and additional agent adapters will be added later without changing th
 
 ### Hosted setup
 
-Run the tentacle package on the coding machine:
+Run the tentacle binary on the coding machine:
 
 ```bash
+# Preferred: standalone release binary
+chmod +x ./kraki-<platform>-<arch>
+./kraki-<platform>-<arch>
+
+# npm fallback
 npx @kraki/tentacle
 
 # or

@@ -7,8 +7,8 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { delimiter, join, dirname, resolve } from 'node:path';
+import { isSea } from 'node:sea';
 
 import {
   getLogsDir,
@@ -20,6 +20,7 @@ import {
 } from './config.js';
 
 const STARTUP_GRACE_MS = 1500;
+export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
 
 export interface DaemonLaunchSpec {
   runtime: string;
@@ -33,13 +34,32 @@ export function getDaemonBootstrapLogPath(): string {
   return join(getLogsDir(), 'daemon-bootstrap.log');
 }
 
-export function resolveDaemonLaunch(currentUrl: string = import.meta.url): DaemonLaunchSpec {
-  const moduleDir = dirname(fileURLToPath(currentUrl));
-  const isTsSource = currentUrl.endsWith('.ts');
+export function resolveDaemonLaunch(
+  cliEntryPath: string | undefined = process.argv[1],
+  seaMode = isSea(),
+): DaemonLaunchSpec {
+  if (seaMode) {
+    return {
+      runtime: process.execPath,
+      args: [INTERNAL_DAEMON_WORKER_COMMAND],
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+      },
+      workerPath: process.execPath,
+    };
+  }
+
+  if (!cliEntryPath) {
+    throw new Error('Cannot resolve daemon launch without a CLI entry path');
+  }
+
+  const entryPath = resolve(cliEntryPath);
+  const moduleDir = dirname(entryPath);
+  const isTsSource = entryPath.endsWith('.ts');
   const packageRoot = resolve(moduleDir, '..');
   const workspaceRoot = resolve(packageRoot, '..', '..');
-  const workerFile = isTsSource ? 'daemon-worker.ts' : 'daemon-worker.js';
-  const workerPath = join(moduleDir, workerFile);
 
   const binPaths = isTsSource
     ? [join(workspaceRoot, 'node_modules', '.bin'), join(packageRoot, 'node_modules', '.bin')]
@@ -47,14 +67,16 @@ export function resolveDaemonLaunch(currentUrl: string = import.meta.url): Daemo
 
   return {
     runtime: process.execPath,
-    args: isTsSource ? ['--import', 'tsx', workerPath] : [workerPath],
+    args: isTsSource
+      ? ['--import', 'tsx', entryPath, INTERNAL_DAEMON_WORKER_COMMAND]
+      : [entryPath, INTERNAL_DAEMON_WORKER_COMMAND],
     cwd: isTsSource ? workspaceRoot : packageRoot,
     env: {
       ...process.env,
       NODE_ENV: 'production',
-      PATH: [...binPaths, process.env.PATH ?? ''].filter(Boolean).join(':'),
+      PATH: [...binPaths, process.env.PATH ?? ''].filter(Boolean).join(delimiter),
     },
-    workerPath,
+    workerPath: entryPath,
   };
 }
 
@@ -129,11 +151,11 @@ export function getDaemonStatus(): DaemonStatus {
 
 // ── Start / Stop ────────────────────────────────────────
 
-export async function startDaemon(config: KrakiConfig): Promise<number> {
+export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
   // Kill any existing daemon(s) before starting a new one
   stopDaemon();
 
-  const launch = resolveDaemonLaunch();
+  const launch = resolveDaemonLaunch(cliEntryPath);
   launch.env.LOG_LEVEL = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });

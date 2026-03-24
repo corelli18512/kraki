@@ -62,15 +62,19 @@ export async function startWorker(): Promise<WorkerResult> {
       token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       if (token) logger.debug('Resolved GitHub token from `gh auth token`');
     } catch {
-      logger.warn('Could not resolve GitHub token from gh CLI');
+      // gh CLI not available — try saved device flow token
+    }
+    if (!token) {
+      const { loadGitHubToken } = await import('./config.js');
+      token = loadGitHubToken() ?? undefined;
+      if (token) logger.debug('Resolved GitHub token from saved device flow token');
+      else logger.warn('No GitHub token found (neither gh CLI nor device flow)');
     }
   } else {
     const channelKey = loadChannelKey();
     if (channelKey) {
       token = channelKey;
       logger.debug({ channelKeyPath }, `Loaded channel key from ${channelKeyPath}`);
-    } else {
-      logger.warn({ channelKeyPath }, `No channel key found at ${channelKeyPath}`);
     }
   }
 
@@ -101,7 +105,7 @@ export async function startWorker(): Promise<WorkerResult> {
     adapter as unknown as AgentAdapter,
     sessionManager,
     {
-      relayUrl: config.relay,
+      relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
       device: {
         name: config.device.name,
         role: 'tentacle',

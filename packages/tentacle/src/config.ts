@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSy
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import type { AuthMethod } from '@kraki/protocol';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -16,7 +17,7 @@ export type KrakiLogVerbosity = 'normal' | 'verbose';
 
 export interface KrakiConfig {
   relay: string;
-  authMethod: 'github_token' | 'github_oauth' | 'apikey' | 'open';
+  authMethod: AuthMethod['method'];
   device: { name: string; id?: string };
   logging?: {
     verbosity?: KrakiLogVerbosity;
@@ -121,6 +122,27 @@ export function saveChannelKey(key: string): void {
 export function loadChannelKey(): string | null {
   try {
     return readFileSync(getChannelKeyPath(), 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+// ── GitHub Token (device flow) ──────────────────────────
+
+function getGitHubTokenPath(): string {
+  return join(getKrakiHome(), 'github-token');
+}
+
+export function saveGitHubToken(token: string): void {
+  getConfigDir();
+  const tokenPath = getGitHubTokenPath();
+  writeFileSync(tokenPath, token, 'utf8');
+  chmodSync(tokenPath, 0o600);
+}
+
+export function loadGitHubToken(): string | null {
+  try {
+    return readFileSync(getGitHubTokenPath(), 'utf8').trim() || null;
   } catch {
     return null;
   }

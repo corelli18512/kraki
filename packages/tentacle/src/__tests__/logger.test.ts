@@ -4,6 +4,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const mockIsSea = vi.fn(() => false);
+vi.mock('node:sea', () => ({
+  isSea: (...args: any[]) => mockIsSea(...args),
+}));
+
 // Avoid actually writing to log files in production mode
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
@@ -18,6 +23,8 @@ describe('createLogger()', () => {
   beforeEach(async () => {
     vi.resetModules();
     process.env.NODE_ENV = 'development'; // force dev mode (no file transport)
+    mockIsSea.mockReset();
+    mockIsSea.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -64,6 +71,15 @@ describe('createLogger()', () => {
     process.env.NODE_ENV = 'production';
     ({ createLogger } = await import('../logger.js'));
     const logger = createLogger('prod-test');
+    expect(logger).toBeDefined();
+    expect(typeof logger.info).toBe('function');
+  });
+
+  it('creates a logger with a plain file destination in SEA production mode', async () => {
+    process.env.NODE_ENV = 'production';
+    mockIsSea.mockReturnValue(true);
+    ({ createLogger } = await import('../logger.js'));
+    const logger = createLogger('sea-test');
     expect(logger).toBeDefined();
     expect(typeof logger.info).toBe('function');
   });

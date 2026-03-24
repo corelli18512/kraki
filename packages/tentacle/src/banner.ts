@@ -4,15 +4,32 @@
  */
 
 import chalk from 'chalk';
-import { createRequire } from 'node:module';
+import bannerData from './banner-data.json' with { type: 'json' };
 
-const require = createRequire(import.meta.url);
-const data: { lines: string[]; colors: [number, number, number, number][][]; w: number; h: number } =
-  require('./banner-data.json');
+const data = bannerData as { lines: string[]; colors: [number, number, number, number][][]; w: number; h: number };
 
 const SCRAMBLE = '!@#$%^&*=+<>~/';
 const TITLE = 'KRAKI';
-const TITLE_COLORS = ['#00c9a7', '#00b4d8', '#06b6d4', '#0891b2', '#ea6046'];
+const TITLE_COLORS = ['#00c9a7', '#00b4d8', '#06b6d4', '#ea6046', '#0891b2'];
+
+const BLOCK_MAP: Record<string, string> = {
+  '.': '░', ':': '░', '-': '▒', '=': '▓', '+': '█', '*': '█', '#': '█', '%': '█', '@': '█',
+};
+
+/** Whether to render this cell as a block character (dense head) or original ASCII (tentacles) */
+function useBlockChar(x: number, y: number, w: number): boolean {
+  if (y < 8) return true;
+  if (y === 8) {
+    const cx = Math.floor(w / 2);
+    return x >= cx - 9 && x < cx + 9;
+  }
+  return false;
+}
+
+/** Convert a character to its block equivalent if in the head region */
+function toDisplayChar(ch: string, x: number, y: number, w: number): string {
+  return useBlockChar(x, y, w) ? (BLOCK_MAP[ch] ?? ch) : ch;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -130,7 +147,7 @@ export async function printAnimatedBanner(): Promise<void> {
 
     if (f > 0) {
       for (const cell of frames[f - 1]) {
-        buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(cell.ch);
+        buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(toDisplayChar(cell.ch, cell.x, cell.y, w));
       }
     }
 
@@ -146,7 +163,7 @@ export async function printAnimatedBanner(): Promise<void> {
 
   // Resolve final frame
   for (const cell of frames[totalFrames - 1]) {
-    buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(cell.ch);
+    buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(toDisplayChar(cell.ch, cell.x, cell.y, w));
   }
   textCharsShown = totalTextChars;
   redraw();
@@ -175,7 +192,7 @@ export function printStaticBanner(): void {
       if (ch === ' ' || !c) {
         chars.push(' ');
       } else {
-        chars.push(chalk.rgb(c[1], c[2], c[3])(ch));
+        chars.push(chalk.rgb(c[1], c[2], c[3])(toDisplayChar(ch, x, y, w)));
       }
     }
 

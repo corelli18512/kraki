@@ -27,7 +27,7 @@ export interface RelayClientOptions {
   /** Device info for auth */
   device: DeviceInfo;
   /** How the relay should authenticate this device */
-  authMethod: 'github_token' | 'github_oauth' | 'apikey' | 'open';
+  authMethod: AuthMethod['method'];
   /** Auth token, such as a GitHub token or channel/shared key */
   token?: string;
   /** Reconnect delay in ms. Default: 3000 */

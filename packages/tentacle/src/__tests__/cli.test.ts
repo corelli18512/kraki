@@ -33,6 +33,7 @@ const mockGetDaemonStatus = vi.fn();
 const mockStartDaemon = vi.fn();
 const mockStopDaemon = vi.fn();
 const mockRunSetup = vi.fn();
+const mockStartWorker = vi.fn();
 
 vi.mock('../config.js', () => ({
   configExists: (...args: any[]) => mockConfigExists(...args),
@@ -46,10 +47,15 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../daemon.js', () => ({
+  INTERNAL_DAEMON_WORKER_COMMAND: '__daemon-worker',
   isDaemonRunning: (...args: any[]) => mockIsDaemonRunning(...args),
   getDaemonStatus: (...args: any[]) => mockGetDaemonStatus(...args),
   startDaemon: (...args: any[]) => mockStartDaemon(...args),
   stopDaemon: (...args: any[]) => mockStopDaemon(...args),
+}));
+
+vi.mock('../daemon-worker.js', () => ({
+  startWorker: (...args: any[]) => mockStartWorker(...args),
 }));
 
 vi.mock('../banner.js', () => ({
@@ -118,6 +124,7 @@ beforeEach(() => {
   mockGetConfigPath.mockReturnValue('/tmp/fake-kraki/config.json');
   mockGetKrakiHome.mockReturnValue('/tmp/fake-kraki');
   mockLoadChannelKey.mockReset();
+  mockStartWorker.mockReset();
 });
 
 afterEach(() => {
@@ -170,6 +177,13 @@ describe('CLI --version', () => {
   it('-v also prints version', async () => {
     await runCli(['-v']);
     expect(consoleOutput.join('\n')).toContain('1.2.3');
+  });
+});
+
+describe('CLI internal daemon worker', () => {
+  it('runs the hidden daemon worker command', async () => {
+    await runCli(['__daemon-worker']);
+    expect(mockStartWorker).toHaveBeenCalled();
   });
 });
 
@@ -327,19 +341,18 @@ describe('CLI default (no args)', () => {
     expect(mockRunSetup).toHaveBeenCalled();
   });
 
-  it('prompts when daemon already running, user chooses exit', async () => {
+  it('shows QR when daemon already running', async () => {
     mockLoadConfig.mockReturnValue({
       relay: 'wss://r',
-      authMethod: 'github',
+      authMethod: 'github_token',
       device: { name: 'x' },
       logging: { verbosity: 'normal' },
     });
     mockIsDaemonRunning.mockReturnValue(true);
     mockGetDaemonStatus.mockReturnValue({ running: true, pid: 55 });
-    mockSelect.mockResolvedValueOnce('exit');
 
     await runCli([]);
-    expect(consoleOutput.join('\n')).toContain('still running');
+    expect(consoleOutput.join('\n')).toContain('already running');
     expect(mockStartDaemon).not.toHaveBeenCalled();
   });
 });

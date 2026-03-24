@@ -61,6 +61,7 @@ type MockSession = ReturnType<typeof createMockSession>;
 let mockSessions: MockSession[];
 let capturedSessionConfigs: any[];
 let capturedResumeConfigs: any[];
+let capturedClientOptions: any[];
 let mockListSessions: Mock;
 let mockResumeSessionError: Error | null;
 const mockExistsSync = vi.fn();
@@ -71,26 +72,29 @@ let mockRegister: Mock | undefined;
 
 vi.mock('@github/copilot-sdk', () => {
   return {
-    CopilotClient: vi.fn().mockImplementation(() => ({
-      start: vi.fn(),
-      stop: vi.fn(),
-      createSession: vi.fn().mockImplementation(async (config: any) => {
-        capturedSessionConfigs.push(config);
-        const session = createMockSession(`mock-sess-${mockSessions.length + 1}`);
-        mockSessions.push(session);
-        return session;
-      }),
-      resumeSession: vi.fn().mockImplementation(async (sessionId: string, config: any) => {
-        capturedResumeConfigs.push({ sessionId, config });
-        if (mockResumeSessionError) {
-          throw mockResumeSessionError;
-        }
-        const session = createMockSession(sessionId);
-        mockSessions.push(session);
-        return session;
-      }),
-      listSessions: mockListSessions,
-    })),
+    CopilotClient: vi.fn().mockImplementation((options: any) => {
+      capturedClientOptions.push(options);
+      return {
+        start: vi.fn(),
+        stop: vi.fn(),
+        createSession: vi.fn().mockImplementation(async (config: any) => {
+          capturedSessionConfigs.push(config);
+          const session = createMockSession(`mock-sess-${mockSessions.length + 1}`);
+          mockSessions.push(session);
+          return session;
+        }),
+        resumeSession: vi.fn().mockImplementation(async (sessionId: string, config: any) => {
+          capturedResumeConfigs.push({ sessionId, config });
+          if (mockResumeSessionError) {
+            throw mockResumeSessionError;
+          }
+          const session = createMockSession(sessionId);
+          mockSessions.push(session);
+          return session;
+        }),
+        listSessions: mockListSessions,
+      };
+    }),
   };
 });
 
@@ -122,6 +126,7 @@ import { CopilotAdapter, AgentAdapter } from '../index.js';
 import {
   installCopilotSdkImportCompatibility,
   patchCopilotSdkSessionImport,
+  resolveCopilotCliPath,
   resolveCopilotSdkSessionPath,
 } from '../copilot.js';
 
@@ -134,13 +139,27 @@ describe('CopilotAdapter', () => {
     mockSessions = [];
     capturedSessionConfigs = [];
     capturedResumeConfigs = [];
+    capturedClientOptions = [];
     mockListSessions = vi.fn().mockResolvedValue([]);
     mockResumeSessionError = null;
     mockRegisterHooks = vi.fn();
     mockRegister = vi.fn();
-    mockExistsSync.mockImplementation((path: string) => path === '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js');
+    mockExistsSync.mockImplementation(
+      (path: string) =>
+        path === '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js' ||
+        path === '/opt/homebrew/bin/copilot',
+    );
     mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
     mockWriteFileSync.mockReset();
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command.includes('gh auth token')) {
+        return 'fake-gh-token\n';
+      }
+      if (command.includes('command -v copilot') || command.includes('where.exe copilot')) {
+        return '/opt/homebrew/bin/copilot\n';
+      }
+      return '';
+    });
     adapter = new CopilotAdapter();
   });
 
@@ -158,6 +177,18 @@ describe('CopilotAdapter', () => {
     it('start() creates and starts a CopilotClient', async () => {
       await adapter.start();
       // No error = success (CopilotClient constructor + start were called)
+    });
+
+    it('start() passes the resolved Copilot CLI path to the SDK', async () => {
+      await adapter.start();
+
+      expect(capturedClientOptions[0]).toEqual(
+        expect.objectContaining({
+          useLoggedInUser: false,
+          githubToken: 'fake-gh-token',
+          cliPath: '/opt/homebrew/bin/copilot',
+        }),
+      );
     });
 
     it('patches the SDK import when the installed session file is incompatible', () => {
@@ -243,6 +274,23 @@ describe('CopilotAdapter', () => {
 
       expect(resolveCopilotSdkSessionPath('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
         .toBeNull();
+    });
+  });
+
+  describe('resolveCopilotCliPath', () => {
+    it('returns the first executable path found on PATH', () => {
+      expect(resolveCopilotCliPath()).toBe('/opt/homebrew/bin/copilot');
+    });
+
+    it('returns undefined when the PATH lookup fails', () => {
+      mockedExecSync.mockImplementation((command: string) => {
+        if (command.includes('command -v copilot') || command.includes('where.exe copilot')) {
+          throw new Error('not found');
+        }
+        return 'fake-gh-token\n';
+      });
+
+      expect(resolveCopilotCliPath()).toBeUndefined();
     });
   });
 

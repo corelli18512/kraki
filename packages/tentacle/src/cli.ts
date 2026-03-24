@@ -15,26 +15,41 @@
  */
 
 import chalk from 'chalk';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
 import { select } from '@inquirer/prompts';
+import { isSea } from 'node:sea';
 
-import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, loadChannelKey } from './config.js';
-import { isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
+import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, loadChannelKey, type KrakiConfig } from './config.js';
+import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+declare const __KRAKI_VERSION__: string | undefined;
 
 // ── Version ─────────────────────────────────────────────
 
+function resolvePackageRootFromArgv(): string | null {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) return null;
+  return resolve(dirname(resolve(scriptPath)), '..');
+}
+
 function getVersion(): string {
+  if (typeof __KRAKI_VERSION__ !== 'undefined') {
+    return __KRAKI_VERSION__;
+  }
+
+  if (isSea()) {
+    return '0.0.0';
+  }
+
   try {
-    const pkgPath = join(__dirname, '..', 'package.json');
+    const packageRoot = resolvePackageRootFromArgv();
+    if (!packageRoot) return '0.0.0';
+    const pkgPath = join(packageRoot, 'package.json');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
     return pkg.version ?? '0.0.0';
   } catch {
@@ -47,10 +62,11 @@ function getVersion(): string {
 function printHelp(): void {
   printStaticBanner();
   console.log(`${chalk.bold('Usage:')}
-  kraki                Start Kraki (runs setup first if needed)
+  kraki                Setup wizard + start (first time or reconfigure)
+  kraki start          Start silently from existing config
   kraki stop           Stop Kraki
+  kraki connect        Generate QR code to connect a device
   kraki status         Show status and connection info
-  kraki connect           Generate QR code to connect a mobile device
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
   kraki config log     Show current log verbosity
@@ -64,57 +80,79 @@ function printHelp(): void {
 
 // ── Commands ────────────────────────────────────────────
 
-async function cmdStart(): Promise<void> {
+// ── kraki (default) — setup wizard + auto start ─────────
+
+async function cmdDefault(): Promise<void> {
   let config = loadConfig();
 
-  if (!config) {
-    config = await runSetup();
-  }
+  if (config) {
+    if (isDaemonRunning()) {
+      // Already running — show QR
+      const status = getDaemonStatus();
+      console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+      const { showPairingQr } = await import('./setup.js');
+      await showPairingQr(config);
+      return;
+    }
 
-  if (isDaemonRunning()) {
-    const status = getDaemonStatus();
+    // Config exists but daemon not running — ask what to do
     const action = await select({
-      message: `Kraki is already running (PID ${status.pid}). What do you want to do?`,
+      message: 'Found previous config. What do you want to do?',
       theme: {
         prefix: { idle: chalk.blue('  ?'), done: chalk.green('  ✔') },
         icon: { cursor: '  ❯' },
       },
       choices: [
-        { name: '  Keep running', value: 'exit' },
-        { name: '  Restart Kraki', value: 'restart' },
-        { name: '  Clean setup (stop + reset config)', value: 'clean' },
+        { name: '  Start with existing config', value: 'start' },
+        { name: '  Reconfigure', value: 'reconfig' },
       ],
     });
 
-    if (action === 'exit') {
-      console.log(chalk.green(`${chalk.hex('#ea6046')('◈')} Kraki still running (PID ${status.pid})`));
-      return;
-    }
-
-    stopDaemon();
-    console.log(chalk.dim('   Stopped..'));
-
-    if (action === 'clean') {
+    if (action === 'reconfig') {
       const { rmSync } = await import('node:fs');
-      const krakiHome = getKrakiHome();
-      try {
-        rmSync(krakiHome, { recursive: true, force: true });
-        console.log(chalk.dim(`   Cleared ${krakiHome}`));
-      } catch { /* already clean */ }
+      try { rmSync(getKrakiHome(), { recursive: true, force: true }); } catch { /* ignore */ }
       config = await runSetup();
     }
+  } else {
+    // No config — first time setup
+    config = await runSetup();
   }
 
+  // Start daemon
+  await silentStart(config);
+}
+
+// ── kraki start — silent start from config ──────────────
+
+async function cmdStart(): Promise<void> {
+  let config = loadConfig();
+
+  if (!config) {
+    const { confirm } = await import('@inquirer/prompts');
+    const setup = await confirm({ message: 'No config found. Set up now?', default: true });
+    if (!setup) return;
+    config = await runSetup();
+  }
+
+  if (isDaemonRunning()) {
+    const status = getDaemonStatus();
+    console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
+    return;
+  }
+
+  await silentStart(config);
+}
+
+// ── Shared start logic ──────────────────────────────────
+
+async function silentStart(config: KrakiConfig): Promise<void> {
   let pid: number;
   try {
     pid = await startDaemon(config);
   } catch (err) {
-    console.log('');
     console.log(chalk.red(`  Failed to start Kraki: ${(err as Error).message}`));
-    console.log('');
     return;
   }
-  console.log('');
   console.log(chalk.green(`  🦑 Kraki started (PID ${pid})`));
 
   // Show pairing QR code
@@ -123,10 +161,10 @@ async function cmdStart(): Promise<void> {
 
   // Tips
   console.log(chalk.dim('  Commands:'));
-  console.log(chalk.dim(`    kraki connect     Generate a new connect code`));
-  console.log(chalk.dim(`    kraki status   Show connection status`));
-  console.log(chalk.dim(`    kraki logs -f  Follow logs`));
-  console.log(chalk.dim(`    kraki stop     Stop Kraki`));
+  console.log(chalk.dim('    kraki connect   Generate a new connect code'));
+  console.log(chalk.dim('    kraki status    Show connection status'));
+  console.log(chalk.dim('    kraki logs -f   Follow logs'));
+  console.log(chalk.dim('    kraki stop      Stop Kraki'));
   console.log('');
 }
 
@@ -240,31 +278,40 @@ async function cmdConfigReset(): Promise<void> {
 }
 
 async function cmdConnect(): Promise<void> {
-  const config = loadConfig();
-  if (!config) {
-    console.log(chalk.red('No config found. Run `kraki` to set up first.'));
-    return;
-  }
+  let config = loadConfig();
 
   if (!isDaemonRunning()) {
-    console.log(chalk.yellow('Kraki is not running. Start it with `kraki` first.'));
+    const { confirm } = await import('@inquirer/prompts');
+    const start = await confirm({ message: 'Kraki is not running. Start now?', default: true });
+    if (!start) return;
+
+    if (!config) {
+      config = await runSetup();
+    }
+    await silentStart(config);
+    return; // silentStart already shows QR
+  }
+
+  if (!config) {
+    console.log(chalk.red('No config found. Run `kraki` to set up.'));
     return;
   }
 
-  console.log(chalk.dim('Requesting pairing token from relay...'));
+  console.log(chalk.dim('  Requesting pairing token from relay...'));
 
   try {
-    // Resolve auth token (same logic as daemon-worker)
     let token: string | undefined;
     if (config.authMethod === 'github_token') {
       try {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       } catch { /* ignore */ }
+      if (!token) {
+        const { loadGitHubToken } = await import('./config.js');
+        token = loadGitHubToken() ?? undefined;
+      }
     } else if (config.authMethod === 'open') {
       token = 'dev';
-    } else {
-      token = loadChannelKey() ?? undefined;
     }
 
     const info = await requestPairingToken(config.relay, token);
@@ -272,7 +319,7 @@ async function cmdConnect(): Promise<void> {
     const qr = await renderQrToTerminal(pairingUrl);
     console.log(qr);
   } catch (err) {
-    console.log(chalk.red(`Failed to create pairing token: ${(err as Error).message}`));
+    console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
   }
 }
 
@@ -281,6 +328,12 @@ async function cmdConnect(): Promise<void> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const cmd = args[0];
+
+  if (cmd === INTERNAL_DAEMON_WORKER_COMMAND) {
+    const { startWorker } = await import('./daemon-worker.js');
+    await startWorker();
+    return;
+  }
 
   if (cmd === '--help' || cmd === '-h') {
     printHelp();
@@ -294,6 +347,11 @@ async function main(): Promise<void> {
 
   if (cmd === 'stop') {
     cmdStop();
+    return;
+  }
+
+  if (cmd === 'start') {
+    await cmdStart();
     return;
   }
 
@@ -326,9 +384,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Default: start
+  // Default: setup wizard + start
   if (!cmd) {
-    await cmdStart();
+    await cmdDefault();
     return;
   }
 

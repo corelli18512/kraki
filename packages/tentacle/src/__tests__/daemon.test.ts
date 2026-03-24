@@ -121,13 +121,14 @@ describe('startDaemon()', () => {
   };
 
   it('resolves source launch paths from the workspace root', () => {
-    const launch = resolveDaemonLaunch('file:///tmp/repo/packages/tentacle/src/daemon.ts');
+    const launch = resolveDaemonLaunch('/tmp/repo/packages/tentacle/src/cli.ts', false);
 
     expect(launch.runtime).toBe(process.execPath);
     expect(launch.args).toEqual([
       '--import',
       'tsx',
-      '/tmp/repo/packages/tentacle/src/daemon-worker.ts',
+      '/tmp/repo/packages/tentacle/src/cli.ts',
+      '__daemon-worker',
     ]);
     expect(launch.cwd).toBe('/tmp/repo');
     expect(launch.env.NODE_ENV).toBe('production');
@@ -135,11 +136,20 @@ describe('startDaemon()', () => {
   });
 
   it('resolves published launch paths from the installed package root', () => {
-    const launch = resolveDaemonLaunch('file:///tmp/npx/node_modules/kraki/dist/daemon.js');
+    const launch = resolveDaemonLaunch('/tmp/npx/node_modules/kraki/dist/cli.js', false);
 
-    expect(launch.args).toEqual(['/tmp/npx/node_modules/kraki/dist/daemon-worker.js']);
+    expect(launch.args).toEqual(['/tmp/npx/node_modules/kraki/dist/cli.js', '__daemon-worker']);
     expect(launch.cwd).toBe('/tmp/npx/node_modules/kraki');
     expect(launch.env.PATH).toContain('/tmp/npx/node_modules/kraki/node_modules/.bin');
+  });
+
+  it('resolves SEA launch paths to the current executable', () => {
+    const launch = resolveDaemonLaunch('/tmp/kraki', true);
+
+    expect(launch.runtime).toBe(process.execPath);
+    expect(launch.args).toEqual(['__daemon-worker']);
+    expect(launch.cwd).toBe(process.cwd());
+    expect(launch.workerPath).toBe(process.execPath);
   });
 
   it('waits for bootstrap before saving the PID', async () => {
@@ -152,7 +162,7 @@ describe('startDaemon()', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = mockSpawn.mock.calls[0];
     expect(cmd).toBe(process.execPath);
-    expect(args.some((a: string) => /daemon-worker\.(js|ts)$/.test(a))).toBe(true);
+    expect(args).toContain('__daemon-worker');
     expect(opts.detached).toBe(true);
     expect(opts.stdio).toEqual(['ignore', 99, 99]);
     expect(opts.env.NODE_ENV).toBe('production');

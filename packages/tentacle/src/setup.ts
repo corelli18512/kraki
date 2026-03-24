@@ -46,6 +46,7 @@ function link(text: string, url: string): string {
 interface RelayInfo {
   methods: string[];
   pairing: boolean;
+  githubClientId?: string;
 }
 
 /**
@@ -71,6 +72,7 @@ function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo> {
           resolve({
             methods: msg.methods ?? ['open'],
             pairing: msg.methods?.includes('pairing') ?? true,
+            githubClientId: msg.githubClientId,
           });
         }
       } catch { /* ignore non-JSON */ }
@@ -97,6 +99,109 @@ function printBox(lines: string[]): void {
   console.log(border(`  └${'─'.repeat(maxLen + 2)}┘`));
 }
 
+// ── GitHub Device Authorization Flow ────────────────────
+
+interface DeviceCodeResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+/**
+ * Authenticate with GitHub using the device authorization flow.
+ * Opens the browser, copies the code to clipboard, and polls for approval.
+ * Returns the access token and saves it for future use.
+ */
+async function githubDeviceFlow(clientId: string): Promise<string> {
+  // 1. Request device code
+  const res = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+  });
+  if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`);
+  const data = await res.json() as DeviceCodeResponse;
+
+  // 2. Copy code to clipboard
+  try {
+    const { execSync } = await import('node:child_process');
+    const platform = (await import('node:os')).platform();
+    if (platform === 'darwin') {
+      execSync(`echo -n "${data.user_code}" | pbcopy`, { stdio: 'ignore' });
+    } else {
+      execSync(`echo -n "${data.user_code}" | xclip -selection clipboard 2>/dev/null || echo -n "${data.user_code}" | xsel --clipboard 2>/dev/null`, { stdio: 'ignore' });
+    }
+    console.log(chalk.dim(`    Device code copied to clipboard: ${chalk.bold(data.user_code)}`));
+  } catch {
+    console.log(chalk.dim(`    Your device code: ${chalk.bold(data.user_code)}`));
+  }
+
+  // 3. Prompt to open browser
+  console.log(chalk.dim(`    Open ${chalk.underline(data.verification_uri)} and paste the code`));
+  await input({ message: 'Press Enter to open GitHub in your browser…', theme: promptTheme });
+
+  try {
+    const { execSync } = await import('node:child_process');
+    const platform = (await import('node:os')).platform();
+    const openCmd = platform === 'darwin' ? 'open' : 'xdg-open';
+    execSync(`${openCmd} "${data.verification_uri}"`, { stdio: 'ignore' });
+  } catch { /* browser open failed — user can navigate manually */ }
+
+  // 4. Poll for authorization
+  const spinner = ora({ text: 'Waiting for authorization…', indent: 4 }).start();
+  const interval = (data.interval ?? 5) * 1000;
+  const deadline = Date.now() + data.expires_in * 1000;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval));
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: data.device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      }),
+    });
+    const tokenData = await tokenRes.json() as Record<string, string>;
+
+    if (tokenData.access_token) {
+      // Fetch username
+      let username = 'unknown';
+      try {
+        const userRes = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}`, 'User-Agent': 'kraki-tentacle' },
+        });
+        const userData = await userRes.json() as Record<string, unknown>;
+        username = String(userData.login ?? 'unknown');
+      } catch { /* ignore */ }
+
+      spinner.succeed(`Authenticated as ${chalk.bold(username)}`);
+
+      // Save token for daemon to use
+      const { saveGitHubToken } = await import('./config.js');
+      saveGitHubToken(tokenData.access_token);
+      return tokenData.access_token;
+    }
+
+    if (tokenData.error === 'slow_down') {
+      await new Promise(r => setTimeout(r, 5000)); // extra backoff
+    } else if (tokenData.error === 'expired_token') {
+      spinner.fail('Device code expired. Please try again.');
+      throw new Error('Device code expired');
+    } else if (tokenData.error === 'access_denied') {
+      spinner.fail('Authorization denied.');
+      throw new Error('Access denied');
+    }
+    // 'authorization_pending' — keep polling
+  }
+
+  spinner.fail('Authorization timed out.');
+  throw new Error('Device flow timed out');
+}
+
 // ── Setup flow ──────────────────────────────────────────
 
 export async function runSetup(): Promise<KrakiConfig> {
@@ -105,14 +210,15 @@ export async function runSetup(): Promise<KrakiConfig> {
   const total = 4;
 
   // 1. Relay URL (with retry loop)
-  let relay: string = OFFICIAL_RELAY;
+  const defaultRelay = process.env.KRAKI_RELAY_URL ?? OFFICIAL_RELAY;
+  let relay: string = defaultRelay;
   let relayInfo: RelayInfo = { methods: ['open'], pairing: true };
   let urlConfirmed = false;
   while (!urlConfirmed) {
     console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay URL')}`);
     relay = await input({
       message: 'Relay URL:',
-      default: OFFICIAL_RELAY,
+      default: defaultRelay,
       theme: promptTheme,
       validate: (v) => {
         if (!v.startsWith('wss://') && !v.startsWith('ws://')) {
@@ -127,7 +233,7 @@ export async function runSetup(): Promise<KrakiConfig> {
       const connSpinner = ora({ text: 'Querying relay…', indent: 4 }).start();
       try {
         relayInfo = await queryRelayInfo(relay);
-        connSpinner.succeed(`Relay is reachable (auth: ${relayInfo.methods.join(', ')})`);
+        connSpinner.succeed('Relay is reachable');
         urlConfirmed = true;
         break;
       } catch (err) {
@@ -148,51 +254,47 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   divider();
 
-  // 2. Auth method (filtered by what the relay supports)
-  const authLabels: Record<string, string> = {
+  // 2. Auth method
+  // For GitHub-enabled relays: silently try gh CLI, fall back to device flow
+  // Only prompt if multiple non-GitHub methods are available
+  const cliAuthLabels: Record<string, string> = {
     github_token: '  GitHub (recommended)',
-    github_oauth: '  GitHub OAuth',
     apikey: '  API key',
     open: '  Open (no auth)',
   };
 
-  const supportedModes = relayInfo.methods;
+  const hasGitHub = relayInfo.methods.includes('github_token');
+  const cliMethods = relayInfo.methods.filter((m) => cliAuthLabels[m]);
   let authMethod: string;
 
-  if (supportedModes.length === 1) {
-    // Auto-select
-    authMethod = supportedModes[0];
+  if (hasGitHub) {
+    // GitHub relay: auto-select, try CLI then device flow
+    authMethod = 'github_token';
     console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
-    console.log(chalk.dim(`    Auto-selected: ${authLabels[authMethod]?.trim() ?? authMethod}`));
-  } else {
+    const spinner = ora({ text: 'Checking GitHub CLI…', indent: 4 }).start();
+    const ghResult = checkGhAuth();
+    if (ghResult.authenticated) {
+      spinner.succeed(`Authenticated via GitHub CLI as ${chalk.bold(ghResult.username ?? 'unknown')}`);
+    } else {
+      spinner.info('GitHub CLI not found — signing in via browser');
+      if (!relayInfo.githubClientId) {
+        throw new Error('Relay does not provide a GitHub client ID. Install GitHub CLI and run: gh auth login');
+      }
+      await githubDeviceFlow(relayInfo.githubClientId);
+    }
+  } else if (cliMethods.length === 1) {
+    authMethod = cliMethods[0];
     console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
-    const choices = supportedModes
-      .filter((m) => authLabels[m])
-      .map((m) => ({ name: authLabels[m], value: m }));
-
+    console.log(chalk.dim(`    Auto-selected: ${cliAuthLabels[authMethod]?.trim() ?? authMethod}`));
+  } else if (cliMethods.length > 1) {
+    console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
     authMethod = await select({
       message: 'Authentication:',
       theme: promptTheme,
-      choices,
+      choices: cliMethods.map((m) => ({ name: cliAuthLabels[m], value: m })),
     });
-  }
-
-  if (authMethod === 'github_token') {
-    const spinner = ora({ text: 'Checking GitHub authentication…', indent: 4 }).start();
-    const authResult = await withRetry(
-      checkGhAuth,
-      'GitHub CLI authentication',
-      'Run: gh auth login',
-    );
-    spinner.succeed(`Authenticated as ${chalk.bold(authResult.username ?? 'unknown')}`);
-  } else if (authMethod === 'channel-key') {
-    const channelKey = await input({
-      message: 'Channel key:',
-      theme: promptTheme,
-      validate: (v) => (v.trim().length > 0 ? true : 'Channel key cannot be empty'),
-    });
-    saveChannelKey(channelKey.trim());
-    console.log(chalk.green('    ✔ Channel key saved'));
+  } else {
+    throw new Error('No supported auth method found on this relay');
   }
 
   divider();
@@ -260,6 +362,10 @@ export async function showPairingQr(config: KrakiConfig): Promise<void> {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       } catch { /* ignore */ }
+      if (!token) {
+        const { loadGitHubToken } = await import('./config.js');
+        token = loadGitHubToken() ?? undefined;
+      }
     } else if (config.authMethod === 'open') {
       token = 'dev';
     }

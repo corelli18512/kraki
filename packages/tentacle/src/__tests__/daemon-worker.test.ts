@@ -78,6 +78,7 @@ let mockChannelKey: string | null = null;
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => mockConfig),
   loadChannelKey: vi.fn(() => mockChannelKey),
+  loadGitHubToken: vi.fn(() => null),
   getOrCreateDeviceId: vi.fn(() => 'dev_test123'),
   getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
@@ -141,16 +142,17 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  it('warns when gh auth token fails (github auth)', async () => {
+  it('warns when gh auth token fails and no saved token (github auth)', async () => {
     mockExecSyncThrow = true;
     await startWorker();
-    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('Could not resolve'));
+    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('No GitHub token found'));
   });
 
-  it('handles empty gh token', async () => {
+  it('handles empty gh token by falling back to saved token', async () => {
     mockExecSyncReturn = '';
     await startWorker();
-    expect(process.env.GITHUB_TOKEN).toBeUndefined();
+    // Falls through to loadGitHubToken which also returns null in tests
+    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('No GitHub token found'));
   });
 
   it('loads channel key for non-github auth', async () => {
@@ -160,16 +162,6 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockLoggerFns.debug).toHaveBeenCalledWith(
       expect.objectContaining({ channelKeyPath: '/tmp/fake-kraki/channel.key' }),
       expect.stringContaining('Loaded channel key'),
-    );
-  });
-
-  it('warns when channel key is missing', async () => {
-    mockConfig.authMethod = 'open';
-    mockChannelKey = null;
-    await startWorker();
-    expect(mockLoggerFns.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ channelKeyPath: '/tmp/fake-kraki/channel.key' }),
-      expect.stringContaining('No channel key'),
     );
   });
 

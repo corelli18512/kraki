@@ -18,8 +18,8 @@ export function Sidebar() {
             <span style={{ color: '#00c9a7' }}>K</span>
             <span style={{ color: '#00b4d8' }}>R</span>
             <span style={{ color: '#06b6d4' }}>A</span>
-            <span style={{ color: '#0891b2' }}>K</span>
-            <span style={{ color: '#ea6046' }}>I</span>
+            <span style={{ color: '#ea6046' }}>K</span>
+            <span style={{ color: '#0891b2' }}>I</span>
           </span>
           <span className="rounded-full bg-kraki-500/15 px-2 py-0.5 text-[10px] font-semibold text-kraki-600 dark:text-kraki-400">Preview</span>
           {/* Desktop only: settings icon */}

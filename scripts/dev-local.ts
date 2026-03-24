@@ -362,7 +362,7 @@ async function start(args: string[]): Promise<void> {
   saveConfig(localConfig);
 
   console.log('🦑 Starting real Kraki daemon...');
-  const daemonPid = await startDaemon(localConfig);
+  const daemonPid = await startDaemon(localConfig, join(process.cwd(), 'packages/tentacle/src/cli.ts'));
 
   let vitePort = '3000';
   let viteReady = false;
