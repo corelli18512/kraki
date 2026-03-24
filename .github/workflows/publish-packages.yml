@@ -57,15 +57,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          sha="${GITHUB_SHA}"
+          # Resolve tag to commit SHA (release events use the tag ref)
+          sha=$(git rev-parse HEAD)
           echo "Checking CI status for ${sha}..."
-          status=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs" \
-            --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
-          if [ "$status" != "success" ]; then
-            echo "CI has not passed for this commit (status: ${status:-not found}). Refusing to publish."
-            exit 1
-          fi
-          echo "CI passed ✅"
+          # Wait up to 5 minutes for CI to complete
+          for i in $(seq 1 30); do
+            status=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs" \
+              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+            if [ "$status" = "success" ]; then
+              echo "CI passed ✅"
+              exit 0
+            elif [ "$status" = "failure" ]; then
+              echo "CI failed for ${sha}. Refusing to publish."
+              exit 1
+            fi
+            echo "CI status: ${status:-pending}. Waiting 10s... (attempt $i/30)"
+            sleep 10
+          done
+          echo "CI did not complete within 5 minutes. Refusing to publish."
+          exit 1
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
