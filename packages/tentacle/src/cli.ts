@@ -256,7 +256,7 @@ async function cmdConnect(): Promise<void> {
   try {
     // Resolve auth token (same logic as daemon-worker)
     let token: string | undefined;
-    if (config.authMethod === 'github') {
+    if (config.authMethod === 'github_token') {
       try {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;

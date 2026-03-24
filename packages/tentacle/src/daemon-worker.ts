@@ -57,7 +57,7 @@ export async function startWorker(): Promise<WorkerResult> {
   // 2. Resolve auth token
   let token: string | undefined;
 
-  if (config.authMethod === 'github') {
+  if (config.authMethod === 'github_token') {
     try {
       token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       if (token) logger.debug('Resolved GitHub token from `gh auth token`');

@@ -16,7 +16,7 @@ export type KrakiLogVerbosity = 'normal' | 'verbose';
 
 export interface KrakiConfig {
   relay: string;
-  authMethod: 'github' | 'channel-key' | 'open';
+  authMethod: 'github_token' | 'github_oauth' | 'apikey' | 'open';
   device: { name: string; id?: string };
   logging?: {
     verbosity?: KrakiLogVerbosity;

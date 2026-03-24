@@ -27,7 +27,7 @@ export interface RelayClientOptions {
   /** Device info for auth */
   device: DeviceInfo;
   /** How the relay should authenticate this device */
-  authMethod: 'github' | 'channel-key' | 'open';
+  authMethod: 'github_token' | 'github_oauth' | 'apikey' | 'open';
   /** Auth token, such as a GitHub token or channel/shared key */
   token?: string;
   /** Reconnect delay in ms. Default: 3000 */
@@ -277,7 +277,7 @@ export class RelayClient {
     }
 
     switch (this.options.authMethod) {
-      case 'github':
+      case 'github_token':
         if (!this.options.token) {
           throw new Error('GitHub auth requires a token or an already-known device for challenge auth');
         }
@@ -286,10 +286,22 @@ export class RelayClient {
           token: this.options.token,
         };
 
-      case 'channel-key':
+      case 'github_oauth':
+        if (!this.options.token) {
+          throw new Error('GitHub OAuth requires a code');
+        }
         return {
-          method: 'open',
-          sharedKey: this.options.token,
+          method: 'github_oauth',
+          code: this.options.token,
+        };
+
+      case 'apikey':
+        if (!this.options.token) {
+          throw new Error('API key auth requires a key');
+        }
+        return {
+          method: 'apikey',
+          key: this.options.token,
         };
 
       case 'open':

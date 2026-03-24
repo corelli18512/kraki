@@ -44,8 +44,7 @@ function link(text: string, url: string): string {
  * Test if the relay is reachable by opening a WebSocket and waiting for connection.
  */
 interface RelayInfo {
-  authModes: string[];
-  e2e: boolean;
+  methods: string[];
   pairing: boolean;
 }
 
@@ -70,9 +69,8 @@ function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo> {
           clearTimeout(timer);
           ws.close();
           resolve({
-            authModes: msg.authModes ?? ['open'],
-            e2e: msg.e2e ?? false,
-            pairing: msg.pairing ?? true,
+            methods: msg.methods ?? ['open'],
+            pairing: msg.methods?.includes('pairing') ?? true,
           });
         }
       } catch { /* ignore non-JSON */ }
@@ -108,7 +106,7 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   // 1. Relay URL (with retry loop)
   let relay: string = OFFICIAL_RELAY;
-  let relayInfo: RelayInfo = { authModes: ['open'], e2e: false, pairing: true };
+  let relayInfo: RelayInfo = { methods: ['open'], pairing: true };
   let urlConfirmed = false;
   while (!urlConfirmed) {
     console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay URL')}`);
@@ -129,7 +127,7 @@ export async function runSetup(): Promise<KrakiConfig> {
       const connSpinner = ora({ text: 'Querying relay…', indent: 4 }).start();
       try {
         relayInfo = await queryRelayInfo(relay);
-        connSpinner.succeed(`Relay is reachable (auth: ${relayInfo.authModes.join(', ')})`);
+        connSpinner.succeed(`Relay is reachable (auth: ${relayInfo.methods.join(', ')})`);
         urlConfirmed = true;
         break;
       } catch (err) {
@@ -152,13 +150,13 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   // 2. Auth method (filtered by what the relay supports)
   const authLabels: Record<string, string> = {
-    github: '  GitHub (recommended)',
+    github_token: '  GitHub (recommended)',
+    github_oauth: '  GitHub OAuth',
     apikey: '  API key',
-    'channel-key': '  Channel key (shared secret)',
     open: '  Open (no auth)',
   };
 
-  const supportedModes = relayInfo.authModes;
+  const supportedModes = relayInfo.methods;
   let authMethod: string;
 
   if (supportedModes.length === 1) {
@@ -179,7 +177,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     });
   }
 
-  if (authMethod === 'github') {
+  if (authMethod === 'github_token') {
     const spinner = ora({ text: 'Checking GitHub authentication…', indent: 4 }).start();
     const authResult = await withRetry(
       checkGhAuth,
@@ -257,16 +255,13 @@ export async function showPairingQr(config: KrakiConfig): Promise<void> {
   const pairSpinner = ora({ text: 'Generating pairing code…', indent: 2 }).start();
   try {
     let token: string | undefined;
-    if (config.authMethod === 'github') {
+    if (config.authMethod === 'github_token') {
       try {
         const { execSync } = await import('node:child_process');
         token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
       } catch { /* ignore */ }
     } else if (config.authMethod === 'open') {
       token = 'dev';
-    } else if (config.authMethod === 'channel-key') {
-      const { loadChannelKey: loadKey } = await import('./config.js');
-      token = loadKey() ?? undefined;
     }
 
     const { requestPairingToken, buildPairingUrl, renderQrToTerminal } = await import('./pair.js');

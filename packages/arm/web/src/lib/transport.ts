@@ -33,13 +33,13 @@ export function loadStoredDevice(): StoredDevice | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const result = raw ? JSON.parse(raw) : null;
-    logger.debug('loadStoredDevice:', result);
+    logger.info('loadStoredDevice:', result);
     return result;
   } catch { return null; }
 }
 
 export function saveStoredDevice(device: StoredDevice): void {
-  logger.debug('saveStoredDevice:', device);
+  logger.info('saveStoredDevice:', device);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
 }
 
