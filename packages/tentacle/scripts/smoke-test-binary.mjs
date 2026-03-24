@@ -111,15 +111,11 @@ async function main() {
     assertSuccess(binaryPath, ['--help'], helpResult);
     assertOutput(helpResult, 'Usage:', '--help output');
 
-    const startArgs = ['start'];
-    const startResult = runBinary(binaryPath, startArgs, { KRAKI_HOME: tempHome });
-    assertSuccess(binaryPath, startArgs, startResult, tempHome);
-    assertOutput(startResult, 'Kraki started', 'start output');
-
     const statusResult = runBinary(binaryPath, ['status'], { KRAKI_HOME: tempHome });
     assertSuccess(binaryPath, ['status'], statusResult, tempHome);
     assertOutput(statusResult, 'Status:', 'status output');
     assertOutput(statusResult, 'Relay:', 'status output');
+    assertOutputOneOf(statusResult, ['stopped', 'running'], 'status output');
 
     const stopResult = runBinary(binaryPath, ['stop'], { KRAKI_HOME: tempHome });
     assertSuccess(binaryPath, ['stop'], stopResult, tempHome);

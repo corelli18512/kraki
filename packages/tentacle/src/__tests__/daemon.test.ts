@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resolve } from 'node:path';
 
 // ── Mocks ───────────────────────────────────────────────
 
@@ -113,6 +114,10 @@ describe('getDaemonStatus()', () => {
 // ── startDaemon ─────────────────────────────────────────
 
 describe('startDaemon()', () => {
+  const sourceCliPath = resolve('/tmp/repo/packages/tentacle/src/cli.ts');
+  const sourceWorkspaceRoot = resolve('/tmp/repo');
+  const publishedCliPath = resolve('/tmp/npx/node_modules/kraki/dist/cli.js');
+  const publishedPackageRoot = resolve('/tmp/npx/node_modules/kraki');
   const fakeConfig = {
     relay: 'wss://relay.test',
     authMethod: 'github' as const,
@@ -121,26 +126,26 @@ describe('startDaemon()', () => {
   };
 
   it('resolves source launch paths from the workspace root', () => {
-    const launch = resolveDaemonLaunch('/tmp/repo/packages/tentacle/src/cli.ts', false);
+    const launch = resolveDaemonLaunch(sourceCliPath, false);
 
     expect(launch.runtime).toBe(process.execPath);
     expect(launch.args).toEqual([
       '--import',
       'tsx',
-      '/tmp/repo/packages/tentacle/src/cli.ts',
+      sourceCliPath,
       '__daemon-worker',
     ]);
-    expect(launch.cwd).toBe('/tmp/repo');
+    expect(launch.cwd).toBe(sourceWorkspaceRoot);
     expect(launch.env.NODE_ENV).toBe('production');
-    expect(launch.env.PATH).toContain('/tmp/repo/node_modules/.bin');
+    expect(launch.env.PATH).toContain(resolve('/tmp/repo/node_modules/.bin'));
   });
 
   it('resolves published launch paths from the installed package root', () => {
-    const launch = resolveDaemonLaunch('/tmp/npx/node_modules/kraki/dist/cli.js', false);
+    const launch = resolveDaemonLaunch(publishedCliPath, false);
 
-    expect(launch.args).toEqual(['/tmp/npx/node_modules/kraki/dist/cli.js', '__daemon-worker']);
-    expect(launch.cwd).toBe('/tmp/npx/node_modules/kraki');
-    expect(launch.env.PATH).toContain('/tmp/npx/node_modules/kraki/node_modules/.bin');
+    expect(launch.args).toEqual([publishedCliPath, '__daemon-worker']);
+    expect(launch.cwd).toBe(publishedPackageRoot);
+    expect(launch.env.PATH).toContain(resolve('/tmp/npx/node_modules/kraki/node_modules/.bin'));
   });
 
   it('resolves SEA launch paths to the current executable', () => {

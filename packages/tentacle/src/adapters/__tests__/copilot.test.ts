@@ -14,6 +14,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock the logger so tests don't emit log output
 vi.mock('../../logger.js', () => {
@@ -57,6 +59,11 @@ function createMockSession(sessionId: string) {
 }
 
 type MockSession = ReturnType<typeof createMockSession>;
+
+const fakeRepoRoot = resolve('/tmp/repo');
+const fakeSdkSessionPath = resolve(fakeRepoRoot, 'node_modules', '@github', 'copilot-sdk', 'dist', 'session.js');
+const fakeAdapterUrl = pathToFileURL(resolve(fakeRepoRoot, 'packages', 'tentacle', 'src', 'adapters', 'copilot.ts')).href;
+const fakeCopilotPath = process.platform === 'win32' ? 'C:\\Tools\\copilot.exe' : '/opt/homebrew/bin/copilot';
 
 let mockSessions: MockSession[];
 let capturedSessionConfigs: any[];
@@ -146,8 +153,8 @@ describe('CopilotAdapter', () => {
     mockRegister = vi.fn();
     mockExistsSync.mockImplementation(
       (path: string) =>
-        path === '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js' ||
-        path === '/opt/homebrew/bin/copilot',
+        path === fakeSdkSessionPath ||
+        path === fakeCopilotPath,
     );
     mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
     mockWriteFileSync.mockReset();
@@ -156,7 +163,7 @@ describe('CopilotAdapter', () => {
         return 'fake-gh-token\n';
       }
       if (command.includes('command -v copilot') || command.includes('where.exe copilot')) {
-        return '/opt/homebrew/bin/copilot\n';
+        return `${fakeCopilotPath}\n`;
       }
       return '';
     });
@@ -186,7 +193,7 @@ describe('CopilotAdapter', () => {
         expect.objectContaining({
           useLoggedInUser: false,
           githubToken: 'fake-gh-token',
-          cliPath: '/opt/homebrew/bin/copilot',
+          cliPath: fakeCopilotPath,
         }),
       );
     });
@@ -194,10 +201,10 @@ describe('CopilotAdapter', () => {
     it('patches the SDK import when the installed session file is incompatible', () => {
       mockReadFileSync.mockReturnValue('import { x } from "vscode-jsonrpc/node";\n');
 
-      expect(patchCopilotSdkSessionImport('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts')).toBe(true);
+      expect(patchCopilotSdkSessionImport(fakeAdapterUrl)).toBe(true);
 
       expect(mockWriteFileSync).toHaveBeenCalledWith(
-        '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js',
+        fakeSdkSessionPath,
         'import { x } from "vscode-jsonrpc/node.js";\n',
         'utf8',
       );
@@ -221,14 +228,14 @@ describe('CopilotAdapter', () => {
     it('returns false when no patch is needed', () => {
       mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
 
-      expect(patchCopilotSdkSessionImport('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts')).toBe(false);
+      expect(patchCopilotSdkSessionImport(fakeAdapterUrl)).toBe(false);
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
   });
 
   describe('installCopilotSdkImportCompatibility', () => {
     it('uses registerHooks when available', () => {
-      expect(installCopilotSdkImportCompatibility('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+      expect(installCopilotSdkImportCompatibility(fakeAdapterUrl))
         .toBe('hook');
       expect(mockRegisterHooks).toHaveBeenCalledTimes(1);
       expect(mockRegister).not.toHaveBeenCalled();
@@ -238,12 +245,12 @@ describe('CopilotAdapter', () => {
     it('falls back to module.register when sync hooks are unavailable', () => {
       mockRegisterHooks = undefined;
 
-      expect(installCopilotSdkImportCompatibility('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+      expect(installCopilotSdkImportCompatibility(fakeAdapterUrl))
         .toBe('hook');
       expect(mockRegister).toHaveBeenCalledTimes(1);
       expect(mockRegister).toHaveBeenCalledWith(
         expect.stringMatching(/^data:text\/javascript,/),
-        'file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts',
+        fakeAdapterUrl,
       );
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
@@ -253,10 +260,10 @@ describe('CopilotAdapter', () => {
       mockRegister = undefined;
       mockReadFileSync.mockReturnValue('import { x } from "vscode-jsonrpc/node";\n');
 
-      expect(installCopilotSdkImportCompatibility('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+      expect(installCopilotSdkImportCompatibility(fakeAdapterUrl))
         .toBe('patch');
       expect(mockWriteFileSync).toHaveBeenCalledWith(
-        '/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js',
+        fakeSdkSessionPath,
         'import { x } from "vscode-jsonrpc/node.js";\n',
         'utf8',
       );
@@ -265,21 +272,21 @@ describe('CopilotAdapter', () => {
 
   describe('resolveCopilotSdkSessionPath', () => {
     it('finds the sdk session file by walking up to node_modules', () => {
-      expect(resolveCopilotSdkSessionPath('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
-        .toBe('/tmp/repo/node_modules/@github/copilot-sdk/dist/session.js');
+      expect(resolveCopilotSdkSessionPath(fakeAdapterUrl))
+        .toBe(fakeSdkSessionPath);
     });
 
     it('returns null when no sdk session file exists', () => {
       mockExistsSync.mockReturnValue(false);
 
-      expect(resolveCopilotSdkSessionPath('file:///tmp/repo/packages/tentacle/src/adapters/copilot.ts'))
+      expect(resolveCopilotSdkSessionPath(fakeAdapterUrl))
         .toBeNull();
     });
   });
 
   describe('resolveCopilotCliPath', () => {
     it('returns the first executable path found on PATH', () => {
-      expect(resolveCopilotCliPath()).toBe('/opt/homebrew/bin/copilot');
+      expect(resolveCopilotCliPath()).toBe(fakeCopilotPath);
     });
 
     it('returns undefined when the PATH lookup fails', () => {
