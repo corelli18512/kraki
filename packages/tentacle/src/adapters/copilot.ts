@@ -22,6 +22,7 @@ import type {
   PermissionRequest,
   PermissionRequestResult,
   SessionMetadata,
+  MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -275,7 +276,6 @@ export class CopilotAdapter extends AgentAdapter {
 
     const opts = {
       useLoggedInUser: false,
-      logLevel: 'debug' as const,
       ...(githubToken && { githubToken }),
       ...(cliPath && { cliPath }),
     };
@@ -303,29 +303,39 @@ export class CopilotAdapter extends AgentAdapter {
     const pendingPermissions = new Map<string, PendingPermission>();
     const pendingQuestions = new Map<string, PendingQuestion>();
 
-    const sessionConfig: SessionConfig = {
-      ...(config.sessionId && { sessionId: config.sessionId }),
-      ...(config.model && { model: config.model }),
-      ...(config.cwd && { workingDirectory: config.cwd }),
-      configDir: join(homedir(), '.copilot'),
-      streaming: true,
-      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
-      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
-    };
-
-    // Log MCP config discovery
+    // Load MCP server config and inject into session
     const mcpConfigPath = join(homedir(), '.copilot', 'mcp-config.json');
+    let mcpServers: Record<string, MCPServerConfig> | undefined;
     if (existsSync(mcpConfigPath)) {
       try {
         const mcpRaw = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
-        const serverNames = Object.keys(mcpRaw.mcpServers ?? {});
-        logger.info(`MCP config found: ${serverNames.length} server(s) [${serverNames.join(', ')}]`);
+        const rawServers = mcpRaw.mcpServers ?? {};
+        const serverNames = Object.keys(rawServers);
+        if (serverNames.length > 0) {
+          // CLI requires `tools` field on each server — default to all tools
+          mcpServers = {};
+          for (const [name, cfg] of Object.entries(rawServers)) {
+            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as any).tools ?? ['*'] };
+          }
+          logger.info(`MCP config found: ${serverNames.length} server(s) [${serverNames.join(', ')}]`);
+        }
       } catch (err) {
         logger.warn(`MCP config exists but failed to parse: ${(err as Error).message}`);
       }
     } else {
       logger.info('No MCP config at ~/.copilot/mcp-config.json');
     }
+
+    const sessionConfig: SessionConfig = {
+      ...(config.sessionId && { sessionId: config.sessionId }),
+      ...(config.model && { model: config.model }),
+      ...(config.cwd && { workingDirectory: config.cwd }),
+      configDir: join(homedir(), '.copilot'),
+      ...(mcpServers && { mcpServers }),
+      streaming: true,
+      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
+      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
+    };
 
     const session = await this.client!.createSession(sessionConfig);
     const sid = session.sessionId;
@@ -519,8 +529,24 @@ export class CopilotAdapter extends AgentAdapter {
     pendingPermissions: Map<string, PendingPermission>,
     pendingQuestions: Map<string, PendingQuestion>,
   ): ResumeSessionConfig {
+    // Load MCP servers for resumed sessions too
+    const mcpConfigPath = join(homedir(), '.copilot', 'mcp-config.json');
+    let mcpServers: Record<string, MCPServerConfig> | undefined;
+    if (existsSync(mcpConfigPath)) {
+      try {
+        const rawServers = JSON.parse(readFileSync(mcpConfigPath, 'utf8')).mcpServers ?? {};
+        if (Object.keys(rawServers).length > 0) {
+          mcpServers = {};
+          for (const [name, cfg] of Object.entries(rawServers)) {
+            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as any).tools ?? ['*'] };
+          }
+        }
+      } catch { /* ignore parse errors on resume */ }
+    }
+
     return {
       configDir: join(homedir(), '.copilot'),
+      ...(mcpServers && { mcpServers }),
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
     };
@@ -565,18 +591,6 @@ export class CopilotAdapter extends AgentAdapter {
   // ── SDK → callback wiring ─────────────────────────
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
-    // Catch-all: log every event type for debugging
-    session.on((event) => {
-      const knownTypes = new Set([
-        'assistant.message_delta', 'assistant.message', 'assistant.turn_end',
-        'tool.execution_start', 'tool.execution_complete', 'session.idle',
-        'session.info', 'session.warning',
-      ]);
-      if (!knownTypes.has(event.type)) {
-        logger.info({ type: event.type, data: event.data }, `[event] ${event.type}`);
-      }
-    });
-
     session.on('assistant.message_delta', (event) => {
       this.onMessageDelta?.(sessionId, { content: event.data.deltaContent });
     });
@@ -590,9 +604,8 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('tool.execution_start', (event) => {
       const data = event.data as Record<string, unknown>;
-      // Log MCP tool info if present
       if (data.mcpServerName) {
-        logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName, tool: data.toolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
+        logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
       }
       this.onToolStart?.(sessionId, {
         toolName: data.toolName as string,
@@ -622,14 +635,17 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('session.info', (event) => {
       const data = event.data as Record<string, unknown>;
       const category = data.category as string | undefined;
-      // Log ALL info events at info level for debugging
-      logger.info({ category, data }, `[info:${category}] ${data.message}`);
+      if (category === 'mcp') {
+        logger.info(`[MCP] ${data.message}`);
+      } else {
+        logger.debug(`[info:${category}] ${data.message}`);
+      }
     });
 
     session.on('session.warning', (event) => {
       const data = event.data as Record<string, unknown>;
       const category = data.category as string | undefined;
-      logger.warn({ category, data }, `[warning:${category}] ${data.message}`);
+      logger.warn(`[warning:${category}] ${data.message}`);
     });
 
     session.on('assistant.turn_end', (event) => {

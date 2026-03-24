@@ -37,7 +37,6 @@ jobs:
         id: detect
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
         run: |
           python3 - <<'PY'
           import json
@@ -48,20 +47,18 @@ jobs:
           current = json.loads(Path('packages/arm/web/package.json').read_text())['version']
           previous = ''
           should_deploy = os.environ['EVENT_NAME'] == 'workflow_dispatch'
-          before = os.environ.get('BEFORE_SHA', '')
 
-          if not should_deploy and before and before != '0000000000000000000000000000000000000000':
+          if not should_deploy:
               try:
                   previous_source = subprocess.check_output(
-                      ['git', 'show', f'{before}:packages/arm/web/package.json'],
+                      ['git', 'show', 'HEAD~1:packages/arm/web/package.json'],
                       text=True,
                   )
                   previous = json.loads(previous_source)['version']
                   should_deploy = previous != current
               except subprocess.CalledProcessError:
+                  # File didn't exist in previous commit — first deploy
                   should_deploy = True
-          elif not should_deploy:
-              should_deploy = True
 
           with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as fh:
               fh.write(f'current_version={current}\n')
