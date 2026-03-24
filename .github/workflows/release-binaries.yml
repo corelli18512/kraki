@@ -138,7 +138,7 @@ jobs:
           - runner: ubuntu-24.04
             label: Linux x64
             asset_name: kraki-linux-x64
-          - runner: macos-13
+          - runner: macos-15-intel
             label: macOS x64
             asset_name: kraki-macos-x64
           - runner: macos-14

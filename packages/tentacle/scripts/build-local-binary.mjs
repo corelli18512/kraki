@@ -2,7 +2,7 @@
 
 import { build } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +20,21 @@ const outputName = `kraki-${getPlatformLabel()}-${process.arch}${process.platfor
 const outputPath = join(seaDir, outputName);
 
 function run(command, args, options = {}) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+    const result = spawnSync(command, args, {
+      stdio: 'inherit',
+      shell: true,
+      ...options,
+    });
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status !== 0) {
+      throw new Error(`Command failed: ${command} ${args.join(' ')}`);
+    }
+    return;
+  }
+
   execFileSync(command, args, { stdio: 'inherit', ...options });
 }
 
