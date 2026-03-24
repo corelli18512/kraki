@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
   id-token: write
 
 concurrency:
@@ -50,6 +51,21 @@ jobs:
           else
             test "${GITHUB_REF_NAME}" = "main"
           fi
+
+      - name: Ensure CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${GITHUB_SHA}"
+          echo "Checking CI status for ${sha}..."
+          status=$(gh api "repos/${{ github.repository }}/commits/${sha}/check-runs" \
+            --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+          if [ "$status" != "success" ]; then
+            echo "CI has not passed for this commit (status: ${status:-not found}). Refusing to publish."
+            exit 1
+          fi
+          echo "CI passed ✅"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
