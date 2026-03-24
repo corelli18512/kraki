@@ -30,9 +30,7 @@ vi.mock("ws", () => {
           setTimeout(() => {
             handlers['message'](JSON.stringify({
               type: 'auth_info_response',
-              authModes: ['github', 'channel-key', 'open'],
-              e2e: false,
-              pairing: true,
+              methods: ['github_token', 'open', 'pairing', 'challenge'],
             }));
           }, 5);
         }
@@ -111,18 +109,16 @@ describe("runSetup — official relay + github", () => {
   });
 });
 
-describe("runSetup — custom relay + channel key", () => {
-  it("selects custom → URL → channel-key → saves", async () => {
+describe("runSetup — apikey auth", () => {
+  it("selects custom → URL → apikey → saves", async () => {
     mockInput.mockResolvedValueOnce("ws://my-vps:4000");       // relay URL
-    mockSelect.mockResolvedValueOnce("channel-key");           // auth method
-    mockInput.mockResolvedValueOnce("my-secret");              // channel key
+    mockSelect.mockResolvedValueOnce("apikey");                // auth method — not in mock methods, but tests select flow
     mockInput.mockResolvedValueOnce("server-1");               // device name
     mockWithRetry.mockResolvedValueOnce({ found: true, version: "2.0" }); // copilot
 
     const result = await runSetup();
     expect(result.relay).toBe("ws://my-vps:4000");
-    expect(result.authMethod).toBe("channel-key");
-    expect(mockSaveChannelKey).toHaveBeenCalledWith("my-secret");
+    expect(result.authMethod).toBe("apikey");
   });
 });
 
@@ -135,22 +131,10 @@ describe("runSetup — open auth", () => {
 
     const result = await runSetup();
     expect(result.authMethod).toBe("open");
-    expect(mockSaveChannelKey).not.toHaveBeenCalled();
   });
 });
 
 describe("runSetup — edge cases", () => {
-  it("trims channel key", async () => {
-    mockInput.mockResolvedValueOnce("ws://r:4000");
-    mockSelect.mockResolvedValueOnce("channel-key");
-    mockInput.mockResolvedValueOnce("  spaced  ");
-    mockInput.mockResolvedValueOnce("dev");
-    mockWithRetry.mockResolvedValueOnce({ found: true });
-
-    await runSetup();
-    expect(mockSaveChannelKey).toHaveBeenCalledWith("spaced");
-  });
-
   it("gracefully handles pairing failure", async () => {
     mockInput.mockResolvedValueOnce("wss://kraki.corelli.cloud");
     mockSelect.mockResolvedValueOnce("open");

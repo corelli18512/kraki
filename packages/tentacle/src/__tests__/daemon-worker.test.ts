@@ -107,7 +107,7 @@ describe('daemon-worker: startWorker()', () => {
     vi.clearAllMocks();
     mockConfig = {
       relay: 'wss://kraki.corelli.cloud',
-      authMethod: 'github',
+      authMethod: 'github_token',
       device: { name: 'test-machine' },
     };
     mockChannelKey = null;
@@ -154,7 +154,7 @@ describe('daemon-worker: startWorker()', () => {
   });
 
   it('loads channel key for non-github auth', async () => {
-    mockConfig.authMethod = 'channel-key';
+    mockConfig.authMethod = 'open';
     mockChannelKey = 'my-secret-key';
     await startWorker();
     expect(mockLoggerFns.debug).toHaveBeenCalledWith(
@@ -164,7 +164,7 @@ describe('daemon-worker: startWorker()', () => {
   });
 
   it('warns when channel key is missing', async () => {
-    mockConfig.authMethod = 'channel-key';
+    mockConfig.authMethod = 'open';
     mockChannelKey = null;
     await startWorker();
     expect(mockLoggerFns.warn).toHaveBeenCalledWith(

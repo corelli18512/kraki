@@ -141,7 +141,7 @@ describe('RelayClient auth negotiation', () => {
       createSessionManager(),
       {
         relayUrl: 'ws://localhost:4000',
-        authMethod: 'github',
+        authMethod: 'github_token',
         token: 'ghu_123',
         device: { name: 'Laptop', role: 'tentacle' },
         reconnectDelay: 10,
