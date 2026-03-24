@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { cpSync, mkdirSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,9 +13,23 @@ const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
-execFileSync(pnpmCommand, ['exec', 'tsc'], {
-  cwd: packageRoot,
-  stdio: 'inherit',
-});
+if (process.platform === 'win32') {
+  const result = spawnSync(pnpmCommand, ['exec', 'tsc'], {
+    cwd: packageRoot,
+    stdio: 'inherit',
+    shell: true,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Command failed: ${pnpmCommand} exec tsc`);
+  }
+} else {
+  execFileSync(pnpmCommand, ['exec', 'tsc'], {
+    cwd: packageRoot,
+    stdio: 'inherit',
+  });
+}
 
 cpSync(join(packageRoot, 'src', 'banner-data.json'), join(distDir, 'banner-data.json'));
