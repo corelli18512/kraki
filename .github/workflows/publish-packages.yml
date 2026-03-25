@@ -20,6 +20,9 @@ permissions:
   checks: read
   id-token: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: publish-packages-${{ github.ref }}
   cancel-in-progress: false
