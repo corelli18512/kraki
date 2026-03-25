@@ -64,6 +64,8 @@ Install Kraki on the coding machine:
 - Or install from npm: `npm i -g @kraki/tentacle`, then run `kraki`
 - On macOS/Linux, if the downloaded binary is not executable yet, run `chmod +x ./kraki-<platform>-<arch>` once
 
+> Note: macOS may show Gatekeeper and Windows may show SmartScreen on first launch. If you trust the release, use "Open Anyway" / "Run anyway".
+
 On first run, Kraki will:
 
 1. guide you through setup in the terminal
