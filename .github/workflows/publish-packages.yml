@@ -20,9 +20,6 @@ permissions:
   checks: read
   id-token: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 concurrency:
   group: publish-packages-${{ github.ref }}
   cancel-in-progress: false
@@ -38,7 +35,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -86,7 +83,7 @@ jobs:
           version: 10.29.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -125,7 +122,7 @@ jobs:
           ls -lh "$ARTIFACT_DIR"
 
       - name: Upload release tarballs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-packages-${{ github.sha }}
           path: ${{ env.ARTIFACT_DIR }}
