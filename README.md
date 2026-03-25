@@ -6,27 +6,30 @@
 
 <p align="center"><strong>Remote control for coding agents from anywhere through an E2E encrypted relay</strong></p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  <a href="https://www.npmjs.com/package/@kraki/tentacle"><img src="https://img.shields.io/npm/v/@kraki/tentacle" alt="npm"></a>
+  <img src="https://img.shields.io/badge/E2E-AES--256--GCM-green?logo=letsencrypt&logoColor=white" alt="E2E Encrypted">
+  <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/TypeScript-5.7-blue?logo=typescript&logoColor=white" alt="TypeScript">
+</p>
+
 > 🐣 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
 
-Kraki lets you watch agent sessions, respond to permission requests, answer questions, and send follow-up input from a phone or browser while the agent keeps running on another machine. 
+Kraki lets you watch agent sessions, respond to permission requests, answer questions, and send follow-up input from a phone or browser while the agent keeps running on another machine.
 
 Get started on your coding machine:
-```bash
-# Only supports GitHub Copilot CLI for now
-# Requires Copilot CLI installed and `gh auth login` completed
 
-# Preferred: download the matching binary from GitHub Releases
-# https://github.com/corelli18512/kraki/releases
-chmod +x ./kraki-<platform>-<arch>
-./kraki-<platform>-<arch>
-
-# npm fallback: one-off run
-npx @kraki/tentacle
-
-# Or install globally
+- [Download the latest standalone binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest)
+- Or install from npm:
+```bash 
 npm i -g @kraki/tentacle
+# then
 kraki
 ```
+- Only supports GitHub Copilot CLI and GitHub account login for now
+- On macOS/Linux, if the downloaded binary is not executable yet, run `chmod +x ./kraki-<platform>-<arch>` once
 
 Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
 
@@ -55,22 +58,11 @@ Native iOS and additional agent adapters will be added later without changing th
 
 ## Set up
 
-### Hosted setup
+Install Kraki on the coding machine:
 
-Run the tentacle binary on the coding machine:
-
-```bash
-# Preferred: standalone release binary
-chmod +x ./kraki-<platform>-<arch>
-./kraki-<platform>-<arch>
-
-# npm fallback
-npx @kraki/tentacle
-
-# or
-npm i -g @kraki/tentacle
-kraki
-```
+- Preferred: [Download the latest standalone binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run the matching `kraki-*` asset for your platform
+- Or install from npm: `npm i -g @kraki/tentacle`, then run `kraki`
+- On macOS/Linux, if the downloaded binary is not executable yet, run `chmod +x ./kraki-<platform>-<arch>` once
 
 On first run, Kraki will:
 
