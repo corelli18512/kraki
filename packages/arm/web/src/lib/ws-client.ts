@@ -17,6 +17,8 @@ export class KrakiWSClient {
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
+  /** Shared replay context — set to true after requesting replay, false on replay_complete. */
+  private replayCtx = { replaying: false };
 
   get url(): string { return this.transport.url; }
 
@@ -126,6 +128,27 @@ export class KrakiWSClient {
     markSessionRead(sessionId);
   }
 
+  /**
+   * Send request_replay to all known tentacle devices.
+   * Called after auth_ok to get messages missed during disconnect.
+   */
+  private requestReplay(): void {
+    const store = getStore();
+    const afterSeq = store.lastSeq ?? 0;
+
+    // Send to every tentacle device
+    for (const [, device] of store.devices) {
+      if (device.role === 'tentacle') {
+        this.sendEncrypted({
+          type: 'request_replay',
+          sessionId: undefined,
+          payload: { afterSeq },
+        });
+        this.replayCtx.replaying = true;
+      }
+    }
+  }
+
   // --- Internal ---
 
   private async authenticate(): Promise<void> {
@@ -155,9 +178,10 @@ export class KrakiWSClient {
   private encryptionCallbacks() {
     return {
       handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        replaying: false,
+        replaying: this.replayCtx.replaying,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
+        onReplayComplete: () => { this.replayCtx.replaying = false; },
       }),
       getHandlers: () => this.handlers,
     };
@@ -179,6 +203,7 @@ export class KrakiWSClient {
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
+          sendReplayRequest: () => this.requestReplay(),
         });
         break;
 

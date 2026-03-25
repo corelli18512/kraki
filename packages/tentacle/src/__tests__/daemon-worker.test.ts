@@ -54,6 +54,17 @@ vi.mock('../key-manager.js', () => ({
   KeyManager: vi.fn().mockImplementation(() => ({})),
 }));
 
+vi.mock('../message-store.js', () => ({
+  MessageStore: vi.fn().mockImplementation(() => ({
+    getLastSeq: vi.fn(() => 0),
+    append: vi.fn(),
+    getAfterSeq: vi.fn(() => []),
+    prune: vi.fn(() => 0),
+    deleteSession: vi.fn(() => 0),
+    count: vi.fn(() => 0),
+  })),
+}));
+
 const mockLoggerFns = {
   info: vi.fn(),
   debug: vi.fn(),
@@ -82,6 +93,7 @@ vi.mock('../config.js', () => ({
   getOrCreateDeviceId: vi.fn(() => 'dev_test123'),
   getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
+  getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
 }));
 
 let mockExecSyncReturn = 'fake-token\n';
