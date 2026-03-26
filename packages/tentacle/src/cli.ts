@@ -17,7 +17,7 @@
 import chalk from 'chalk';
 import { join, dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, realpathSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 import { isSea } from 'node:sea';
 
@@ -34,7 +34,12 @@ declare const __KRAKI_VERSION__: string | undefined;
 function resolvePackageRootFromArgv(): string | null {
   const scriptPath = process.argv[1];
   if (!scriptPath) return null;
-  return resolve(dirname(resolve(scriptPath)), '..');
+  try {
+    const realPath = realpathSync(resolve(scriptPath));
+    return resolve(dirname(realPath), '..');
+  } catch {
+    return resolve(dirname(resolve(scriptPath)), '..');
+  }
 }
 
 function getVersion(): string {
