@@ -84,7 +84,7 @@ export async function startWorker(): Promise<WorkerResult> {
   const adapter = new CopilotAdapter();
   const sessionManager = new SessionManager();
   const keyManager = new KeyManager();
-  const messageStore = new MessageStore(join(getConfigDir(), 'message-buffer.jsonl'));
+  const messageStore = new MessageStore(join(getConfigDir(), 'message-log.jsonl'));
   const deviceId = getOrCreateDeviceId();
 
   // 4. Start Copilot adapter
