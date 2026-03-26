@@ -92,11 +92,45 @@ async function cmdDefault(): Promise<void> {
 
   if (config) {
     if (isDaemonRunning()) {
-      // Already running — show QR
       const status = getDaemonStatus();
       console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
-      const { showPairingQr } = await import('./setup.js');
-      await showPairingQr(config);
+      console.log();
+
+      const action = await select({
+        message: 'What do you want to do?',
+        theme: {
+          prefix: { idle: chalk.blue('  ?'), done: chalk.green('  ✔') },
+          icon: { cursor: '  ❯' },
+        },
+        choices: [
+          { name: '  Show pairing QR', value: 'qr' },
+          { name: '  Stop', value: 'stop' },
+          { name: '  Restart', value: 'restart' },
+          { name: '  Clean restart (reconfigure)', value: 'reconfig' },
+        ],
+      });
+
+      switch (action) {
+        case 'qr': {
+          const { showPairingQr } = await import('./setup.js');
+          await showPairingQr(config);
+          break;
+        }
+        case 'stop':
+          cmdStop();
+          break;
+        case 'restart':
+          cmdStop();
+          await silentStart(config);
+          break;
+        case 'reconfig':
+          cmdStop();
+          const { rmSync } = await import('node:fs');
+          try { rmSync(getKrakiHome(), { recursive: true, force: true }); } catch { /* ignore */ }
+          config = await runSetup();
+          await silentStart(config);
+          break;
+      }
       return;
     }
 
