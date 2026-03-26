@@ -661,16 +661,19 @@ export class RelayClient {
       enriched.deviceId = this.authInfo.deviceId;
     }
 
-    // Buffer message for replay (before encryption, as plaintext JSON)
+    // Buffer message for replay (before encryption, as plaintext JSON).
+    // Skip transient types that are redundant for state reconstruction.
     if (this.messageStore) {
-      const sessionId = enriched.sessionId as string | undefined;
       const type = enriched.type as string;
-      this.messageStore.append(
-        enriched.seq as number,
-        sessionId,
-        type,
-        JSON.stringify(enriched),
-      );
+      if (type !== 'agent_message_delta' && type !== 'idle') {
+        const sessionId = enriched.sessionId as string | undefined;
+        this.messageStore.append(
+          enriched.seq as number,
+          sessionId,
+          type,
+          JSON.stringify(enriched),
+        );
+      }
     }
 
     if (this.keyManager) {
