@@ -66,11 +66,13 @@ export function checkCopilotCli(): CliCheckResult {
 /**
  * Run a check function with interactive retry.
  * After 2 failures, prints a terminal-restart hint and exits.
+ * If a spinner is provided, it is stopped before prompting and restarted on retry.
  */
 export async function withRetry<T extends { found?: boolean; authenticated?: boolean }>(
   checkFn: () => T,
   label: string,
   installHint: string,
+  spinner?: { stop: () => void; start: () => void },
 ): Promise<T> {
   let failures = 0;
 
@@ -81,6 +83,7 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
     if (ok) return result;
 
     failures++;
+    spinner?.stop();
     console.log(chalk.yellow(`\n⚠  ${label} not found.`));
     console.log(chalk.dim(`   ${installHint}`));
 
@@ -94,5 +97,6 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
     if (!retry) {
       process.exit(1);
     }
+    spinner?.start();
   }
 }

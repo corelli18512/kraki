@@ -21,6 +21,7 @@ import {
 } from './config.js';
 import { checkGhAuth, checkCopilotCli, withRetry } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
+import { isSea } from 'node:sea';
 
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
 
@@ -312,14 +313,19 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   // 4. Agent check
   console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Agent Verification')}`);
-  const spinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
-  const copilotResult = await withRetry(
-    checkCopilotCli,
-    'Copilot CLI',
-    'Install: npm install -g @github/copilot  (or check your PATH)',
-  );
-  spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
-
+  if (isSea()) {
+    const spinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
+    const copilotResult = await withRetry(
+      checkCopilotCli,
+      'Copilot CLI',
+      'Install: npm install -g @github/copilot  (or check your PATH)',
+      spinner,
+    );
+    spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
+  } else {
+    const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
+    spinner.succeed('Copilot SDK available');
+  }
   // 5. Build config
   const deviceId = getOrCreateDeviceId();
   const config: KrakiConfig = {
