@@ -91,6 +91,9 @@ export interface AppState {
 
   // Live capabilities from tentacle greetings
   deviceModels: Map<string, string[]>;
+
+  // Highest seq seen from any tentacle — used for replay requests after reconnect
+  lastSeq: number;
 }
 
 export interface AppActions {
@@ -127,6 +130,8 @@ export interface AppActions {
   setGithubClientId: (clientId: string | null) => void;
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
+  /** Track the highest seq seen from tentacle messages. */
+  trackSeq: (seq: number) => void;
   clearTransientState: () => void;
   reset: () => void;
 }

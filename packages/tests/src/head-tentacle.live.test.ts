@@ -174,7 +174,7 @@ describe("Full E2E: Real Daemon Wiring + Copilot + Head", () => {
     await waitMs(500);
 
     const app2 = await connectApp(env.port, "Second Phone");
-    app2.send({ type: "replay", afterSeq: 0 });
+    app2.send({ type: "request_replay", afterSeq: 0 });
     const replayed = await app2.waitFor("agent_message", 10_000);
     expect(replayed.payload.content).toBeTruthy();
 

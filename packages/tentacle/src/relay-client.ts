@@ -17,6 +17,7 @@ import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
+import type { MessageStore } from './message-store.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('relay-client');
@@ -43,6 +44,7 @@ export class RelayClient {
   private adapter: AgentAdapter;
   private sessionManager: SessionManager;
   private keyManager: KeyManager | null;
+  private messageStore: MessageStore | null;
   private options: RelayClientOptions;
   private state: RelayClientState = 'disconnected';
   private reconnectAttempts = 0;
@@ -81,11 +83,17 @@ export class RelayClient {
     sessionManager: SessionManager,
     options: RelayClientOptions,
     keyManager?: KeyManager | null,
+    messageStore?: MessageStore | null,
   ) {
     this.adapter = adapter;
     this.sessionManager = sessionManager;
     this.options = options;
     this.keyManager = keyManager ?? null;
+    this.messageStore = messageStore ?? null;
+    // Restore seq counter from persisted buffer so seq stays monotonic across restarts
+    if (this.messageStore) {
+      this.seqCounter = this.messageStore.getLastSeq();
+    }
     this.wireAdapterEvents();
   }
 
@@ -319,6 +327,12 @@ export class RelayClient {
       return;
     }
 
+    // request_replay — replay buffered messages to the requesting device
+    if (msg.type === 'request_replay') {
+      this.handleReplayRequest(msg.deviceId, msg.payload.afterSeq);
+      return;
+    }
+
     const sessionId = msg.sessionId;
     if (!sessionId) return;
 
@@ -366,6 +380,7 @@ export class RelayClient {
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           this.sessionManager.deleteSession(sessionId);
+          this.messageStore?.deleteSession(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
           break;
         default: {
@@ -573,6 +588,60 @@ export class RelayClient {
     }
   }
 
+  // ── Replay ─────────────────────────────────────────
+
+  /**
+   * Handle a request_replay from a reconnecting app.
+   * Replays buffered messages with seq > afterSeq as encrypted unicasts.
+   */
+  private handleReplayRequest(requesterDeviceId: string, afterSeq: number): void {
+    if (!this.messageStore) {
+      logger.warn('Replay requested but no message store configured');
+      this.sendReplayComplete(requesterDeviceId, this.seqCounter);
+      return;
+    }
+
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Replay requested but no encryption key for requester');
+      return;
+    }
+
+    const messages = this.messageStore.getAfterSeq(afterSeq);
+    logger.info({ requesterDeviceId, afterSeq, count: messages.length }, 'Replaying buffered messages');
+
+    for (const buffered of messages) {
+      try {
+        const parsed = JSON.parse(buffered.payload);
+        this.sendUnicastTo(requesterDeviceId, requesterKey, parsed);
+      } catch {
+        logger.warn({ seq: buffered.seq }, 'Failed to replay buffered message');
+      }
+    }
+
+    const lastSeq = messages.length > 0
+      ? messages[messages.length - 1].seq
+      : this.seqCounter;
+    this.sendReplayComplete(requesterDeviceId, lastSeq);
+  }
+
+  /**
+   * Send replay_complete to a specific device.
+   */
+  private sendReplayComplete(targetDeviceId: string, lastSeq: number): void {
+    const targetKey = this.consumerKeys.get(targetDeviceId);
+    if (!targetKey) return;
+
+    const msg = {
+      type: 'replay_complete',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { lastSeq },
+    };
+    this.sendUnicastTo(targetDeviceId, targetKey, msg);
+  }
+
   // ── Send to relay ───────────────────────────────────
 
   // TODO: Make send() accept a discriminated union of ProducerMessage types
@@ -590,6 +659,21 @@ export class RelayClient {
     enriched.timestamp = new Date().toISOString();
     if (this.authInfo) {
       enriched.deviceId = this.authInfo.deviceId;
+    }
+
+    // Buffer message for replay (before encryption, as plaintext JSON).
+    // Skip transient types that are redundant for state reconstruction.
+    if (this.messageStore) {
+      const type = enriched.type as string;
+      if (type !== 'agent_message_delta' && type !== 'idle') {
+        const sessionId = enriched.sessionId as string | undefined;
+        this.messageStore.append(
+          enriched.seq as number,
+          sessionId,
+          type,
+          JSON.stringify(enriched),
+        );
+      }
     }
 
     if (this.keyManager) {

@@ -62,9 +62,9 @@ export class EncryptionHandler {
     // Unicast: determine the target tentacle device
     let targetDeviceId: string | undefined;
     const sessionId = msg.sessionId as string | undefined;
-    if (msg.type === 'create_session') {
-      const payload = msg.payload as Record<string, unknown> | undefined;
-      targetDeviceId = payload?.targetDeviceId as string | undefined;
+    const payload = msg.payload as Record<string, unknown> | undefined;
+    if (payload?.targetDeviceId) {
+      targetDeviceId = payload.targetDeviceId as string;
     } else if (sessionId) {
       const session = store.sessions.get(sessionId);
       targetDeviceId = session?.deviceId;

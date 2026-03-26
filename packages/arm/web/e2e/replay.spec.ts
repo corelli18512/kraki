@@ -141,7 +141,7 @@ test.describe('Replay and chat history', () => {
     await expect(chat.getByText('Persistent message 2')).toBeVisible({ timeout: 3000 });
   });
 
-  test('requests only new messages after refresh via afterSeq', async ({ page }) => {
+  test('persists lastSeq and restores cached messages after refresh', async ({ page }) => {
     await gotoWithRelay(page, server, { path: `/session/${SESSION_ID}` });
     const ws = await authenticateClient(server);
 
@@ -151,21 +151,17 @@ test.describe('Replay and chat history', () => {
     await expect(chat.getByText('Old message')).toBeVisible({ timeout: 5000 });
     await page.waitForTimeout(500);
 
-    // Remember the persisted lastSeq
+    // Verify lastSeq was persisted
     const storedData = await page.evaluate(() => localStorage.getItem('kraki-store'));
     const lastSeq = JSON.parse(storedData!).state.lastSeq;
+    expect(lastSeq).toBeGreaterThan(0);
 
     // Refresh the page — client will reconnect
     await page.goto(`/session/${SESSION_ID}?relay=${encodeURIComponent(server.url)}`);
 
-    // Intercept the replay request to verify afterSeq
     const ws2 = await server.waitForConnection();
     await server.waitForMessage(ws2); // auth
     server.sendAuthOk(ws2, { sessions: [TEST_SESSION], devices: [TEST_DEVICE] });
-    const replayMsg = await server.waitForMessage(ws2);
-
-    expect(replayMsg.type).toBe('replay');
-    expect(replayMsg.afterSeq).toBe(lastSeq);
 
     // Send only the new message
     server.resetSeq(lastSeq + 1);

@@ -28,4 +28,6 @@ export type { SessionContext, SessionMeta, RunRecord } from './session-manager.j
 export { RelayClient } from './relay-client.js';
 export type { RelayClientOptions, RelayClientState } from './relay-client.js';
 export { KeyManager } from './key-manager.js';
+export { MessageStore } from './message-store.js';
+export type { BufferedMessage } from './message-store.js';
 

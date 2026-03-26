@@ -88,6 +88,7 @@ export function processAuthOk(
   deps: {
     setStoredDeviceId: (id: string) => void;
     drainEncryptedQueue: () => void;
+    sendReplayRequest: () => void;
   },
 ): void {
   const store = getStore();
@@ -109,6 +110,8 @@ export function processAuthOk(
   deps.setStoredDeviceId(msg.deviceId);
   // Drain any encrypted messages queued before auth
   deps.drainEncryptedQueue();
+  // Request replay of messages missed during disconnect
+  deps.sendReplayRequest();
 }
 
 /** Process auth_error: return to login page with error message. */

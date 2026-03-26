@@ -10,10 +10,23 @@ export interface RouterContext {
   cmdState: CommandState;
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
   sendEncrypted?: (msg: Record<string, unknown>) => void;
+  /** Called when tentacle signals replay is complete. */
+  onReplayComplete?: () => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
+
+  // Track highest seq for replay requests after reconnect
+  if (typeof msg.seq === 'number' && msg.seq > 0) {
+    store.trackSeq(msg.seq);
+  }
+
+  // Handle replay_complete — tentacle finished replaying buffered messages
+  if (msg.type === 'replay_complete') {
+    ctx.onReplayComplete?.();
+    return;
+  }
 
   // Handle device_greeting before sessionId check (greetings have no sessionId)
   if (msg.type === 'device_greeting') {

@@ -174,6 +174,15 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   };
 }
 
+/** Sent by tentacle to a device after replaying all buffered messages. */
+export interface ReplayCompleteMessage extends BaseEnvelope {
+  type: 'replay_complete';
+  payload: {
+    /** The highest seq in the replay window (or current tentacle seq if nothing to replay). */
+    lastSeq: number;
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -188,7 +197,8 @@ export type ProducerMessage =
   | IdleMessage
   | ErrorMessage
   | SessionModeSetMessage
-  | DeviceGreetingMessage;
+  | DeviceGreetingMessage
+  | ReplayCompleteMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -279,6 +289,15 @@ export interface MarkReadMessage extends BaseEnvelope {
   };
 }
 
+/** Sent by app to tentacle after reconnect to request buffered messages. */
+export interface RequestReplayMessage extends BaseEnvelope {
+  type: 'request_replay';
+  payload: {
+    /** Replay messages with seq strictly greater than this value. Use 0 for full replay. */
+    afterSeq: number;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -290,7 +309,8 @@ export type ConsumerMessage =
   | CreateSessionMessage
   | SetSessionModeMessage
   | DeleteSessionMessage
-  | MarkReadMessage;
+  | MarkReadMessage
+  | RequestReplayMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
