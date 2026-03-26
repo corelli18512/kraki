@@ -82,16 +82,15 @@ export class MessageStore {
     const regionStart = firstEntry.offset;
     const regionEnd = lastEntry.offset + lastEntry.length;
 
-    let content: string;
+    let regionBuf: Buffer;
     try {
-      const buf = Buffer.alloc(regionEnd - regionStart);
+      regionBuf = Buffer.alloc(regionEnd - regionStart);
       const fd = openSync(this.filePath, 'r');
       try {
-        readSync(fd, buf, 0, buf.length, regionStart);
+        readSync(fd, regionBuf, 0, regionBuf.length, regionStart);
       } finally {
         closeSync(fd);
       }
-      content = buf.toString('utf8');
     } catch {
       return [];
     }
@@ -99,7 +98,8 @@ export class MessageStore {
     const messages: BufferedMessage[] = [];
     for (const entry of entries) {
       const localOffset = entry.offset - regionStart;
-      const line = content.slice(localOffset, localOffset + entry.length).trimEnd();
+      const lineBuf = regionBuf.subarray(localOffset, localOffset + entry.length);
+      const line = lineBuf.toString('utf8').trimEnd();
       try {
         messages.push(JSON.parse(line));
       } catch {
