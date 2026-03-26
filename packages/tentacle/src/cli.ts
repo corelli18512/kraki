@@ -17,7 +17,7 @@
 import chalk from 'chalk';
 import { join, dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, realpathSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 import { isSea } from 'node:sea';
 
@@ -34,7 +34,12 @@ declare const __KRAKI_VERSION__: string | undefined;
 function resolvePackageRootFromArgv(): string | null {
   const scriptPath = process.argv[1];
   if (!scriptPath) return null;
-  return resolve(dirname(resolve(scriptPath)), '..');
+  try {
+    const realPath = realpathSync(resolve(scriptPath));
+    return resolve(dirname(realPath), '..');
+  } catch {
+    return resolve(dirname(resolve(scriptPath)), '..');
+  }
 }
 
 function getVersion(): string {
@@ -87,11 +92,45 @@ async function cmdDefault(): Promise<void> {
 
   if (config) {
     if (isDaemonRunning()) {
-      // Already running — show QR
       const status = getDaemonStatus();
       console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
-      const { showPairingQr } = await import('./setup.js');
-      await showPairingQr(config);
+      console.log();
+
+      const action = await select({
+        message: 'What do you want to do?',
+        theme: {
+          prefix: { idle: chalk.blue('  ?'), done: chalk.green('  ✔') },
+          icon: { cursor: '  ❯' },
+        },
+        choices: [
+          { name: '  Show pairing QR', value: 'qr' },
+          { name: '  Stop', value: 'stop' },
+          { name: '  Restart', value: 'restart' },
+          { name: '  Clean restart (reconfigure)', value: 'reconfig' },
+        ],
+      });
+
+      switch (action) {
+        case 'qr': {
+          const { showPairingQr } = await import('./setup.js');
+          await showPairingQr(config);
+          break;
+        }
+        case 'stop':
+          cmdStop();
+          break;
+        case 'restart':
+          cmdStop();
+          await silentStart(config);
+          break;
+        case 'reconfig':
+          cmdStop();
+          const { rmSync } = await import('node:fs');
+          try { rmSync(getKrakiHome(), { recursive: true, force: true }); } catch { /* ignore */ }
+          config = await runSetup();
+          await silentStart(config);
+          break;
+      }
       return;
     }
 
