@@ -24,7 +24,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
   const deviceModels = useStore((s) => s.deviceModels);
 
-  const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && deviceModels.has(d.id));
+  const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');

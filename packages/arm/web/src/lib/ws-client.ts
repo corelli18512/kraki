@@ -17,8 +17,11 @@ export class KrakiWSClient {
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
-  /** Shared replay context — set to true after requesting replay, false on replay_complete. */
-  private replayCtx = { replaying: false };
+  /** Track replay state per tentacle so one device finishing doesn't affect another. */
+  private replayCtx = {
+    replayingDeviceIds: new Set<string>(),
+    replayTimeouts: new Map<string, ReturnType<typeof setTimeout>>(),
+  };
 
   get url(): string { return this.transport.url; }
 
@@ -35,7 +38,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
-        onClose: () => { /* no-op — thin relay has no server-side replay state to reset */ },
+        onClose: () => { this.clearReplayTracking(); },
       },
       url,
     );
@@ -52,6 +55,7 @@ export class KrakiWSClient {
   }
 
   disconnect() {
+    this.clearReplayTracking();
     this.transport.disconnect();
   }
 
@@ -129,31 +133,52 @@ export class KrakiWSClient {
   }
 
   /**
-   * Send request_replay to all known tentacle devices.
+   * Send request_replay to online tentacle devices.
    * Called after auth_ok to get messages missed during disconnect.
    */
   private requestReplay(): void {
     const store = getStore();
     const afterSeq = store.lastSeq ?? 0;
 
-    let sent = false;
-    // Send to every tentacle device
+    this.clearReplayTracking();
+
+    // Send to every online tentacle device from the relay's auth snapshot
     for (const [, device] of store.devices) {
-      if (device.role === 'tentacle') {
+      if (device.role === 'tentacle' && device.online) {
         this.sendEncrypted({
           type: 'request_replay',
           deviceId: store.deviceId ?? '',
           payload: { afterSeq, targetDeviceId: device.id },
         });
-        sent = true;
+        this.trackReplayRequest(device.id);
       }
     }
+  }
 
-    if (sent) {
-      this.replayCtx.replaying = true;
-      // Safety timeout: if replay_complete never arrives, stop waiting after 10s
-      setTimeout(() => { this.replayCtx.replaying = false; }, 10_000);
+  private trackReplayRequest(deviceId: string): void {
+    this.finishReplayTracking(deviceId);
+    this.replayCtx.replayingDeviceIds.add(deviceId);
+    this.replayCtx.replayTimeouts.set(
+      deviceId,
+      setTimeout(() => this.finishReplayTracking(deviceId), 10_000),
+    );
+  }
+
+  private finishReplayTracking(deviceId: string): void {
+    const timeout = this.replayCtx.replayTimeouts.get(deviceId);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.replayCtx.replayTimeouts.delete(deviceId);
     }
+    this.replayCtx.replayingDeviceIds.delete(deviceId);
+  }
+
+  private clearReplayTracking(): void {
+    for (const timeout of this.replayCtx.replayTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.replayCtx.replayTimeouts.clear();
+    this.replayCtx.replayingDeviceIds.clear();
   }
 
   // --- Internal ---
@@ -185,10 +210,11 @@ export class KrakiWSClient {
   private encryptionCallbacks() {
     return {
       handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        replaying: this.replayCtx.replaying,
+        replaying: this.replayCtx.replayingDeviceIds.size > 0,
+        replayingDeviceIds: this.replayCtx.replayingDeviceIds,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
-        onReplayComplete: () => { this.replayCtx.replaying = false; },
+        onReplayComplete: (deviceId) => { this.finishReplayTracking(deviceId); },
       }),
       getHandlers: () => this.handlers,
     };

@@ -7,6 +7,7 @@ import { Sidebar } from '../components/layout/Sidebar';
 import { SessionList } from '../components/sessions/SessionList';
 import { SessionCard } from '../components/sessions/SessionCard';
 import { DeviceList } from '../components/sessions/DeviceList';
+import { NewSessionDialog } from '../components/sessions/NewSessionDialog';
 import { EmptyState } from '../components/common/EmptyState';
 import { ActionQueue } from '../components/actions/ActionQueue';
 import { StreamingText } from '../components/chat/StreamingText';
@@ -223,6 +224,37 @@ describe('DeviceList', () => {
     // Both devices should be shown
     expect(screen.getByText('Online Mac')).toBeInTheDocument();
     expect(screen.getByText('Offline Server')).toBeInTheDocument();
+  });
+});
+
+describe('NewSessionDialog', () => {
+  it('does not offer offline tentacles even if stale model metadata exists', () => {
+    localStorage.removeItem('kraki:last-device');
+    localStorage.removeItem('kraki:last-model');
+
+    useStore.getState().setDevices([
+      { id: 'd-offline', name: 'Offline Mac', role: 'tentacle', online: false },
+    ]);
+    useStore.getState().setDeviceModels('d-offline', ['gpt-5']);
+
+    renderWithRouter(<NewSessionDialog open onClose={() => {}} />);
+
+    expect(screen.getByText('No devices online')).toBeInTheDocument();
+    expect(screen.queryByText('Offline Mac')).not.toBeInTheDocument();
+  });
+
+  it('offers online tentacles even before device models arrive', () => {
+    localStorage.removeItem('kraki:last-device');
+    localStorage.removeItem('kraki:last-model');
+
+    useStore.getState().setDevices([
+      { id: 'd-online', name: 'Online Mac', role: 'tentacle', online: true },
+    ]);
+
+    renderWithRouter(<NewSessionDialog open onClose={() => {}} />);
+
+    expect(screen.getByText('Online Mac')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('e.g. claude-sonnet-4')).toBeInTheDocument();
   });
 });
 

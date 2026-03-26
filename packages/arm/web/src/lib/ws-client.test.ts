@@ -145,6 +145,35 @@ describe('KrakiWSClient', () => {
       expect(state.deviceId).toBe('dev-web-123');
       expect(state.devices.size).toBe(1);
     });
+
+    it('requests replay only from online tentacles', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+
+      lastWsInstance.sentMessages = [];
+      lastWsInstance._receive({
+        type: 'auth_ok',
+        deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-online', name: 'Online Mac', role: 'tentacle', online: true },
+          { id: 'dev-offline', name: 'Offline Mac', role: 'tentacle', online: false },
+          { id: 'dev-app', name: 'Phone', role: 'app', online: true },
+        ],
+      });
+
+      const sent = lastWsInstance.sentMessages.map((raw: string) => JSON.parse(raw));
+      expect(sent).toEqual([
+        {
+          type: 'request_replay',
+          deviceId: 'dev-web-123',
+          payload: { afterSeq: 0, targetDeviceId: 'dev-online' },
+        },
+      ]);
+    });
   });
 
   describe('message routing', () => {
@@ -221,6 +250,88 @@ describe('KrakiWSClient', () => {
       });
 
       expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
+    });
+
+    it('tracks replay completion per tentacle device', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+
+      lastWsInstance._receive({
+        type: 'auth_ok',
+        deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-1', name: 'MacBook', role: 'tentacle', online: true },
+          { id: 'dev-2', name: 'CI Server', role: 'tentacle', online: true },
+        ],
+      });
+
+      useStore.getState().upsertSession({
+        id: 'sess-1',
+        deviceId: 'dev-1',
+        deviceName: 'MacBook',
+        agent: 'copilot',
+        state: 'active',
+        messageCount: 0,
+      });
+      useStore.getState().upsertSession({
+        id: 'sess-2',
+        deviceId: 'dev-2',
+        deviceName: 'CI Server',
+        agent: 'copilot',
+        state: 'active',
+        messageCount: 0,
+      });
+
+      receiveInner({
+        type: 'agent_message',
+        deviceId: 'dev-1',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess-1',
+        payload: { content: 'Replay from device 1' },
+      });
+      receiveInner({
+        type: 'agent_message',
+        deviceId: 'dev-2',
+        seq: 2,
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess-2',
+        payload: { content: 'Replay from device 2' },
+      });
+
+      expect(useStore.getState().unreadCount.get('sess-1')).toBeUndefined();
+      expect(useStore.getState().unreadCount.get('sess-2')).toBeUndefined();
+
+      receiveInner({
+        type: 'replay_complete',
+        deviceId: 'dev-1',
+        seq: 3,
+        timestamp: new Date().toISOString(),
+        payload: { lastSeq: 2 },
+      });
+
+      receiveInner({
+        type: 'agent_message',
+        deviceId: 'dev-1',
+        seq: 4,
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess-1',
+        payload: { content: 'Live from device 1' },
+      });
+      receiveInner({
+        type: 'agent_message',
+        deviceId: 'dev-2',
+        seq: 5,
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess-2',
+        payload: { content: 'Still replaying from device 2' },
+      });
+
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(useStore.getState().unreadCount.get('sess-2')).toBeUndefined();
     });
 
     it('routes session_created and creates session', async () => {

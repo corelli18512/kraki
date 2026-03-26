@@ -7,15 +7,17 @@ import type { PendingPermission, PendingQuestion } from '../types/store';
 
 export interface RouterContext {
   replaying: boolean;
+  replayingDeviceIds?: ReadonlySet<string>;
   cmdState: CommandState;
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
   sendEncrypted?: (msg: Record<string, unknown>) => void;
   /** Called when tentacle signals replay is complete. */
-  onReplayComplete?: () => void;
+  onReplayComplete?: (deviceId: string) => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
+  const replaying = ctx.replayingDeviceIds?.has(msg.deviceId) ?? ctx.replaying;
 
   // Track highest seq for replay requests after reconnect
   if (typeof msg.seq === 'number' && msg.seq > 0) {
@@ -24,7 +26,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
   // Handle replay_complete — tentacle finished replaying buffered messages
   if (msg.type === 'replay_complete') {
-    ctx.onReplayComplete?.();
+    ctx.onReplayComplete?.(msg.deviceId);
     return;
   }
 
@@ -92,14 +94,14 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'agent_message': {
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
-      if (!ctx.replaying && !isViewingSession(sid)) store.incrementUnread(sid);
+      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
     case 'error':
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
-      if (!ctx.replaying && !isViewingSession(sid)) store.incrementUnread(sid);
+      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
 
     case 'permission': {
@@ -114,7 +116,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
       store.addPermission(perm);
       store.appendMessage(sid, msg);
-      if (!ctx.replaying && !isViewingSession(sid)) store.incrementUnread(sid);
+      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
@@ -128,7 +130,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       };
       store.addQuestion(q);
       store.appendMessage(sid, msg);
-      if (!ctx.replaying && !isViewingSession(sid)) store.incrementUnread(sid);
+      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
