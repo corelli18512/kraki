@@ -136,16 +136,23 @@ export class KrakiWSClient {
     const store = getStore();
     const afterSeq = store.lastSeq ?? 0;
 
+    let sent = false;
     // Send to every tentacle device
     for (const [, device] of store.devices) {
       if (device.role === 'tentacle') {
         this.sendEncrypted({
           type: 'request_replay',
-          sessionId: undefined,
-          payload: { afterSeq },
+          deviceId: store.deviceId ?? '',
+          payload: { afterSeq, targetDeviceId: device.id },
         });
-        this.replayCtx.replaying = true;
+        sent = true;
       }
+    }
+
+    if (sent) {
+      this.replayCtx.replaying = true;
+      // Safety timeout: if replay_complete never arrives, stop waiting after 10s
+      setTimeout(() => { this.replayCtx.replaying = false; }, 10_000);
     }
   }
 

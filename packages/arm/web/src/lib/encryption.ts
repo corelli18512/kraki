@@ -65,6 +65,9 @@ export class EncryptionHandler {
     if (msg.type === 'create_session') {
       const payload = msg.payload as Record<string, unknown> | undefined;
       targetDeviceId = payload?.targetDeviceId as string | undefined;
+    } else if (msg.type === 'request_replay') {
+      const payload = msg.payload as Record<string, unknown> | undefined;
+      targetDeviceId = payload?.targetDeviceId as string | undefined;
     } else if (sessionId) {
       const session = store.sessions.get(sessionId);
       targetDeviceId = session?.deviceId;
