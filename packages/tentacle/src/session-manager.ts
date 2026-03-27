@@ -6,10 +6,20 @@
  * This is the tentacle's local intelligence layer.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
+
+// ── Types ───────────────────────────────────────────────
+
+/** A single logged message in a session's message log. */
+export interface LoggedMessage {
+  seq: number;
+  type: string;
+  payload: string;
+  ts: string;
+}
 
 // ── Types ───────────────────────────────────────────────
 
@@ -26,9 +36,11 @@ export interface SessionMeta {
   agent: string;
   model?: string;
   title?: string;
-  state: 'active' | 'idle' | 'disconnected' | 'ended';
+  state: 'active' | 'idle' | 'disconnected';
   currentRunId: string;
   totalRuns: number;
+  lastSeq: number;
+  readSeq: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -48,6 +60,64 @@ export class SessionManager {
   constructor(sessionsDir?: string) {
     this.sessionsDir = sessionsDir ?? join(getConfigDir(), 'sessions');
     mkdirSync(this.sessionsDir, { recursive: true });
+    this.migrateGlobalLog();
+  }
+
+  /**
+   * Migrate from global message-log.jsonl to per-session message logs.
+   * Runs once on startup — if the old file exists, splits it by sessionId.
+   */
+  private migrateGlobalLog(): void {
+    const configDir = this.sessionsDir.replace(/\/sessions$/, '');
+    const oldLogPath = join(configDir, 'message-log.jsonl');
+    if (!existsSync(oldLogPath)) return;
+
+    let content: string;
+    try {
+      content = readFileSync(oldLogPath, 'utf8');
+    } catch {
+      return;
+    }
+
+    const bySession = new Map<string, Array<{ seq: number; type: string; payload: string; ts: string }>>();
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        const sid = msg.sessionId;
+        if (!sid) continue;
+        if (!bySession.has(sid)) bySession.set(sid, []);
+        bySession.get(sid)!.push({ seq: msg.seq, type: msg.type, payload: msg.payload, ts: msg.ts });
+      } catch { /* skip */ }
+    }
+
+    for (const [sid, messages] of bySession) {
+      const sessionDir = this.sessionDir(sid);
+      const logPath = join(sessionDir, 'messages.jsonl');
+      if (existsSync(logPath)) continue; // already migrated or has its own log
+
+      if (!existsSync(sessionDir)) {
+        mkdirSync(join(sessionDir, 'runs'), { recursive: true });
+      }
+
+      const logContent = messages.map(m => JSON.stringify(m)).join('\n') + '\n';
+      writeFileSync(logPath, logContent, 'utf8');
+
+      // Update lastSeq in meta if it exists
+      const meta = this.readMeta(sid);
+      if (meta) {
+        const maxSeq = messages.reduce((max, m) => Math.max(max, m.seq), 0);
+        if (maxSeq > (meta.lastSeq ?? 0)) {
+          meta.lastSeq = maxSeq;
+          this.writeMeta(sid, meta);
+        }
+      }
+    }
+
+    // Remove old global log
+    try {
+      rmSync(oldLogPath);
+    } catch { /* ignore */ }
   }
 
   /**
@@ -66,6 +136,8 @@ export class SessionManager {
       state: 'active',
       currentRunId: runId,
       totalRuns: 1,
+      lastSeq: 0,
+      readSeq: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -137,7 +209,7 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return;
 
-    meta.state = 'ended';
+    meta.state = 'idle';
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
 
@@ -233,6 +305,119 @@ export class SessionManager {
    */
   getMeta(sessionId: string): SessionMeta | null {
     return this.readMeta(sessionId);
+  }
+
+  // ── Message log ────────────────────────────────────────
+
+  /**
+   * Append a message to a session's log. Assigns the next per-session seq.
+   * Returns the assigned seq number.
+   */
+  appendMessage(sessionId: string, type: string, payload: string): number {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return 0;
+
+    const seq = (meta.lastSeq ?? 0) + 1;
+    const entry: LoggedMessage = { seq, type, payload, ts: new Date().toISOString() };
+    const line = JSON.stringify(entry) + '\n';
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    appendFileSync(logPath, line, 'utf8');
+
+    meta.lastSeq = seq;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+
+    return seq;
+  }
+
+  /**
+   * Get messages for a session with seq > afterSeq.
+   */
+  getMessagesAfterSeq(sessionId: string, afterSeq: number): LoggedMessage[] {
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    if (!existsSync(logPath)) return [];
+
+    let content: string;
+    try {
+      content = readFileSync(logPath, 'utf8');
+    } catch {
+      return [];
+    }
+
+    const messages: LoggedMessage[] = [];
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line) as LoggedMessage;
+        if (msg.seq > afterSeq) {
+          messages.push(msg);
+        }
+      } catch {
+        // Skip corrupted lines
+      }
+    }
+    return messages;
+  }
+
+  /**
+   * Update read state for a session (cross-device).
+   */
+  markRead(sessionId: string, seq: number): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    if (seq > (meta.readSeq ?? 0)) {
+      meta.readSeq = seq;
+      meta.updatedAt = new Date().toISOString();
+      this.writeMeta(sessionId, meta);
+    }
+  }
+
+  /**
+   * Get digests for all existing sessions (for session_list sync).
+   */
+  getSessionList(): Array<{
+    id: string;
+    agent: string;
+    model?: string;
+    title?: string;
+    state: 'active' | 'idle';
+    lastSeq: number;
+    readSeq: number;
+    messageCount: number;
+    createdAt: string;
+  }> {
+    const result: ReturnType<SessionManager['getSessionList']> = [];
+    if (!existsSync(this.sessionsDir)) return result;
+
+    for (const dir of readdirSync(this.sessionsDir)) {
+      const meta = this.readMeta(dir);
+      if (!meta) continue;
+
+      const logPath = join(this.sessionDir(dir), 'messages.jsonl');
+      let messageCount = 0;
+      if (existsSync(logPath)) {
+        try {
+          const content = readFileSync(logPath, 'utf8');
+          messageCount = content.split('\n').filter(l => l.length > 0).length;
+        } catch { /* ignore */ }
+      }
+
+      // Map 'disconnected' to 'idle' for external consumers
+      const state: 'active' | 'idle' = meta.state === 'active' ? 'active' : 'idle';
+
+      result.push({
+        id: meta.id,
+        agent: meta.agent,
+        model: meta.model,
+        title: meta.title,
+        state,
+        lastSeq: meta.lastSeq ?? 0,
+        readSeq: meta.readSeq ?? 0,
+        messageCount,
+        createdAt: meta.createdAt,
+      });
+    }
+    return result;
   }
 
   // ── File I/O ──────────────────────────────────────────

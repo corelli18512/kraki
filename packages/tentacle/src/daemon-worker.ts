@@ -11,14 +11,12 @@
  */
 
 import { execSync } from 'node:child_process';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getConfigDir } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
-import { MessageStore } from './message-store.js';
 import { createLogger } from './logger.js';
-import { join } from 'node:path';
 import type { AgentAdapter } from './adapters/base.js';
 
 const logger = createLogger('daemon');
@@ -84,7 +82,6 @@ export async function startWorker(): Promise<WorkerResult> {
   const adapter = new CopilotAdapter();
   const sessionManager = new SessionManager();
   const keyManager = new KeyManager();
-  const messageStore = new MessageStore(join(getConfigDir(), 'message-log.jsonl'));
   const deviceId = getOrCreateDeviceId();
 
   // 4. Start Copilot adapter
@@ -121,7 +118,6 @@ export async function startWorker(): Promise<WorkerResult> {
       reconnectDelay: 3000,
     },
     keyManager,
-    messageStore,
   );
 
   relay.onStateChange = (state) => {

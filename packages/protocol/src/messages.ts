@@ -174,12 +174,22 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   };
 }
 
-/** Sent by tentacle to a device after replaying all buffered messages. */
-export interface ReplayCompleteMessage extends BaseEnvelope {
-  type: 'replay_complete';
+/** Sent by tentacle to a device after replaying all buffered messages for a session. */
+export interface SessionReplayCompleteMessage extends BaseEnvelope {
+  type: 'session_replay_complete';
   payload: {
-    /** The highest seq in the replay window (or current tentacle seq if nothing to replay). */
+    /** The session that was replayed. */
+    sessionId: string;
+    /** The highest seq in this session's replay. */
     lastSeq: number;
+  };
+}
+
+/** Sent by tentacle to app with metadata for all active sessions. */
+export interface SessionListMessage extends BaseEnvelope {
+  type: 'session_list';
+  payload: {
+    sessions: import('./sessions.js').SessionDigest[];
   };
 }
 
@@ -198,7 +208,8 @@ export type ProducerMessage =
   | ErrorMessage
   | SessionModeSetMessage
   | DeviceGreetingMessage
-  | ReplayCompleteMessage;
+  | SessionReplayCompleteMessage
+  | SessionListMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -289,10 +300,12 @@ export interface MarkReadMessage extends BaseEnvelope {
   };
 }
 
-/** Sent by app to tentacle after reconnect to request buffered messages. */
-export interface RequestReplayMessage extends BaseEnvelope {
-  type: 'request_replay';
+/** Sent by app to tentacle to request replay for a specific session. */
+export interface RequestSessionReplayMessage extends BaseEnvelope {
+  type: 'request_session_replay';
   payload: {
+    /** Session to replay. */
+    sessionId: string;
     /** Replay messages with seq strictly greater than this value. Use 0 for full replay. */
     afterSeq: number;
   };
@@ -310,7 +323,7 @@ export type ConsumerMessage =
   | SetSessionModeMessage
   | DeleteSessionMessage
   | MarkReadMessage
-  | RequestReplayMessage;
+  | RequestSessionReplayMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
@@ -478,6 +491,6 @@ export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
 import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
-import type { SessionSummary } from './sessions.js';
+import type { SessionSummary, SessionDigest } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, ToolArgs };

@@ -61,7 +61,6 @@ const initialState = {
   githubClientId: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
-  lastSeq: 0,
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -283,12 +282,6 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModels: next };
     }),
 
-  trackSeq: (seq) =>
-    set((state) => {
-      if (seq > state.lastSeq) return { lastSeq: seq };
-      return state;
-    }),
-
   clearTransientState: () => set((state) => {
     // Remove pending_input messages from all sessions (fix #12)
     const cleanedMessages = new Map(state.messages);
@@ -328,7 +321,6 @@ export const useStore = create<Store>()(persist((set) => ({
     deviceModels: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
-    lastSeq: 0,
   }),
 }), {
   name: 'kraki-store',
@@ -344,6 +336,5 @@ export const useStore = create<Store>()(persist((set) => ({
     pinnedSessions: state.pinnedSessions,
     sessionModes: state.sessionModes,
     drafts: state.drafts,
-    lastSeq: state.lastSeq,
   }),
 }));

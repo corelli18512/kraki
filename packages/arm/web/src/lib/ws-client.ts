@@ -17,11 +17,8 @@ export class KrakiWSClient {
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
-  /** Track replay state per tentacle so one device finishing doesn't affect another. */
-  private replayCtx = {
-    replayingDeviceIds: new Set<string>(),
-    replayTimeouts: new Map<string, ReturnType<typeof setTimeout>>(),
-  };
+  /** Sessions currently being replayed — suppresses unread increments. */
+  private replayingSessions = new Set<string>();
 
   get url(): string { return this.transport.url; }
 
@@ -133,52 +130,77 @@ export class KrakiWSClient {
   }
 
   /**
-   * Send request_replay to online tentacle devices.
-   * Called after auth_ok to get messages missed during disconnect.
+   * Handle session_list from tentacle: diff with local store, request per-session replays.
    */
-  private requestReplay(): void {
+  private handleSessionList(msg: any): void {
     const store = getStore();
-    const afterSeq = store.lastSeq ?? 0;
+    const tentacleSessions: Array<{
+      id: string; agent: string; model?: string; title?: string;
+      state: string; lastSeq: number; readSeq: number; messageCount: number; createdAt: string;
+    }> = msg.payload?.sessions ?? [];
 
-    this.clearReplayTracking();
+    const tentacleDeviceId = msg.deviceId;
+    const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
-    // Send to every online tentacle device from the relay's auth snapshot
-    for (const [, device] of store.devices) {
-      if (device.role === 'tentacle' && device.online) {
-        this.sendEncrypted({
-          type: 'request_replay',
-          deviceId: store.deviceId ?? '',
-          payload: { afterSeq, targetDeviceId: device.id },
-        });
-        this.trackReplayRequest(device.id);
+    // Remove local sessions from this tentacle that are no longer in the list
+    for (const [sid, session] of store.sessions) {
+      if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
+        store.removeSession(sid);
+      }
+    }
+
+    // Add/update sessions and request replays for stale ones
+    for (const ts of tentacleSessions) {
+      const device = store.devices.get(tentacleDeviceId);
+      store.upsertSession({
+        id: ts.id,
+        deviceId: tentacleDeviceId,
+        deviceName: device?.name ?? tentacleDeviceId,
+        agent: ts.agent,
+        model: ts.model,
+        state: ts.state as 'active' | 'idle',
+        messageCount: ts.messageCount,
+      });
+
+      // Determine local message count for this session
+      const localMessages = store.messages.get(ts.id);
+      const localCount = localMessages?.length ?? 0;
+
+      // Request replay if we have fewer messages than the tentacle
+      if (localCount < ts.messageCount) {
+        // Find the highest seq we have locally
+        let localLastSeq = 0;
+        if (localMessages) {
+          for (const m of localMessages) {
+            const seq = (m as any).seq;
+            if (typeof seq === 'number' && seq > localLastSeq) localLastSeq = seq;
+          }
+        }
+        this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
       }
     }
   }
 
-  private trackReplayRequest(deviceId: string): void {
-    this.finishReplayTracking(deviceId);
-    this.replayCtx.replayingDeviceIds.add(deviceId);
-    this.replayCtx.replayTimeouts.set(
-      deviceId,
-      setTimeout(() => this.finishReplayTracking(deviceId), 10_000),
-    );
-  }
-
-  private finishReplayTracking(deviceId: string): void {
-    const timeout = this.replayCtx.replayTimeouts.get(deviceId);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.replayCtx.replayTimeouts.delete(deviceId);
-    }
-    this.replayCtx.replayingDeviceIds.delete(deviceId);
-  }
-
+  /** Clear all in-progress replay tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
-    for (const timeout of this.replayCtx.replayTimeouts.values()) {
-      clearTimeout(timeout);
-    }
-    this.replayCtx.replayTimeouts.clear();
-    this.replayCtx.replayingDeviceIds.clear();
+    this.replayingSessions.clear();
+  }
+
+  /**
+   * Request replay for a specific session from a tentacle.
+   */
+  private requestSessionReplay(tentacleDeviceId: string, sessionId: string, afterSeq: number): void {
+    const store = getStore();
+    this.replayingSessions.add(sessionId);
+
+    this.sendEncrypted({
+      type: 'request_session_replay',
+      deviceId: store.deviceId ?? '',
+      payload: { sessionId, afterSeq, targetDeviceId: tentacleDeviceId },
+    });
+
+    // Safety timeout
+    setTimeout(() => { this.replayingSessions.delete(sessionId); }, 10_000);
   }
 
   // --- Internal ---
@@ -210,11 +232,11 @@ export class KrakiWSClient {
   private encryptionCallbacks() {
     return {
       handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        replaying: this.replayCtx.replayingDeviceIds.size > 0,
-        replayingDeviceIds: this.replayCtx.replayingDeviceIds,
+        replayingSessions: this.replayingSessions,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
-        onReplayComplete: (deviceId) => { this.finishReplayTracking(deviceId); },
+        onSessionList: (m) => this.handleSessionList(m),
+        onSessionReplayComplete: (sessionId) => { this.replayingSessions.delete(sessionId); },
       }),
       getHandlers: () => this.handlers,
     };
@@ -236,7 +258,6 @@ export class KrakiWSClient {
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
-          sendReplayRequest: () => this.requestReplay(),
         });
         break;
 

@@ -129,11 +129,9 @@ test.describe('Replay and chat history', () => {
     // Wait for replay to complete and state to persist
     await page.waitForTimeout(500);
 
-    // Verify lastSeq was persisted to localStorage
+    // Verify messages were persisted to localStorage
     const storedData = await page.evaluate(() => localStorage.getItem('kraki-store'));
     expect(storedData).toBeTruthy();
-    const parsed = JSON.parse(storedData!);
-    expect(parsed.state.lastSeq).toBeGreaterThan(0);
 
     // Refresh — history should appear from cache before server responds
     await page.goto(`/session/${SESSION_ID}?relay=${encodeURIComponent(server.url)}`);
@@ -141,7 +139,7 @@ test.describe('Replay and chat history', () => {
     await expect(chat.getByText('Persistent message 2')).toBeVisible({ timeout: 3000 });
   });
 
-  test('persists lastSeq and restores cached messages after refresh', async ({ page }) => {
+  test('restores cached messages after refresh', async ({ page }) => {
     await gotoWithRelay(page, server, { path: `/session/${SESSION_ID}` });
     const ws = await authenticateClient(server);
 
@@ -151,11 +149,6 @@ test.describe('Replay and chat history', () => {
     await expect(chat.getByText('Old message')).toBeVisible({ timeout: 5000 });
     await page.waitForTimeout(500);
 
-    // Verify lastSeq was persisted
-    const storedData = await page.evaluate(() => localStorage.getItem('kraki-store'));
-    const lastSeq = JSON.parse(storedData!).state.lastSeq;
-    expect(lastSeq).toBeGreaterThan(0);
-
     // Refresh the page — client will reconnect
     await page.goto(`/session/${SESSION_ID}?relay=${encodeURIComponent(server.url)}`);
 
@@ -164,7 +157,6 @@ test.describe('Replay and chat history', () => {
     server.sendAuthOk(ws2, { sessions: [TEST_SESSION], devices: [TEST_DEVICE] });
 
     // Send only the new message
-    server.resetSeq(lastSeq + 1);
     sendAgentMessages(server, ws2, [{ content: 'New message after refresh' }]);
 
     // Both old (from cache) and new messages should be visible

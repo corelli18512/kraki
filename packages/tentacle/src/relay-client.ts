@@ -17,7 +17,6 @@ import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
-import type { MessageStore } from './message-store.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('relay-client');
@@ -44,7 +43,6 @@ export class RelayClient {
   private adapter: AgentAdapter;
   private sessionManager: SessionManager;
   private keyManager: KeyManager | null;
-  private messageStore: MessageStore | null;
   private options: RelayClientOptions;
   private state: RelayClientState = 'disconnected';
   private reconnectAttempts = 0;
@@ -56,7 +54,7 @@ export class RelayClient {
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
-  /** Monotonic seq counter — per tentacle, shared across all sessions. */
+  /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
   /** Tool kinds auto-approved via always_allow from apps */
   private allowedTools = new Set<string>();
@@ -83,17 +81,11 @@ export class RelayClient {
     sessionManager: SessionManager,
     options: RelayClientOptions,
     keyManager?: KeyManager | null,
-    messageStore?: MessageStore | null,
   ) {
     this.adapter = adapter;
     this.sessionManager = sessionManager;
     this.options = options;
     this.keyManager = keyManager ?? null;
-    this.messageStore = messageStore ?? null;
-    // Restore seq counter from persisted buffer so seq stays monotonic across restarts
-    if (this.messageStore) {
-      this.seqCounter = this.messageStore.getLastSeq();
-    }
     this.wireAdapterEvents();
   }
 
@@ -191,6 +183,7 @@ export class RelayClient {
       this.onAuthenticated?.(this.authInfo);
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
+      this.broadcastSessionList();
       return;
     }
 
@@ -245,6 +238,8 @@ export class RelayClient {
           this.flushE2eQueue();
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
+          // Send session list so the app can sync
+          this.sendSessionListTo(device.id, key);
         }
       }
       return;
@@ -328,8 +323,9 @@ export class RelayClient {
     }
 
     // request_replay — replay buffered messages to the requesting device
-    if (msg.type === 'request_replay') {
-      this.handleReplayRequest(msg.deviceId, msg.payload.afterSeq);
+    // request_session_replay — replay buffered messages for a specific session
+    if (msg.type === 'request_session_replay') {
+      this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq);
       return;
     }
 
@@ -380,15 +376,16 @@ export class RelayClient {
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           this.sessionManager.deleteSession(sessionId);
-          this.messageStore?.deleteSession(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
+          break;
+        case 'mark_read':
+          this.sessionManager.markRead(sessionId, msg.payload.seq);
           break;
         default: {
           // Handle extended message types (e.g. set_session_mode)
           const ext = msg as any;
           if (ext.type === 'set_session_mode') {
             this.adapter.setSessionMode(sessionId, ext.payload.mode);
-            // Echo confirmation back so head stores it for replay
             this.send({
               type: 'session_mode_set',
               sessionId,
@@ -588,58 +585,69 @@ export class RelayClient {
     }
   }
 
-  // ── Replay ─────────────────────────────────────────
+  // ── Session sync & replay ───────────────────────────
 
   /**
-   * Handle a request_replay from a reconnecting app.
-   * Replays buffered messages with seq > afterSeq as encrypted unicasts.
+   * Send the session_list to a specific device (used on device_joined).
    */
-  private handleReplayRequest(requesterDeviceId: string, afterSeq: number): void {
-    if (!this.messageStore) {
-      logger.warn('Replay requested but no message store configured');
-      this.sendReplayComplete(requesterDeviceId, this.seqCounter);
-      return;
-    }
-
-    const requesterKey = this.consumerKeys.get(requesterDeviceId);
-    if (!requesterKey) {
-      logger.warn({ requesterDeviceId }, 'Replay requested but no encryption key for requester');
-      return;
-    }
-
-    const messages = this.messageStore.getAfterSeq(afterSeq);
-    logger.info({ requesterDeviceId, afterSeq, count: messages.length }, 'Replaying buffered messages');
-
-    for (const buffered of messages) {
-      try {
-        const parsed = JSON.parse(buffered.payload);
-        this.sendUnicastTo(requesterDeviceId, requesterKey, parsed);
-      } catch {
-        logger.warn({ seq: buffered.seq }, 'Failed to replay buffered message');
-      }
-    }
-
-    const lastSeq = messages.length > 0
-      ? messages[messages.length - 1].seq
-      : this.seqCounter;
-    this.sendReplayComplete(requesterDeviceId, lastSeq);
-  }
-
-  /**
-   * Send replay_complete to a specific device.
-   */
-  private sendReplayComplete(targetDeviceId: string, lastSeq: number): void {
-    const targetKey = this.consumerKeys.get(targetDeviceId);
-    if (!targetKey) return;
-
+  private sendSessionListTo(targetDeviceId: string, compactPubKey: string): void {
+    const sessions = this.sessionManager.getSessionList();
     const msg = {
-      type: 'replay_complete',
+      type: 'session_list',
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { lastSeq },
+      payload: { sessions },
     };
-    this.sendUnicastTo(targetDeviceId, targetKey, msg);
+    this.sendUnicastTo(targetDeviceId, compactPubKey, msg);
+  }
+
+  /**
+   * Broadcast session_list to all connected apps (used on auth_ok).
+   */
+  private broadcastSessionList(): void {
+    const sessions = this.sessionManager.getSessionList();
+    this.sendEncrypted({
+      type: 'session_list' as any,
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { sessions },
+    } as any);
+  }
+
+  /**
+   * Handle a per-session replay request from a reconnecting app.
+   */
+  private handleSessionReplay(requesterDeviceId: string, sessionId: string, afterSeq: number): void {
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Session replay requested but no encryption key for requester');
+      return;
+    }
+
+    const messages = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq);
+    logger.info({ requesterDeviceId, sessionId, afterSeq, count: messages.length }, 'Replaying session messages');
+
+    for (const logged of messages) {
+      try {
+        const parsed = JSON.parse(logged.payload);
+        this.sendUnicastTo(requesterDeviceId, requesterKey, parsed);
+      } catch {
+        logger.warn({ seq: logged.seq, sessionId }, 'Failed to replay session message');
+      }
+    }
+
+    const meta = this.sessionManager.getMeta(sessionId);
+    const lastSeq = meta?.lastSeq ?? (messages.length > 0 ? messages[messages.length - 1].seq : 0);
+    const completeMsg = {
+      type: 'session_replay_complete',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { sessionId, lastSeq },
+    };
+    this.sendUnicastTo(requesterDeviceId, requesterKey, completeMsg);
   }
 
   // ── Send to relay ───────────────────────────────────
@@ -661,19 +669,12 @@ export class RelayClient {
       enriched.deviceId = this.authInfo.deviceId;
     }
 
-    // Buffer message for replay (before encryption, as plaintext JSON).
+    // Log message to per-session store for replay.
     // Skip transient types that are redundant for state reconstruction.
-    if (this.messageStore) {
-      const type = enriched.type as string;
-      if (type !== 'agent_message_delta' && type !== 'idle') {
-        const sessionId = enriched.sessionId as string | undefined;
-        this.messageStore.append(
-          enriched.seq as number,
-          sessionId,
-          type,
-          JSON.stringify(enriched),
-        );
-      }
+    const type = enriched.type as string;
+    const sessionId = enriched.sessionId as string | undefined;
+    if (sessionId && type !== 'agent_message_delta' && type !== 'idle') {
+      enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
     }
 
     if (this.keyManager) {

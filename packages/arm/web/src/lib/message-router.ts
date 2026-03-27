@@ -6,27 +6,31 @@ import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import type { PendingPermission, PendingQuestion } from '../types/store';
 
 export interface RouterContext {
-  replaying: boolean;
-  replayingDeviceIds?: ReadonlySet<string>;
+  replayingSessions: Set<string>;
   cmdState: CommandState;
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
   sendEncrypted?: (msg: Record<string, unknown>) => void;
-  /** Called when tentacle signals replay is complete. */
-  onReplayComplete?: (deviceId: string) => void;
+  /** Called when tentacle sends session_list for sync. */
+  onSessionList?: (msg: any) => void;
+  /** Called when tentacle signals per-session replay is complete. */
+  onSessionReplayComplete?: (sessionId: string) => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
-  const replaying = ctx.replayingDeviceIds?.has(msg.deviceId) ?? ctx.replaying;
 
-  // Track highest seq for replay requests after reconnect
-  if (typeof msg.seq === 'number' && msg.seq > 0) {
-    store.trackSeq(msg.seq);
+  // Handle session_list — tentacle's authoritative session metadata
+  if (msg.type === 'session_list') {
+    ctx.onSessionList?.(msg);
+    return;
   }
 
-  // Handle replay_complete — tentacle finished replaying buffered messages
-  if (msg.type === 'replay_complete') {
-    ctx.onReplayComplete?.(msg.deviceId);
+  // Handle session_replay_complete — tentacle finished replaying a specific session
+  if (msg.type === 'session_replay_complete') {
+    const payload = (msg as any).payload;
+    if (payload?.sessionId) {
+      ctx.onSessionReplayComplete?.(payload.sessionId);
+    }
     return;
   }
 
@@ -42,6 +46,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
+  const replaying = ctx.replayingSessions.has(sid);
 
   // If we receive a message for a session we don't know about (e.g. missed
   // session_created due to seq mismatch or environment switch), create a

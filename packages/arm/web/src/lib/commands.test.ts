@@ -127,7 +127,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
     useStore.getState().setSessionMode('sess-1', 'auto');
 
     handleDataMessage(makePermissionMsg('perm-1', 'sess-1'), {
-      replaying: false,
+      replayingSessions: new Set(),
       cmdState,
       sendEncrypted,
     });
@@ -141,7 +141,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
     const sendEncrypted = vi.fn();
 
     handleDataMessage(makePermissionMsg('perm-2', 'sess-1'), {
-      replaying: false,
+      replayingSessions: new Set(),
       cmdState,
       sendEncrypted,
     });
@@ -155,7 +155,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
     useStore.getState().setSessionMode('sess-1', 'auto');
 
     handleDataMessage(makePermissionMsg('perm-3', 'sess-1'), {
-      replaying: true,
+      replayingSessions: new Set(["test-session"]),
       cmdState,
       sendEncrypted,
     });
@@ -180,7 +180,7 @@ describe('handleDataMessage session_mode_set', () => {
 
   it('restores auto mode from replayed message', () => {
     handleDataMessage(makeModeSetMsg('sess-1', 'auto') as any, {
-      replaying: true,
+      replayingSessions: new Set(["test-session"]),
       cmdState,
     });
     expect(useStore.getState().sessionModes.get('sess-1')).toBe('auto');
@@ -189,7 +189,7 @@ describe('handleDataMessage session_mode_set', () => {
   it('restores ask mode (clears entry)', () => {
     useStore.getState().setSessionMode('sess-1', 'auto');
     handleDataMessage(makeModeSetMsg('sess-1', 'ask') as any, {
-      replaying: true,
+      replayingSessions: new Set(["test-session"]),
       cmdState,
     });
     expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
@@ -197,7 +197,7 @@ describe('handleDataMessage session_mode_set', () => {
 
   it('works for live (non-replay) messages', () => {
     handleDataMessage(makeModeSetMsg('sess-2', 'auto') as any, {
-      replaying: false,
+      replayingSessions: new Set(),
       cmdState,
     });
     expect(useStore.getState().sessionModes.get('sess-2')).toBe('auto');

@@ -111,7 +111,7 @@ describe('SessionManager', () => {
       sm.endSession(sessionId, 'completed');
 
       const meta = sm.getMeta(sessionId)!;
-      expect(meta.state).toBe('ended');
+      expect(meta.state).toBe('idle');
     });
 
     it('should record end reason on current run', () => {

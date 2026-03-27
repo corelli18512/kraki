@@ -146,7 +146,7 @@ describe('KrakiWSClient', () => {
       expect(state.devices.size).toBe(1);
     });
 
-    it('requests replay only from online tentacles', async () => {
+    it('does not send replay requests on auth_ok (session sync is triggered by session_list)', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
 
@@ -165,14 +165,12 @@ describe('KrakiWSClient', () => {
         ],
       });
 
+      // No request_replay or request_session_replay should be sent on auth_ok
       const sent = lastWsInstance.sentMessages.map((raw: string) => JSON.parse(raw));
-      expect(sent).toEqual([
-        {
-          type: 'request_replay',
-          deviceId: 'dev-web-123',
-          payload: { afterSeq: 0, targetDeviceId: 'dev-online' },
-        },
-      ]);
+      const replayMsgs = sent.filter((m: any) =>
+        m.type === 'request_replay' || m.type === 'request_session_replay',
+      );
+      expect(replayMsgs).toEqual([]);
     });
   });
 
@@ -252,7 +250,7 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
     });
 
-    it('tracks replay completion per tentacle device', async () => {
+    it('tracks per-session replay completion via session_replay_complete', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
       await vi.waitFor(() => {
@@ -264,7 +262,6 @@ describe('KrakiWSClient', () => {
         deviceId: 'dev-web-123',
         devices: [
           { id: 'dev-1', name: 'MacBook', role: 'tentacle', online: true },
-          { id: 'dev-2', name: 'CI Server', role: 'tentacle', online: true },
         ],
       });
 
@@ -278,56 +275,74 @@ describe('KrakiWSClient', () => {
       });
       useStore.getState().upsertSession({
         id: 'sess-2',
-        deviceId: 'dev-2',
-        deviceName: 'CI Server',
+        deviceId: 'dev-1',
+        deviceName: 'MacBook',
         agent: 'copilot',
         state: 'active',
         messageCount: 0,
       });
 
+      // Trigger session_list which will request replays for sessions with fewer messages
+      receiveInner({
+        type: 'session_list',
+        deviceId: 'dev-1',
+        seq: 0,
+        timestamp: new Date().toISOString(),
+        payload: {
+          sessions: [
+            { id: 'sess-1', agent: 'copilot', state: 'active', lastSeq: 5, readSeq: 0, messageCount: 3, createdAt: new Date().toISOString() },
+            { id: 'sess-2', agent: 'copilot', state: 'active', lastSeq: 5, readSeq: 0, messageCount: 3, createdAt: new Date().toISOString() },
+          ],
+        },
+      });
+
+      // Messages during replay should not increment unread
       receiveInner({
         type: 'agent_message',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
-        payload: { content: 'Replay from device 1' },
+        payload: { content: 'Replay from session 1' },
       });
       receiveInner({
         type: 'agent_message',
-        deviceId: 'dev-2',
+        deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-2',
-        payload: { content: 'Replay from device 2' },
+        payload: { content: 'Replay from session 2' },
       });
 
       expect(useStore.getState().unreadCount.get('sess-1')).toBeUndefined();
       expect(useStore.getState().unreadCount.get('sess-2')).toBeUndefined();
 
+      // Complete replay for sess-1 only
       receiveInner({
-        type: 'replay_complete',
+        type: 'session_replay_complete',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
-        payload: { lastSeq: 2 },
+        payload: { sessionId: 'sess-1' },
       });
 
+      // New message to sess-1 after replay complete should increment unread
       receiveInner({
         type: 'agent_message',
         deviceId: 'dev-1',
         seq: 4,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
-        payload: { content: 'Live from device 1' },
+        payload: { content: 'Live from session 1' },
       });
+      // sess-2 still replaying — should not increment
       receiveInner({
         type: 'agent_message',
-        deviceId: 'dev-2',
+        deviceId: 'dev-1',
         seq: 5,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-2',
-        payload: { content: 'Still replaying from device 2' },
+        payload: { content: 'Still replaying session 2' },
       });
 
       expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
