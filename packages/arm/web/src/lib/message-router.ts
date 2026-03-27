@@ -43,6 +43,21 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
 
+  // If we receive a message for a session we don't know about (e.g. missed
+  // session_created due to seq mismatch or environment switch), create a
+  // placeholder so the UI can render it.
+  if (!store.sessions.has(sid) && msg.type !== 'session_created') {
+    const device = store.devices.get(msg.deviceId);
+    store.upsertSession({
+      id: sid,
+      deviceId: msg.deviceId,
+      deviceName: device?.name ?? msg.deviceId,
+      agent: 'unknown',
+      state: 'active',
+      messageCount: 0,
+    });
+  }
+
   switch (msg.type) {
     case 'session_created': {
       const device = store.devices.get(msg.deviceId);
