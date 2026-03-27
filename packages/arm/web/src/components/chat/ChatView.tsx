@@ -3,9 +3,11 @@ import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
 import { StreamingText } from './StreamingText';
+import { ThinkingBox } from './ThinkingBox';
 import { MessageInput } from './MessageInput';
 import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
+import { useTurns } from '../../hooks/useTurns';
 
 const EMPTY_MESSAGES: import('../../types/store').ChatMessage[] = [];
 
@@ -40,8 +42,9 @@ export function ChatView() {
     [questionsMap, sessionId],
   );
 
-  // Filter out pending permission/question bubbles from chat — the blocking card handles them
-  const visibleMessages = useMemo(
+  // Filter out pending permission/question bubbles — the blocking card handles them
+  // Also filter out approve/deny/always_allow (they return null anyway)
+  const filteredMessages = useMemo(
     () => messages.filter((msg) => {
       if (msg.type === 'permission' && pendingPermIds.has(msg.payload.id)) return false;
       if (msg.type === 'question' && pendingQuestionIds.has(msg.payload.id)) return false;
@@ -49,6 +52,8 @@ export function ChatView() {
     }),
     [messages, pendingPermIds, pendingQuestionIds],
   );
+
+  const grouped = useTurns(filteredMessages);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -135,9 +140,37 @@ export function ChatView() {
           className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
         >
           <div className="mx-auto max-w-3xl space-y-3">
-            {visibleMessages.map((msg, idx) => (
-              <MessageBubble key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `local-${idx}`} message={msg} agent={session.agent} />
-            ))}
+            {grouped.map((item, idx) => {
+              if (item.type === 'standalone') {
+                const msg = item.message;
+                return (
+                  <MessageBubble
+                    key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `local-${idx}`}
+                    message={msg}
+                    agent={session.agent}
+                  />
+                );
+              }
+
+              const { turn } = item;
+              const isActiveTurn = !turn.finalMessage && !streaming;
+              const isStreamingTurn = !turn.finalMessage && !!streaming;
+
+              return (
+                <div key={`turn-${idx}`}>
+                  {turn.thinkingMessages.length > 0 && (
+                    <ThinkingBox
+                      messages={turn.thinkingMessages}
+                      isActive={isActiveTurn || isStreamingTurn}
+                      agent={session.agent}
+                    />
+                  )}
+                  {turn.finalMessage && (
+                    <MessageBubble message={turn.finalMessage} agent={session.agent} />
+                  )}
+                </div>
+              );
+            })}
 
             {streaming && <StreamingText content={streaming} agent={session.agent} />}
           </div>
