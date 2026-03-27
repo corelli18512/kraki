@@ -163,7 +163,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_mode_set': {
       const mode = (msg as any).payload?.mode;
-      if (mode === 'ask' || mode === 'auto') {
+      if (mode === 'safe' || mode === 'plan' || mode === 'execute' || mode === 'delegate') {
         store.setSessionMode(sid, mode);
       }
       break;

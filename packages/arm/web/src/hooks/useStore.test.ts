@@ -294,7 +294,7 @@ describe('useStore', () => {
       useStore.getState().appendDelta('sess-1', 'content');
       useStore.getState().addPermission(mockPermission);
       useStore.getState().addQuestion(mockQuestion);
-      useStore.getState().setSessionMode('sess-1', 'auto');
+      useStore.getState().setSessionMode('sess-1', 'execute');
 
       // Reset
       useStore.getState().reset();
@@ -318,23 +318,23 @@ describe('useStore', () => {
     });
 
     it('setSessionMode stores auto mode', () => {
-      useStore.getState().setSessionMode('sess-1', 'auto');
-      expect(useStore.getState().sessionModes.get('sess-1')).toBe('auto');
+      useStore.getState().setSessionMode('sess-1', 'execute');
+      expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
     });
 
-    it('setSessionMode removes entry when set to ask', () => {
-      useStore.getState().setSessionMode('sess-1', 'auto');
+    it('setSessionMode removes entry when set to plan (default)', () => {
+      useStore.getState().setSessionMode('sess-1', 'execute');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(true);
-      useStore.getState().setSessionMode('sess-1', 'ask');
+      useStore.getState().setSessionMode('sess-1', 'plan');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
     });
 
     it('setSessionMode preserves other sessions', () => {
-      useStore.getState().setSessionMode('sess-1', 'auto');
-      useStore.getState().setSessionMode('sess-2', 'auto');
-      useStore.getState().setSessionMode('sess-1', 'ask');
+      useStore.getState().setSessionMode('sess-1', 'execute');
+      useStore.getState().setSessionMode('sess-2', 'execute');
+      useStore.getState().setSessionMode('sess-1', 'plan');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
-      expect(useStore.getState().sessionModes.get('sess-2')).toBe('auto');
+      expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
     });
   });
 });

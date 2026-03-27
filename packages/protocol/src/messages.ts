@@ -154,7 +154,7 @@ export interface ErrorMessage extends BaseEnvelope {
 export interface SessionModeSetMessage extends BaseEnvelope {
   type: 'session_mode_set';
   payload: {
-    mode: 'ask' | 'auto';
+    mode: import('./sessions.js').SessionMode;
   };
 }
 
@@ -296,7 +296,7 @@ export interface CreateSessionMessage extends BaseEnvelope {
 export interface SetSessionModeMessage extends BaseEnvelope {
   type: 'set_session_mode';
   payload: {
-    mode: 'ask' | 'auto';
+    mode: import('./sessions.js').SessionMode;
   };
 }
 
@@ -477,6 +477,18 @@ export interface DeviceLeftMessage {
   deviceId: string;
 }
 
+/** Update user preferences on the relay (e.g. intro dismissal flags). */
+export interface UpdatePreferencesMessage {
+  type: 'update_preferences';
+  preferences: Record<string, unknown>;
+}
+
+/** Confirmation that preferences were updated. */
+export interface PreferencesUpdatedMessage {
+  type: 'preferences_updated';
+  preferences: Record<string, unknown>;
+}
+
 export type ControlMessage =
   | AuthMessage
   | AuthOkMessage
@@ -490,7 +502,9 @@ export type ControlMessage =
   | AuthInfoRequest
   | AuthInfoResponse
   | DeviceJoinedMessage
-  | DeviceLeftMessage;
+  | DeviceLeftMessage
+  | UpdatePreferencesMessage
+  | PreferencesUpdatedMessage;
 
 // ============================================================
 // Union of all messages
@@ -504,6 +518,6 @@ export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
 import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
-import type { SessionSummary, SessionDigest } from './sessions.js';
+import type { SessionSummary, SessionDigest, SessionMode } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, ToolArgs };

@@ -107,7 +107,7 @@ export class KrakiWSClient {
     commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg));
   }
 
-  setSessionMode(sessionId: string, mode: 'ask' | 'auto') {
+  setSessionMode(sessionId: string, mode: 'safe' | 'plan' | 'execute' | 'delegate') {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
   }
 
@@ -161,6 +161,11 @@ export class KrakiWSClient {
         state: ts.state as 'active' | 'idle',
         messageCount: ts.messageCount,
       });
+
+      // Sync session mode from tentacle
+      if (ts.mode) {
+        store.setSessionMode(ts.id, ts.mode as 'safe' | 'plan' | 'execute' | 'delegate');
+      }
 
       // Determine local freshness for this session
       const localMessages = store.messages.get(ts.id);

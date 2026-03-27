@@ -158,7 +158,7 @@ export function abortSession(
 
 export function setSessionMode(
   sessionId: string,
-  mode: 'ask' | 'auto',
+  mode: 'safe' | 'plan' | 'execute' | 'delegate',
   send: (msg: Record<string, unknown>) => void,
 ): void {
   send({
@@ -169,8 +169,8 @@ export function setSessionMode(
   const store = getStore();
   store.setSessionMode(sessionId, mode);
 
-  // When switching to auto, auto-approve all pending permissions for this session
-  if (mode === 'auto') {
+  // When switching to execute or delegate, auto-approve all pending permissions
+  if (mode === 'execute' || mode === 'delegate') {
     const pending = [...store.pendingPermissions.values()].filter(
       (p) => p.sessionId === sessionId,
     );

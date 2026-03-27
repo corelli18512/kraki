@@ -4,6 +4,9 @@
 
 export type SessionState = 'active' | 'idle';
 
+/** Permission mode that controls how the agent's tool usage and questions are handled. */
+export type SessionMode = 'safe' | 'plan' | 'execute' | 'delegate';
+
 export interface SessionSummary {
   id: string;
   deviceId: string;
@@ -21,6 +24,7 @@ export interface SessionDigest {
   model?: string;
   title?: string;
   state: SessionState;
+  mode: SessionMode;
   lastSeq: number;
   readSeq: number;
   messageCount: number;

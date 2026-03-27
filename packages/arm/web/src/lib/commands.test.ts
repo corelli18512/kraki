@@ -12,18 +12,18 @@ beforeEach(() => {
 describe('setSessionMode', () => {
   it('sends set_session_mode message', () => {
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'auto', send);
+    commands.setSessionMode('sess-1', 'execute', send);
     expect(send).toHaveBeenCalledWith({
       type: 'set_session_mode',
       sessionId: 'sess-1',
-      payload: { mode: 'auto' },
+      payload: { mode: 'execute' },
     });
   });
 
   it('updates store session mode', () => {
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'auto', send);
-    expect(useStore.getState().sessionModes.get('sess-1')).toBe('auto');
+    commands.setSessionMode('sess-1', 'execute', send);
+    expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
   });
 
   it('auto-approves pending permissions when switching to auto', () => {
@@ -47,7 +47,7 @@ describe('setSessionMode', () => {
     useStore.getState().addPermission(perm2);
 
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'auto', send);
+    commands.setSessionMode('sess-1', 'execute', send);
 
     // Should send set_session_mode + approve for each pending permission
     expect(send).toHaveBeenCalledTimes(3);
@@ -78,7 +78,7 @@ describe('setSessionMode', () => {
     useStore.getState().addPermission(permOther);
 
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'auto', send);
+    commands.setSessionMode('sess-1', 'execute', send);
 
     // Only set_session_mode message, no approve
     expect(send).toHaveBeenCalledTimes(1);
@@ -97,7 +97,7 @@ describe('setSessionMode', () => {
     useStore.getState().addPermission(perm);
 
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'ask', send);
+    commands.setSessionMode('sess-1', 'safe', send);
 
     // Only set_session_mode message
     expect(send).toHaveBeenCalledTimes(1);
@@ -124,7 +124,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   it('adds permission as pending in auto mode (auto-approve moved to tentacle)', () => {
     const sendEncrypted = vi.fn();
-    useStore.getState().setSessionMode('sess-1', 'auto');
+    useStore.getState().setSessionMode('sess-1', 'execute');
 
     handleDataMessage(makePermissionMsg('perm-1', 'sess-1'), {
       replayingSessions: new Set(),
@@ -152,7 +152,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   it('does not auto-approve during replay even in auto mode', () => {
     const sendEncrypted = vi.fn();
-    useStore.getState().setSessionMode('sess-1', 'auto');
+    useStore.getState().setSessionMode('sess-1', 'execute');
 
     handleDataMessage(makePermissionMsg('perm-3', 'sess-1'), {
       replayingSessions: new Set(["test-session"]),
@@ -169,7 +169,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 describe('handleDataMessage session_mode_set', () => {
   const cmdState = new commands.CommandState();
 
-  const makeModeSetMsg = (sessionId: string, mode: 'ask' | 'auto') => ({
+  const makeModeSetMsg = (sessionId: string, mode: string) => ({
     type: 'session_mode_set' as const,
     deviceId: 'dev-tentacle',
     seq: 10,
@@ -179,16 +179,16 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('restores auto mode from replayed message', () => {
-    handleDataMessage(makeModeSetMsg('sess-1', 'auto') as any, {
+    handleDataMessage(makeModeSetMsg('sess-1', 'execute') as any, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
     });
-    expect(useStore.getState().sessionModes.get('sess-1')).toBe('auto');
+    expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
   });
 
-  it('restores ask mode (clears entry)', () => {
-    useStore.getState().setSessionMode('sess-1', 'auto');
-    handleDataMessage(makeModeSetMsg('sess-1', 'ask') as any, {
+  it('restores plan mode (clears entry)', () => {
+    useStore.getState().setSessionMode('sess-1', 'execute');
+    handleDataMessage(makeModeSetMsg('sess-1', 'plan') as any, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
     });
@@ -196,10 +196,10 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('works for live (non-replay) messages', () => {
-    handleDataMessage(makeModeSetMsg('sess-2', 'auto') as any, {
+    handleDataMessage(makeModeSetMsg('sess-2', 'execute') as any, {
       replayingSessions: new Set(),
       cmdState,
     });
-    expect(useStore.getState().sessionModes.get('sess-2')).toBe('auto');
+    expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
   });
 });

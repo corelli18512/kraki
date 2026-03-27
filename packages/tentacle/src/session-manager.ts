@@ -31,12 +31,15 @@ export interface SessionContext {
   updatedAt: string;
 }
 
+export type SessionMode = 'safe' | 'plan' | 'execute' | 'delegate';
+
 export interface SessionMeta {
   id: string;
   agent: string;
   model?: string;
   title?: string;
   state: 'active' | 'idle' | 'disconnected';
+  mode: SessionMode;
   currentRunId: string;
   totalRuns: number;
   lastSeq: number;
@@ -134,6 +137,7 @@ export class SessionManager {
       agent,
       model,
       state: 'active',
+      mode: 'plan',
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: 0,
@@ -278,6 +282,17 @@ export class SessionManager {
   }
 
   /**
+   * Set session permission mode.
+   */
+  setMode(sessionId: string, mode: SessionMode): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.mode = mode;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
    * Get all sessions that were active/disconnected (need resume on restart).
    */
   getResumableSessions(): SessionMeta[] {
@@ -381,6 +396,7 @@ export class SessionManager {
     model?: string;
     title?: string;
     state: 'active' | 'idle';
+    mode: SessionMode;
     lastSeq: number;
     readSeq: number;
     messageCount: number;
@@ -411,6 +427,7 @@ export class SessionManager {
         model: meta.model,
         title: meta.title,
         state,
+        mode: meta.mode ?? 'plan',
         lastSeq: meta.lastSeq ?? 0,
         readSeq: meta.readSeq ?? 0,
         messageCount,

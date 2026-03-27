@@ -150,5 +150,5 @@ export abstract class AgentAdapter {
   async listModels(): Promise<string[]> { return []; }
 
   /** Set permission mode for a session. Override in concrete adapters. */
-  setSessionMode(_sessionId: string, _mode: 'ask' | 'auto'): void { /* no-op by default */ }
+  setSessionMode(_sessionId: string, _mode: 'safe' | 'plan' | 'execute' | 'delegate'): void { /* no-op by default */ }
 }

@@ -247,8 +247,8 @@ export class CopilotAdapter extends AgentAdapter {
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   private sessionAllowSets = new Map<string, Set<string>>();
-  /** Session permission mode: 'ask' (default) or 'auto' */
-  private sessionModes = new Map<string, 'ask' | 'auto'>();
+  /** Session permission mode */
+  private sessionModes = new Map<string, 'safe' | 'plan' | 'execute' | 'delegate'>();
 
   constructor(options: { cliPath?: string } = {}) {
     super();
@@ -513,8 +513,8 @@ export class CopilotAdapter extends AgentAdapter {
     }
   }
 
-  /** Set permission mode for a session ('ask' or 'auto') */
-  setSessionMode(sessionId: string, mode: 'ask' | 'auto'): void {
+  /** Set permission mode for a session */
+  setSessionMode(sessionId: string, mode: 'safe' | 'plan' | 'execute' | 'delegate'): void {
     this.sessionModes.set(sessionId, mode);
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
@@ -665,16 +665,25 @@ export class CopilotAdapter extends AgentAdapter {
     return (req: PermissionRequest, invocation: { sessionId: string }): Promise<PermissionRequestResult> | PermissionRequestResult => {
       const sessionId = invocation.sessionId;
       const toolKind = req.kind; // e.g. 'shell', 'write', 'read', 'url', 'mcp'
+      const mode = this.sessionModes.get(sessionId) ?? 'plan';
 
-      // Layer 1: Auto mode — approve everything in this session
-      if (this.sessionModes.get(sessionId) === 'auto') {
-        logger.debug({ sessionId, toolKind }, 'permission auto-approved');
+      // Mode-based auto-approval
+      if (mode === 'execute' || mode === 'delegate') {
+        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+        return { kind: 'approved' };
+      }
+      if (mode === 'plan') {
+        if (toolKind === 'write') {
+          logger.debug({ sessionId, toolKind, mode }, 'permission denied (plan mode)');
+          return { kind: 'denied-interactively-by-user', feedback: 'Write operations are not allowed in Plan mode.' };
+        }
+        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approved' };
       }
 
-      // Layer 3: Session allow set — auto-approve if previously "Always Allowed"
+      // Mode === 'safe': check session allow set, then prompt user
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
-        logger.debug({ sessionId, toolKind }, 'permission auto-approved');
+        logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
         return { kind: 'approved' };
       }
 
@@ -705,17 +714,26 @@ export class CopilotAdapter extends AgentAdapter {
   // ── Question handler factory ──────────────────────
 
   private makeQuestionHandler(pending: Map<string, PendingQuestion>) {
-    return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> => {
+    return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> | UserInputResponse => {
+      const sessionId = invocation.sessionId;
+      const mode = this.sessionModes.get(sessionId) ?? 'plan';
+
+      // Delegate mode: auto-answer questions
+      if (mode === 'delegate') {
+        logger.debug({ sessionId }, 'question auto-answered (delegate mode)');
+        return { answer: 'proceed with your best judgment', wasFreeform: true };
+      }
+
       const qId = makeId('q');
 
       logger.debug({
         questionId: qId,
-        sessionId: invocation.sessionId,
+        sessionId,
         choicesCount: req.choices?.length ?? 0,
         allowFreeform: req.allowFreeform !== false,
       }, 'question requested');
 
-      this.onQuestionRequest?.(invocation.sessionId, {
+      this.onQuestionRequest?.(sessionId, {
         id: qId,
         question: req.question ?? '',
         choices: req.choices ?? undefined,
