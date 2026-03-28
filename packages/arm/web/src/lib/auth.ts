@@ -1,3 +1,4 @@
+import type { AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
 import { createLogger } from './logger';
 import { getStore } from './store-adapter';
@@ -83,7 +84,7 @@ export async function handleAuthChallenge(
 
 /** Process auth_ok: populate store, save device, drain encrypted queue. */
 export function processAuthOk(
-  msg: any,
+  msg: AuthOkMessage,
   transportUrl: string,
   deps: {
     setStoredDeviceId: (id: string) => void;
@@ -94,12 +95,12 @@ export function processAuthOk(
   store.setStatus('connected');
   store.setReconnectState(0, null);
   store.setAuth(msg.deviceId);
-  store.setUser((msg as any).user ?? null);
-  if ((msg as any).githubClientId) {
-    store.setGithubClientId((msg as any).githubClientId);
+  store.setUser(msg.user ?? null);
+  if (msg.githubClientId) {
+    store.setGithubClientId(msg.githubClientId);
   }
-  if ((msg as any).relayVersion) {
-    store.setRelayVersion((msg as any).relayVersion);
+  if (msg.relayVersion) {
+    store.setRelayVersion(msg.relayVersion);
   }
   // Clear transient state that may be stale from previous connection
   store.clearTransientState();

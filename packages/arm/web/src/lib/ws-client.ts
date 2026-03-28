@@ -1,4 +1,4 @@
-import type { Message, InnerMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -132,12 +132,9 @@ export class KrakiWSClient {
   /**
    * Handle session_list from tentacle: diff with local store, request per-session replays.
    */
-  private handleSessionList(msg: any): void {
+  private handleSessionList(msg: SessionListMessage): void {
     const store = getStore();
-    const tentacleSessions: Array<{
-      id: string; agent: string; model?: string; title?: string;
-      state: string; lastSeq: number; readSeq: number; messageCount: number; createdAt: string;
-    }> = msg.payload?.sessions ?? [];
+    const tentacleSessions = msg.payload?.sessions ?? [];
 
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
@@ -172,7 +169,7 @@ export class KrakiWSClient {
       let localLastSeq = 0;
       if (localMessages) {
         for (const m of localMessages) {
-          const seq = (m as any).seq;
+          const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
           if (typeof seq === 'number' && seq > localLastSeq) localLastSeq = seq;
         }
       }
@@ -247,13 +244,13 @@ export class KrakiWSClient {
 
   private handleMessage(msg: Message) {
     // Handle pong (keepalive response) — not in typed Message union
-    if ((msg as any).type === 'pong') return;
+    if ((msg as Record<string, unknown>).type === 'pong') return;
 
     switch (msg.type) {
       // --- Encrypted envelopes ---
       case 'unicast':
       case 'broadcast':
-        this.encryption.handleEncrypted(msg as any, this.encryptionCallbacks());
+        this.encryption.handleEncrypted(msg as RelayEnvelope, this.encryptionCallbacks());
         return;
 
       // --- Control messages ---
@@ -266,7 +263,7 @@ export class KrakiWSClient {
 
       case 'auth_challenge':
         handleAuthChallenge(
-          (msg as any).nonce,
+          (msg as AuthChallengeMessage).nonce,
           this.encryption.keyStore,
           this.transport.storedDeviceId,
           (m) => this.transport.send(m),
@@ -282,7 +279,7 @@ export class KrakiWSClient {
         break;
 
       case 'auth_info_response': {
-        const info = msg as any;
+        const info = msg as AuthInfoResponse;
         if (info.githubClientId) {
           getStore().setGithubClientId(info.githubClientId);
         }
@@ -292,7 +289,7 @@ export class KrakiWSClient {
       }
 
       case 'server_error': {
-        const serverErr = msg as any;
+        const serverErr = msg as ServerErrorMessage;
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {
@@ -303,7 +300,7 @@ export class KrakiWSClient {
       }
 
       case 'device_joined': {
-        const joined = msg as any;
+        const joined = msg as DeviceJoinedMessage;
         if (joined.device) {
           getStore().upsertDevice(joined.device);
         }
@@ -311,7 +308,7 @@ export class KrakiWSClient {
       }
 
       case 'device_left': {
-        const left = msg as any;
+        const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
           getStore().setDeviceModels(left.deviceId, []);
           getStore().removeDevice(left.deviceId);

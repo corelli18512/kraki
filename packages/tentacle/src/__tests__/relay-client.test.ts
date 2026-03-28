@@ -1,20 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { sockets, MockSocket } = vi.hoisted(() => {
-  const sockets: any[] = [];
+  const sockets: Array<{
+    url: string;
+    readyState: number;
+    sent: string[];
+    on: (event: string, cb: (...args: unknown[]) => void) => void;
+    send: (data: string) => void;
+    close: () => void;
+    emit: (event: string, ...args: unknown[]) => void;
+  }> = [];
 
   class MockSocket {
     static OPEN = 1;
 
     readyState = MockSocket.OPEN;
     sent: string[] = [];
-    private handlers = new Map<string, Array<(...args: any[]) => void>>();
+    private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
     constructor(public url: string) {
       sockets.push(this);
     }
 
-    on(event: string, cb: (...args: any[]) => void): void {
+    on(event: string, cb: (...args: unknown[]) => void): void {
       const current = this.handlers.get(event) ?? [];
       current.push(cb);
       this.handlers.set(event, current);
@@ -29,7 +37,7 @@ const { sockets, MockSocket } = vi.hoisted(() => {
       this.emit('close');
     }
 
-    emit(event: string, ...args: any[]): void {
+    emit(event: string, ...args: unknown[]): void {
       for (const handler of this.handlers.get(event) ?? []) {
         handler(...args);
       }
@@ -54,7 +62,7 @@ vi.mock('../logger.js', () => ({
 
 import { RelayClient } from '../relay-client.js';
 
-function createAdapter(): any {
+function createAdapter(): Record<string, unknown> {
   return {
     onSessionCreated: null,
     onMessage: null,
@@ -70,7 +78,7 @@ function createAdapter(): any {
   };
 }
 
-function createSessionManager(): any {
+function createSessionManager(): Record<string, unknown> {
   return {
     getResumableSessions: vi.fn(() => []),
     resumeSession: vi.fn(() => null),
@@ -83,7 +91,7 @@ function createSessionManager(): any {
   };
 }
 
-function createKeyManager(): any {
+function createKeyManager(): Record<string, unknown> {
   return {
     getCompactPublicKey: vi.fn(() => 'pub-key'),
     getKeyPair: vi.fn(() => ({ privateKey: 'priv-key', publicKey: 'pub-key' })),

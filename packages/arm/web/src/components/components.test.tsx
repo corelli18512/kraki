@@ -8,6 +8,7 @@ import { SessionList } from '../components/sessions/SessionList';
 import { SessionCard } from '../components/sessions/SessionCard';
 import { DeviceList } from '../components/sessions/DeviceList';
 import { NewSessionDialog } from '../components/sessions/NewSessionDialog';
+import type { ChatMessage } from '../types/store';
 import { EmptyState } from '../components/common/EmptyState';
 import { ActionQueue } from '../components/actions/ActionQueue';
 import { StreamingText } from '../components/chat/StreamingText';
@@ -143,7 +144,7 @@ describe('SessionCard', () => {
       deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { content: 'Here is the analysis result' },
-    } as any);
+    } as ChatMessage);
     renderWithRouter(<SessionCard session={session} />);
     expect(screen.getByText('Here is the analysis result')).toBeInTheDocument();
   });
@@ -155,7 +156,7 @@ describe('SessionCard', () => {
       deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { message: 'Something went wrong' },
-    } as any);
+    } as ChatMessage);
     renderWithRouter(<SessionCard session={session} />);
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
   });

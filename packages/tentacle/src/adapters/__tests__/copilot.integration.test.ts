@@ -59,7 +59,7 @@ describe('CopilotAdapter (live Copilot)', () => {
   });
 
   it('handles permission request for file write', async () => {
-    const permEvents: any[] = [];
+    const permEvents: { id: string; toolName: string; description: string }[] = [];
     const messages: string[] = [];
 
     adapter.onPermissionRequest = (sid, e) => {

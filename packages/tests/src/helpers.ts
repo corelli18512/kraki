@@ -7,6 +7,7 @@
  * - App → tentacle via UnicastEnvelope (encrypted blob with `to`)
  */
 import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
 import type { AuthProvider } from '@kraki/head';
@@ -41,7 +42,7 @@ export async function createTestEnv(options?: {
   head.attach(httpServer);
 
   await new Promise<void>(resolve => httpServer.listen(0, resolve));
-  const port = (httpServer.address() as any).port;
+  const port = (httpServer.address() as AddressInfo).port;
 
   const cleanup = async () => {
     head.close();
@@ -73,12 +74,12 @@ export function createRelayClient(
 
 export interface MockApp {
   ws: WebSocket;
-  messages: any[];
-  authOk: any;
+  messages: Record<string, unknown>[];
+  authOk: Record<string, unknown>;
   deviceId: string;
   keyPair: KeyPair;
-  waitFor: (type: string, timeout?: number) => Promise<any>;
-  waitForN: (type: string, count: number, timeout?: number) => Promise<any[]>;
+  waitFor: (type: string, timeout?: number) => Promise<Record<string, unknown>>;
+  waitForN: (type: string, count: number, timeout?: number) => Promise<Record<string, unknown>[]>;
   /** Send an encrypted unicast to a specific device. Pass recipientCompactPubKey if target isn't in auth_ok.devices. */
   sendUnicast: (to: string, msg: Record<string, unknown>, recipientCompactPubKey?: string) => void;
   send: (msg: Record<string, unknown>) => void;
@@ -99,8 +100,8 @@ export async function connectApp(
   const compactPubKey = exportPublicKey(kp.publicKey);
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  const messages: any[] = [];
-  const listeners: Array<(msg: any) => void> = [];
+  const messages: Record<string, unknown>[] = [];
+  const listeners: Array<(msg: Record<string, unknown>) => void> = [];
 
   await new Promise<void>((resolve, reject) => {
     ws.on('open', resolve);
@@ -109,7 +110,7 @@ export async function connectApp(
 
   ws.on('message', (data) => {
     const raw = JSON.parse(data.toString());
-    let msg: any;
+    let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
       try {
         const decrypted = decryptFromBlob(
@@ -140,7 +141,7 @@ export async function connectApp(
 
   const authOk = await waitForType('auth_ok');
 
-  function waitForType(type: string, timeout = 5000): Promise<any> {
+  function waitForType(type: string, timeout = 5000): Promise<Record<string, unknown>> {
     for (let i = 0; i < messages.length; i++) {
       if (messages[i].type === type && !messages[i]._consumed) {
         messages[i]._consumed = true;
@@ -153,7 +154,7 @@ export async function connectApp(
         if (idx !== -1) listeners.splice(idx, 1);
         reject(new Error(`Timeout waiting for "${type}" on "${name}"`));
       }, timeout);
-      const listener = (msg: any) => {
+      const listener = (msg: Record<string, unknown>) => {
         if (msg.type === type && !msg._consumed) {
           msg._consumed = true;
           clearTimeout(timer);
@@ -166,8 +167,8 @@ export async function connectApp(
     });
   }
 
-  async function waitForN(type: string, count: number, timeout = 5000): Promise<any[]> {
-    const results: any[] = [];
+  async function waitForN(type: string, count: number, timeout = 5000): Promise<Record<string, unknown>[]> {
+    const results: Record<string, unknown>[] = [];
     for (let i = 0; i < count; i++) {
       results.push(await waitForType(type, timeout));
     }
@@ -177,7 +178,7 @@ export async function connectApp(
   function sendUnicast(to: string, innerMsg: Record<string, unknown>, recipientCompactPubKey?: string): void {
     let compactKey = recipientCompactPubKey;
     if (!compactKey) {
-      const device = authOk?.devices?.find((d: any) => d.id === to);
+      const device = authOk?.devices?.find((d: Record<string, unknown>) => d.id === to);
       compactKey = device?.encryptionKey ?? device?.publicKey;
     }
     if (!compactKey) throw new Error(`No encryption key for device ${to}`);
@@ -211,8 +212,8 @@ export async function connectAppWithCrypto(
   const kp: KeyPair = { publicKey: opts.publicKey, privateKey: opts.privateKey };
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  const messages: any[] = [];
-  const listeners: Array<(msg: any) => void> = [];
+  const messages: Record<string, unknown>[] = [];
+  const listeners: Array<(msg: Record<string, unknown>) => void> = [];
 
   await new Promise<void>((resolve, reject) => {
     ws.on('open', resolve);
@@ -221,7 +222,7 @@ export async function connectAppWithCrypto(
 
   ws.on('message', (data) => {
     const raw = JSON.parse(data.toString());
-    let msg: any;
+    let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
       try {
         const decrypted = decryptFromBlob(
@@ -254,10 +255,10 @@ export async function connectAppWithCrypto(
   }));
 
   // Handle challenge-response if needed, wait for auth_ok
-  let authOk: any = null;
+  let authOk: Record<string, unknown> | null = null;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Auth timeout')), 5000);
-    const listener = (msg: any) => {
+    const listener = (msg: Record<string, unknown>) => {
       if (msg.type === 'auth_ok') {
         authOk = msg;
         msg._consumed = true;
@@ -278,7 +279,7 @@ export async function connectAppWithCrypto(
     listeners.push(listener);
   });
 
-  function waitForType(type: string, timeout = 5000): Promise<any> {
+  function waitForType(type: string, timeout = 5000): Promise<Record<string, unknown>> {
     for (let i = 0; i < messages.length; i++) {
       if (messages[i].type === type && !messages[i]._consumed) {
         messages[i]._consumed = true;
@@ -291,7 +292,7 @@ export async function connectAppWithCrypto(
         if (idx !== -1) listeners.splice(idx, 1);
         reject(new Error(`Timeout waiting for "${type}"`));
       }, timeout);
-      const listener = (msg: any) => {
+      const listener = (msg: Record<string, unknown>) => {
         if (msg.type === type && !msg._consumed) {
           msg._consumed = true;
           clearTimeout(timer);
@@ -304,8 +305,8 @@ export async function connectAppWithCrypto(
     });
   }
 
-  async function waitForN(type: string, count: number, timeout = 5000): Promise<any[]> {
-    const results: any[] = [];
+  async function waitForN(type: string, count: number, timeout = 5000): Promise<Record<string, unknown>[]> {
+    const results: Record<string, unknown>[] = [];
     for (let i = 0; i < count; i++) {
       results.push(await waitForType(type, timeout));
     }
@@ -315,7 +316,7 @@ export async function connectAppWithCrypto(
   function sendUnicast(to: string, innerMsg: Record<string, unknown>, recipientCompactPubKey?: string): void {
     let compactKey = recipientCompactPubKey;
     if (!compactKey) {
-      const device = authOk?.devices?.find((d: any) => d.id === to);
+      const device = authOk?.devices?.find((d: Record<string, unknown>) => d.id === to);
       compactKey = device?.encryptionKey ?? device?.publicKey;
     }
     if (!compactKey) throw new Error(`No encryption key for device ${to}`);

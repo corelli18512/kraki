@@ -206,7 +206,7 @@ describe('MessageBubble', () => {
 
   describe('unknown type', () => {
     it('returns null for unknown message type', () => {
-      const { container } = renderMsg(makeMsg('unknown_type', {}) as any);
+      const { container } = renderMsg(makeMsg('unknown_type', {}) as ChatMessage);
       expect(container.firstChild).toBeNull();
     });
   });

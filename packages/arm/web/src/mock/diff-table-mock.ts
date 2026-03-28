@@ -283,7 +283,7 @@ export class AuthService {
     logger.info('User logged out', { userId });
   }
 
-  private sanitizeUser(user: any) {
+  private sanitizeUser(user: Record<string, unknown>) {
     const { passwordHash, ...safe } = user;
     return safe;
   }

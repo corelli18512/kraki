@@ -58,7 +58,7 @@ describe('Pairing (in-memory tokens)', () => {
       auth: { method: 'pairing', token: tokenMsg.token },
       device: { name: 'Browser', role: 'app' },
     }));
-    const res = await new Promise<any>((resolve) => {
+    const res = await new Promise<Record<string, unknown>>((resolve) => {
       ws.once('message', (data) => resolve(JSON.parse(data.toString())));
     });
     expect(res.type).toBe('auth_error');
@@ -80,7 +80,7 @@ describe('Pairing (in-memory tokens)', () => {
       auth: { method: 'pairing', token: 'pt_nonexistent' },
       device: { name: 'Phone', role: 'app' },
     }));
-    const res = await new Promise<any>((resolve) => {
+    const res = await new Promise<Record<string, unknown>>((resolve) => {
       ws.once('message', (data) => resolve(JSON.parse(data.toString())));
     });
     expect(res.type).toBe('auth_error');
@@ -116,7 +116,7 @@ describe('Pairing (in-memory tokens)', () => {
       token: 'anything',
     }));
 
-    const tokenMsg = await new Promise<any>((resolve) => {
+    const tokenMsg = await new Promise<Record<string, unknown>>((resolve) => {
       ws.once('message', (data) => resolve(JSON.parse(data.toString())));
     });
     expect(tokenMsg.type).toBe('pairing_token_created');

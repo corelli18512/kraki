@@ -1,4 +1,4 @@
-import type { InnerMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayCompleteMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ToolCompleteMessage, ToolStartMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 import { isViewingSession } from './replay';
 import type { CommandState } from './commands';
@@ -11,7 +11,7 @@ export interface RouterContext {
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
   sendEncrypted?: (msg: Record<string, unknown>) => void;
   /** Called when tentacle sends session_list for sync. */
-  onSessionList?: (msg: any) => void;
+  onSessionList?: (msg: SessionListMessage) => void;
   /** Called when tentacle signals per-session replay is complete. */
   onSessionReplayComplete?: (sessionId: string) => void;
 }
@@ -27,7 +27,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
   // Handle session_replay_complete — tentacle finished replaying a specific session
   if (msg.type === 'session_replay_complete') {
-    const payload = (msg as any).payload;
+    const payload = (msg as SessionReplayCompleteMessage).payload;
     if (payload?.sessionId) {
       ctx.onSessionReplayComplete?.(payload.sessionId);
     }
@@ -36,7 +36,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
   // Handle device_greeting before sessionId check (greetings have no sessionId)
   if (msg.type === 'device_greeting') {
-    const greeting = (msg as any).payload;
+    const greeting = (msg as DeviceGreetingMessage).payload;
     store.setDeviceOnline(msg.deviceId, true);
     if (greeting?.models) {
       store.setDeviceModels(msg.deviceId, greeting.models);
@@ -76,12 +76,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         messageCount: 0,
       });
       store.appendMessage(sid, msg);
-      const reqId = (msg.payload as any).requestId;
+      const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;
       // Show initial prompt as user message if we sent one via create_session
       const pendingPrompt = reqId ? ctx.cmdState.pendingPrompts.get(reqId) : undefined;
       if (pendingPrompt) {
-        ctx.cmdState.pendingPrompts.delete(reqId);
+        ctx.cmdState.pendingPrompts.delete(reqId!);
         store.appendMessage(sid, {
           type: 'user_message',
           sessionId: sid,
@@ -89,7 +89,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           seq: 0,
           timestamp: msg.timestamp,
           payload: { content: pendingPrompt },
-        } as any);
+        } as ProducerMessage);
       }
       // Auto-navigate to the new session if we created it
       if (wasOurRequest) {
@@ -162,7 +162,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_mode_set': {
-      const mode = (msg as any).payload?.mode;
+      const mode = (msg as SessionModeSetMessage).payload?.mode;
       if (mode === 'safe' || mode === 'plan' || mode === 'execute' || mode === 'delegate') {
         store.setSessionMode(sid, mode);
       }
@@ -193,8 +193,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'permission_resolved': {
-      const permId = (msg as any).payload?.permissionId;
-      const resolution = (msg as any).payload?.resolution;
+      const resolvedMsg = msg as PermissionResolvedMessage;
+      const permId = resolvedMsg.payload?.permissionId;
+      const resolution = resolvedMsg.payload?.resolution;
       if (permId && resolution) {
         store.removePermission(permId);
         resolvePermissionMessage(sid, permId, resolution);
@@ -203,11 +204,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'question_resolved': {
-      const qId = (msg as any).payload?.questionId;
-      const answer = (msg as any).payload?.answer;
+      const resolvedQMsg = msg as QuestionResolvedMessage;
+      const qId = resolvedQMsg.payload?.questionId;
+      const qAnswer = resolvedQMsg.payload?.answer;
       if (qId) {
         store.removeQuestion(qId);
-        resolveQuestionMessage(sid, qId, answer);
+        resolveQuestionMessage(sid, qId, qAnswer);
       }
       break;
     }
@@ -240,29 +242,30 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'tool_complete': {
       // Merge tool_complete into the matching tool_start by toolCallId only
       const msgs = store.messages.get(sid);
-      const toolCallId = (msg as any).payload?.toolCallId;
+      const completeMsg = msg as ToolCompleteMessage;
+      const toolCallId = completeMsg.payload?.toolCallId;
       if (msgs && toolCallId) {
         let idx = -1;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i] as any;
-          if (m.type === 'tool_start' && m.payload?.toolCallId === toolCallId) {
+          const m = msgs[i];
+          if (m.type === 'tool_start' && (m as ToolStartMessage).payload?.toolCallId === toolCallId) {
             idx = i;
             break;
           }
         }
         if (idx >= 0) {
-          const original = msgs[idx] as any;
+          const original = msgs[idx] as ToolStartMessage;
           const updated = [...msgs];
           updated[idx] = {
             ...msg,
             payload: {
-              ...(msg as any).payload,
+              ...completeMsg.payload,
               args: {
                 ...(original.payload?.args ?? {}),
-                ...((msg as any).payload?.args ?? {}),
+                ...(completeMsg.payload?.args ?? {}),
               },
             },
-          } as any;
+          } as ToolCompleteMessage;
           const next = new Map(store.messages);
           next.set(sid, updated);
           setStoreState({ messages: next });

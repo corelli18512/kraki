@@ -4,6 +4,7 @@
  */
 
 import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
@@ -30,7 +31,7 @@ export async function createTestEnv(options?: Partial<HeadServerOptions>): Promi
   server.attach(httpServer);
 
   await new Promise<void>(resolve => httpServer.listen(0, resolve));
-  const port = (httpServer.address() as any).port;
+  const port = (httpServer.address() as AddressInfo).port;
 
   const cleanup = async () => {
     server.close();
@@ -45,11 +46,11 @@ export interface MockDevice {
   ws: WebSocket;
   deviceId: string;
   /** All messages received (raw parsed JSON) */
-  messages: any[];
+  messages: Record<string, unknown>[];
   /** Wait for a message of a specific type */
-  waitFor: (type: string, timeout?: number) => Promise<any>;
+  waitFor: (type: string, timeout?: number) => Promise<Record<string, unknown>>;
   /** Wait for N messages of a specific type */
-  waitForN: (type: string, count: number, timeout?: number) => Promise<any[]>;
+  waitForN: (type: string, count: number, timeout?: number) => Promise<Record<string, unknown>[]>;
   /** Send a raw message */
   send: (msg: Record<string, unknown>) => void;
   /** Close the connection */
@@ -63,8 +64,8 @@ export async function connectDevice(
   options?: { kind?: string; token?: string; deviceId?: string; pairingToken?: string },
 ): Promise<MockDevice> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  const messages: any[] = [];
-  const listeners = new Set<{ type: string; resolve: (msg: any) => void }>();
+  const messages: Record<string, unknown>[] = [];
+  const listeners = new Set<{ type: string; resolve: (msg: Record<string, unknown>) => void }>();
 
   await new Promise<void>((resolve, reject) => {
     ws.on('open', resolve);
@@ -83,7 +84,7 @@ export async function connectDevice(
     }
   });
 
-  const authMsg: any = {
+  const authMsg: Record<string, unknown> = {
     type: 'auth',
     auth: options?.pairingToken
       ? { method: 'pairing', token: options.pairingToken }
@@ -96,10 +97,10 @@ export async function connectDevice(
 
   const authOk = await waitFor('auth_ok');
 
-  function waitFor(type: string, timeout = 5000): Promise<any> {
+  function waitFor(type: string, timeout = 5000): Promise<Record<string, unknown>> {
     for (let i = 0; i < messages.length; i++) {
-      if (messages[i].type === type && !messages[i]._consumed) {
-        messages[i]._consumed = true;
+      if ((messages[i] as Record<string, unknown>).type === type && !(messages[i] as Record<string, unknown>)._consumed) {
+        (messages[i] as Record<string, unknown>)._consumed = true;
         return Promise.resolve(messages[i]);
       }
     }
@@ -120,8 +121,8 @@ export async function connectDevice(
     });
   }
 
-  async function waitForN(type: string, count: number, timeout = 5000): Promise<any[]> {
-    const results: any[] = [];
+  async function waitForN(type: string, count: number, timeout = 5000): Promise<Record<string, unknown>[]> {
+    const results: Record<string, unknown>[] = [];
     for (let i = 0; i < count; i++) {
       results.push(await waitFor(type, timeout));
     }

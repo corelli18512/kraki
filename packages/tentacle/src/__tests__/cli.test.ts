@@ -36,26 +36,26 @@ const mockRunSetup = vi.fn();
 const mockStartWorker = vi.fn();
 
 vi.mock('../config.js', () => ({
-  configExists: (...args: any[]) => mockConfigExists(...args),
-  loadConfig: (...args: any[]) => mockLoadConfig(...args),
-  saveConfig: (...args: any[]) => mockSaveConfig(...args),
-  getConfigDir: (...args: any[]) => mockGetConfigDir(...args),
-  getConfigPath: (...args: any[]) => mockGetConfigPath(...args),
-  getKrakiHome: (...args: any[]) => mockGetKrakiHome(...args),
-  getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
-  loadChannelKey: (...args: any[]) => mockLoadChannelKey(...args),
+  configExists: (...args: unknown[]) => mockConfigExists(...args),
+  loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
+  saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
+  getConfigDir: (...args: unknown[]) => mockGetConfigDir(...args),
+  getConfigPath: (...args: unknown[]) => mockGetConfigPath(...args),
+  getKrakiHome: (...args: unknown[]) => mockGetKrakiHome(...args),
+  getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
+  loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
 }));
 
 vi.mock('../daemon.js', () => ({
   INTERNAL_DAEMON_WORKER_COMMAND: '__daemon-worker',
-  isDaemonRunning: (...args: any[]) => mockIsDaemonRunning(...args),
-  getDaemonStatus: (...args: any[]) => mockGetDaemonStatus(...args),
-  startDaemon: (...args: any[]) => mockStartDaemon(...args),
-  stopDaemon: (...args: any[]) => mockStopDaemon(...args),
+  isDaemonRunning: (...args: unknown[]) => mockIsDaemonRunning(...args),
+  getDaemonStatus: (...args: unknown[]) => mockGetDaemonStatus(...args),
+  startDaemon: (...args: unknown[]) => mockStartDaemon(...args),
+  stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
 }));
 
 vi.mock('../daemon-worker.js', () => ({
-  startWorker: (...args: any[]) => mockStartWorker(...args),
+  startWorker: (...args: unknown[]) => mockStartWorker(...args),
 }));
 
 vi.mock('../banner.js', () => ({
@@ -64,7 +64,7 @@ vi.mock('../banner.js', () => ({
 }));
 
 vi.mock('../setup.js', () => ({
-  runSetup: (...args: any[]) => mockRunSetup(...args),
+  runSetup: (...args: unknown[]) => mockRunSetup(...args),
 }));
 
 vi.mock('../update.js', () => ({
@@ -73,19 +73,19 @@ vi.mock('../update.js', () => ({
 
 const mockSelect = vi.fn();
 vi.mock('@inquirer/prompts', () => ({
-  select: (...args: any[]) => mockSelect(...args),
+  select: (...args: unknown[]) => mockSelect(...args),
   input: vi.fn(),
 }));
 
 // Mock chalk — returns strings through, handles .rgb()/.hex()/.bold etc chaining
 vi.mock("chalk", () => {
   let lastStr = '';
-  const p: any = new Proxy(function(){}, {
-    get: (_t: any, prop: any) => {
+  const p: unknown = new Proxy(function(){}, {
+    get: (_t: unknown, prop: string | symbol) => {
       if (prop === Symbol.toPrimitive || prop === 'toString') return () => lastStr;
       return p;
     },
-    apply: (_t: any, _this: any, args: any[]) => {
+    apply: (_t: unknown, _this: unknown, args: unknown[]) => {
       if (args.length >= 1 && typeof args[0] === 'string') lastStr = args[0];
       return p;
     },
@@ -98,7 +98,7 @@ vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
-    readFileSync: vi.fn((path: string, ...rest: any[]) => {
+    readFileSync: vi.fn((path: string, ...rest: unknown[]) => {
       if (typeof path === 'string' && path.includes('package.json')) {
         return JSON.stringify({ version: '1.2.3' });
       }
@@ -111,15 +111,15 @@ vi.mock('node:fs', async () => {
 // Capture console output
 let consoleOutput: string[];
 let originalArgv: string[];
-const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
 beforeEach(() => {
   vi.resetAllMocks();
   consoleOutput = [];
-  vi.spyOn(console, 'log').mockImplementation((...args: any[]) => {
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
-  vi.spyOn(console, 'error').mockImplementation((...args: any[]) => {
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
   originalArgv = process.argv;

@@ -3,7 +3,7 @@ import { useStore } from '../hooks/useStore';
 import * as commands from './commands';
 import { handleDataMessage } from './message-router';
 import type { PendingPermission } from '../types/store';
-import type { PermissionRequest } from '@kraki/protocol';
+import type { PermissionRequest, InnerMessage } from '@kraki/protocol';
 
 beforeEach(() => {
   useStore.getState().reset();
@@ -179,7 +179,7 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('restores auto mode from replayed message', () => {
-    handleDataMessage(makeModeSetMsg('sess-1', 'execute') as any, {
+    handleDataMessage(makeModeSetMsg('sess-1', 'execute') as InnerMessage, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
     });
@@ -188,7 +188,7 @@ describe('handleDataMessage session_mode_set', () => {
 
   it('restores plan mode (clears entry)', () => {
     useStore.getState().setSessionMode('sess-1', 'execute');
-    handleDataMessage(makeModeSetMsg('sess-1', 'plan') as any, {
+    handleDataMessage(makeModeSetMsg('sess-1', 'plan') as InnerMessage, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
     });
@@ -196,7 +196,7 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('works for live (non-replay) messages', () => {
-    handleDataMessage(makeModeSetMsg('sess-2', 'execute') as any, {
+    handleDataMessage(makeModeSetMsg('sess-2', 'execute') as InnerMessage, {
       replayingSessions: new Set(),
       cmdState,
     });

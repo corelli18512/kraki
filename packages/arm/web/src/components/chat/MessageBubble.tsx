@@ -1,6 +1,7 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { ToolActivity } from './ToolActivity';
@@ -118,7 +119,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
       const args = message.payload.args as Record<string, unknown> | undefined;
       const argsSummary = args ? getPermissionArgsSummary(toolName, args) : '';
       const desc = message.payload.description;
-      const resolution = (message.payload as any).resolution as 'approved' | 'denied' | 'always_allowed' | undefined;
+      const resolution = (message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' }).resolution;
       // Build a meaningful description
       const displayDesc = desc && desc !== 'Run:' && desc !== `Run: `
         ? desc
@@ -170,7 +171,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
     }
 
     case 'question': {
-      const answer = (message.payload as any).answer as string | undefined;
+      const answer = (message.payload as ProtocolQuestionRequest['payload'] & { answer?: string }).answer;
       if (answer) {
         return (
           <div className="flex gap-2">

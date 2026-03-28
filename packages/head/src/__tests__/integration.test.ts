@@ -121,7 +121,7 @@ describe('Integration: Thin Relay', () => {
 
       // app2 should NOT receive it
       let app2Got = false;
-      app2.ws.on('message', (d: any) => {
+      app2.ws.on('message', (d: Buffer) => {
         const m = JSON.parse(d.toString());
         if (m.type === 'unicast') app2Got = true;
       });
@@ -171,7 +171,7 @@ describe('Integration: Thin Relay', () => {
       expect(tentacle2.deviceId).toBe('dev_stable_laptop');
 
       const authOk = tentacle2.messages.find(m => m.type === 'auth_ok');
-      const laptops = authOk.devices.filter((d: any) => d.name === 'Laptop');
+      const laptops = authOk.devices.filter((d: Record<string, unknown>) => d.name === 'Laptop');
       expect(laptops).toHaveLength(1);
 
       tentacle2.close();

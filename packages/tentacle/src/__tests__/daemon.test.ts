@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 
 const mockSpawn = vi.fn();
 vi.mock('node:child_process', () => ({
-  spawn: (...args: any[]) => mockSpawn(...args),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
 const mockSaveDaemonPid = vi.fn();
@@ -23,17 +23,17 @@ const mockOpenSync = vi.fn();
 const mockCloseSync = vi.fn();
 
 vi.mock('node:fs', () => ({
-  mkdirSync: (...args: any[]) => mockMkdirSync(...args),
-  openSync: (...args: any[]) => mockOpenSync(...args),
-  closeSync: (...args: any[]) => mockCloseSync(...args),
+  mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
+  openSync: (...args: unknown[]) => mockOpenSync(...args),
+  closeSync: (...args: unknown[]) => mockCloseSync(...args),
 }));
 
 vi.mock('../config.js', () => ({
   getLogsDir: vi.fn(() => '/tmp/fake-kraki/logs'),
-  getLogVerbosity: vi.fn((config: any) => config?.logging?.verbosity ?? 'normal'),
-  saveDaemonPid: (...args: any[]) => mockSaveDaemonPid(...args),
-  loadDaemonPid: (...args: any[]) => mockLoadDaemonPid(...args),
-  clearDaemonPid: (...args: any[]) => mockClearDaemonPid(...args),
+  getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
+  saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
+  loadDaemonPid: (...args: unknown[]) => mockLoadDaemonPid(...args),
+  clearDaemonPid: (...args: unknown[]) => mockClearDaemonPid(...args),
 }));
 
 import {
@@ -57,11 +57,11 @@ afterEach(() => {
 });
 
 function makeFakeChild(pid = 42) {
-  const listeners = new Map<string, (...args: any[]) => void>();
+  const listeners = new Map<string, (...args: unknown[]) => void>();
   const child = {
     pid,
     unref: vi.fn(),
-    once: vi.fn((event: string, cb: (...args: any[]) => void) => {
+    once: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
       listeners.set(event, cb);
       return child;
     }),

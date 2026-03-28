@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
 import { generateKeyPairSync, createSign } from 'crypto';
 import { HeadServer } from '../server.js';
 import { Storage } from '../storage.js';
@@ -30,19 +31,19 @@ function mockGitHubFetcher(users: Record<string, { id: number | string; login: s
   };
 }
 
-function waitForMessage(ws: WebSocket): Promise<any> {
+function waitForMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     ws.once('message', (data) => resolve(JSON.parse(data.toString())));
   });
 }
 
-function waitForMessageOfType(ws: WebSocket, type: string, timeout = 5000): Promise<any> {
+function waitForMessageOfType(ws: WebSocket, type: string, timeout = 5000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       ws.off('message', handler);
       reject(new Error(`Timeout waiting for "${type}"`));
     }, timeout);
-    const handler = (data: any) => {
+    const handler = (data: Buffer) => {
       const msg = JSON.parse(data.toString());
       if (msg.type === type) {
         clearTimeout(timer);
@@ -78,7 +79,7 @@ async function createHead(opts?: Partial<HeadServerOptions>): Promise<TestHead> 
   const httpServer = createServer();
   server.attach(httpServer);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
-  const port = (httpServer.address() as any).port;
+  const port = (httpServer.address() as AddressInfo).port;
   return { storage, server, httpServer, port };
 }
 
@@ -98,10 +99,10 @@ async function authConnect(
     encryptionKey?: string;
     pairingToken?: string;
   },
-): Promise<{ ws: WebSocket; authOk: any }> {
+): Promise<{ ws: WebSocket; authOk: Record<string, unknown> }> {
   const ws = connect(port);
   await waitForOpen(ws);
-  const authMsg: any = {
+  const authMsg: Record<string, unknown> = {
     type: 'auth',
     auth: extra?.pairingToken
       ? { method: 'pairing', token: extra.pairingToken }
@@ -606,7 +607,7 @@ describe('HeadServer (thin relay)', () => {
     it('should accept connections via acceptConnection', async () => {
       head = await createHead();
       const directWss = new WebSocketServer({ port: 0 });
-      const directPort = (directWss.address() as any).port;
+      const directPort = (directWss.address() as AddressInfo).port;
       const directStorage = new Storage(':memory:');
       const directServer = new HeadServer(directStorage, { authProvider: new OpenAuthProvider() });
 

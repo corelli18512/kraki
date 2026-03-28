@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { ChatView } from './ChatView';
+import type { ChatMessage } from '../../types/store';
 
 vi.mock('../../lib/ws-client', () => ({
   wsClient: {
@@ -47,7 +48,7 @@ describe('ChatView', () => {
       deviceId: 'd1', seq: 1,
       timestamp: new Date().toISOString(), sessionId: 's1',
       payload: { content: 'Hello from user' },
-    } as any);
+    } as ChatMessage);
     renderChatView('s1');
     expect(screen.getByText('Hello from user')).toBeInTheDocument();
   });
@@ -128,7 +129,7 @@ describe('ChatView', () => {
         deviceId: 'd1', seq: i,
         timestamp: new Date().toISOString(), sessionId: 's1',
         payload: { content: `Message ${i}` },
-      } as any);
+      } as ChatMessage);
     }
     const { container } = renderChatView('s1');
     const scrollArea = container.querySelector('.overflow-y-auto');

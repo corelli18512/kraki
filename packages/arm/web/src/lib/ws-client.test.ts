@@ -5,14 +5,14 @@ import { useStore } from '../hooks/useStore';
 // Mock encryption so data messages pass through without real crypto
 vi.mock('./encryption', () => ({
   EncryptionHandler: class {
-    keyStore: any;
-    constructor(keyStore: any) { this.keyStore = keyStore; }
-    async handleEncrypted(msg: any, callbacks: any) {
+    keyStore: unknown;
+    constructor(keyStore: unknown) { this.keyStore = keyStore; }
+    async handleEncrypted(msg: Record<string, unknown>, callbacks: Record<string, unknown>) {
       const inner = JSON.parse(msg.blob);
       callbacks.handleDataMessage(inner);
-      callbacks.getHandlers().forEach((h: any) => h(inner));
+      (callbacks as { getHandlers: () => Array<(msg: unknown) => void> }).getHandlers().forEach((h: (msg: unknown) => void) => h(inner));
     }
-    async encryptOutbound(msg: any, send: any) { send(msg); }
+    async encryptOutbound(msg: unknown, send: (msg: unknown) => void) { send(msg); }
     async drainEncryptedQueue() {}
   },
 }));
@@ -27,7 +27,7 @@ vi.mock('./e2e', () => ({
 }));
 
 // Access the mock WebSocket instances
-let lastWsInstance: any;
+let lastWsInstance: WebSocket & { sentMessages: string[]; _receive: (data: Record<string, unknown>) => void };
 const OriginalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
@@ -38,7 +38,7 @@ beforeEach(() => {
       super(url);
       lastWsInstance = this;
     }
-  } as any;
+  } as unknown as typeof OriginalWebSocket;
 });
 
 afterEach(() => {
@@ -167,7 +167,7 @@ describe('KrakiWSClient', () => {
 
       // No request_replay or request_session_replay should be sent on auth_ok
       const sent = lastWsInstance.sentMessages.map((raw: string) => JSON.parse(raw));
-      const replayMsgs = sent.filter((m: any) =>
+      const replayMsgs = sent.filter((m: Record<string, unknown>) =>
         m.type === 'request_replay' || m.type === 'request_session_replay',
       );
       expect(replayMsgs).toEqual([]);
@@ -206,7 +206,7 @@ describe('KrakiWSClient', () => {
 
       const msgs = useStore.getState().messages.get('sess-1');
       expect(msgs).toHaveLength(1);
-      expect((msgs![0] as any).payload.content).toBe('Hello!');
+      expect((msgs![0] as Record<string, unknown> & { payload: { content: string } }).payload.content).toBe('Hello!');
     });
 
     it('routes agent_message_delta to streaming content', async () => {
@@ -680,7 +680,7 @@ describe('KrakiWSClient', () => {
       localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
       globalThis.WebSocket = class {
         constructor() { throw new Error('network unavailable'); }
-      } as any;
+      } as unknown as typeof OriginalWebSocket;
 
       const client = new KrakiWSClient('ws://localhost:9999');
       expect(() => client.connect()).not.toThrow();
@@ -949,9 +949,9 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('new-sess-1') ?? [];
-      const userMsg = messages.find((m: any) => m.type === 'user_message');
+      const userMsg = messages.find((m: Record<string, unknown>) => m.type === 'user_message');
       expect(userMsg).toBeTruthy();
-      expect((userMsg as any).payload.content).toBe('Fix the bug');
+      expect((userMsg as unknown as { payload: { content: string } }).payload.content).toBe('Fix the bug');
     });
 
     it('does not insert prompt for session_created without matching requestId', async () => {
@@ -971,7 +971,7 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('new-sess-2') ?? [];
-      const userMsg = messages.find((m: any) => m.type === 'user_message');
+      const userMsg = messages.find((m: Record<string, unknown>) => m.type === 'user_message');
       expect(userMsg).toBeUndefined();
     });
   });
@@ -1029,7 +1029,7 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('late-sess') ?? [];
-      const userMsg = messages.find((m: any) => m.type === 'user_message');
+      const userMsg = messages.find((m: Record<string, unknown>) => m.type === 'user_message');
       expect(userMsg).toBeUndefined();
     });
   });
@@ -1077,12 +1077,12 @@ describe('KrakiWSClient', () => {
 
       const messages = useStore.getState().messages.get('sess-1') ?? [];
       // Should have merged — only 1 tool message (complete replaced start)
-      const toolMsgs = messages.filter((m: any) => m.type === 'tool_start' || m.type === 'tool_complete');
+      const toolMsgs = messages.filter((m: Record<string, unknown>) => m.type === 'tool_start' || m.type === 'tool_complete');
       expect(toolMsgs).toHaveLength(1);
       expect(toolMsgs[0].type).toBe('tool_complete');
       // Should preserve original args
-      expect((toolMsgs[0] as any).payload.args.command).toBe('ls');
-      expect((toolMsgs[0] as any).payload.result).toBe('file1.txt');
+      expect((toolMsgs[0] as unknown as { payload: { args: { command: string }; result: string } }).payload.args.command).toBe('ls');
+      expect((toolMsgs[0] as unknown as { payload: { result: string } }).payload.result).toBe('file1.txt');
     });
 
     it('does not merge tool_complete without toolCallId', async () => {
@@ -1108,7 +1108,7 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('sess-1') ?? [];
-      const toolMsgs = messages.filter((m: any) => m.type === 'tool_start' || m.type === 'tool_complete');
+      const toolMsgs = messages.filter((m: Record<string, unknown>) => m.type === 'tool_start' || m.type === 'tool_complete');
       // No merge — both should be separate
       expect(toolMsgs).toHaveLength(2);
     });

@@ -1,6 +1,7 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type PluginOption, type ViteDevServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { resolve } from 'path';
 import { assertSafeProductionRelayUrl } from './src/lib/build-env';
 
@@ -8,7 +9,7 @@ export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, __dirname, '');
   assertSafeProductionRelayUrl(command, mode, env.VITE_WS_URL);
 
-  const plugins: any[] = [react(), tailwindcss()];
+  const plugins: PluginOption[] = [react(), tailwindcss()];
 
   // When launched by `pnpm dev:local`, redirect bare page loads to the auth
   // server so every refresh gets a fresh pairing token automatically.
@@ -16,8 +17,8 @@ export default defineConfig(({ command, mode }) => {
   if (devAuthPort) {
     plugins.push({
       name: 'kraki-dev-auth-redirect',
-      configureServer(server: any) {
-        server.middlewares.use((req: any, res: any, next: any) => {
+      configureServer(server: ViteDevServer) {
+        server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
           const url = new URL(req.url!, `http://${req.headers.host}`);
           if (req.method === 'GET' && url.pathname === '/' && !url.searchParams.has('token')) {
             res.writeHead(302, { Location: `http://localhost:${devAuthPort}` });
