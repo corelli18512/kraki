@@ -54,14 +54,23 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
 
             <div className="min-w-0 overflow-y-auto px-5 py-4">
               <div className="min-w-0 space-y-3">
-                {messages.map((msg, idx) => (
-                  <MessageBubble
-                    key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
-                    message={msg}
-                    agent={agent}
-                    forceExpanded={allExpanded || undefined}
-                  />
-                ))}
+                {messages.map((msg, idx) => {
+                  if (msg.type === 'agent_message') {
+                    return (
+                      <div key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="text-sm leading-relaxed text-text-secondary">
+                        {msg.payload.content}
+                      </div>
+                    );
+                  }
+                  return (
+                    <MessageBubble
+                      key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
+                      message={msg}
+                      agent={agent}
+                      forceExpanded={allExpanded || undefined}
+                    />
+                  );
+                })}
               </div>
             </div>
 

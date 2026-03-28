@@ -36,7 +36,7 @@ export function ToolActivity({ type, toolName, args, result, forceExpanded }: To
           : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
         }
         <span className="shrink-0 text-xs font-medium text-text-secondary">
-          {isStart ? 'Running' : 'Completed'}{' '}
+          {isStart && 'Running '}
           <span className="font-mono text-ocean-600 dark:text-ocean-400">{toolName}</span>
         </span>
         {summary && (
