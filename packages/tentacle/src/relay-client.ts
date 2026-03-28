@@ -360,6 +360,7 @@ export class RelayClient {
         case 'answer':
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, false)
             .catch((err) => logger.error({ err, sessionId }, 'respondToQuestion failed'));
+          this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
           break;
         case 'kill_session':
           this.adapter.killSession(sessionId)

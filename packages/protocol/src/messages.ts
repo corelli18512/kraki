@@ -205,6 +205,15 @@ export interface PermissionResolvedMessage extends BaseEnvelope {
   );
 }
 
+/** Broadcast by tentacle when a question is answered (so all apps can clear the card). */
+export interface QuestionResolvedMessage extends BaseEnvelope {
+  type: 'question_resolved';
+  payload: {
+    questionId: string;
+    answer: string;
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -222,7 +231,8 @@ export type ProducerMessage =
   | DeviceGreetingMessage
   | SessionReplayCompleteMessage
   | SessionListMessage
-  | PermissionResolvedMessage;
+  | PermissionResolvedMessage
+  | QuestionResolvedMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)

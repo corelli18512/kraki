@@ -1,7 +1,7 @@
 {
   "name": "@kraki/tentacle",
-  "version": "0.4.0",
-  "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
+  "version": "0.4.1",
+  "description": "Kraki agent bridge \u2014 the arm that connects your coding agent to the head",
   "repository": {
     "type": "git",
     "url": "https://github.com/corelli18512/kraki",

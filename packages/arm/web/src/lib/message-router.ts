@@ -202,6 +202,16 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    case 'question_resolved': {
+      const qId = (msg as any).payload?.questionId;
+      const answer = (msg as any).payload?.answer;
+      if (qId) {
+        store.removeQuestion(qId);
+        resolveQuestionMessage(sid, qId, answer);
+      }
+      break;
+    }
+
     case 'answer': {
       const qId = msg.payload?.questionId;
       if (qId) {
