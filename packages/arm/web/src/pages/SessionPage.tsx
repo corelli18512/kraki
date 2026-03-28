@@ -102,10 +102,18 @@ export function SessionPage() {
 
 const MODES = ['safe', 'plan', 'execute', 'delegate'] as const;
 
+const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> = {
+  safe:     { pill: 'bg-emerald-400/80 dark:bg-emerald-500/60', text: 'text-emerald-900 dark:text-emerald-100' },
+  plan:     { pill: 'bg-ocean-400/80 dark:bg-ocean-500/60',     text: 'text-ocean-900 dark:text-ocean-100' },
+  execute:  { pill: 'bg-amber-400/80 dark:bg-amber-500/60',     text: 'text-amber-900 dark:text-amber-100' },
+  delegate: { pill: 'bg-kraki-400/80 dark:bg-kraki-500/60',     text: 'text-kraki-900 dark:text-kraki-100' },
+};
+
 function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMode: typeof MODES[number] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
   const activeIdx = MODES.indexOf(currentMode);
+  const colors = MODE_COLORS[currentMode];
 
   useEffect(() => {
     const container = containerRef.current;
@@ -119,7 +127,7 @@ function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMo
   return (
     <div ref={containerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
       <div
-        className="absolute top-0.5 h-[calc(100%-4px)] rounded-full bg-white dark:bg-surface-primary shadow-sm transition-all duration-300 ease-in-out"
+        className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
         style={{ left: pill.left, width: pill.width }}
       />
       {MODES.map((mode) => (
@@ -127,7 +135,7 @@ function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMo
           key={mode}
           onClick={() => wsClient.setSessionMode(sessionId, mode)}
           className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-            currentMode === mode ? 'text-text-primary' : 'text-text-muted hover:text-text-secondary'
+            currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
           }`}
         >
           {mode.charAt(0).toUpperCase() + mode.slice(1)}
