@@ -7,6 +7,8 @@
  */
 
 import { WebSocket } from 'ws';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
@@ -18,6 +20,7 @@ import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import { createLogger } from './logger.js';
+import { getKrakiHome } from './config.js';
 
 const logger = createLogger('relay-client');
 
@@ -324,6 +327,12 @@ export class RelayClient {
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
       this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq);
+      return;
+    }
+
+    // client_log — write web app debug logs to local file
+    if ((msg as any).type === 'client_log') {
+      this.handleClientLog(msg.deviceId, (msg as any).payload?.entries);
       return;
     }
 
@@ -639,6 +648,22 @@ export class RelayClient {
       payload: { sessionId, lastSeq },
     };
     this.sendUnicastTo(requesterDeviceId, requesterKey, completeMsg);
+  }
+
+  // ── Client log shipping ─────────────────────────────
+
+  /**
+   * Write web app debug logs to a local file.
+   */
+  private handleClientLog(deviceId: string, entries: Array<{ ts: string; level: string; scope: string; message: string }> | undefined): void {
+    if (!entries || entries.length === 0) return;
+    try {
+      const logPath = join(getKrakiHome(), 'logs', 'web-client.log');
+      const lines = entries.map(e => `${e.ts} [${deviceId}] [${e.level}:${e.scope}] ${e.message}`).join('\n') + '\n';
+      appendFileSync(logPath, lines, 'utf8');
+    } catch {
+      // Ignore write errors
+    }
   }
 
   // ── Send to relay ───────────────────────────────────

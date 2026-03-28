@@ -8,7 +8,7 @@ import { handleDataMessage } from './message-router';
 import { getStore } from './store-adapter';
 import { CommandState } from './commands';
 import * as commands from './commands';
-import { createLogger } from './logger';
+import { createLogger, setLogBroadcast } from './logger';
 
 const logger = createLogger('ws-client');
 
@@ -139,6 +139,8 @@ export class KrakiWSClient {
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
+    logger.info('session_list received', { tentacleDeviceId, sessionCount: tentacleSessions.length, sessions: tentacleSessions.map(s => ({ id: s.id, lastSeq: s.lastSeq, messageCount: s.messageCount })) });
+
     // Remove local sessions from this tentacle that are no longer in the list
     for (const [sid, session] of store.sessions) {
       if (session.deviceId === tentacleDeviceId && !tentacleIds.has(sid)) {
@@ -175,7 +177,9 @@ export class KrakiWSClient {
       }
 
       // Request replay if tentacle has newer messages than our local cache
-      if (localLastSeq < ts.lastSeq) {
+      const needsReplay = localLastSeq < ts.lastSeq;
+      logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay });
+      if (needsReplay) {
         this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
       }
     }
@@ -324,3 +328,6 @@ export class KrakiWSClient {
 
 // Singleton
 export const wsClient = new KrakiWSClient();
+
+// Wire up remote log shipping
+setLogBroadcast((msg) => wsClient.sendBroadcast(msg));
