@@ -252,8 +252,8 @@ export class RelayClient {
       return;
     }
 
-    // Incoming unicast messages from apps — decrypt and handle inner message
-    if (msg.type === 'unicast' && this.keyManager && this.authInfo) {
+    // Incoming encrypted messages from apps — decrypt and handle inner message
+    if ((msg.type === 'unicast' || msg.type === 'broadcast') && this.keyManager && this.authInfo) {
       try {
         const decrypted = decryptFromBlob(
           { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
