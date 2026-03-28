@@ -109,7 +109,7 @@ export interface AppActions {
   removeDevice: (deviceId: string) => void;
   setDeviceOnline: (deviceId: string, online: boolean) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
-  resolvePendingInput: (sessionId: string) => void;
+  resolvePendingInput: (sessionId: string, seq?: number) => void;
   appendDelta: (sessionId: string, content: string) => void;
   flushDelta: (sessionId: string) => void;
   addPermission: (perm: PendingPermission) => void;

@@ -147,7 +147,7 @@ export const useStore = create<Store>()(persist((set) => ({
       return { messages: nextMsgs };
     }),
 
-  resolvePendingInput: (sessionId) =>
+  resolvePendingInput: (sessionId, seq) =>
     set((state) => {
       const msgs = state.messages.get(sessionId);
       if (!msgs) return state;
@@ -160,7 +160,7 @@ export const useStore = create<Store>()(persist((set) => ({
               type: 'user_message' as const,
               sessionId: m.sessionId,
               deviceId: '',
-              seq: 0,
+              seq: seq ?? 0,
               timestamp: m.timestamp,
               payload: { content: m.text },
             }

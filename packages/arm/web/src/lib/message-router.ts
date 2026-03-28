@@ -227,7 +227,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'user_message': {
       // Resolve pending_input when tentacle confirms receipt via user_message broadcast
       const hadPending = store.messages.get(sid)?.some((m) => m.type === 'pending_input');
-      store.resolvePendingInput(sid);
+      store.resolvePendingInput(sid, msg.seq);
       if (!hadPending) {
         store.appendMessage(sid, msg);
       }
