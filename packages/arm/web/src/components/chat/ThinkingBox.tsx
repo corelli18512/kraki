@@ -11,6 +11,7 @@ interface ThinkingBoxProps {
 
 export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   if (messages.length === 0) return null;
 
@@ -52,21 +53,39 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
             </div>
 
             <div className="overflow-y-auto px-5 py-4">
-              <div className="space-y-3">
-                {messages.map((msg, idx) => (
-                  <MessageBubble
-                    key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
-                    message={msg}
-                    agent={agent}
-                  />
-                ))}
-              </div>
+              {expanded ? (
+                <div className="space-y-3">
+                  {messages.map((msg, idx) => (
+                    <MessageBubble
+                      key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
+                      message={msg}
+                      agent={agent}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <ol className="space-y-1 text-xs text-text-secondary">
+                  {messages.map((msg, idx) => (
+                    <li key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="flex items-start gap-2 py-0.5">
+                      <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
+                      <span className="truncate">{getMessageSummary(msg)}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
 
-            <div className="border-t border-border-primary px-5 py-3 sm:hidden">
+            <div className="flex items-center border-t border-border-primary px-5 py-3 sm:hidden">
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="rounded-lg bg-surface-tertiary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
+              >
+                {expanded ? 'Collapse' : 'Expand'}
+              </button>
+              <div className="flex-1" />
               <button
                 onClick={() => setOpen(false)}
-                className="w-full rounded-lg bg-surface-tertiary px-4 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
+                className="rounded-lg bg-surface-tertiary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
               >
                 Done
               </button>
