@@ -331,8 +331,10 @@ export class RelayClient {
     }
 
     // client_log — write web app debug logs to local file
-    if ((msg as any).type === 'client_log') {
-      this.handleClientLog(msg.deviceId, (msg as any).payload?.entries);
+    const msgAny = msg as Record<string, unknown>;
+    if (msgAny.type === 'client_log') {
+      const payload = msgAny.payload as Record<string, unknown> | undefined;
+      this.handleClientLog(msg.deviceId, payload?.entries as Array<{ ts: string; level: string; scope: string; message: string }> | undefined);
       return;
     }
 
