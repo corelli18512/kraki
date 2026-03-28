@@ -114,7 +114,7 @@ describe('checkCopilotCli()', () => {
 describe('withRetry()', () => {
   const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {
     throw new Error('process.exit called');
-  }) as any);
+  }) as never);
 
   beforeEach(() => {
     mockExit.mockClear();

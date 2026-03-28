@@ -38,7 +38,12 @@ export function detectInstallMethod(): InstallMethod {
 
 // ── Latest version fetching ─────────────────────────────
 
-function fetchJson(url: string): Promise<any> {
+interface GitHubRelease {
+  tag_name: string;
+  assets?: Array<{ name: string; browser_download_url: string }>;
+}
+
+function fetchJson(url: string): Promise<GitHubRelease> {
   return new Promise((resolve, reject) => {
     httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
@@ -210,7 +215,7 @@ async function updateViaBinary(version: string): Promise<void> {
   const releaseUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${version}`;
 
   const release = await fetchJson(releaseUrl);
-  const asset = release.assets?.find((a: any) => a.name === assetName);
+  const asset = release.assets?.find((a) => a.name === assetName);
   if (!asset) {
     throw new Error(`No binary found for ${assetName} in release v${version}`);
   }
@@ -223,7 +228,7 @@ async function updateViaBinary(version: string): Promise<void> {
   await downloadFile(downloadUrl, tmpPath);
 
   // Verify checksum if SHA256SUMS is available
-  const checksumAsset = release.assets?.find((a: any) => a.name === 'SHA256SUMS.txt');
+  const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
   if (checksumAsset) {
     const checksumData = await fetchText(checksumAsset.browser_download_url);
     const expectedHash = parseChecksum(checksumData, assetName);

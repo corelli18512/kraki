@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockIsSea = vi.fn(() => false);
 vi.mock('node:sea', () => ({
-  isSea: (...args: any[]) => mockIsSea(...args),
+  isSea: (...args: unknown[]) => mockIsSea(...args),
 }));
 
 // Avoid actually writing to log files in production mode
@@ -42,7 +42,7 @@ describe('createLogger()', () => {
     ({ createLogger } = await import('../logger.js'));
     const logger = createLogger('test-logger');
     for (const method of ['info', 'warn', 'error', 'debug', 'trace', 'fatal']) {
-      expect(typeof (logger as any)[method]).toBe('function');
+      expect(typeof (logger as unknown as Record<string, unknown>)[method]).toBe('function');
     }
   });
 
@@ -64,7 +64,7 @@ describe('createLogger()', () => {
     ({ createLogger } = await import('../logger.js'));
     const logger = createLogger('my-component');
     // pino stores name in bindings
-    expect((logger as any).bindings().name).toBe('my-component');
+    expect((logger as unknown as { bindings: () => { name: string } }).bindings().name).toBe('my-component');
   });
 
   it('creates a logger with pino-roll transport in production mode', async () => {

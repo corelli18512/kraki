@@ -5,8 +5,8 @@ const mockSelect = vi.fn();
 const mockInput = vi.fn();
 
 vi.mock("@inquirer/prompts", () => ({
-  select: (...args: any[]) => mockSelect(...args),
-  input: (...args: any[]) => mockInput(...args),
+  select: (...args: unknown[]) => mockSelect(...args),
+  input: (...args: unknown[]) => mockInput(...args),
 }));
 
 vi.mock("ora", () => {
@@ -48,14 +48,14 @@ vi.mock("../banner.js", () => ({
 }));
 
 vi.mock("chalk", () => {
-  const handler: ProxyHandler<any> = {
+  const handler: ProxyHandler<(...args: unknown[]) => unknown> = {
     get: () => proxy,
     apply: (_target, _thisArg, args) => {
       if (args.length === 1 && typeof args[0] === "string") return args[0];
       return proxy;
     },
   };
-  const proxy: any = new Proxy(function(){} as any, handler);
+  const proxy: unknown = new Proxy(function(){} as (...args: unknown[]) => unknown, handler);
   return { default: proxy };
 });
 
@@ -63,8 +63,8 @@ const mockSaveConfig = vi.fn();
 const mockSaveChannelKey = vi.fn();
 vi.mock("../config.js", () => ({
   DEFAULT_LOG_VERBOSITY: "normal",
-  saveConfig: (...args: any[]) => mockSaveConfig(...args),
-  saveChannelKey: (...args: any[]) => mockSaveChannelKey(...args),
+  saveConfig: (...args: unknown[]) => mockSaveConfig(...args),
+  saveChannelKey: (...args: unknown[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: () => "dev_test123",
   getConfigPath: () => "/tmp/fake-kraki/config.json",
   loadChannelKey: () => null,
@@ -73,9 +73,9 @@ vi.mock("../config.js", () => ({
 const mockWithRetry = vi.fn();
 const mockCheckGhAuth = vi.fn().mockReturnValue({ authenticated: true, username: 'testuser', token: 'fake-token' });
 vi.mock("../checks.js", () => ({
-  checkGhAuth: (...args: any[]) => mockCheckGhAuth(...args),
+  checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   checkCopilotCli: vi.fn(),
-  withRetry: (...args: any[]) => mockWithRetry(...args),
+  withRetry: (...args: unknown[]) => mockWithRetry(...args),
 }));
 
 // Mock pair module to avoid real WebSocket connection

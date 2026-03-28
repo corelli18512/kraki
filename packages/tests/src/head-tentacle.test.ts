@@ -21,24 +21,24 @@ import { WebSocket } from "ws";
 // ── Mock Adapter ────────────────────────────────────────
 
 class MockAdapter {
-  onSessionCreated: any = null;
-  onMessage: any = null;
-  onMessageDelta: any = null;
-  onPermissionRequest: any = null;
-  onPermissionAutoResolved: any = null;
-  onQuestionRequest: any = null;
-  onToolStart: any = null;
-  onToolComplete: any = null;
-  onIdle: any = null;
-  onError: any = null;
-  onSessionEnded: any = null;
+  onSessionCreated: ((event: { sessionId: string; agent: string; model?: string }) => void) | null = null;
+  onMessage: ((sessionId: string, event: { content: string }) => void) | null = null;
+  onMessageDelta: ((sessionId: string, event: { content: string }) => void) | null = null;
+  onPermissionRequest: ((sessionId: string, event: { id: string; toolArgs: unknown; description: string }) => void) | null = null;
+  onPermissionAutoResolved: ((sessionId: string, permissionId: string) => void) | null = null;
+  onQuestionRequest: ((sessionId: string, event: { id: string; question: string }) => void) | null = null;
+  onToolStart: ((sessionId: string, event: { toolName: string; args: Record<string, unknown> }) => void) | null = null;
+  onToolComplete: ((sessionId: string, event: { toolName: string; result: string }) => void) | null = null;
+  onIdle: ((sessionId: string) => void) | null = null;
+  onError: ((sessionId: string, event: { message: string }) => void) | null = null;
+  onSessionEnded: ((sessionId: string, event: { reason: string }) => void) | null = null;
 
   private sessionCounter = 0;
   started = false;
   sessions = new Map<string, { ended: boolean }>();
-  lastPermissionResponse: any = null;
-  lastQuestionResponse: any = null;
-  lastMessage: any = null;
+  lastPermissionResponse: string | null = null;
+  lastQuestionResponse: string | null = null;
+  lastMessage: string | null = null;
   killedSessions: string[] = [];
 
   async start() { this.started = true; }
@@ -170,9 +170,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     expect(info!.user.login).toBe("local");
     expect(info!.devices).toBeInstanceOf(Array);
     // Thin relay auth_ok has no channel, sessions, readState, e2e
-    expect((info as any).channel).toBeUndefined();
-    expect((info as any).sessions).toBeUndefined();
-    expect((info as any).readState).toBeUndefined();
+    expect((info as Record<string, unknown>).channel).toBeUndefined();
+    expect((info as Record<string, unknown>).sessions).toBeUndefined();
+    expect((info as Record<string, unknown>).readState).toBeUndefined();
   });
 
   // ── 2. Broadcast: agent_message ──────────────────────
@@ -398,7 +398,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     // User B's app (raw WebSocket, just listening for any messages)
     const wsB = new WebSocket(`ws://127.0.0.1:${multiEnv.port}`);
     await new Promise<void>(r => wsB.on("open", r));
-    const bMessages: any[] = [];
+    const bMessages: Record<string, unknown>[] = [];
     wsB.on("message", (d) => bMessages.push(JSON.parse(d.toString())));
     wsB.send(JSON.stringify({
       type: "auth", auth: { method: "open", sharedKey: "user_b" },
@@ -474,7 +474,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     expect(relay.getState()).toBe("connected");
 
     // Force disconnect
-    (relay as any).ws?.close();
+    (relay as unknown as { ws: { close: () => void } | null }).ws?.close();
     await waitMs(100);
     expect(relay.getState()).toBe("disconnected");
 
@@ -500,12 +500,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await connectTentacle();
 
     // Request a pairing token via the raw WS
-    const tokenMsg = await new Promise<any>((resolve) => {
-      (relay as any).ws.on("message", (data: any) => {
+    const tokenMsg = await new Promise<Record<string, unknown>>((resolve) => {
+      (relay as unknown as { ws: { on: (event: string, cb: (data: Buffer) => void) => void } }).ws.on("message", (data: Buffer) => {
         const msg = JSON.parse(data.toString());
         if (msg.type === "pairing_token_created") resolve(msg);
       });
-      (relay as any).ws.send(JSON.stringify({ type: "create_pairing_token" }));
+      (relay as unknown as { ws: { send: (data: string) => void } }).ws.send(JSON.stringify({ type: "create_pairing_token" }));
     });
     expect(tokenMsg.token).toMatch(/^pt_/);
     expect(tokenMsg.expiresIn).toBeGreaterThan(0);
@@ -521,8 +521,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Paired Phone", role: "app", kind: "ios", deviceId: pairDeviceId, publicKey: pairCompactKey },
     }));
-    const authOk = await new Promise<any>((resolve) => {
-      pairWs.on("message", (d: any) => {
+    const authOk = await new Promise<Record<string, unknown>>((resolve) => {
+      pairWs.on("message", (d: Buffer) => {
         const m = JSON.parse(d.toString());
         if (m.type === "auth_ok") resolve(m);
       });
@@ -537,9 +537,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const { sessionId } = await adapter.createSession();
     await waitMs(100);
     adapter.simulateAgentMessage(sessionId, "to paired app");
-    const received = await new Promise<any>((resolve, reject) => {
+    const received = await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("No message received")), 5000);
-      pairWs.on("message", (d: any) => {
+      pairWs.on("message", (d: Buffer) => {
         const raw = JSON.parse(d.toString());
         if (raw.type === "broadcast") {
           try {
@@ -567,12 +567,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const deviceId = "dev_challenge_test";
 
     // Step 1: Get pairing token
-    const tokenMsg = await new Promise<any>((resolve) => {
-      (relay as any).ws.on("message", (data: any) => {
+    const tokenMsg = await new Promise<Record<string, unknown>>((resolve) => {
+      (relay as unknown as { ws: { on: (event: string, cb: (data: Buffer) => void) => void } }).ws.on("message", (data: Buffer) => {
         const msg = JSON.parse(data.toString());
         if (msg.type === "pairing_token_created") resolve(msg);
       });
-      (relay as any).ws.send(JSON.stringify({ type: "create_pairing_token" }));
+      (relay as unknown as { ws: { send: (data: string) => void } }).ws.send(JSON.stringify({ type: "create_pairing_token" }));
     });
 
     // Step 2: Pair with token + publicKey + deviceId
@@ -583,8 +583,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Challenge Phone", role: "app", kind: "web", publicKey: compactPubKey, deviceId },
     }));
-    const authOk1 = await new Promise<any>(r => {
-      ws1.on("message", (d: any) => {
+    const authOk1 = await new Promise<Record<string, unknown>>(r => {
+      ws1.on("message", (d: Buffer) => {
         const m = JSON.parse(d.toString());
         if (m.type === "auth_ok") r(m);
       });
@@ -652,7 +652,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     // Also verify the raw WS data was encrypted (not plaintext)
     // The raw messages on the wire are broadcast envelopes with encrypted blobs
     // Check that no raw message contains the secret in plaintext
-    const rawOnWire: any[] = [];
+    const rawOnWire: Record<string, unknown>[] = [];
     const verifyWs = new WebSocket(`ws://127.0.0.1:${env.port}`);
     await new Promise<void>(r => verifyWs.on("open", r));
     // We can't retroactively check, but we verify the crypto round-trip worked:
@@ -679,12 +679,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const deviceId = "dev_wrong_sig";
 
     // Register device via pairing
-    const tokenMsg = await new Promise<any>((resolve) => {
-      (relay as any).ws.on("message", (data: any) => {
+    const tokenMsg = await new Promise<Record<string, unknown>>((resolve) => {
+      (relay as unknown as { ws: { on: (event: string, cb: (data: Buffer) => void) => void } }).ws.on("message", (data: Buffer) => {
         const msg = JSON.parse(data.toString());
         if (msg.type === "pairing_token_created") resolve(msg);
       });
-      (relay as any).ws.send(JSON.stringify({ type: "create_pairing_token" }));
+      (relay as unknown as { ws: { send: (data: string) => void } }).ws.send(JSON.stringify({ type: "create_pairing_token" }));
     });
 
     const ws1 = new WebSocket(`ws://127.0.0.1:${env.port}`);
@@ -694,7 +694,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "WrongSig", role: "app", publicKey: exportPublicKey(kp.publicKey), deviceId },
     }));
-    await new Promise<any>(r => ws1.on("message", (d: any) => {
+    await new Promise<Record<string, unknown>>(r => ws1.on("message", (d: Buffer) => {
       const m = JSON.parse(d.toString());
       if (m.type === "auth_ok") r(m);
     }));
@@ -711,8 +711,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       device: { name: "WrongSig", role: "app", deviceId },
     }));
 
-    const challenge = await new Promise<any>(r => {
-      ws2.on("message", (d: any) => {
+    const challenge = await new Promise<Record<string, unknown>>(r => {
+      ws2.on("message", (d: Buffer) => {
         const m = JSON.parse(d.toString());
         if (m.type === "auth_challenge") r(m);
       });
@@ -721,8 +721,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const badSig = signChallenge(challenge.nonce, kpWrong.privateKey);
     ws2.send(JSON.stringify({ type: "auth_response", deviceId, signature: badSig }));
 
-    const error = await new Promise<any>(r => {
-      ws2.on("message", (d: any) => {
+    const error = await new Promise<Record<string, unknown>>(r => {
+      ws2.on("message", (d: Buffer) => {
         const m = JSON.parse(d.toString());
         if (m.type === "auth_error") r(m);
       });
@@ -738,12 +738,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
   it("reused pairing token is rejected", async () => {
     await connectTentacle();
 
-    const tokenMsg = await new Promise<any>((resolve) => {
-      (relay as any).ws.on("message", (data: any) => {
+    const tokenMsg = await new Promise<Record<string, unknown>>((resolve) => {
+      (relay as unknown as { ws: { on: (event: string, cb: (data: Buffer) => void) => void } }).ws.on("message", (data: Buffer) => {
         const msg = JSON.parse(data.toString());
         if (msg.type === "pairing_token_created") resolve(msg);
       });
-      (relay as any).ws.send(JSON.stringify({ type: "create_pairing_token" }));
+      (relay as unknown as { ws: { send: (data: string) => void } }).ws.send(JSON.stringify({ type: "create_pairing_token" }));
     });
 
     // Use token once (success)
@@ -753,7 +753,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "First", role: "app" },
     }));
-    const ok = await new Promise<any>(r => ws1.on("message", (d: any) => r(JSON.parse(d.toString()))));
+    const ok = await new Promise<Record<string, unknown>>(r => ws1.on("message", (d: Buffer) => r(JSON.parse(d.toString()))));
     expect(ok.type).toBe("auth_ok");
     ws1.close();
 
@@ -764,7 +764,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Second", role: "app" },
     }));
-    const err = await new Promise<any>(r => ws2.on("message", (d: any) => r(JSON.parse(d.toString()))));
+    const err = await new Promise<Record<string, unknown>>(r => ws2.on("message", (d: Buffer) => r(JSON.parse(d.toString()))));
     expect(err.type).toBe("auth_error");
     expect(err.code).toBe("invalid_pairing_token");
     expect(err.message).toContain("Invalid or expired");

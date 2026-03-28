@@ -18,16 +18,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockAdapter = {
   start: vi.fn(),
   stop: vi.fn(),
-  onSessionCreated: null as any,
-  onMessage: null as any,
-  onMessageDelta: null as any,
-  onPermissionRequest: null as any,
-  onQuestionRequest: null as any,
-  onToolStart: null as any,
-  onToolComplete: null as any,
-  onIdle: null as any,
-  onError: null as any,
-  onSessionEnded: null as any,
+  onSessionCreated: null as unknown as ((event: { sessionId: string; agent: string; model?: string }) => void) | null,
+  onMessage: null as unknown as ((sessionId: string, event: { content: string }) => void) | null,
+  onMessageDelta: null as unknown as ((sessionId: string, event: { content: string }) => void) | null,
+  onPermissionRequest: null as unknown as ((sessionId: string, event: { id: string; toolArgs: unknown; description: string }) => void) | null,
+  onQuestionRequest: null as unknown as ((sessionId: string, event: { id: string; question: string }) => void) | null,
+  onToolStart: null as unknown as ((sessionId: string, event: { toolName: string; args: Record<string, unknown> }) => void) | null,
+  onToolComplete: null as unknown as ((sessionId: string, event: { toolName: string; result: string }) => void) | null,
+  onIdle: null as unknown as ((sessionId: string) => void) | null,
+  onError: null as unknown as ((sessionId: string, event: { message: string }) => void) | null,
+  onSessionEnded: null as unknown as ((sessionId: string, event: { reason: string }) => void) | null,
 };
 
 vi.mock('../adapters/copilot.js', () => ({
@@ -37,9 +37,9 @@ vi.mock('../adapters/copilot.js', () => ({
 const mockRelay = {
   connect: vi.fn(),
   disconnect: vi.fn(),
-  onStateChange: null as any,
-  onAuthenticated: null as any,
-  onFatalError: null as any,
+  onStateChange: null as ((state: string) => void) | null,
+  onAuthenticated: null as ((info: Record<string, unknown>) => void) | null,
+  onFatalError: null as ((message: string) => void) | null,
 };
 
 vi.mock('../relay-client.js', () => ({
@@ -64,15 +64,15 @@ const mockLoggerFns = {
 
 vi.mock('../logger.js', () => ({
   createLogger: vi.fn().mockReturnValue({
-    info: (...args: any[]) => mockLoggerFns.info(...args),
-    debug: (...args: any[]) => mockLoggerFns.debug(...args),
-    warn: (...args: any[]) => mockLoggerFns.warn(...args),
-    error: (...args: any[]) => mockLoggerFns.error(...args),
-    fatal: (...args: any[]) => mockLoggerFns.fatal(...args),
+    info: (...args: unknown[]) => mockLoggerFns.info(...args),
+    debug: (...args: unknown[]) => mockLoggerFns.debug(...args),
+    warn: (...args: unknown[]) => mockLoggerFns.warn(...args),
+    error: (...args: unknown[]) => mockLoggerFns.error(...args),
+    fatal: (...args: unknown[]) => mockLoggerFns.fatal(...args),
   }),
 }));
 
-let mockConfig: any = null;
+let mockConfig: Record<string, unknown> | null = null;
 let mockChannelKey: string | null = null;
 
 vi.mock('../config.js', () => ({
@@ -96,7 +96,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 // Prevent process.exit from killing the test runner
-const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
 // ── Import after mocking ────────────────────────────────
 

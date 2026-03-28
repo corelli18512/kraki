@@ -51,7 +51,7 @@ function createMockSession(sessionId: string) {
       listeners.get(event)!.push(handler);
     }),
     // Test helper: fire a fake SDK event
-    _emit(event: string, data: any) {
+    _emit(event: string, data: unknown) {
       for (const fn of listeners.get(event) ?? []) fn(data);
     },
     _listeners: listeners,
@@ -66,9 +66,9 @@ const fakeAdapterUrl = pathToFileURL(resolve(fakeRepoRoot, 'packages', 'tentacle
 const fakeCopilotPath = process.platform === 'win32' ? 'C:\\Tools\\copilot.exe' : '/opt/homebrew/bin/copilot';
 
 let mockSessions: MockSession[];
-let capturedSessionConfigs: any[];
-let capturedResumeConfigs: any[];
-let capturedClientOptions: any[];
+let capturedSessionConfigs: Record<string, unknown>[];
+let capturedResumeConfigs: Record<string, unknown>[];
+let capturedClientOptions: Record<string, unknown>[];
 let mockListSessions: Mock;
 let mockResumeSessionError: Error | null;
 const mockExistsSync = vi.fn();
@@ -79,18 +79,18 @@ let mockRegister: Mock | undefined;
 
 vi.mock('@github/copilot-sdk', () => {
   return {
-    CopilotClient: vi.fn().mockImplementation((options: any) => {
+    CopilotClient: vi.fn().mockImplementation((options: Record<string, unknown>) => {
       capturedClientOptions.push(options);
       return {
         start: vi.fn(),
         stop: vi.fn(),
-        createSession: vi.fn().mockImplementation(async (config: any) => {
+        createSession: vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
           capturedSessionConfigs.push(config);
           const session = createMockSession(`mock-sess-${mockSessions.length + 1}`);
           mockSessions.push(session);
           return session;
         }),
-        resumeSession: vi.fn().mockImplementation(async (sessionId: string, config: any) => {
+        resumeSession: vi.fn().mockImplementation(async (sessionId: string, config: Record<string, unknown>) => {
           capturedResumeConfigs.push({ sessionId, config });
           if (mockResumeSessionError) {
             throw mockResumeSessionError;
@@ -106,9 +106,9 @@ vi.mock('@github/copilot-sdk', () => {
 });
 
 vi.mock('node:fs', () => ({
-  existsSync: (...args: any[]) => mockExistsSync(...args),
-  readFileSync: (...args: any[]) => mockReadFileSync(...args),
-  writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
+  existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
 }));
 
 vi.mock('node:module', () => ({
