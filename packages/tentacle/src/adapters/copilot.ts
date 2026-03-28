@@ -672,16 +672,11 @@ export class CopilotAdapter extends AgentAdapter {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approved' };
       }
-      if (mode === 'plan') {
-        if (toolKind === 'write') {
-          logger.debug({ sessionId, toolKind, mode }, 'permission denied (plan mode)');
-          return { kind: 'denied-interactively-by-user', feedback: 'Write operations are not allowed in Plan mode.' };
-        }
+      if (mode === 'plan' && toolKind !== 'write') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approved' };
       }
-
-      // Mode === 'safe': check session allow set, then prompt user
+      // Plan mode writes and Safe mode: fall through to prompt user
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
         return { kind: 'approved' };
