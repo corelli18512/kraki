@@ -56,10 +56,10 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
               </div>
             </div>
 
-            <div className="border-t border-border-primary px-5 py-3">
+            <div className="border-t border-border-primary px-5 py-3 sm:hidden">
               <button
                 onClick={() => setOpen(false)}
-                className="w-full rounded-lg bg-kraki-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-kraki-600 active:scale-[0.98]"
+                className="w-full rounded-lg bg-surface-tertiary px-4 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
               >
                 Done
               </button>
