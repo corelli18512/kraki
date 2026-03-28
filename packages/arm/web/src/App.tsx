@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
+import { SyncOverlay } from './components/common/SyncOverlay';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './hooks/useStore';
 import { wsClient } from './lib/ws-client';
@@ -118,6 +119,7 @@ export function App() {
         reconnectAttempts={reconnectAttempts}
         nextReconnectDelayMs={nextReconnectDelayMs}
       />
+      <SyncOverlay />
     </div>
   );
 }

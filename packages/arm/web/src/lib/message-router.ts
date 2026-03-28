@@ -13,7 +13,7 @@ export interface RouterContext {
   /** Called when tentacle sends session_list for sync. */
   onSessionList?: (msg: SessionListMessage) => void;
   /** Called when tentacle signals per-session replay is complete. */
-  onSessionReplayComplete?: (sessionId: string) => void;
+  onSessionReplayComplete?: (sessionId: string, lastSeq: number, totalLastSeq: number) => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
@@ -29,7 +29,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'session_replay_complete') {
     const payload = (msg as SessionReplayCompleteMessage).payload;
     if (payload?.sessionId) {
-      ctx.onSessionReplayComplete?.(payload.sessionId);
+      ctx.onSessionReplayComplete?.(payload.sessionId, payload.lastSeq, payload.totalLastSeq ?? payload.lastSeq);
     }
     return;
   }
