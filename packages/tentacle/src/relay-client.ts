@@ -691,7 +691,7 @@ export class RelayClient {
     // Skip transient types that are redundant for state reconstruction.
     const type = enriched.type as string;
     const sessionId = enriched.sessionId as string | undefined;
-    if (sessionId && type !== 'agent_message_delta' && type !== 'idle') {
+    if (sessionId && type !== 'agent_message_delta') {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
     }
 
