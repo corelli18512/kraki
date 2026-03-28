@@ -228,3 +228,11 @@
 .animate-slide-in-right {
   animation: slide-in-right 0.2s ease-out;
 }
+
+@keyframes slide-out-right {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(1rem); }
+}
+.animate-slide-out-right {
+  animation: slide-out-right 0.2s ease-in forwards;
+}
