@@ -162,20 +162,18 @@ export class KrakiWSClient {
         messageCount: ts.messageCount,
       });
 
-      // Determine local message count for this session
+      // Determine local freshness for this session
       const localMessages = store.messages.get(ts.id);
-      const localCount = localMessages?.length ?? 0;
-
-      // Request replay if we have fewer messages than the tentacle
-      if (localCount < ts.messageCount) {
-        // Find the highest seq we have locally
-        let localLastSeq = 0;
-        if (localMessages) {
-          for (const m of localMessages) {
-            const seq = (m as any).seq;
-            if (typeof seq === 'number' && seq > localLastSeq) localLastSeq = seq;
-          }
+      let localLastSeq = 0;
+      if (localMessages) {
+        for (const m of localMessages) {
+          const seq = (m as any).seq;
+          if (typeof seq === 'number' && seq > localLastSeq) localLastSeq = seq;
         }
+      }
+
+      // Request replay if tentacle has newer messages than our local cache
+      if (localLastSeq < ts.lastSeq) {
         this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
       }
     }
