@@ -1,3 +1,4 @@
+import type { PermissionRequest, QuestionRequest } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 
 /** Instance-scoped tracking for create_session requests. */
@@ -42,10 +43,11 @@ export function resolvePermissionMessage(
   const msgs = store.messages.get(sessionId);
   if (!msgs) return;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i] as any;
-    if (m.type === 'permission' && m.payload?.id === permissionId) {
+    const m = msgs[i];
+    if (m.type === 'permission' && (m as PermissionRequest).payload?.id === permissionId) {
+      const permMsg = m as PermissionRequest;
       const updated = [...msgs];
-      updated[i] = { ...m, payload: { ...m.payload, resolution } };
+      updated[i] = { ...permMsg, payload: { ...permMsg.payload, resolution } } as typeof permMsg & { payload: typeof permMsg.payload & { resolution: string } };
       const next = new Map(store.messages);
       next.set(sessionId, updated);
       setStoreState({ messages: next });
@@ -64,10 +66,11 @@ export function resolveQuestionMessage(
   const msgs = store.messages.get(sessionId);
   if (!msgs) return;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i] as any;
-    if (m.type === 'question' && m.payload?.id === questionId) {
+    const m = msgs[i];
+    if (m.type === 'question' && (m as QuestionRequest).payload?.id === questionId) {
+      const qMsg = m as QuestionRequest;
       const updated = [...msgs];
-      updated[i] = { ...m, payload: { ...m.payload, answer: answerText } };
+      updated[i] = { ...qMsg, payload: { ...qMsg.payload, answer: answerText } } as typeof qMsg & { payload: typeof qMsg.payload & { answer: string } };
       const next = new Map(store.messages);
       next.set(sessionId, updated);
       setStoreState({ messages: next });

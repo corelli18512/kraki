@@ -141,7 +141,7 @@ export class HeadServer {
     if (!provider) return undefined;
     if (provider instanceof GitHubAuthProvider) return provider;
     if ('inner' in provider) {
-      const inner = (provider as any).inner;
+      const inner = (provider as unknown as { inner: unknown }).inner;
       if (inner instanceof GitHubAuthProvider) return inner;
     }
     return undefined;
@@ -240,7 +240,7 @@ export class HeadServer {
         }
         await this.handleAuth(ws, state, msg as unknown as AuthMessage);
       } else if (msg.type === 'auth_response' && state.pendingNonce) {
-        this.handleChallengeResponse(ws, state, msg as any);
+        this.handleChallengeResponse(ws, state, msg as unknown as { deviceId: string; signature: string });
       } else {
         this.sendError(ws, 'Must authenticate first');
       }

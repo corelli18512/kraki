@@ -315,7 +315,7 @@ export class CopilotAdapter extends AgentAdapter {
           // CLI requires `tools` field on each server — default to all tools
           mcpServers = {};
           for (const [name, cfg] of Object.entries(rawServers)) {
-            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as any).tools ?? ['*'] };
+            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as MCPServerConfig & { tools?: string[] }).tools ?? ['*'] };
           }
           logger.info(`MCP config found: ${serverNames.length} server(s) [${serverNames.join(', ')}]`);
         }
@@ -538,7 +538,7 @@ export class CopilotAdapter extends AgentAdapter {
         if (Object.keys(rawServers).length > 0) {
           mcpServers = {};
           for (const [name, cfg] of Object.entries(rawServers)) {
-            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as any).tools ?? ['*'] };
+            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as MCPServerConfig & { tools?: string[] }).tools ?? ['*'] };
           }
         }
       } catch { /* ignore parse errors on resume */ }

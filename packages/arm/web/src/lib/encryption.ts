@@ -14,7 +14,12 @@ export interface EncryptionCallbacks {
 /** Handles E2E encrypted message decryption and outbound encryption. */
 export class EncryptionHandler {
   keyStore: AppKeyStore;
-  private encryptedQueue: any[] = [];
+  private encryptedQueue: Array<{
+    type: 'broadcast' | 'unicast';
+    blob: string;
+    keys: Record<string, string>;
+    [key: string]: unknown;
+  }> = [];
 
   constructor(keyStore: AppKeyStore) {
     this.keyStore = keyStore;

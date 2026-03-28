@@ -512,7 +512,7 @@ export class RelayClient {
       });
       // Track key files from tool usage
       if (event.toolName === 'read_file' || event.toolName === 'write_file') {
-        const path = (event.args as any)?.path;
+        const path = (event.args as Record<string, unknown>)?.path as string | undefined;
         if (path) {
           const ctx = this.sessionManager.getContext(sessionId);
           if (ctx) {
@@ -599,12 +599,12 @@ export class RelayClient {
   private broadcastSessionList(): void {
     const sessions = this.sessionManager.getSessionList();
     this.sendEncrypted({
-      type: 'session_list' as any,
+      type: 'session_list',
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
       payload: { sessions },
-    } as any);
+    } as ProducerMessage);
   }
 
   /**
@@ -674,7 +674,7 @@ export class RelayClient {
         if (this.pendingE2eQueue.length < 1000) {
           this.pendingE2eQueue.push(msg);
         } else {
-          logger.warn({ type: (msg as any).type }, 'E2E queue full (1000) — dropping message');
+          logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
         }
         return;
       }
@@ -745,7 +745,7 @@ export class RelayClient {
    */
   private sendGreetingBroadcast(): void {
     this.sendEncrypted({
-      type: 'device_greeting' as any,
+      type: 'device_greeting',
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
@@ -754,7 +754,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         models: this.options.device.capabilities?.models,
       },
-    } as any);
+    } as ProducerMessage);
   }
 
   /**

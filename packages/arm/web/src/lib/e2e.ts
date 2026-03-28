@@ -64,7 +64,7 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-function idbGet(db: IDBDatabase, key: string): Promise<any> {
+function idbGet<T = unknown>(db: IDBDatabase, key: string): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const req = tx.objectStore(STORE_NAME).get(key);
@@ -73,7 +73,7 @@ function idbGet(db: IDBDatabase, key: string): Promise<any> {
   });
 }
 
-function idbPut(db: IDBDatabase, key: string, value: any): Promise<void> {
+function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).put(value, key);

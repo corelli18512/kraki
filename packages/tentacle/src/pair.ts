@@ -44,7 +44,7 @@ export async function requestPairingToken(
     });
 
     ws.on('message', (data) => {
-      let msg: any;
+      let msg: { type: string; token?: string; expiresIn?: number; message?: string };
       try { msg = JSON.parse(data.toString()); } catch { return; }
 
       if (msg.type === 'pairing_token_created') {
@@ -52,9 +52,9 @@ export async function requestPairingToken(
         const km = new KeyManager();
         resolve({
           relay: relayUrl,
-          pairingToken: msg.token,
+          pairingToken: msg.token!,
           publicKey: km.getCompactPublicKey(),
-          expiresIn: msg.expiresIn,
+          expiresIn: msg.expiresIn!,
         });
         ws.close();
         return;

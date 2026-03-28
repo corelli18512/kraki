@@ -23,7 +23,8 @@
     "build:web": "pnpm --filter @kraki/arm-web build",
     "test": "pnpm --filter @kraki/crypto test && pnpm --filter @kraki/head test && pnpm --filter @kraki/tentacle test && pnpm --filter @kraki/tests test",
     "test:live": "pnpm --filter @kraki/tests test:live",
-    "validate": "pnpm build && pnpm test && pnpm --filter @kraki/arm-web test",
+    "lint": "biome lint",
+    "validate": "pnpm lint && pnpm build && pnpm test && pnpm --filter @kraki/arm-web test",
     "reset": "rm -rf ~/.kraki && echo '🦑 Cleared ~/.kraki — run pnpm dev:tentacle to set up fresh'",
     "clean": "pnpm -r clean"
   },
@@ -38,6 +39,7 @@
     ]
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
     "tsx": "^4.21.0"
   }
 }
