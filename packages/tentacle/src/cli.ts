@@ -70,6 +70,7 @@ function printHelp(): void {
   kraki                Setup wizard + start (first time or reconfigure)
   kraki start          Start silently from existing config
   kraki stop           Stop Kraki
+  kraki update         Check for updates and install the latest version
   kraki connect        Generate QR code to connect a device
   kraki status         Show status and connection info
   kraki logs [-f]      Tail log files (-f to follow)
@@ -89,6 +90,15 @@ function printHelp(): void {
 
 async function cmdDefault(): Promise<void> {
   let config = loadConfig();
+
+  // Quick update check (blocks up to 2s, uses cache if available)
+  const { checkForUpdate } = await import('./update.js');
+  const currentVersion = getVersion();
+  const updateAvailable = await checkForUpdate(currentVersion);
+  if (updateAvailable) {
+    console.log(chalk.cyan(`  ⬆  Update available: ${currentVersion} → ${updateAvailable}`) + chalk.dim('  (run `kraki update`)'));
+    console.log();
+  }
 
   if (config) {
     if (isDaemonRunning()) {
@@ -386,6 +396,12 @@ async function main(): Promise<void> {
 
   if (cmd === 'stop') {
     cmdStop();
+    return;
+  }
+
+  if (cmd === 'update') {
+    const { performUpdate } = await import('./update.js');
+    await performUpdate(getVersion());
     return;
   }
 

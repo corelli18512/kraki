@@ -67,6 +67,10 @@ vi.mock('../setup.js', () => ({
   runSetup: (...args: any[]) => mockRunSetup(...args),
 }));
 
+vi.mock('../update.js', () => ({
+  checkForUpdate: vi.fn().mockResolvedValue(null),
+}));
+
 const mockSelect = vi.fn();
 vi.mock('@inquirer/prompts', () => ({
   select: (...args: any[]) => mockSelect(...args),
