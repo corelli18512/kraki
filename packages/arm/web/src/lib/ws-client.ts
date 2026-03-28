@@ -5,7 +5,7 @@ import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError } from './auth';
 import { handleDataMessage } from './message-router';
-import { getStore } from './store-adapter';
+import { getStore, setStoreState } from './store-adapter';
 import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
@@ -176,11 +176,18 @@ export class KrakiWSClient {
         }
       }
 
-      // Request replay if tentacle has newer messages than our local cache
-      const needsReplay = localLastSeq < ts.lastSeq;
-      logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay });
-      if (needsReplay) {
+      // Request replay if tentacle has newer messages than our local cache.
+      // If localLastSeq > tentacle lastSeq, local data has stale seq numbers
+      // (e.g. from before per-session seq migration) — clear and replay from scratch.
+      if (localLastSeq > ts.lastSeq) {
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, staleCache: true });
+        setStoreState({ messages: new Map([...store.messages].filter(([k]) => k !== ts.id)) });
+        this.requestSessionReplay(tentacleDeviceId, ts.id, 0);
+      } else if (localLastSeq < ts.lastSeq) {
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay: true });
         this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
+      } else {
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, upToDate: true });
       }
     }
   }
