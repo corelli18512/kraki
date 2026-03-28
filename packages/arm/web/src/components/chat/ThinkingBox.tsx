@@ -37,7 +37,7 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
           onClick={() => setOpen(false)}
         >
           <div
-            className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border-primary bg-surface-primary shadow-2xl"
+            className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-primary bg-surface-primary shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
@@ -52,8 +52,8 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
               </button>
             </div>
 
-            <div className="overflow-y-auto px-5 py-4">
-              <div className="space-y-3">
+            <div className="min-w-0 overflow-y-auto px-5 py-4">
+              <div className="min-w-0 space-y-3">
                 {messages.map((msg, idx) => (
                   <MessageBubble
                     key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
@@ -68,14 +68,14 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
             <div className="flex items-center border-t border-border-primary px-5 py-3 sm:hidden">
               <button
                 onClick={() => setAllExpanded(!allExpanded)}
-                className="rounded-lg bg-surface-tertiary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
+                className="rounded-lg bg-ocean-500/15 px-3 py-2 text-xs font-medium text-ocean-600 transition-colors hover:bg-ocean-500/25 active:scale-[0.98] dark:text-ocean-400"
               >
                 {allExpanded ? 'Collapse All' : 'Expand All'}
               </button>
               <div className="flex-1" />
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-lg bg-surface-tertiary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
+                className="rounded-lg bg-kraki-500/15 px-3 py-2 text-xs font-medium text-kraki-600 transition-colors hover:bg-kraki-500/25 active:scale-[0.98] dark:text-kraki-400"
               >
                 Back to Chat
               </button>
