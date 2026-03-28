@@ -150,7 +150,8 @@ export class KrakiWSClient {
 
     // Add/update sessions and request replays for stale ones
     for (const ts of tentacleSessions) {
-      const device = store.devices.get(tentacleDeviceId);
+      const currentStore = getStore();
+      const device = currentStore.devices.get(tentacleDeviceId);
       store.upsertSession({
         id: ts.id,
         deviceId: tentacleDeviceId,
@@ -167,7 +168,7 @@ export class KrakiWSClient {
       }
 
       // Determine local freshness for this session
-      const localMessages = store.messages.get(ts.id);
+      const localMessages = currentStore.messages.get(ts.id);
       let localLastSeq = 0;
       if (localMessages) {
         for (const m of localMessages) {
@@ -181,7 +182,10 @@ export class KrakiWSClient {
       // (e.g. from before per-session seq migration) — clear and replay from scratch.
       if (localLastSeq > ts.lastSeq) {
         logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, staleCache: true });
-        setStoreState({ messages: new Map([...store.messages].filter(([k]) => k !== ts.id)) });
+        // Clear stale messages through the store (ensures persistence update)
+        const cleaned = new Map(currentStore.messages);
+        cleaned.delete(ts.id);
+        setStoreState({ messages: cleaned });
         this.requestSessionReplay(tentacleDeviceId, ts.id, 0);
       } else if (localLastSeq < ts.lastSeq) {
         logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay: true });
