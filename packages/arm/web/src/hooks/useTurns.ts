@@ -43,8 +43,12 @@ const THINKING_TYPES = new Set([
   'approve',
   'deny',
   'always_allow',
-  'idle',
   'session_mode_set',
+]);
+
+/** Message types that signal the end of an agent turn */
+const TURN_COMPLETE_TYPES = new Set([
+  'idle',
 ]);
 
 /**
@@ -62,37 +66,29 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
   const result: GroupedMessages[] = [];
   let currentThinking: ChatMessage[] = [];
 
-  const flushTurn = () => {
+  const flushTurn = (turnComplete: boolean) => {
     if (currentThinking.length === 0) return;
 
-    // Find the last agent_message in the accumulated thinking
-    let lastAgentIdx = -1;
-    for (let i = currentThinking.length - 1; i >= 0; i--) {
-      if (currentThinking[i].type === 'agent_message') {
-        lastAgentIdx = i;
-        break;
-      }
-    }
-
-    if (lastAgentIdx === -1) {
-      // No agent_message yet — turn in progress
+    if (!turnComplete) {
+      // Turn still in progress — everything stays in thinking
       result.push({ type: 'turn', turn: { thinkingMessages: currentThinking, finalMessage: null } });
-    } else if (lastAgentIdx === 0 && currentThinking.length === 1) {
-      // Single agent_message, no thinking steps — show directly
-      result.push({ type: 'turn', turn: { thinkingMessages: [], finalMessage: currentThinking[0] } });
     } else {
-      // Has thinking steps + final message
-      const thinking = currentThinking.slice(0, lastAgentIdx);
-      const finalMsg = currentThinking[lastAgentIdx];
-      // Any messages after the final agent_message go into thinking of next implicit turn
-      const trailing = currentThinking.slice(lastAgentIdx + 1);
+      // Turn is complete — find the last agent_message as the final output
+      let lastAgentIdx = -1;
+      for (let i = currentThinking.length - 1; i >= 0; i--) {
+        if (currentThinking[i].type === 'agent_message') {
+          lastAgentIdx = i;
+          break;
+        }
+      }
 
-      result.push({ type: 'turn', turn: { thinkingMessages: thinking, finalMessage: finalMsg } });
-
-      // If there are trailing messages (e.g. tool calls after the last agent_message),
-      // they start a new in-progress turn
-      if (trailing.length > 0) {
-        result.push({ type: 'turn', turn: { thinkingMessages: trailing, finalMessage: null } });
+      if (lastAgentIdx === -1) {
+        // No agent_message — just thinking steps
+        result.push({ type: 'turn', turn: { thinkingMessages: currentThinking, finalMessage: null } });
+      } else {
+        const thinking = currentThinking.filter((_, i) => i !== lastAgentIdx);
+        const finalMsg = currentThinking[lastAgentIdx];
+        result.push({ type: 'turn', turn: { thinkingMessages: thinking, finalMessage: finalMsg } });
       }
     }
 
@@ -101,19 +97,21 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
 
   for (const msg of messages) {
     if (STANDALONE_TYPES.has(msg.type)) {
-      flushTurn();
+      flushTurn(true);
       result.push({ type: 'standalone', message: msg });
+    } else if (TURN_COMPLETE_TYPES.has(msg.type)) {
+      flushTurn(true);
     } else if (THINKING_TYPES.has(msg.type)) {
       currentThinking.push(msg);
     } else {
       // Unknown type — treat as standalone to be safe
-      flushTurn();
+      flushTurn(true);
       result.push({ type: 'standalone', message: msg });
     }
   }
 
-  // Flush any remaining turn
-  flushTurn();
+  // Flush any remaining turn — still in progress (no standalone followed)
+  flushTurn(false);
 
   return result;
 }

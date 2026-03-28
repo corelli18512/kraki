@@ -112,6 +112,8 @@ const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> 
 function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMode: typeof MODES[number] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const activeIdx = MODES.indexOf(currentMode);
   const colors = MODE_COLORS[currentMode];
 
@@ -122,25 +124,71 @@ function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMo
     if (btn) {
       setPill({ left: btn.offsetLeft, width: btn.offsetWidth });
     }
-  }, [activeIdx]);
+  }, [activeIdx, mobileExpanded]);
 
+  // Auto-collapse on mobile after 3s
+  useEffect(() => {
+    if (mobileExpanded) {
+      collapseTimerRef.current = setTimeout(() => setMobileExpanded(false), 3000);
+      return () => clearTimeout(collapseTimerRef.current);
+    }
+  }, [mobileExpanded]);
+
+  const handleMobileSelect = (mode: typeof MODES[number]) => {
+    wsClient.setSessionMode(sessionId, mode);
+    clearTimeout(collapseTimerRef.current);
+    setMobileExpanded(false);
+  };
+
+  // Desktop: always show all modes
+  // Mobile: show only selected, expand on tap
   return (
-    <div ref={containerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
-      <div
-        className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
-        style={{ left: pill.left, width: pill.width }}
-      />
-      {MODES.map((mode) => (
+    <>
+      {/* Desktop */}
+      <div ref={containerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
+        <div
+          className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+          style={{ left: pill.left, width: pill.width }}
+        />
+        {MODES.map((mode) => (
+          <button
+            key={mode}
+            onClick={() => wsClient.setSessionMode(sessionId, mode)}
+            className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+              currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Mobile: collapsed = selected pill only */}
+      {!mobileExpanded && (
         <button
-          key={mode}
-          onClick={() => wsClient.setSessionMode(sessionId, mode)}
-          className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-            currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
-          }`}
+          onClick={() => setMobileExpanded(true)}
+          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:hidden ${colors.pill} ${colors.text}`}
         >
-          {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          {currentMode.charAt(0).toUpperCase() + currentMode.slice(1)}
         </button>
-      ))}
-    </div>
+      )}
+
+      {/* Mobile: expanded = all modes, slides in from right */}
+      {mobileExpanded && (
+        <div className="absolute right-4 flex items-center rounded-full bg-surface-secondary p-0.5 sm:hidden animate-slide-in-right">
+          {MODES.map((mode) => (
+            <button
+              key={mode}
+              onClick={() => handleMobileSelect(mode)}
+              className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+                currentMode === mode ? `${colors.pill} ${colors.text}` : 'text-text-muted hover:text-text-secondary'
+              }`}
+            >
+              {mode.charAt(0).toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   );
 }

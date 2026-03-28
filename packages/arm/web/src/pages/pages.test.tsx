@@ -225,9 +225,9 @@ describe('SessionPage', () => {
       { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Safe')).toBeInTheDocument();
-    expect(screen.getByText('Plan')).toBeInTheDocument();
-    expect(screen.getByText('Execute')).toBeInTheDocument();
+    expect(screen.getAllByText('Safe').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Plan').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Execute').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Delegate')).toBeInTheDocument();
   });
 

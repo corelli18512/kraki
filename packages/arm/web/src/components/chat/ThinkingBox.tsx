@@ -7,26 +7,30 @@ interface ThinkingBoxProps {
   messages: ChatMessage[];
   isActive: boolean;
   agent?: string;
+  streamingText?: string;
 }
 
-export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
+export function ThinkingBox({ messages, isActive, agent, streamingText }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
   const [allExpanded, setAllExpanded] = useState(false);
 
-  if (messages.length === 0) return null;
+  if (messages.length === 0 && !streamingText) return null;
 
-  const lastMsg = messages[messages.length - 1];
-  const summary = getMessageSummary(lastMsg);
+  const summary = streamingText
+    ? streamingText.trim()
+    : messages.length > 0
+      ? getMessageSummary(messages[messages.length - 1])
+      : 'Processing…';
 
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        className="group my-1 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
+        className="group my-1 flex w-full items-start gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
-        <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : 'bg-emerald-500'}`} />
+        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : 'bg-emerald-500'}`} />
 
-        <span className="truncate text-xs font-medium text-text-secondary">
+        <span className="text-xs font-medium text-text-secondary line-clamp-3">
           {summary}
         </span>
       </button>
@@ -42,7 +46,7 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
           >
             <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
               <h3 className="text-sm font-semibold text-text-primary">
-                Agent Steps
+                Steps
               </h3>
               <button
                 onClick={() => setOpen(false)}
@@ -71,20 +75,26 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
                     />
                   );
                 })}
+                {streamingText && (
+                  <div className="text-sm leading-relaxed text-text-secondary">
+                    {streamingText}
+                    <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-text-muted" />
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="flex items-center border-t border-border-primary px-5 py-3 sm:hidden">
               <button
                 onClick={() => setAllExpanded(!allExpanded)}
-                className="rounded-lg bg-ocean-500/15 px-3 py-2 text-xs font-medium text-ocean-600 transition-colors hover:bg-ocean-500/25 active:scale-[0.98] dark:text-ocean-400"
+                className="rounded-lg bg-ocean-500/10 px-3 py-2 text-xs font-medium text-ocean-600/80 transition-colors hover:bg-ocean-500/20 active:scale-[0.98] dark:text-ocean-400/80"
               >
                 {allExpanded ? 'Collapse All' : 'Expand All'}
               </button>
               <div className="flex-1" />
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-lg bg-kraki-500/15 px-3 py-2 text-xs font-medium text-kraki-600 transition-colors hover:bg-kraki-500/25 active:scale-[0.98] dark:text-kraki-400"
+                className="rounded-lg bg-kraki-500 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-kraki-600 active:scale-[0.98]"
               >
                 Back to Chat
               </button>
@@ -101,14 +111,14 @@ function getMessageSummary(msg: ChatMessage): string {
     case 'tool_start': {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
-      const detail = getToolDetail(toolName, args);
-      return detail ? `Running ${toolName} ${detail}` : `Running ${toolName}`;
+      const detail = getToolDetail(args);
+      return detail || (toolName ? `Running ${toolName}` : 'Running…');
     }
     case 'tool_complete': {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
-      const detail = getToolDetail(toolName, args);
-      return detail ? `Completed ${toolName} ${detail}` : `Completed ${toolName}`;
+      const detail = getToolDetail(args);
+      return detail || toolName || 'Done';
     }
     case 'agent_message': {
       const content = msg.payload.content;
@@ -123,15 +133,17 @@ function getMessageSummary(msg: ChatMessage): string {
       return `Question: ${truncate(msg.payload.question, 50)}`;
     case 'error':
       return `Error: ${truncate(msg.payload.message, 50)}`;
+    case 'idle':
+      return 'Waiting…';
+    case 'session_mode_set':
+      return `Mode: ${msg.payload.mode ?? 'updated'}`;
     default:
       return 'Processing…';
   }
 }
 
-function getToolDetail(toolName: string, args: Record<string, unknown>): string {
-  if ((toolName === 'shell' || toolName === 'bash') && typeof args.command === 'string') {
-    return truncate(`$ ${args.command}`, 50);
-  }
+function getToolDetail(args: Record<string, unknown>): string {
+  if (typeof args.command === 'string') return truncate(`$ ${args.command}`, 50);
   if (typeof args.path === 'string') return truncate(args.path, 50);
   if (typeof args.pattern === 'string') return truncate(args.pattern, 50);
   if (typeof args.url === 'string') return truncate(args.url, 50);

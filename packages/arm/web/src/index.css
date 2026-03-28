@@ -220,3 +220,11 @@
   opacity: 0;
   animation: fade-up 1s ease-out 1.6s forwards;
 }
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(1rem); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.2s ease-out;
+}

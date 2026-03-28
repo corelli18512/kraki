@@ -2,14 +2,14 @@ import { useEffect, useRef, useMemo, useState, useCallback, type MutableRefObjec
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
-import { StreamingText } from './StreamingText';
 import { ThinkingBox } from './ThinkingBox';
 import { MessageInput } from './MessageInput';
 import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { useTurns } from '../../hooks/useTurns';
+import type { ChatMessage } from '../../types/store';
 
-const EMPTY_MESSAGES: import('../../types/store').ChatMessage[] = [];
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 export function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -53,7 +53,16 @@ export function ChatView() {
     [messages, pendingPermIds, pendingQuestionIds],
   );
 
-  const grouped = useTurns(filteredMessages);
+  const rawGrouped = useTurns(filteredMessages);
+
+  // Ensure streaming always attaches to a turn group
+  const grouped = useMemo(() => {
+    if (!streaming) return rawGrouped;
+    const last = rawGrouped[rawGrouped.length - 1];
+    if (last && last.type === 'turn' && !last.turn.finalMessage) return rawGrouped;
+    // No in-progress turn — append one so streaming has a home
+    return [...rawGrouped, { type: 'turn' as const, turn: { thinkingMessages: [] as ChatMessage[], finalMessage: null } }];
+  }, [rawGrouped, streaming]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -145,7 +154,7 @@ export function ChatView() {
                 const msg = item.message;
                 return (
                   <MessageBubble
-                    key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `local-${idx}`}
+                    key={`g-${idx}`}
                     message={msg}
                     agent={session.agent}
                   />
@@ -153,26 +162,26 @@ export function ChatView() {
               }
 
               const { turn } = item;
-              const isActiveTurn = !turn.finalMessage && !streaming;
-              const isStreamingTurn = !turn.finalMessage && !!streaming;
+              const isLastTurn = idx === grouped.length - 1;
+              const hasStreaming = isLastTurn && !!streaming;
+              const isActive = !turn.finalMessage || hasStreaming;
 
               return (
                 <div key={`turn-${idx}`}>
-                  {turn.thinkingMessages.length > 0 && (
+                  {(turn.thinkingMessages.length > 0 || hasStreaming) && (
                     <ThinkingBox
                       messages={turn.thinkingMessages}
-                      isActive={isActiveTurn || isStreamingTurn}
+                      isActive={isActive}
                       agent={session.agent}
+                      streamingText={hasStreaming ? streaming : undefined}
                     />
                   )}
-                  {turn.finalMessage && (
+                  {turn.finalMessage && !hasStreaming && (
                     <MessageBubble message={turn.finalMessage} agent={session.agent} />
                   )}
                 </div>
               );
             })}
-
-            {streaming && <StreamingText content={streaming} agent={session.agent} />}
           </div>
         </div>
 
