@@ -29,7 +29,7 @@ export function ToolActivity({ type, toolName, args, result, forceExpanded }: To
     <div className="my-1">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
+        className="group flex w-full items-center gap-1 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
         {isStart
           ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />
@@ -46,7 +46,7 @@ export function ToolActivity({ type, toolName, args, result, forceExpanded }: To
           <span className="truncate text-[11px] text-text-muted">{resultPreview}</span>
         )}
         <svg
-          className={`ml-1 h-3 w-3 shrink-0 text-text-muted transition-transform ${
+          className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${
             expanded ? 'rotate-180' : ''
           }`}
           fill="none"

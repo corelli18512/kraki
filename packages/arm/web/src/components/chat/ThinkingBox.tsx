@@ -42,7 +42,7 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
           >
             <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
               <h3 className="text-sm font-semibold text-text-primary">
-                Thinking Process
+                Agent Steps
               </h3>
               <button
                 onClick={() => setOpen(false)}
