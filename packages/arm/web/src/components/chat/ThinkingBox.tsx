@@ -11,7 +11,7 @@ interface ThinkingBoxProps {
 
 export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [allExpanded, setAllExpanded] = useState(false);
 
   if (messages.length === 0) return null;
 
@@ -53,34 +53,24 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
             </div>
 
             <div className="overflow-y-auto px-5 py-4">
-              {expanded ? (
-                <div className="space-y-3">
-                  {messages.map((msg, idx) => (
-                    <MessageBubble
-                      key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
-                      message={msg}
-                      agent={agent}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <ol className="space-y-1 text-xs text-text-secondary">
-                  {messages.map((msg, idx) => (
-                    <li key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="flex items-start gap-2 py-0.5">
-                      <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-muted" />
-                      <span className="truncate">{getMessageSummary(msg)}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
+              <div className="space-y-3">
+                {messages.map((msg, idx) => (
+                  <MessageBubble
+                    key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
+                    message={msg}
+                    agent={agent}
+                    forceExpanded={allExpanded || undefined}
+                  />
+                ))}
+              </div>
             </div>
 
             <div className="flex items-center border-t border-border-primary px-5 py-3 sm:hidden">
               <button
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => setAllExpanded(!allExpanded)}
                 className="rounded-lg bg-surface-tertiary px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary active:scale-[0.98]"
               >
-                {expanded ? 'Collapse' : 'Expand'}
+                {allExpanded ? 'Collapse all' : 'Expand all'}
               </button>
               <div className="flex-1" />
               <button

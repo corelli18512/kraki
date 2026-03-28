@@ -8,10 +8,12 @@ interface ToolActivityProps {
   toolName: string;
   args: Record<string, unknown> | object;
   result?: string;
+  forceExpanded?: boolean;
 }
 
-export function ToolActivity({ type, toolName, args, result }: ToolActivityProps) {
+export function ToolActivity({ type, toolName, args, result, forceExpanded }: ToolActivityProps) {
   const [expanded, setExpanded] = useState(false);
+  const isExpanded = forceExpanded ?? expanded;
   const isStart = type === 'start';
 
   const summary = getToolSummary(toolName, args as Record<string, unknown>);
@@ -56,7 +58,7 @@ export function ToolActivity({ type, toolName, args, result }: ToolActivityProps
         </svg>
       </button>
 
-      {expanded && (
+      {isExpanded && (
         <div className="ml-7 mt-1 space-y-2 rounded-lg bg-surface-tertiary p-3 text-xs">
           {summary && (
             <div>
