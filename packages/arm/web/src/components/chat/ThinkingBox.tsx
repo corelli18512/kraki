@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import type { ChatMessage } from '../../types/store';
 import { MessageBubble } from './MessageBubble';
 
@@ -38,10 +39,16 @@ export function ThinkingBox({ messages, isActive, agent }: ThinkingBoxProps) {
             className="mx-4 flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl border border-border-primary bg-surface-primary shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="border-b border-border-primary px-5 py-3">
+            <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
               <h3 className="text-sm font-semibold text-text-primary">
                 Thinking Process
               </h3>
+              <button
+                onClick={() => setOpen(false)}
+                className="hidden rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary sm:block"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <div className="overflow-y-auto px-5 py-4">
