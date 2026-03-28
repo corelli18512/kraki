@@ -271,6 +271,17 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'update_preferences') {
+      if (state.userId) {
+        const prefs = msg.preferences as Record<string, unknown> | undefined;
+        if (prefs && typeof prefs === 'object') {
+          this.storage.updatePreferences(state.userId, prefs);
+          ws.send(JSON.stringify({ type: 'preferences_updated', preferences: prefs }));
+        }
+      }
+      return;
+    }
+
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong' }));
       return;
@@ -517,11 +528,12 @@ export class HeadServer {
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
+    const fullUser = this.storage.getUser(user.userId);
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
       authMethod: 'challenge',
-      user: { id: user.userId, login: user.username, provider: user.provider },
+      user: { id: user.userId, login: user.username, provider: user.provider, preferences: fullUser?.preferences },
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
       relayVersion: this.options.version,
@@ -570,11 +582,12 @@ export class HeadServer {
       ip: state.ip,
     });
 
+    const fullUser = this.storage.getUser(user.id);
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
       authMethod,
-      user: { id: user.id, login: user.login, provider: user.provider },
+      user: { id: user.id, login: user.login, provider: user.provider, preferences: fullUser?.preferences },
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),
       relayVersion: this.options.version,

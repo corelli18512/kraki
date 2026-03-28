@@ -56,8 +56,6 @@ export class RelayClient {
   private pendingRequestIds = new Map<string, string>();
   /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
-  /** Tool kinds auto-approved via always_allow from apps */
-  private allowedTools = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
 
@@ -355,9 +353,6 @@ export class RelayClient {
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
           break;
         case 'always_allow':
-          if (msg.payload.toolKind) {
-            this.allowedTools.add(msg.payload.toolKind);
-          }
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
@@ -383,19 +378,19 @@ export class RelayClient {
         case 'mark_read':
           this.sessionManager.markRead(sessionId, msg.payload.seq);
           break;
-        default: {
-          // Handle extended message types (e.g. set_session_mode)
-          const ext = msg as any;
-          if (ext.type === 'set_session_mode') {
-            this.adapter.setSessionMode(sessionId, ext.payload.mode);
-            this.send({
-              type: 'session_mode_set',
-              sessionId,
-              payload: { mode: ext.payload.mode },
-            });
-          }
+        case 'set_session_mode': {
+          const mode = msg.payload.mode;
+          this.adapter.setSessionMode(sessionId, mode);
+          this.sessionManager.setMode(sessionId, mode);
+          this.send({
+            type: 'session_mode_set',
+            sessionId,
+            payload: { mode },
+          });
           break;
         }
+        default:
+          break;
       }
     } catch (err) {
       logger.error({ err, sessionId, type: msg.type }, 'handleConsumerMessage failed');
@@ -472,13 +467,6 @@ export class RelayClient {
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
-      // Auto-approve if tool kind is in the always-allowed set
-      if (this.allowedTools.has(event.toolArgs.toolName)) {
-        this.adapter.respondToPermission(sessionId, event.id, 'approve')
-          .catch((err) => logger.error({ err, sessionId }, 'auto-approve failed'));
-        return;
-      }
-
       this.send({
         type: 'permission',
         sessionId,

@@ -57,7 +57,7 @@ const initialState = {
   drafts: new Map<string, string>(),
   navigateToSession: null,
   activeSessionId: null,
-  sessionModes: new Map<string, 'ask' | 'auto'>(),
+  sessionModes: new Map<string, 'safe' | 'plan' | 'execute' | 'delegate'>(),
   githubClientId: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
@@ -260,8 +260,8 @@ export const useStore = create<Store>()(persist((set) => ({
   setSessionMode: (sessionId, mode) =>
     set((state) => {
       const next = new Map(state.sessionModes);
-      if (mode === 'ask') {
-        next.delete(sessionId);
+      if (mode === 'plan') {
+        next.delete(sessionId); // plan is default, no need to store
       } else {
         next.set(sessionId, mode);
       }

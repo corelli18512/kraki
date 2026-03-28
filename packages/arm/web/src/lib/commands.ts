@@ -158,7 +158,7 @@ export function abortSession(
 
 export function setSessionMode(
   sessionId: string,
-  mode: 'ask' | 'auto',
+  mode: 'safe' | 'plan' | 'execute' | 'delegate',
   send: (msg: Record<string, unknown>) => void,
 ): void {
   send({
@@ -169,8 +169,9 @@ export function setSessionMode(
   const store = getStore();
   store.setSessionMode(sessionId, mode);
 
-  // When switching to auto, auto-approve all pending permissions for this session
-  if (mode === 'auto') {
+  // Auto-approve pending permissions based on mode rules
+  if (mode === 'execute' || mode === 'delegate') {
+    // Execute/Delegate: approve all pending permissions
     const pending = [...store.pendingPermissions.values()].filter(
       (p) => p.sessionId === sessionId,
     );
@@ -182,6 +183,32 @@ export function setSessionMode(
       });
       store.removePermission(perm.id);
       resolvePermissionMessage(sessionId, perm.id, 'approved');
+    }
+  } else if (mode === 'plan') {
+    // Plan: approve non-write pending permissions, deny write
+    const pending = [...store.pendingPermissions.values()].filter(
+      (p) => p.sessionId === sessionId,
+    );
+    for (const perm of pending) {
+      const isWrite = perm.toolName === 'write' || perm.toolName === 'write_file' ||
+        perm.toolName === 'create' || perm.toolName === 'edit';
+      if (!isWrite) {
+        send({
+          type: 'approve',
+          sessionId,
+          payload: { permissionId: perm.id },
+        });
+        store.removePermission(perm.id);
+        resolvePermissionMessage(sessionId, perm.id, 'approved');
+      } else {
+        send({
+          type: 'deny',
+          sessionId,
+          payload: { permissionId: perm.id },
+        });
+        store.removePermission(perm.id);
+        resolvePermissionMessage(sessionId, perm.id, 'denied');
+      }
     }
   }
 }

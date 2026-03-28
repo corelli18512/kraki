@@ -7,6 +7,7 @@ interface UserRow {
   username: string;
   provider: string;
   email: string | null;
+  preferences: string | null;
   created_at: string;
 }
 
@@ -41,10 +42,11 @@ export interface StoredUser {
   username: string;
   provider: string;
   email?: string;
+  preferences?: Record<string, unknown>;
   createdAt: string;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export class Storage {
   private db: Database.Database;
@@ -66,6 +68,7 @@ export class Storage {
           username    TEXT NOT NULL,
           provider    TEXT NOT NULL DEFAULT 'open',
           email       TEXT,
+          preferences TEXT,
           created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -81,6 +84,15 @@ export class Storage {
           created_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
       `);
+    }
+
+    if (currentVersion < 2) {
+      // Add preferences column if upgrading from v1
+      try {
+        this.db.exec(`ALTER TABLE users ADD COLUMN preferences TEXT`);
+      } catch {
+        // Column may already exist from v1 schema above
+      }
     }
 
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -99,10 +111,22 @@ export class Storage {
 
   getUser(userId: string): StoredUser | undefined {
     const row = this.db.prepare(
-      'SELECT user_id, username, provider, email, created_at FROM users WHERE user_id = ?'
+      'SELECT user_id, username, provider, email, preferences, created_at FROM users WHERE user_id = ?'
     ).get(userId) as UserRow | undefined;
     if (!row) return undefined;
-    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, createdAt: row.created_at };
+    let prefs: Record<string, unknown> | undefined;
+    if (row.preferences) {
+      try { prefs = JSON.parse(row.preferences); } catch { /* ignore */ }
+    }
+    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, preferences: prefs, createdAt: row.created_at };
+  }
+
+  updatePreferences(userId: string, preferences: Record<string, unknown>): void {
+    const existing = this.getUser(userId);
+    if (!existing) return;
+    const merged = { ...(existing.preferences ?? {}), ...preferences };
+    this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
+      .run(JSON.stringify(merged), userId);
   }
 
   // --- Devices ---

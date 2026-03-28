@@ -580,6 +580,7 @@ describe('CopilotAdapter', () => {
       adapter.onPermissionRequest = permSpy;
       await adapter.start();
       await adapter.createSession({});
+      adapter.setSessionMode('mock-sess-1', 'safe');
 
       // Simulate SDK calling onPermissionRequest
       const handler = capturedSessionConfigs[0].onPermissionRequest;
@@ -608,6 +609,7 @@ describe('CopilotAdapter', () => {
       adapter.onPermissionRequest = permSpy;
       await adapter.start();
       await adapter.createSession({});
+      adapter.setSessionMode('mock-sess-1', 'safe');
 
       const handler = capturedSessionConfigs[0].onPermissionRequest;
       const resultPromise = handler(
@@ -627,6 +629,7 @@ describe('CopilotAdapter', () => {
       adapter.onPermissionRequest = permSpy;
       await adapter.start();
       await adapter.createSession({});
+      adapter.setSessionMode('mock-sess-1', 'safe');
 
       const handler = capturedSessionConfigs[0].onPermissionRequest;
       const resultPromise = handler(
@@ -704,6 +707,7 @@ describe('CopilotAdapter', () => {
       adapter.onPermissionRequest = permSpy;
       await adapter.start();
       await adapter.createSession({});
+      adapter.setSessionMode('mock-sess-1', 'safe');
 
       const handler = capturedSessionConfigs[0].onPermissionRequest;
       const resultPromise = handler(
@@ -803,6 +807,7 @@ describe('CopilotAdapter', () => {
       adapter.onPermissionRequest = permSpy;
       await adapter.start();
       await adapter.createSession({});
+      adapter.setSessionMode('mock-sess-1', 'safe');
       handler = capturedSessionConfigs[0].onPermissionRequest;
     });
 

@@ -217,7 +217,7 @@ describe('SessionPage', () => {
     expect(screen.queryByText('offline')).not.toBeInTheDocument();
   });
 
-  it('shows Ask/Auto toggle for online session', () => {
+  it('shows mode selector for online session', () => {
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
     ]);
@@ -225,20 +225,22 @@ describe('SessionPage', () => {
       { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Ask')).toBeInTheDocument();
-    expect(screen.getByText('Auto')).toBeInTheDocument();
+    expect(screen.getByText('Safe')).toBeInTheDocument();
+    expect(screen.getByText('Plan')).toBeInTheDocument();
+    expect(screen.getByText('Execute')).toBeInTheDocument();
+    expect(screen.getByText('Delegate')).toBeInTheDocument();
   });
 
-  it('hides Ask/Auto toggle for offline session', () => {
+  it('hides mode selector for offline session', () => {
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.queryByText('Ask')).not.toBeInTheDocument();
-    expect(screen.queryByText('Auto')).not.toBeInTheDocument();
+    expect(screen.queryByText('Safe')).not.toBeInTheDocument();
+    expect(screen.queryByText('Execute')).not.toBeInTheDocument();
   });
 
-  it('clicking toggle switches mode from ask to auto', async () => {
+  it('clicking mode button switches mode', async () => {
     const user = userEvent.setup();
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
@@ -247,22 +249,8 @@ describe('SessionPage', () => {
       { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
-    await user.click(screen.getByText('Auto'));
-    expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'auto');
-  });
-
-  it('clicking toggle switches mode from auto to ask', async () => {
-    const user = userEvent.setup();
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
-    useStore.getState().setSessionMode('s1', 'auto');
-    renderWithRoute('/session/s1', <SessionPage />);
-    await user.click(screen.getByText('Ask'));
-    expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'ask');
+    await user.click(screen.getByText('Execute'));
+    expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'execute');
   });
 });
 
