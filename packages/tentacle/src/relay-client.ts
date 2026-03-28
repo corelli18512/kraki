@@ -347,18 +347,20 @@ export class RelayClient {
         case 'approve':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
           break;
         case 'always_allow':
-          // Track auto-approved tool kinds for future permissions
           if (msg.payload.toolKind) {
             this.allowedTools.add(msg.payload.toolKind);
           }
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
           break;
         case 'answer':
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, false)

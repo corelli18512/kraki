@@ -192,6 +192,16 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    case 'permission_resolved': {
+      const permId = (msg as any).payload?.permissionId;
+      const resolution = (msg as any).payload?.resolution;
+      if (permId && resolution) {
+        store.removePermission(permId);
+        resolvePermissionMessage(sid, permId, resolution);
+      }
+      break;
+    }
+
     case 'answer': {
       const qId = msg.payload?.questionId;
       if (qId) {

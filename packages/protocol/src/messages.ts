@@ -193,6 +193,18 @@ export interface SessionListMessage extends BaseEnvelope {
   };
 }
 
+/** Broadcast by tentacle when a permission is resolved (so all apps can clear the card). */
+export interface PermissionResolvedMessage extends BaseEnvelope {
+  type: 'permission_resolved';
+  payload: {
+    permissionId: string;
+  } & (
+    | { resolution: 'approved' }
+    | { resolution: 'denied'; reason?: string }
+    | { resolution: 'always_allowed' }
+  );
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -209,7 +221,8 @@ export type ProducerMessage =
   | SessionModeSetMessage
   | DeviceGreetingMessage
   | SessionReplayCompleteMessage
-  | SessionListMessage;
+  | SessionListMessage
+  | PermissionResolvedMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
