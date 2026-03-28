@@ -326,7 +326,7 @@ export class RelayClient {
     // request_replay — replay buffered messages to the requesting device
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
-      this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq);
+      this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq, msg.payload.limit);
       return;
     }
 
@@ -621,15 +621,15 @@ export class RelayClient {
   /**
    * Handle a per-session replay request from a reconnecting app.
    */
-  private handleSessionReplay(requesterDeviceId: string, sessionId: string, afterSeq: number): void {
+  private handleSessionReplay(requesterDeviceId: string, sessionId: string, afterSeq: number, limit?: number): void {
     const requesterKey = this.consumerKeys.get(requesterDeviceId);
     if (!requesterKey) {
       logger.warn({ requesterDeviceId }, 'Session replay requested but no encryption key for requester');
       return;
     }
 
-    const messages = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq);
-    logger.info({ requesterDeviceId, sessionId, afterSeq, count: messages.length }, 'Replaying session messages');
+    const messages = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq, limit);
+    logger.info({ requesterDeviceId, sessionId, afterSeq, limit, count: messages.length }, 'Replaying session messages');
 
     for (const logged of messages) {
       try {
@@ -640,14 +640,14 @@ export class RelayClient {
       }
     }
 
+    const replayedLastSeq = messages.length > 0 ? messages[messages.length - 1].seq : afterSeq;
     const meta = this.sessionManager.getMeta(sessionId);
-    const lastSeq = meta?.lastSeq ?? (messages.length > 0 ? messages[messages.length - 1].seq : 0);
     const completeMsg = {
       type: 'session_replay_complete',
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { sessionId, lastSeq },
+      payload: { sessionId, lastSeq: replayedLastSeq, totalLastSeq: meta?.lastSeq ?? replayedLastSeq },
     };
     this.sendUnicastTo(requesterDeviceId, requesterKey, completeMsg);
   }

@@ -48,6 +48,8 @@ export interface AppState {
   deviceId: string | null;
   reconnectAttempts: number;
   nextReconnectDelayMs: number | null;
+  /** True during initial sync (phase 1 replay) — shows sync modal */
+  syncing: boolean;
 
   // Authenticated user
   user: { id: string; login: string; provider: string; email?: string } | null;
@@ -99,6 +101,7 @@ export interface AppActions {
   setAuth: (deviceId: string) => void;
   setUser: (user: AppState['user']) => void;
   setReconnectState: (attempts: number, nextDelayMs: number | null) => void;
+  setSyncing: (syncing: boolean) => void;
 
   // Data
   setSessions: (sessions: SessionSummary[]) => void;

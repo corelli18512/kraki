@@ -19,6 +19,15 @@ export class KrakiWSClient {
   private handlers: MessageHandler[] = [];
   /** Sessions currently being replayed — suppresses unread increments. */
   private replayingSessions = new Set<string>();
+  /** Two-phase sync state per session: 'latest' = waiting for first batch, 'history' = backfilling */
+  private syncPhase = new Map<string, 'latest' | 'history' | 'done'>();
+  /** Whether any session is in the initial sync phase (blocks UI via sync modal) */
+  get isSyncing(): boolean {
+    for (const phase of this.syncPhase.values()) {
+      if (phase === 'latest') return true;
+    }
+    return false;
+  }
 
   get url(): string { return this.transport.url; }
 
@@ -183,18 +192,40 @@ export class KrakiWSClient {
 
       // Request replay if tentacle has newer messages than our local cache
       if (localLastSeq < ts.lastSeq) {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay: true });
-        this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
+        const missing = ts.lastSeq - localLastSeq;
+        const LATEST_BATCH_SIZE = 50;
+
+        if (missing > LATEST_BATCH_SIZE && localLastSeq === 0) {
+          // Large gap from scratch — two-phase: fetch latest first, then backfill
+          const latestAfterSeq = Math.max(0, ts.lastSeq - LATEST_BATCH_SIZE);
+          logger.info('session sync (phase 1: latest)', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, latestAfterSeq });
+          this.syncPhase.set(ts.id, 'latest');
+          this.requestSessionReplay(tentacleDeviceId, ts.id, latestAfterSeq);
+        } else {
+          // Small gap or incremental — single request
+          logger.info('session sync (incremental)', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, missing });
+          this.syncPhase.set(ts.id, 'latest');
+          this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
+        }
       } else {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, upToDate: true });
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, upToDate: true });
+        this.syncPhase.set(ts.id, 'done');
       }
     }
+
+    // Show sync modal if any session needs phase 1 replay
+    getStore().setSyncing(this.isSyncing);
   }
 
   /** Clear all in-progress replay tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
     this.replayingSessions.clear();
+    this.syncPhase.clear();
+    this.sessionTentacleMap.clear();
   }
+
+  /** Maps sessionId → tentacleDeviceId for phase 2 backfill */
+  private sessionTentacleMap = new Map<string, string>();
 
   /**
    * Request replay for a specific session from a tentacle.
@@ -202,6 +233,7 @@ export class KrakiWSClient {
   private requestSessionReplay(tentacleDeviceId: string, sessionId: string, afterSeq: number): void {
     const store = getStore();
     this.replayingSessions.add(sessionId);
+    this.sessionTentacleMap.set(sessionId, tentacleDeviceId);
 
     this.sendEncrypted({
       type: 'request_session_replay',
@@ -210,7 +242,54 @@ export class KrakiWSClient {
     });
 
     // Safety timeout
-    setTimeout(() => { this.replayingSessions.delete(sessionId); }, 10_000);
+    setTimeout(() => {
+      this.replayingSessions.delete(sessionId);
+      if (this.syncPhase.get(sessionId) === 'latest') {
+        this.syncPhase.set(sessionId, 'done');
+        getStore().setSyncing(this.isSyncing);
+      }
+    }, 10_000);
+  }
+
+  /**
+   * Handle replay completion — trigger phase 2 backfill if needed.
+   */
+  private handleReplayComplete(sessionId: string, lastSeq: number, totalLastSeq: number): void {
+    this.replayingSessions.delete(sessionId);
+    const phase = this.syncPhase.get(sessionId);
+
+    if (phase === 'latest' && lastSeq < totalLastSeq) {
+      // Phase 1 complete — latest batch loaded. Start phase 2 for history backfill.
+      this.syncPhase.set(sessionId, 'history');
+      getStore().setSyncing(false); // Dismiss sync modal — user can interact now
+      const tentacleDeviceId = this.sessionTentacleMap.get(sessionId);
+      if (tentacleDeviceId) {
+        // Request everything before the latest batch
+        const currentStore = getStore();
+        let localLastSeq = 0;
+        const localMessages = currentStore.messages.get(sessionId);
+        if (localMessages) {
+          for (const m of localMessages) {
+            const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+            if (typeof seq === 'number' && seq > localLastSeq && seq <= totalLastSeq) {
+              localLastSeq = seq;
+            }
+          }
+        }
+        // Only backfill if there's still a gap
+        if (localLastSeq < totalLastSeq) {
+          // Request from 0 to fill in everything before the latest batch
+          this.requestSessionReplay(tentacleDeviceId, sessionId, 0);
+          this.syncPhase.set(sessionId, 'history');
+        } else {
+          this.syncPhase.set(sessionId, 'done');
+        }
+      }
+    } else {
+      // Phase 2 complete or single-phase replay
+      this.syncPhase.set(sessionId, 'done');
+      getStore().setSyncing(this.isSyncing);
+    }
   }
 
   // --- Internal ---
@@ -246,7 +325,9 @@ export class KrakiWSClient {
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
         onSessionList: (m) => this.handleSessionList(m),
-        onSessionReplayComplete: (sessionId) => { this.replayingSessions.delete(sessionId); },
+        onSessionReplayComplete: (sessionId, lastSeq, totalLastSeq) => {
+          this.handleReplayComplete(sessionId, lastSeq, totalLastSeq);
+        },
       }),
       getHandlers: () => this.handlers,
     };

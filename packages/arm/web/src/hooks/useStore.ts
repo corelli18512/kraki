@@ -44,6 +44,7 @@ const initialState = {
   deviceId: null,
   reconnectAttempts: 0,
   nextReconnectDelayMs: null,
+  syncing: false,
   user: null,
   sessions: new Map<string, SessionSummary>(),
   devices: new Map<string, DeviceSummary>(),
@@ -71,6 +72,8 @@ export const useStore = create<Store>()(persist((set) => ({
   setAuth: (deviceId) => set({ deviceId }),
 
   setUser: (user) => set({ user }),
+
+  setSyncing: (syncing) => set({ syncing }),
 
   setReconnectState: (attempts, nextDelayMs) =>
     set({

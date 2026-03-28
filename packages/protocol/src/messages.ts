@@ -180,8 +180,10 @@ export interface SessionReplayCompleteMessage extends BaseEnvelope {
   payload: {
     /** The session that was replayed. */
     sessionId: string;
-    /** The highest seq in this session's replay. */
+    /** The highest seq included in this replay batch. */
     lastSeq: number;
+    /** The total highest seq in the session (for detecting if more messages are available). */
+    totalLastSeq: number;
   };
 }
 
@@ -331,6 +333,8 @@ export interface RequestSessionReplayMessage extends BaseEnvelope {
     sessionId: string;
     /** Replay messages with seq strictly greater than this value. Use 0 for full replay. */
     afterSeq: number;
+    /** Max number of messages to return. Omit for all. */
+    limit?: number;
   };
 }
 
