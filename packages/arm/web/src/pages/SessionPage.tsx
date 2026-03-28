@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
@@ -111,11 +111,16 @@ const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> 
 
 function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMode: typeof MODES[number] }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
+  const [mobilePill, setMobilePill] = useState<{ left: number; width: number } | null>(null);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const [mobileClosing, setMobileClosing] = useState(false);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const activeIdx = MODES.indexOf(currentMode);
   const colors = MODE_COLORS[currentMode];
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
@@ -124,23 +129,96 @@ function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMo
     }
   }, [activeIdx]);
 
+  useLayoutEffect(() => {
+    if (!mobileExpanded) {
+      setMobilePill(null);
+      return;
+    }
+    const container = mobileContainerRef.current;
+    if (!container) return;
+    const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
+    if (btn) {
+      setMobilePill({ left: btn.offsetLeft, width: btn.offsetWidth });
+    }
+  }, [activeIdx, mobileExpanded]);
+
+  const closeMobile = () => {
+    setMobileClosing(true);
+    setTimeout(() => {
+      setMobileExpanded(false);
+      setMobileClosing(false);
+    }, 200);
+  };
+
+  // Auto-collapse on mobile after 3s
+  useEffect(() => {
+    if (mobileExpanded && !mobileClosing) {
+      collapseTimerRef.current = setTimeout(closeMobile, 3000);
+      return () => clearTimeout(collapseTimerRef.current);
+    }
+  }, [mobileExpanded, mobileClosing, currentMode]);
+
+  const handleMobileSelect = (mode: typeof MODES[number]) => {
+    wsClient.setSessionMode(sessionId, mode);
+    clearTimeout(collapseTimerRef.current);
+    collapseTimerRef.current = setTimeout(closeMobile, 3000);
+  };
+
   return (
-    <div ref={containerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
-      <div
-        className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
-        style={{ left: pill.left, width: pill.width }}
-      />
-      {MODES.map((mode) => (
+    <>
+      {/* Desktop */}
+      <div ref={containerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
+        <div
+          className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+          style={{ left: pill.left, width: pill.width }}
+        />
+        {MODES.map((mode) => (
+          <button
+            key={mode}
+            onClick={() => wsClient.setSessionMode(sessionId, mode)}
+            className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+              currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Mobile: collapsed = selected pill only */}
+      {!mobileExpanded && (
         <button
-          key={mode}
-          onClick={() => wsClient.setSessionMode(sessionId, mode)}
-          className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-            currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
-          }`}
+          onClick={() => setMobileExpanded(true)}
+          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:hidden ${colors.pill} ${colors.text}`}
         >
-          {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          {currentMode.charAt(0).toUpperCase() + currentMode.slice(1)}
         </button>
-      ))}
-    </div>
+      )}
+
+      {/* Mobile: expanded = all modes with sliding pill */}
+      {mobileExpanded && (
+        <div className={`absolute inset-0 flex items-center justify-end bg-gradient-to-l from-surface-primary via-surface-primary to-transparent pl-12 pr-4 sm:hidden ${mobileClosing ? 'animate-slide-out-right' : 'animate-slide-in-right'}`}>
+          <div ref={mobileContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
+            {mobilePill && (
+              <div
+                className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+                style={{ left: mobilePill.left, width: mobilePill.width }}
+              />
+            )}
+            {MODES.map((mode) => (
+              <button
+                key={mode}
+                onClick={() => handleMobileSelect(mode)}
+                className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+                  currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {mode.charAt(0).toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

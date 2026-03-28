@@ -158,6 +158,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const idled = store.sessions.get(sid);
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.flushDelta(sid);
+      store.appendMessage(sid, msg);
       break;
     }
 

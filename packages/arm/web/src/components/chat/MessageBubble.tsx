@@ -21,7 +21,7 @@ const markdownComponents = {
   ),
 };
 
-export function MessageBubble({ message, agent }: { message: ChatMessage; agent?: string }) {
+export function MessageBubble({ message, agent, forceExpanded }: { message: ChatMessage; agent?: string; forceExpanded?: boolean }) {
   switch (message.type) {
     case 'user_message':
       return (
@@ -82,7 +82,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
       );
 
     case 'tool_start':
-      return <ToolActivity type="start" toolName={message.payload.toolName} args={message.payload.args as Record<string, unknown>} />;
+      return <ToolActivity type="start" toolName={message.payload.toolName} args={message.payload.args as Record<string, unknown>} forceExpanded={forceExpanded} />;
 
     case 'tool_complete':
       return (
@@ -91,6 +91,7 @@ export function MessageBubble({ message, agent }: { message: ChatMessage; agent?
           toolName={message.payload.toolName}
           args={message.payload.args as Record<string, unknown>}
           result={message.payload.result}
+          forceExpanded={forceExpanded}
         />
       );
 
