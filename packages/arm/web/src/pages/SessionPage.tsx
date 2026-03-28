@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
@@ -89,25 +89,50 @@ export function SessionPage() {
           )}
         </div>
         {isDeviceOnline && sessionId && (
-          <div className="flex items-center gap-0.5 rounded-full bg-surface-secondary p-0.5">
-            {(['safe', 'plan', 'execute', 'delegate'] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => wsClient.setSessionMode(sessionId, mode)}
-                className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-                  sessionMode === mode
-                    ? 'bg-white dark:bg-surface-primary text-text-primary shadow-sm'
-                    : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-              </button>
-            ))}
-          </div>
+          <ModeSelector sessionId={sessionId} currentMode={sessionMode as 'safe' | 'plan' | 'execute' | 'delegate'} />
         )}
       </div>
 
       <ChatView />
+    </div>
+  );
+}
+
+// ── Mode selector with sliding pill ──────────────────────
+
+const MODES = ['safe', 'plan', 'execute', 'delegate'] as const;
+
+function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMode: typeof MODES[number] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState({ left: 0, width: 0 });
+  const activeIdx = MODES.indexOf(currentMode);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
+    if (btn) {
+      setPill({ left: btn.offsetLeft, width: btn.offsetWidth });
+    }
+  }, [activeIdx]);
+
+  return (
+    <div ref={containerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
+      <div
+        className="absolute top-0.5 h-[calc(100%-4px)] rounded-full bg-white dark:bg-surface-primary shadow-sm transition-all duration-300 ease-in-out"
+        style={{ left: pill.left, width: pill.width }}
+      />
+      {MODES.map((mode) => (
+        <button
+          key={mode}
+          onClick={() => wsClient.setSessionMode(sessionId, mode)}
+          className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+            currentMode === mode ? 'text-text-primary' : 'text-text-muted hover:text-text-secondary'
+          }`}
+        >
+          {mode.charAt(0).toUpperCase() + mode.slice(1)}
+        </button>
+      ))}
     </div>
   );
 }
