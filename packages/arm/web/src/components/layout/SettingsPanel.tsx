@@ -1,12 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
+import { isDebugLoggingEnabled, setDebugLogging } from '../../lib/logger';
 import { version } from '../../../package.json';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
+  const [debugLog, setDebugLog] = useState(isDebugLoggingEnabled);
 
   // Close on Escape (overlay mode only)
   useEffect(() => {
@@ -55,6 +57,30 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
           <p className="mt-1 rounded-lg bg-surface-secondary px-3 py-2 font-mono text-xs text-text-secondary">
             {wsUrl}
           </p>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+          Developer
+        </h3>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-text-primary">Debug logging</p>
+            <p className="text-[11px] text-text-muted">Ship client logs to tentacle for remote debugging</p>
+          </div>
+          <button
+            onClick={() => { const next = !debugLog; setDebugLog(next); setDebugLogging(next); }}
+            className={`relative h-6 w-11 rounded-full transition-colors ${
+              debugLog ? 'bg-kraki-500' : 'bg-slate-300'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                debugLog ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
         </div>
       </section>
 
