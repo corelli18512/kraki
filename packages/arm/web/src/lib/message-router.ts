@@ -48,19 +48,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const sid = msg.sessionId;
   const replaying = ctx.replayingSessions.has(sid);
 
-  // If we receive a message for a session we don't know about (e.g. missed
-  // session_created due to seq mismatch or environment switch), create a
-  // placeholder so the UI can render it.
+  // Drop messages for sessions we don't know about — session_list sync on
+  // reconnect will recover any legitimately missed sessions.
   if (!store.sessions.has(sid) && msg.type !== 'session_created') {
-    const device = store.devices.get(msg.deviceId);
-    store.upsertSession({
-      id: sid,
-      deviceId: msg.deviceId,
-      deviceName: device?.name ?? msg.deviceId,
-      agent: 'unknown',
-      state: 'active',
-      messageCount: 0,
-    });
+    return;
   }
 
   switch (msg.type) {

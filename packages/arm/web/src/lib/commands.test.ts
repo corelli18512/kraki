@@ -122,8 +122,15 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   const cmdState = new commands.CommandState();
 
+  const seedSession = (id: string) => {
+    useStore.getState().upsertSession({
+      id, deviceId: 'dev-tentacle', deviceName: 'test', agent: 'test', state: 'active', messageCount: 0,
+    });
+  };
+
   it('adds permission as pending in auto mode (auto-approve moved to tentacle)', () => {
     const sendEncrypted = vi.fn();
+    seedSession('sess-1');
     useStore.getState().setSessionMode('sess-1', 'execute');
 
     handleDataMessage(makePermissionMsg('perm-1', 'sess-1'), {
@@ -139,6 +146,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   it('adds permission as pending when session is in ask mode', () => {
     const sendEncrypted = vi.fn();
+    seedSession('sess-1');
 
     handleDataMessage(makePermissionMsg('perm-2', 'sess-1'), {
       replayingSessions: new Set(),
@@ -152,6 +160,7 @@ describe('handleDataMessage auto-approve in auto mode', () => {
 
   it('does not auto-approve during replay even in auto mode', () => {
     const sendEncrypted = vi.fn();
+    seedSession('sess-1');
     useStore.getState().setSessionMode('sess-1', 'execute');
 
     handleDataMessage(makePermissionMsg('perm-3', 'sess-1'), {
@@ -178,7 +187,14 @@ describe('handleDataMessage session_mode_set', () => {
     payload: { mode },
   });
 
+  const seedSession = (id: string) => {
+    useStore.getState().upsertSession({
+      id, deviceId: 'dev-tentacle', deviceName: 'test', agent: 'test', state: 'active', messageCount: 0,
+    });
+  };
+
   it('restores auto mode from replayed message', () => {
+    seedSession('sess-1');
     handleDataMessage(makeModeSetMsg('sess-1', 'execute') as InnerMessage, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
@@ -187,6 +203,7 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('restores plan mode (clears entry)', () => {
+    seedSession('sess-1');
     useStore.getState().setSessionMode('sess-1', 'execute');
     handleDataMessage(makeModeSetMsg('sess-1', 'plan') as InnerMessage, {
       replayingSessions: new Set(["test-session"]),
@@ -196,6 +213,7 @@ describe('handleDataMessage session_mode_set', () => {
   });
 
   it('works for live (non-replay) messages', () => {
+    seedSession('sess-2');
     handleDataMessage(makeModeSetMsg('sess-2', 'execute') as InnerMessage, {
       replayingSessions: new Set(),
       cmdState,

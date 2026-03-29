@@ -383,9 +383,11 @@ export class RelayClient {
           break;
         case 'delete_session':
           this.adapter.killSession(sessionId)
-            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
-          this.sessionManager.deleteSession(sessionId);
-          this.send({ type: 'session_deleted', sessionId, payload: {} });
+            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
+            .finally(() => {
+              this.sessionManager.deleteSession(sessionId);
+              this.send({ type: 'session_deleted', sessionId, payload: {} });
+            });
           break;
         case 'mark_read':
           this.sessionManager.markRead(sessionId, msg.payload.seq);
