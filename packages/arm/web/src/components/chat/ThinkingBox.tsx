@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
 import type { ChatMessage } from '../../types/store';
 import { MessageBubble } from './MessageBubble';
@@ -13,6 +13,35 @@ interface ThinkingBoxProps {
 export function ThinkingBox({ messages, isActive, agent, streamingText }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
   const [allExpanded, setAllExpanded] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+
+  const scrollToBottom = useCallback(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, []);
+
+  // Scroll to bottom when modal opens
+  useEffect(() => {
+    if (open) {
+      // Defer to allow the modal to render and measure content
+      requestAnimationFrame(scrollToBottom);
+    }
+  }, [open, scrollToBottom]);
+
+  // Auto-scroll on new content if already at bottom
+  useEffect(() => {
+    if (open && isAtBottomRef.current) {
+      scrollToBottom();
+    }
+  }, [open, messages, streamingText, scrollToBottom]);
+
+  const handleScroll = () => {
+    if (!contentRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
+    isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 40;
+  };
 
   if (messages.length === 0 && !streamingText) return null;
 
@@ -56,7 +85,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
               </button>
             </div>
 
-            <div className="min-w-0 overflow-y-auto px-5 py-4">
+            <div ref={contentRef} onScroll={handleScroll} className="min-w-0 overflow-y-auto px-5 py-4">
               <div className="min-w-0 space-y-3">
                 {messages.map((msg, idx) => {
                   if (msg.type === 'agent_message') {
