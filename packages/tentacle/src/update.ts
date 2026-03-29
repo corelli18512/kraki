@@ -9,7 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { get as httpsGet } from 'node:https';
 import { createHash } from 'node:crypto';
@@ -30,7 +30,10 @@ export type InstallMethod = 'npm' | 'sea' | 'unknown';
 export function detectInstallMethod(): InstallMethod {
   if (isSea()) return 'sea';
   const scriptPath = process.argv[1];
-  if (scriptPath && (scriptPath.includes('node_modules') || scriptPath.includes('.npm'))) {
+  if (!scriptPath) return 'unknown';
+  let resolvedPath = scriptPath;
+  try { resolvedPath = realpathSync(scriptPath); } catch { /* use original */ }
+  if (resolvedPath.includes('node_modules') || resolvedPath.includes('.npm')) {
     return 'npm';
   }
   return 'unknown';
