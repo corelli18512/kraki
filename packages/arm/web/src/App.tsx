@@ -4,7 +4,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
 import { useWebSocket } from './hooks/useWebSocket';
-import { useStore } from './hooks/useStore';
+import { useStore, hydrateMessagesFromDB } from './hooks/useStore';
 import { wsClient } from './lib/ws-client';
 
 const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
@@ -78,6 +78,11 @@ export function App() {
   const reconnectAttempts = useStore((s) => s.reconnectAttempts);
   const nextReconnectDelayMs = useStore((s) => s.nextReconnectDelayMs);
   const relayBlocked = status === 'disconnected' || status === 'error' || (status === 'connecting' && reconnectAttempts > 0);
+
+  // Hydrate messages from IndexedDB on mount
+  useEffect(() => {
+    hydrateMessagesFromDB().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (navigateToSession) {

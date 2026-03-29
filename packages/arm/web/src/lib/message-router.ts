@@ -261,6 +261,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           const next = new Map(store.messages);
           next.set(sid, updated);
           setStoreState({ messages: next });
+          // Sync merged messages to IndexedDB
+          import('./message-db').then(db => db.updateSessionMessages(sid, updated)).catch(() => {});
           break;
         }
       }
