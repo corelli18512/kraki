@@ -195,7 +195,9 @@ export function setSessionMode(
     for (const perm of pending) {
       const isWrite = perm.toolName === 'write' || perm.toolName === 'write_file' ||
         perm.toolName === 'create' || perm.toolName === 'edit';
-      if (!isWrite) {
+      const filePath = (perm.args.path ?? '') as string;
+      const isPlanMd = filePath.endsWith('/plan.md') || filePath === 'plan.md';
+      if (!isWrite || isPlanMd) {
         send({
           type: 'approve',
           sessionId,

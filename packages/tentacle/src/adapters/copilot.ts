@@ -676,6 +676,13 @@ export class CopilotAdapter extends AgentAdapter {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approved' };
       }
+      if (mode === 'plan' && toolKind === 'write') {
+        const filePath = ((req.fileName ?? req.path ?? '') as string);
+        if (filePath.endsWith('/plan.md') || filePath === 'plan.md') {
+          logger.debug({ sessionId, toolKind, mode, filePath }, 'plan.md write auto-approved in plan mode');
+          return { kind: 'approved' };
+        }
+      }
       // Plan mode writes and Safe mode: fall through to prompt user
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
