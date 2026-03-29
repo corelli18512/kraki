@@ -296,6 +296,15 @@ export class KrakiWSClient {
         break;
       }
 
+      case 'device_removed': {
+        const removed = msg as { deviceId: string };
+        if (removed.deviceId) {
+          getStore().setDeviceModels(removed.deviceId, []);
+          getStore().removeDevice(removed.deviceId);
+        }
+        break;
+      }
+
       default:
         break;
     }

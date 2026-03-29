@@ -174,6 +174,11 @@ export class Storage {
     };
   }
 
+  deleteDevice(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM devices WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
   // --- Cleanup ---
 
   close(): void {

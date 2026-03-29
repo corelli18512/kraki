@@ -25,6 +25,9 @@ interface MockSession {
 const devices = [
   { id: 'dev-macbook', name: 'MacBook Pro', role: 'tentacle' as const, kind: 'desktop' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'claude-opus-4', 'gpt-4.1', 'gpt-4o', 'o3'] } },
   { id: 'dev-server', name: 'CI Server', role: 'tentacle' as const, kind: 'server' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'gpt-4.1'] } },
+  { id: 'dev-linux-vm', name: 'Linux Dev VM', role: 'tentacle' as const, kind: 'vm' as const, online: false, capabilities: { models: ['claude-sonnet-4'] } },
+  { id: 'dev-iphone', name: 'iPhone 16', role: 'app' as const, kind: 'ios' as const, online: false },
+  { id: 'dev-old-laptop', name: 'Old ThinkPad', role: 'tentacle' as const, kind: 'desktop' as const, online: false, capabilities: { models: ['gpt-4.1'] } },
 ];
 
 const sessions: MockSession[] = [
@@ -94,6 +97,23 @@ wss.on('connection', (ws) => {
 
         // Send history for active sessions
         sendSessionHistory(ws);
+
+        // Send device greetings for online tentacles (assigns models)
+        for (const dev of devices) {
+          if (dev.online && dev.role === 'tentacle') {
+            send(ws, JSON.stringify({
+              type: 'device_greeting',
+              deviceId: dev.id,
+              seq: nextSeq(),
+              timestamp: new Date().toISOString(),
+              payload: {
+                name: dev.name,
+                kind: dev.kind,
+                models: (dev as { capabilities?: { models?: string[] } }).capabilities?.models,
+              },
+            }));
+          }
+        }
 
         // Start simulation after a brief delay
         setTimeout(() => startSimulation(ws), 2000);

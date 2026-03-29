@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { App } from './App';
 import { DashboardPage } from './pages/DashboardPage';
 import { SessionPage } from './pages/SessionPage';
+import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
 import './index.css';
 
@@ -14,6 +15,7 @@ function Root() {
       <Routes>
         <Route element={<App />}>
           <Route index element={<DashboardPage />} />
+          <Route path="devices" element={<DevicesPage />} />
           <Route path="session" element={<Navigate to="/" replace />} />
           <Route path="session/:sessionId" element={<SessionPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

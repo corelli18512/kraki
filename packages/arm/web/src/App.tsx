@@ -72,6 +72,8 @@ export function App() {
   useWebSocket();
   useSessionShortcuts();
   const inSession = useLocation().pathname.startsWith('/session/');
+  const inDevices = useLocation().pathname === '/devices';
+  const inSubPage = inSession || inDevices;
   const navigate = useNavigate();
   const navigateToSession = useStore((s) => s.navigateToSession);
   const setNavigateToSession = useStore((s) => s.setNavigateToSession);
@@ -120,10 +122,10 @@ export function App() {
       <aside className="hidden w-72 shrink-0 flex-col border-r border-border-primary md:flex lg:w-80" aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
-      <aside className={`w-full shrink-0 flex-col md:hidden ${inSession ? 'hidden' : 'flex'}`} aria-hidden={showBlockingOverlay}>
+      <aside className={`w-full shrink-0 flex-col md:hidden ${inSubPage ? 'hidden' : 'flex'}`} aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
-      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${inSession ? 'flex' : 'hidden md:flex'}`} aria-hidden={showBlockingOverlay}>
+      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${inSubPage ? 'flex' : 'hidden md:flex'}`} aria-hidden={showBlockingOverlay}>
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

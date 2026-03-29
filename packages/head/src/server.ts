@@ -282,6 +282,11 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'remove_device') {
+      this.handleRemoveDevice(ws, state, msg.deviceId as string);
+      return;
+    }
+
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong' }));
       return;
@@ -672,6 +677,51 @@ export class HeadServer {
 
   // --- Device presence notifications ---
 
+  private handleRemoveDevice(ws: WebSocket, state: ClientState, targetDeviceId: string): void {
+    const logger = getLogger();
+    if (!state.userId || !state.deviceId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+
+    if (!targetDeviceId || typeof targetDeviceId !== 'string') {
+      this.sendError(ws, 'Missing deviceId');
+      return;
+    }
+
+    const targetDevice = this.storage.getDevice(targetDeviceId);
+    if (!targetDevice || targetDevice.userId !== state.userId) {
+      this.sendError(ws, 'Device not found');
+      return;
+    }
+
+    // Only allow removing offline devices (zombie cleanup)
+    if (this.connections.has(targetDeviceId)) {
+      this.sendError(ws, 'Cannot remove an online device');
+      return;
+    }
+
+    this.storage.deleteDevice(targetDeviceId);
+    logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
+
+    // Broadcast removal to all remaining user devices
+    this.broadcastDeviceRemoved(state.userId, targetDeviceId);
+  }
+
+  private broadcastDeviceRemoved(userId: string, removedDeviceId: string): void {
+    const msg = JSON.stringify({ type: 'device_removed', deviceId: removedDeviceId });
+    let userDevices;
+    try {
+      userDevices = this.storage.getDevicesByUser(userId);
+    } catch { return; }
+    for (const d of userDevices) {
+      const ws = this.connections.get(d.id);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch { /* best effort */ }
+      }
+    }
+  }
+
   private broadcastDeviceJoined(userId: string, newDeviceId: string): void {
     let device;
     try {
@@ -687,6 +737,8 @@ export class HeadServer {
       publicKey: device.publicKey ?? undefined,
       encryptionKey: device.encryptionKey ?? undefined,
       online: true,
+      lastSeen: device.lastSeen,
+      createdAt: device.createdAt,
     };
 
     const msg = JSON.stringify({ type: 'device_joined', device: summary });
@@ -730,6 +782,8 @@ export class HeadServer {
       publicKey: d.publicKey ?? undefined,
       encryptionKey: d.encryptionKey ?? undefined,
       online: this.connections.has(d.id),
+      lastSeen: d.lastSeen,
+      createdAt: d.createdAt,
     }));
   }
 
