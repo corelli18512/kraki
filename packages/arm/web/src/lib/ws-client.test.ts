@@ -3,6 +3,17 @@ import { KrakiWSClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 
 // Mock encryption so data messages pass through without real crypto
+vi.mock('./message-db', () => ({
+  putMessage: async () => {},
+  putMessages: async () => {},
+  getMessages: async () => [],
+  getAllMessages: async () => new Map(),
+  getLastSeq: async () => 0,
+  deleteSessionMessages: async () => {},
+  updateSessionMessages: async () => {},
+  clearAllMessages: async () => {},
+}));
+
 vi.mock('./encryption', () => ({
   EncryptionHandler: class {
     keyStore: unknown;
@@ -323,7 +334,7 @@ describe('KrakiWSClient', () => {
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
-        payload: { sessionId: 'sess-1' },
+        payload: { sessionId: 'sess-1', lastSeq: 10, totalLastSeq: 10 },
       });
 
       // New message to sess-1 after replay complete should increment unread

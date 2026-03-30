@@ -88,7 +88,9 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessions: next };
     }),
 
-  removeSession: (sessionId) =>
+  removeSession: (sessionId) => {
+    // Clean up IndexedDB
+    import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId)).catch(() => {});
     set((state) => {
       const sessions = new Map(state.sessions);
       sessions.delete(sessionId);
@@ -111,7 +113,8 @@ export const useStore = create<Store>()(persist((set) => ({
       const pinnedSessions = new Set(state.pinnedSessions);
       pinnedSessions.delete(sessionId);
       return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions };
-    }),
+    });
+  },
 
   setDevices: (devices) =>
     set({ devices: new Map(devices.map((d) => [d.id, d])) }),
@@ -139,21 +142,23 @@ export const useStore = create<Store>()(persist((set) => ({
       return { devices: next };
     }),
 
-  appendMessage: (sessionId, message) =>
+  appendMessage: (sessionId, message) => {
+    // Write to IndexedDB (async, fire-and-forget)
+    import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch(() => {});
     set((state) => {
       const nextMsgs = new Map(state.messages);
       const list = [...(nextMsgs.get(sessionId) ?? []), message];
       nextMsgs.set(sessionId, list);
       return { messages: nextMsgs };
-    }),
+    });
+  },
 
-  resolvePendingInput: (sessionId, seq) =>
+  resolvePendingInput: (sessionId, seq) => {
     set((state) => {
       const msgs = state.messages.get(sessionId);
       if (!msgs) return state;
       const hasPending = msgs.some((m) => m.type === 'pending_input');
       if (!hasPending) return state;
-      // Convert pending_input to confirmed user_message (keep the text visible)
       const resolved = msgs.map((m) =>
         m.type === 'pending_input'
           ? {
@@ -168,8 +173,11 @@ export const useStore = create<Store>()(persist((set) => ({
       );
       const next = new Map(state.messages);
       next.set(sessionId, resolved);
+      // Sync resolved messages to IndexedDB
+      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, resolved)).catch(() => {});
       return { messages: next };
-    }),
+    });
+  },
 
   appendDelta: (sessionId, content) =>
     set((state) => {
@@ -329,12 +337,22 @@ export const useStore = create<Store>()(persist((set) => ({
     reviver,
   }),
   partialize: (state) => ({
-    messages: state.messages,
     sessions: state.sessions,
     devices: state.devices,
     unreadCount: state.unreadCount,
     pinnedSessions: state.pinnedSessions,
     sessionModes: state.sessionModes,
     drafts: state.drafts,
+    // messages are stored in IndexedDB, not localStorage
   }),
 }));
+
+/**
+ * Hydrate messages from IndexedDB into the Zustand store.
+ * Call once on app startup before rendering.
+ */
+export async function hydrateMessagesFromDB(): Promise<void> {
+  const { getAllMessages } = await import('../lib/message-db');
+  const messages = await getAllMessages();
+  useStore.setState({ messages });
+}

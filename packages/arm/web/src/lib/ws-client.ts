@@ -167,9 +167,8 @@ export class KrakiWSClient {
         store.setSessionMode(ts.id, ts.mode as 'safe' | 'plan' | 'execute' | 'delegate');
       }
 
-      // Determine local freshness for this session.
-      // Only count seqs within the valid per-session range — ignore stale
-      // messages with old global seq numbers higher than tentacle's lastSeq.
+      // Determine local freshness from in-memory store (hydrated from IndexedDB on mount).
+      // Only count seqs within the valid per-session range.
       const localMessages = currentStore.messages.get(ts.id);
       let localLastSeq = 0;
       if (localMessages) {
@@ -183,10 +182,10 @@ export class KrakiWSClient {
 
       // Request replay if tentacle has newer messages than our local cache
       if (localLastSeq < ts.lastSeq) {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, needsReplay: true });
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, needsReplay: true });
         this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
       } else {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, localCount: localMessages?.length ?? 0, upToDate: true });
+        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, upToDate: true });
       }
     }
   }
