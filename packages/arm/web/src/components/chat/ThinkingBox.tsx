@@ -59,7 +59,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
       >
         <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : 'bg-emerald-500'}`} />
 
-        <span className="text-xs font-medium text-text-secondary line-clamp-3">
+        <span className="text-xs font-medium text-text-secondary">
           {summary}
         </span>
       </button>
