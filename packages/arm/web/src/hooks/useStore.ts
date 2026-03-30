@@ -298,23 +298,12 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModels: next };
     }),
 
-  clearTransientState: () => set((state) => {
-    // Remove pending_input messages from all sessions (fix #12)
-    const cleanedMessages = new Map(state.messages);
-    for (const [sid, msgs] of cleanedMessages) {
-      const filtered = msgs.filter((m) => m.type !== 'pending_input');
-      if (filtered.length !== msgs.length) {
-        cleanedMessages.set(sid, filtered);
-      }
-    }
-    return {
-      streamingContent: new Map(),
-      unreadCount: new Map(),
-      messages: cleanedMessages,
-      // pendingPermissions and pendingQuestions are NOT cleared —
-      // they're persisted in IndexedDB and restored on hydration.
-      // Stale entries are cleaned by permission_resolved/question_resolved during replay.
-    };
+  clearTransientState: () => set({
+    streamingContent: new Map(),
+    unreadCount: new Map(),
+    // messages are NOT touched — they're managed by IndexedDB hydration.
+    // pending_input cleanup happens during hydration.
+    // pendingPermissions/pendingQuestions persist in IndexedDB.
   }),
 
   reset: () => set({
@@ -367,5 +356,12 @@ export async function hydrateMessagesFromDB(): Promise<void> {
     getAllPermissions(),
     getAllQuestions(),
   ]);
+  // Clean up pending_input messages from previous session (they're transient)
+  for (const [sid, msgs] of messages) {
+    const filtered = msgs.filter((m) => m.type !== 'pending_input');
+    if (filtered.length !== msgs.length) {
+      messages.set(sid, filtered);
+    }
+  }
   useStore.setState({ messages, pendingPermissions, pendingQuestions });
 }

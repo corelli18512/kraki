@@ -1,6 +1,6 @@
 {
   "name": "@kraki/arm-web",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Kraki web receiver — view and control your agents from any browser",
   "type": "module",
   "scripts": {
