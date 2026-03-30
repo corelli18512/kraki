@@ -678,12 +678,18 @@ export class CopilotAdapter extends AgentAdapter {
       }
       if (mode === 'plan' && toolKind === 'write') {
         const filePath = ((req.fileName ?? req.path ?? '') as string);
-        if (filePath.endsWith('/plan.md') || filePath === 'plan.md') {
-          logger.debug({ sessionId, toolKind, mode, filePath }, 'plan.md write auto-approved in plan mode');
+        // Allow list: files that can be written in Plan mode
+        const PLAN_MODE_WRITE_ALLOW_LIST = ['plan.md'];
+        const allowed = PLAN_MODE_WRITE_ALLOW_LIST.some(
+          (f) => filePath.endsWith('/' + f) || filePath === f,
+        );
+        if (allowed) {
+          logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (plan mode allow list)');
           return { kind: 'approved' };
         }
+        logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (plan mode)');
+        return { kind: 'denied-interactively-by-user', feedback: 'No edit allowed in Plan mode. Switch to Execute mode to make changes.' };
       }
-      // Plan mode writes and Safe mode: fall through to prompt user
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
         return { kind: 'approved' };
