@@ -90,7 +90,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   removeSession: (sessionId) => {
     // Clean up IndexedDB
-    import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId)).catch(() => {});
+    import('../lib/message-db').then(db => db.deleteSessionMessages(sessionId)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const sessions = new Map(state.sessions);
       sessions.delete(sessionId);
@@ -144,7 +144,7 @@ export const useStore = create<Store>()(persist((set) => ({
 
   appendMessage: (sessionId, message) => {
     // Write to IndexedDB (async, fire-and-forget)
-    import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch(() => {});
+    import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const nextMsgs = new Map(state.messages);
       const list = [...(nextMsgs.get(sessionId) ?? []), message];
@@ -174,7 +174,7 @@ export const useStore = create<Store>()(persist((set) => ({
       const next = new Map(state.messages);
       next.set(sessionId, resolved);
       // Sync resolved messages to IndexedDB
-      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, resolved)).catch(() => {});
+      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, resolved)).catch((e) => { console.error('[Kraki:idb]', e); });
       return { messages: next };
     });
   },
@@ -195,7 +195,7 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   addPermission: (perm) => {
-    import('../lib/message-db').then(db => db.putPermission(perm)).catch(() => {});
+    import('../lib/message-db').then(db => db.putPermission(perm)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.set(perm.id, perm);
@@ -204,7 +204,7 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   removePermission: (id) => {
-    import('../lib/message-db').then(db => db.removePermissionFromDB(id)).catch(() => {});
+    import('../lib/message-db').then(db => db.removePermissionFromDB(id)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.delete(id);
@@ -213,7 +213,7 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   addQuestion: (q) => {
-    import('../lib/message-db').then(db => db.putQuestion(q)).catch(() => {});
+    import('../lib/message-db').then(db => db.putQuestion(q)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.set(q.id, q);
@@ -222,7 +222,7 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   removeQuestion: (id) => {
-    import('../lib/message-db').then(db => db.removeQuestionFromDB(id)).catch(() => {});
+    import('../lib/message-db').then(db => db.removeQuestionFromDB(id)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(id);
