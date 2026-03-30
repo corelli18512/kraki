@@ -636,6 +636,7 @@ export class RelayClient {
     for (const logged of messages) {
       try {
         const parsed = JSON.parse(logged.payload);
+        parsed.seq = logged.seq; // Use per-session seq, not stale inner seq
         this.sendUnicastTo(requesterDeviceId, requesterKey, parsed);
       } catch {
         logger.warn({ seq: logged.seq, sessionId }, 'Failed to replay session message');
