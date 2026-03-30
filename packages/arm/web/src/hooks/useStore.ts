@@ -194,33 +194,41 @@ export const useStore = create<Store>()(persist((set) => ({
       return { streamingContent: next };
     }),
 
-  addPermission: (perm) =>
+  addPermission: (perm) => {
+    import('../lib/message-db').then(db => db.putPermission(perm)).catch(() => {});
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.set(perm.id, perm);
       return { pendingPermissions: next };
-    }),
+    });
+  },
 
-  removePermission: (id) =>
+  removePermission: (id) => {
+    import('../lib/message-db').then(db => db.removePermissionFromDB(id)).catch(() => {});
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.delete(id);
       return { pendingPermissions: next };
-    }),
+    });
+  },
 
-  addQuestion: (q) =>
+  addQuestion: (q) => {
+    import('../lib/message-db').then(db => db.putQuestion(q)).catch(() => {});
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.set(q.id, q);
       return { pendingQuestions: next };
-    }),
+    });
+  },
 
-  removeQuestion: (id) =>
+  removeQuestion: (id) => {
+    import('../lib/message-db').then(db => db.removeQuestionFromDB(id)).catch(() => {});
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(id);
       return { pendingQuestions: next };
-    }),
+    });
+  },
 
   togglePin: (sessionId) =>
     set((state) => {
@@ -301,10 +309,11 @@ export const useStore = create<Store>()(persist((set) => ({
     }
     return {
       streamingContent: new Map(),
-      pendingPermissions: new Map(),
-      pendingQuestions: new Map(),
       unreadCount: new Map(),
       messages: cleanedMessages,
+      // pendingPermissions and pendingQuestions are NOT cleared —
+      // they're persisted in IndexedDB and restored on hydration.
+      // Stale entries are cleaned by permission_resolved/question_resolved during replay.
     };
   }),
 
@@ -352,7 +361,11 @@ export const useStore = create<Store>()(persist((set) => ({
  * Call once on app startup before rendering.
  */
 export async function hydrateMessagesFromDB(): Promise<void> {
-  const { getAllMessages } = await import('../lib/message-db');
-  const messages = await getAllMessages();
-  useStore.setState({ messages });
+  const { getAllMessages, getAllPermissions, getAllQuestions } = await import('../lib/message-db');
+  const [messages, pendingPermissions, pendingQuestions] = await Promise.all([
+    getAllMessages(),
+    getAllPermissions(),
+    getAllQuestions(),
+  ]);
+  useStore.setState({ messages, pendingPermissions, pendingQuestions });
 }
