@@ -51,10 +51,33 @@ Kraki is a little sea creature with a job: the `head` stays in the middle, the `
 - Relay server (`head`) — thin encrypted forwarder
 - CLI bridge for agent machines (`tentacle`)
 - Web receiver / PWA (`arm/web`) with push notifications
+- **Desktop toolbar** (`toolbar`) — macOS menu bar & Windows system tray for tentacle
 - Shared protocol and crypto packages
 - Current adapter work centered on Copilot-based flows
 
 Native iOS and additional agent adapters will be added later without changing the core message flow. Any feedback and contributions are welcome.
+
+## Desktop toolbar
+
+The toolbar is an optional companion to the `kraki` CLI that lives in your macOS menu bar or Windows system tray, giving you always-visible connection status and quick controls.
+
+**Features:**
+- Live relay connection status (connected / connecting / disconnected)
+- Active session name
+- Connect / Disconnect toggle
+- QR pairing window with countdown
+
+**Installation** (macOS / Windows):
+
+Download the latest `.dmg` (macOS) or `.exe` (Windows) from [Releases](https://github.com/corelli18512/kraki/releases) and install it. The toolbar auto-starts at login and manages the tentacle daemon for you — no separate `kraki` CLI install required.
+
+**Running from source:**
+
+```bash
+# Install Rust + Tauri CLI first: https://tauri.app/start/prerequisites/
+pnpm install
+pnpm dev:toolbar
+```
 
 ## Set up
 
