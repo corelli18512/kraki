@@ -70,7 +70,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
           onClick={() => setOpen(false)}
         >
           <div
-            className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-primary bg-surface-primary shadow-2xl sm:max-w-2xl lg:max-w-4xl"
+            className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-primary bg-surface-primary shadow-2xl sm:max-w-3xl lg:max-w-6xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
