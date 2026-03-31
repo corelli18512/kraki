@@ -3,10 +3,14 @@ import { SessionList } from '../sessions/SessionList';
 import { DeviceList } from '../sessions/DeviceList';
 import { SettingsPanel } from './SettingsPanel';
 import { ProfileBar } from './ProfileBar';
+import { useStore } from '../../hooks/useStore';
 
 export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<'agents' | 'settings'>('agents');
+  const status = useStore((s) => s.status);
+  const reconnectAttempts = useStore((s) => s.reconnectAttempts);
+  const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
 
   return (
     <>
@@ -22,6 +26,11 @@ export function Sidebar() {
             <span style={{ color: '#0891b2' }}>I</span>
           </span>
           <span className="rounded-full bg-kraki-500/15 px-2 py-0.5 text-[10px] font-semibold text-kraki-600 dark:text-kraki-400">Preview</span>
+          {isReconnecting && (
+            <div className="flex items-center gap-1.5" title={`Reconnecting (attempt ${reconnectAttempts})`}>
+              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-500 border-t-transparent" />
+            </div>
+          )}
           {/* Desktop only: settings icon */}
           <button
             onClick={() => setSettingsOpen(true)}

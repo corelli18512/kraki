@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('./lib/ws-client', () => ({
@@ -48,7 +48,7 @@ describe('App', () => {
     expect(getAllByAltText('Kraki').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows a blocking relay overlay when disconnected', () => {
+  it('shows a blocking relay overlay when disconnected on first connect', () => {
     useStore.getState().setStatus('disconnected');
     renderApp('/session/s1');
 
@@ -56,7 +56,7 @@ describe('App', () => {
     const sessionShell = screen.getByText('Session content').closest('main');
     expect(overlay).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText('Disconnected')).toBeInTheDocument();
-    expect(screen.getByText('Lost connection to the relay server. Reconnecting…')).toBeInTheDocument();
+    expect(screen.getByText('Lost connection to the relay server.')).toBeInTheDocument();
     expect(sessionShell).toHaveAttribute('aria-hidden', 'true');
   });
 
@@ -71,25 +71,32 @@ describe('App', () => {
     expect(sessionShell).toHaveAttribute('aria-hidden', 'true');
   });
 
-  it('keeps the blocker visible during reconnect attempts', () => {
-    useStore.getState().setStatus('connecting');
-    useStore.getState().setReconnectState(2, null);
+  it('shows non-blocking indicator during early reconnect attempts', () => {
+    // Start as connected, then transition to reconnecting
+    useStore.getState().setStatus('connected');
     renderApp('/session/s1');
 
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
-    expect(screen.getByText('Trying to reconnect to the relay server…')).toBeInTheDocument();
-    expect(screen.queryByText(/Retry attempt/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Next automatic attempt/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Automatic reconnect is paused/i)).not.toBeInTheDocument();
+    // Simulate disconnect + reconnect
+    act(() => {
+      useStore.getState().setStatus('connecting');
+      useStore.getState().setReconnectState(2, null);
+    });
+
+    // Should not show blocking dialog — app stays usable
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('shows a manual connect button after repeated retries', () => {
-    useStore.getState().setStatus('disconnected');
-    useStore.getState().setReconnectState(5, null);
+    // Start as connected, then exhaust retries
+    useStore.getState().setStatus('connected');
     renderApp('/session/s1');
 
-    expect(screen.queryByText(/Automatic reconnect is paused/i)).not.toBeInTheDocument();
+    act(() => {
+      useStore.getState().setStatus('disconnected');
+      useStore.getState().setReconnectState(5, null);
+    });
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     vi.mocked(wsClient.connect).mockClear();
     const button = screen.getByRole('button', { name: 'Connect now' });
     fireEvent.click(button);

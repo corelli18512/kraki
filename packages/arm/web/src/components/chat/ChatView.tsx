@@ -7,9 +7,39 @@ import { MessageInput } from './MessageInput';
 import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { useTurns } from '../../hooks/useTurns';
+import { GapMarker } from './GapMarker';
 import type { ChatMessage } from '../../types/store';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+
+/** Extract seq from a message, returning 0 for non-sequenced messages. */
+function getSeq(m: ChatMessage): number {
+  return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
+}
+
+/**
+ * Detect gaps in a sorted message array.
+ * Returns beforeSeq values — the seq of the first message after each gap.
+ * For the implicit top gap, beforeSeq is the first message's seq.
+ */
+function detectGaps(messages: ChatMessage[]): number[] {
+  const gaps: number[] = [];
+  const seqs = messages.map(getSeq).filter(s => s > 0);
+  if (seqs.length === 0) return gaps;
+
+  // Implicit gap at top: messages don't start at seq 1
+  if (seqs[0] > 1) {
+    gaps.push(seqs[0]);
+  }
+
+  // Interior gaps: beforeSeq is the seq after the gap
+  for (let i = 0; i < seqs.length - 1; i++) {
+    if (seqs[i + 1] - seqs[i] > 1) {
+      gaps.push(seqs[i + 1]);
+    }
+  }
+  return gaps;
+}
 
 export function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -20,6 +50,7 @@ export function ChatView() {
   const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
   const permissionsMap = useStore((s) => s.pendingPermissions);
   const questionsMap = useStore((s) => s.pendingQuestions);
+  const loadingGaps = useStore((s) => s.loadingGaps);
 
   const messages = sessionId ? messagesMap.get(sessionId) ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
   const streaming = sessionId ? streamingMap.get(sessionId) : undefined;
@@ -48,6 +79,9 @@ export function ChatView() {
     [messages, pendingPermIds],
   );
 
+  // Detect gaps in the message sequence
+  const gaps = useMemo(() => sessionId ? detectGaps(filteredMessages) : [], [filteredMessages, sessionId]);
+
   const rawGrouped = useTurns(filteredMessages);
 
   // Ensure streaming always attaches to a turn group
@@ -63,7 +97,9 @@ export function ChatView() {
   const isAtBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const prevGroupLenRef: MutableRefObject<number> = useRef(0);
+  const prevMsgLenRef: MutableRefObject<number> = useRef(0);
+  const prevLastSeqRef = useRef(0);
+  const prevScrollHeightRef = useRef(0);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -73,13 +109,38 @@ export function ChatView() {
     setUnreadCount(0);
   }, []);
 
-  // Auto-scroll when new visible groups arrive (only if already at bottom)
+  // Preserve scroll position when older messages are prepended
   useEffect(() => {
+    if (!scrollRef.current) return;
+    const el = scrollRef.current;
+    const prevHeight = prevScrollHeightRef.current;
+    if (prevHeight > 0 && el.scrollHeight > prevHeight && !isAtBottomRef.current) {
+      el.scrollTop += el.scrollHeight - prevHeight;
+    }
+    prevScrollHeightRef.current = el.scrollHeight;
+  });
+
+  // Auto-scroll to bottom when new messages arrive (only if already at bottom)
+  useEffect(() => {
+    // Detect if messages were appended (new) vs prepended (history)
+    const curLen = grouped.length;
+    let curLastSeq = 0;
+    if (curLen > 0) {
+      const lastGroup = grouped[curLen - 1];
+      if (lastGroup.type === 'standalone') {
+        curLastSeq = getSeq(lastGroup.message);
+      } else {
+        const tm = lastGroup.turn.finalMessage ?? lastGroup.turn.thinkingMessages[lastGroup.turn.thinkingMessages.length - 1];
+        if (tm) curLastSeq = getSeq(tm);
+      }
+    }
+    const isNewAtEnd = curLastSeq > prevLastSeqRef.current;
+
     if (isAtBottomRef.current) {
       scrollToBottom();
-    } else {
-      const prevLen = prevGroupLenRef.current;
-      const curLen = grouped.length;
+    } else if (isNewAtEnd) {
+      // Only count as unread if new messages were appended at the end
+      const prevLen = prevMsgLenRef.current;
       if (curLen > prevLen) {
         const lastGroup = grouped[curLen - 1];
         const isFromUser = lastGroup?.type === 'standalone' && (
@@ -96,7 +157,8 @@ export function ChatView() {
         setShowScrollBtn(true);
       }
     }
-    prevGroupLenRef.current = grouped.length;
+    prevMsgLenRef.current = curLen;
+    prevLastSeqRef.current = curLastSeq;
   }, [grouped, streaming, scrollToBottom]);
 
   // Reset when switching sessions
@@ -123,6 +185,9 @@ export function ChatView() {
     }
   };
 
+  // Build a set of beforeSeq values for inserting gap markers
+  const gapSet = useMemo(() => new Set(gaps), [gaps]);
+
   if (!sessionId || !session) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -146,12 +211,25 @@ export function ChatView() {
             {grouped.map((item, idx) => {
               if (item.type === 'standalone') {
                 const msg = item.message;
+                const seq = getSeq(msg);
                 return (
-                  <MessageBubble
-                    key={`g-${idx}`}
-                    message={msg}
-                    agent={session.agent}
-                  />
+                  <div key={`g-${idx}`}>
+                    {/* Gap marker before this message if there's a gap */}
+                    {sessionId && seq > 0 && gapSet.has(seq) && (
+                      <div className="mb-3">
+                        <GapMarker
+                          sessionId={sessionId}
+                          beforeSeq={seq}
+                          loading={loadingGaps.has(`${sessionId}:before:${seq}`)}
+                          scrollRef={scrollRef}
+                        />
+                      </div>
+                    )}
+                    <MessageBubble
+                      message={msg}
+                      agent={session.agent}
+                    />
+                  </div>
                 );
               }
 
@@ -160,8 +238,23 @@ export function ChatView() {
               const hasStreaming = isLastTurn && !!streaming;
               const isActive = !turn.finalMessage || hasStreaming;
 
+              // Get the first seq in this turn for gap detection
+              const turnMessages = [...turn.thinkingMessages, ...(turn.finalMessage ? [turn.finalMessage] : [])];
+              const firstTurnSeq = turnMessages.length > 0 ? Math.min(...turnMessages.map(getSeq).filter(s => s > 0)) : 0;
+
               return (
                 <div key={`turn-${idx}`}>
+                  {/* Gap marker before this turn if there's a gap */}
+                  {sessionId && firstTurnSeq > 0 && gapSet.has(firstTurnSeq) && (
+                    <div className="mb-3">
+                      <GapMarker
+                        sessionId={sessionId}
+                        beforeSeq={firstTurnSeq}
+                        loading={loadingGaps.has(`${sessionId}:before:${firstTurnSeq}`)}
+                        scrollRef={scrollRef}
+                      />
+                    </div>
+                  )}
                   {(turn.thinkingMessages.length > 0 || hasStreaming) && (
                     <ThinkingBox
                       messages={turn.thinkingMessages}

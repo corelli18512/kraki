@@ -348,7 +348,7 @@ export class SessionManager {
   /**
    * Get messages for a session with seq > afterSeq.
    */
-  getMessagesAfterSeq(sessionId: string, afterSeq: number): LoggedMessage[] {
+  getMessagesAfterSeq(sessionId: string, afterSeq: number, limit?: number): LoggedMessage[] {
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
     if (!existsSync(logPath)) return [];
 
@@ -366,6 +366,7 @@ export class SessionManager {
         const msg = JSON.parse(line) as LoggedMessage;
         if (msg.seq > afterSeq) {
           messages.push(msg);
+          if (limit && messages.length >= limit) break;
         }
       } catch {
         // Skip corrupted lines

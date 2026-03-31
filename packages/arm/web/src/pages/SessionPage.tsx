@@ -14,6 +14,9 @@ export function SessionPage() {
   const clearUnread = useStore((s) => s.clearUnread);
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
   const sessionMode = useStore((s) => (sessionId ? (s.sessionModes.get(sessionId) ?? 'plan') : 'plan'));
+  const status = useStore((s) => s.status);
+  const reconnectAttempts = useStore((s) => s.reconnectAttempts);
+  const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
   const totalOtherUnread = useStore((s) => {
     let count = 0;
     for (const [sid, n] of s.unreadCount) {
@@ -73,7 +76,14 @@ export function SessionPage() {
             </span>
           )}
         </button>
-        <AgentAvatar agent={session.agent} size="sm" />
+        <div className="relative">
+          <AgentAvatar agent={session.agent} size="sm" />
+          {isReconnecting && (
+            <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
+              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-400 border-t-transparent" />
+            </div>
+          )}
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-text-primary">{label}</span>
