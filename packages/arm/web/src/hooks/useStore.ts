@@ -339,7 +339,8 @@ export const useStore = create<Store>()(persist((set) => ({
               const startArgs = (result[i] as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
               const completePayload = (complete as { payload?: Record<string, unknown> }).payload ?? {};
               const completeArgs = (completePayload as { args?: Record<string, unknown> }).args ?? {};
-              result[i] = { ...complete, payload: { ...completePayload, args: { ...startArgs, ...completeArgs } } } as typeof merged[0];
+              const startSeq = (result[i] as { seq?: number }).seq;
+              result[i] = { ...complete, seq: startSeq, payload: { ...completePayload, args: { ...startArgs, ...completeArgs } } } as typeof merged[0];
             }
           }
         }
