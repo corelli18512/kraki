@@ -61,7 +61,6 @@ const initialState = {
   githubClientId: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
-  loadingGaps: new Set<string>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -327,24 +326,9 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
-  addLoadingGap: (key) =>
-    set((state) => {
-      const next = new Set(state.loadingGaps);
-      next.add(key);
-      return { loadingGaps: next };
-    }),
-
-  removeLoadingGap: (key) =>
-    set((state) => {
-      const next = new Set(state.loadingGaps);
-      next.delete(key);
-      return { loadingGaps: next };
-    }),
-
   clearTransientState: () => set({
     streamingContent: new Map(),
     unreadCount: new Map(),
-    loadingGaps: new Set(),
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
     // pendingPermissions/pendingQuestions persist in IndexedDB.
@@ -369,7 +353,6 @@ export const useStore = create<Store>()(persist((set) => ({
     githubClientId: null,
   relayVersion: null,
     deviceModels: new Map(),
-    loadingGaps: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

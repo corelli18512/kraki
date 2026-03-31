@@ -106,7 +106,6 @@ class MessageProvider {
 
     const loadKey = `${sessionId}:${beforeSeq}`;
     this.loading.add(loadKey);
-    getStore().addLoadingGap(loadKey);
     logger.info('requestBefore start', { sessionId, beforeSeq, loadKey });
 
     // Check IndexedDB: take up to 100 messages immediately before beforeSeq
@@ -135,7 +134,6 @@ class MessageProvider {
           getStore().prependMessages(sessionId, older);
           logger.info('gap filled from IndexedDB', { sessionId, beforeSeq, count: older.length, newCount: newMessages.length });
           this.loading.delete(loadKey);
-          getStore().removeLoadingGap(loadKey);
           return;
         }
         // All messages already in store — gap is real (not in IndexedDB), fall through to tentacle
@@ -149,7 +147,6 @@ class MessageProvider {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
     if (!tentacleDeviceId || !this.sendFn) {
       this.loading.delete(loadKey);
-      getStore().removeLoadingGap(loadKey);
       return;
     }
 
@@ -165,9 +162,7 @@ class MessageProvider {
 
     // Safety timeout
     setTimeout(() => {
-      if (this.loading.delete(loadKey)) {
-        getStore().removeLoadingGap(loadKey);
-      }
+      this.loading.delete(loadKey);
     }, 10_000);
   }
 
@@ -175,26 +170,19 @@ class MessageProvider {
    * Handle a replay batch from tentacle — insert into store + clear loading.
    */
   handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
-    logger.info('handleBatch received', { sessionId, count: messages?.length ?? 0, loadingKeys: [...this.loading], storeGaps: [...getStore().loadingGaps] });
+    logger.info('handleBatch received', { sessionId, count: messages?.length ?? 0 });
 
     if (messages && messages.length > 0) {
       getStore().prependMessages(sessionId, messages as Parameters<ReturnType<typeof getStore>['prependMessages']>[1]);
     }
 
-    // Clear all loading keys for this session (internal + store)
+    // Clear internal loading keys for this session
     for (const key of [...this.loading]) {
       if (key.startsWith(`${sessionId}:`)) {
         this.loading.delete(key);
       }
     }
-    // Clear any gap loading keys in the store
-    const store = getStore();
-    for (const key of store.loadingGaps) {
-      if (key.startsWith(`${sessionId}:`)) {
-        store.removeLoadingGap(key);
-      }
-    }
-    logger.info('handleBatch done', { sessionId, loadingKeysAfter: [...this.loading], storeGapsAfter: [...store.loadingGaps] });
+    logger.info('handleBatch done', { sessionId });
   }
 
   /** Clear all tracking (on disconnect). */
@@ -211,8 +199,7 @@ class MessageProvider {
       return;
     }
 
-    // Track in internal loading set (for isLoading check) but not in store loadingGaps
-    // — loadingGaps is only for gap markers in the UI, not initial sync.
+    // Track in internal loading set (for isLoading check).
     const loadKey = `${sessionId}:${afterSeq}`;
     this.loading.add(loadKey);
 

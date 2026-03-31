@@ -1,9 +1,12 @@
 import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ToolCompleteMessage, ToolStartMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 import { isViewingSession } from './replay';
+import { createLogger } from './logger';
 import type { CommandState } from './commands';
 import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import type { PendingPermission, PendingQuestion } from '../types/store';
+
+const logger = createLogger('msg-router');
 
 export interface RouterContext {
   cmdState: CommandState;
@@ -94,11 +97,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'agent_message_delta': {
+      logger.info('delta received', { sessionId: sid, contentLen: msg.payload.content?.length });
       store.appendDelta(sid, msg.payload.content);
       break;
     }
 
     case 'agent_message': {
+      logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
       break;

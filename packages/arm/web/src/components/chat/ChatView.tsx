@@ -50,7 +50,6 @@ export function ChatView() {
   const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
   const permissionsMap = useStore((s) => s.pendingPermissions);
   const questionsMap = useStore((s) => s.pendingQuestions);
-  const loadingGaps = useStore((s) => s.loadingGaps);
 
   const messages = sessionId ? messagesMap.get(sessionId) ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
   const streaming = sessionId ? streamingMap.get(sessionId) : undefined;
@@ -80,14 +79,14 @@ export function ChatView() {
   );
 
   // Detect gaps in the message sequence
-  const gaps = useMemo(() => {
-    const g = sessionId ? detectGaps(filteredMessages) : [];
-    if (g.length > 0) {
-      const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
-      console.log('[Kraki:gaps]', { sessionId, gaps: g, totalMsgs: filteredMessages.length, firstSeq: seqs[0], lastSeq: seqs[seqs.length - 1] });
-    }
-    return g;
-  }, [filteredMessages, sessionId]);
+  const gaps = useMemo(() => sessionId ? detectGaps(filteredMessages) : [], [filteredMessages, sessionId]);
+
+  // Show spinner at top if there are older messages not yet loaded
+  const firstSeq = useMemo(() => {
+    const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
+    return seqs.length > 0 ? seqs[0] : 0;
+  }, [filteredMessages]);
+  const hasOlderMessages = firstSeq > 1;
 
   const rawGrouped = useTurns(filteredMessages);
 
@@ -215,21 +214,20 @@ export function ChatView() {
           className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
         >
           <div className="mx-auto max-w-3xl space-y-3">
+            {/* Top spinner when older messages exist */}
+            {hasOlderMessages && (
+              <GapMarker sessionId={sessionId!} beforeSeq={firstSeq} scrollRef={scrollRef} />
+            )}
             {grouped.map((item, idx) => {
               if (item.type === 'standalone') {
                 const msg = item.message;
                 const seq = getSeq(msg);
                 return (
                   <div key={`g-${idx}`}>
-                    {/* Gap marker before this message if there's a gap */}
-                    {sessionId && seq > 0 && gapSet.has(seq) && (
+                    {/* Interior gap marker */}
+                    {sessionId && seq > 0 && gapSet.has(seq) && seq !== firstSeq && (
                       <div className="mb-3">
-                        <GapMarker
-                          sessionId={sessionId}
-                          beforeSeq={seq}
-                          loading={loadingGaps.has(`${sessionId}:${seq}`)}
-                          scrollRef={scrollRef}
-                        />
+                        <GapMarker sessionId={sessionId} beforeSeq={seq} scrollRef={scrollRef} />
                       </div>
                     )}
                     <MessageBubble
@@ -251,15 +249,10 @@ export function ChatView() {
 
               return (
                 <div key={`turn-${idx}`}>
-                  {/* Gap marker before this turn if there's a gap */}
-                  {sessionId && firstTurnSeq > 0 && gapSet.has(firstTurnSeq) && (
+                  {/* Interior gap marker */}
+                  {sessionId && firstTurnSeq > 0 && gapSet.has(firstTurnSeq) && firstTurnSeq !== firstSeq && (
                     <div className="mb-3">
-                      <GapMarker
-                        sessionId={sessionId}
-                        beforeSeq={firstTurnSeq}
-                        loading={loadingGaps.has(`${sessionId}:${firstTurnSeq}`)}
-                        scrollRef={scrollRef}
-                      />
+                      <GapMarker sessionId={sessionId} beforeSeq={firstTurnSeq} scrollRef={scrollRef} />
                     </div>
                   )}
                   {(turn.thinkingMessages.length > 0 || hasStreaming) && (

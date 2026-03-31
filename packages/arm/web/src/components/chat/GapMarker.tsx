@@ -7,11 +7,10 @@ const logger = createLogger('gap-marker');
 interface GapMarkerProps {
   sessionId: string;
   beforeSeq: number;
-  loading: boolean;
   scrollRef: RefObject<HTMLDivElement | null>;
 }
 
-export function GapMarker({ sessionId, beforeSeq, loading, scrollRef }: GapMarkerProps) {
+export function GapMarker({ sessionId, beforeSeq, scrollRef }: GapMarkerProps) {
   const markerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -21,7 +20,7 @@ export function GapMarker({ sessionId, beforeSeq, loading, scrollRef }: GapMarke
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !loading) {
+        if (entry.isIntersecting) {
           logger.info('gap visible, requesting', { sessionId, beforeSeq });
           messageProvider.requestBefore(sessionId, beforeSeq);
         }
@@ -31,13 +30,11 @@ export function GapMarker({ sessionId, beforeSeq, loading, scrollRef }: GapMarke
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [sessionId, beforeSeq, loading, scrollRef]);
+  }, [sessionId, beforeSeq, scrollRef]);
 
   return (
     <div ref={markerRef} className="flex justify-center py-3">
-      {loading && (
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-      )}
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
     </div>
   );
 }
