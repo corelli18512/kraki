@@ -55,10 +55,15 @@ class MessageProvider {
    * Called for every session after session_list arrives.
    */
   async requestLatest(sessionId: string): Promise<void> {
-    if (this.isLoading(sessionId)) return;
+    if (this.isLoading(sessionId)) {
+      logger.info('requestLatest skipped (loading)', { sessionId, loadingKeys: [...this.loading] });
+      return;
+    }
 
     const totalLastSeq = this.tentacleLastSeq.get(sessionId) ?? 0;
     if (totalLastSeq === 0) return;
+
+    logger.info('requestLatest', { sessionId, totalLastSeq });
 
     // Check IndexedDB first
     let dbLastSeq = 0;
@@ -94,12 +99,15 @@ class MessageProvider {
    * Called when a GapMarker scrolls into view.
    */
   async requestBefore(sessionId: string, beforeSeq: number): Promise<void> {
-    // One request per session at a time
-    if (this.isLoading(sessionId)) return;
+    if (this.isLoading(sessionId)) {
+      logger.info('requestBefore skipped (loading)', { sessionId, beforeSeq, loadingKeys: [...this.loading] });
+      return;
+    }
 
     const loadKey = `${sessionId}:${beforeSeq}`;
     this.loading.add(loadKey);
     getStore().addLoadingGap(loadKey);
+    logger.info('requestBefore start', { sessionId, beforeSeq, loadKey });
 
     // Check IndexedDB: take up to 100 messages immediately before beforeSeq
     try {
@@ -152,6 +160,8 @@ class MessageProvider {
    * Handle a replay batch from tentacle — insert into store + clear loading.
    */
   handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
+    logger.info('handleBatch received', { sessionId, count: messages?.length ?? 0, loadingKeys: [...this.loading], storeGaps: [...getStore().loadingGaps] });
+
     if (messages && messages.length > 0) {
       getStore().prependMessages(sessionId, messages as Parameters<ReturnType<typeof getStore>['prependMessages']>[1]);
     }
@@ -169,6 +179,7 @@ class MessageProvider {
         store.removeLoadingGap(key);
       }
     }
+    logger.info('handleBatch done', { sessionId, loadingKeysAfter: [...this.loading], storeGapsAfter: [...store.loadingGaps] });
   }
 
   /** Clear all tracking (on disconnect). */

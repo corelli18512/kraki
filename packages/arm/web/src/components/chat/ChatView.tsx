@@ -80,7 +80,14 @@ export function ChatView() {
   );
 
   // Detect gaps in the message sequence
-  const gaps = useMemo(() => sessionId ? detectGaps(filteredMessages) : [], [filteredMessages, sessionId]);
+  const gaps = useMemo(() => {
+    const g = sessionId ? detectGaps(filteredMessages) : [];
+    if (g.length > 0) {
+      const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
+      console.log('[Kraki:gaps]', { sessionId, gaps: g, totalMsgs: filteredMessages.length, firstSeq: seqs[0], lastSeq: seqs[seqs.length - 1] });
+    }
+    return g;
+  }, [filteredMessages, sessionId]);
 
   const rawGrouped = useTurns(filteredMessages);
 

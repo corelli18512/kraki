@@ -1,5 +1,8 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { messageProvider } from '../../lib/message-provider';
+import { createLogger } from '../../lib/logger';
+
+const logger = createLogger('gap-marker');
 
 interface GapMarkerProps {
   sessionId: string;
@@ -19,6 +22,7 @@ export function GapMarker({ sessionId, beforeSeq, loading, scrollRef }: GapMarke
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && !loading) {
+          logger.info('gap visible, requesting', { sessionId, beforeSeq });
           messageProvider.requestBefore(sessionId, beforeSeq);
         }
       },
