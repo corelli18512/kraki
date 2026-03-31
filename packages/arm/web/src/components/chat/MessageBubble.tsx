@@ -6,7 +6,7 @@ import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, HelpCircle, Check, X, Ban, LockOpen, CircleStop } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop } from 'lucide-react';
 
 const ID_DISPLAY_LENGTH = 8;
 
@@ -173,30 +173,30 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
 
     case 'question': {
       const answer = (message.payload as ProtocolQuestionRequest['payload'] & { answer?: string }).answer;
-      if (answer) {
-        return (
+      return (
+        <>
           <div className="flex gap-2">
-            <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
-            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
-              <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
-                Question · <span className="text-emerald-600 dark:text-emerald-400">Answered</span>
+            <div className="mt-0.5 shrink-0">
+              <AgentAvatar agent={agent ?? ''} size="sm" />
+            </div>
+            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+              <p className="text-sm leading-relaxed text-text-primary">{message.payload.question}</p>
+              <p className="mt-1 text-[10px] text-text-muted">
+                {formatTime(message.timestamp)}
               </p>
-              <p className="mt-0.5 text-sm text-text-primary">{message.payload.question}</p>
-              <p className="mt-1.5 rounded-lg bg-surface-tertiary px-3 py-1.5 text-sm text-text-primary">{answer}</p>
             </div>
           </div>
-        );
-      }
-      return (
-        <div className="flex gap-2">
-          <HelpCircle className="mt-1 h-4 w-4 text-violet-500" />
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-violet-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
-            <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
-              Question
-            </p>
-            <p className="mt-0.5 text-sm text-text-primary">{message.payload.question}</p>
-          </div>
-        </div>
+          {answer && (
+            <div className="flex justify-end">
+              <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+                <p className="text-sm">{answer}</p>
+                <p className="mt-1 text-right text-[10px] text-white/60">
+                  {formatTime(message.timestamp)}
+                </p>
+              </div>
+            </div>
+          )}
+        </>
       );
     }
 

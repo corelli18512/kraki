@@ -28,10 +28,6 @@ export function ChatView() {
     () => new Set([...permissionsMap.values()].map((p) => p.id)),
     [permissionsMap],
   );
-  const pendingQuestionIds = useMemo(
-    () => new Set([...questionsMap.values()].map((q) => q.id)),
-    [questionsMap],
-  );
 
   const permissions = useMemo(
     () => [...permissionsMap.values()].filter((p) => p.sessionId === sessionId),
@@ -42,15 +38,14 @@ export function ChatView() {
     [questionsMap, sessionId],
   );
 
-  // Filter out pending permission/question bubbles — the blocking card handles them
-  // Also filter out approve/deny/always_allow (they return null anyway)
+  // Filter out pending permission bubbles — the blocking card handles them.
+  // Questions are always shown as normal chat bubbles.
   const filteredMessages = useMemo(
     () => messages.filter((msg) => {
       if (msg.type === 'permission' && pendingPermIds.has(msg.payload.id)) return false;
-      if (msg.type === 'question' && pendingQuestionIds.has(msg.payload.id)) return false;
       return true;
     }),
-    [messages, pendingPermIds, pendingQuestionIds],
+    [messages, pendingPermIds],
   );
 
   const rawGrouped = useTurns(filteredMessages);
@@ -68,7 +63,7 @@ export function ChatView() {
   const isAtBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const prevMsgLenRef: MutableRefObject<number> = useRef(0);
+  const prevGroupLenRef: MutableRefObject<number> = useRef(0);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -78,32 +73,31 @@ export function ChatView() {
     setUnreadCount(0);
   }, []);
 
-  // Auto-scroll to bottom when new messages arrive (only if already at bottom)
+  // Auto-scroll when new visible groups arrive (only if already at bottom)
   useEffect(() => {
     if (isAtBottomRef.current) {
       scrollToBottom();
     } else {
-      // Only count messages from others (agent, system) as unread — not the user's own
-      const prevLen = prevMsgLenRef.current;
-      const curLen = messages.length;
+      const prevLen = prevGroupLenRef.current;
+      const curLen = grouped.length;
       if (curLen > prevLen) {
-        const lastMsg = messages[curLen - 1];
-        const isFromUser = lastMsg && (
-          lastMsg.type === 'user_message' ||
-          lastMsg.type === 'pending_input' ||
-          lastMsg.type === 'answer' ||
-          lastMsg.type === 'send_input'
+        const lastGroup = grouped[curLen - 1];
+        const isFromUser = lastGroup?.type === 'standalone' && (
+          lastGroup.message.type === 'user_message' ||
+          lastGroup.message.type === 'pending_input' ||
+          lastGroup.message.type === 'answer' ||
+          lastGroup.message.type === 'send_input'
         );
         if (!isFromUser) {
-          setUnreadCount((c) => c + 1);
+          setUnreadCount((c) => c + (curLen - prevLen));
           setShowScrollBtn(true);
         }
       } else if (streaming) {
         setShowScrollBtn(true);
       }
     }
-    prevMsgLenRef.current = messages.length;
-  }, [messages, streaming, permissions, questions, scrollToBottom]);
+    prevGroupLenRef.current = grouped.length;
+  }, [grouped, streaming, scrollToBottom]);
 
   // Reset when switching sessions
   useEffect(() => {

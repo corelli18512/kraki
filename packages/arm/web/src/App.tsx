@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore, hydrateMessagesFromDB } from './hooks/useStore';
+import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 
 const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
@@ -70,6 +71,7 @@ function RelayBlockingOverlay({
 
 export function App() {
   useWebSocket();
+  useSessionShortcuts();
   const inSession = useLocation().pathname.startsWith('/session/');
   const navigate = useNavigate();
   const navigateToSession = useStore((s) => s.navigateToSession);

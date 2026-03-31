@@ -150,7 +150,6 @@ describe('MessageBubble', () => {
   describe('question', () => {
     it('renders question text', () => {
       renderMsg(makeMsg('question', { id: 'q1', question: 'Which framework?', choices: ['React', 'Vue'] }));
-      expect(screen.getByText('Question')).toBeInTheDocument();
       expect(screen.getByText('Which framework?')).toBeInTheDocument();
     });
   });

@@ -85,6 +85,10 @@ describe('ChatView', () => {
       id: 'q1', sessionId: 's1', question: 'Which DB?',
       choices: ['sqlite', 'postgres'], timestamp: '',
     });
+    useStore.getState().appendMessage('s1', {
+      type: 'question', sessionId: 's1', deviceId: 'd1', seq: 1, timestamp: '',
+      payload: { id: 'q1', question: 'Which DB?', choices: ['sqlite', 'postgres'] },
+    } as any);
     renderChatView('s1');
     expect(screen.getByText('Which DB?')).toBeInTheDocument();
   });

@@ -105,14 +105,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'agent_message': {
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
-      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
     case 'error':
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
-      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
 
     case 'permission': {
@@ -127,7 +125,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
       store.addPermission(perm);
       store.appendMessage(sid, msg);
-      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
@@ -141,7 +138,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       };
       store.addQuestion(q);
       store.appendMessage(sid, msg);
-      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 
@@ -150,6 +146,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
+      // Only visible chat bubbles count as unread — idle marks a completed turn
+      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;
     }
 

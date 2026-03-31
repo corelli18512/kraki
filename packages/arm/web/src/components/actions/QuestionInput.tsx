@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { wsClient } from '../../lib/ws-client';
 import type { PendingQuestion } from '../../types/store';
-import { HelpCircle } from 'lucide-react';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
 export function QuestionInput({ question, sessionId }: { question: PendingQuestion; sessionId: string }) {
@@ -26,10 +25,6 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
   return (
     <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
       <div className="mx-auto max-w-3xl">
-        <div className="mb-2 flex items-start gap-2">
-          <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
-          <p className="text-sm text-text-primary">{text}</p>
-        </div>
         {choices && choices.length > 0 && (
           <div className="mb-2 space-y-1.5">
             {choices.map((choice, i) => (
@@ -50,7 +45,10 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
             value={freeform}
             onChange={(e) => setFreeform(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && freeform.trim()) handleAnswer(freeform.trim());
+              if (e.key === 'Enter' && freeform.trim()) {
+                e.preventDefault();
+                handleAnswer(freeform.trim());
+              }
             }}
             placeholder="Type your answer…"
             className="flex-1 rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 sm:text-sm"

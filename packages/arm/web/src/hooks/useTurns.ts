@@ -65,6 +65,8 @@ const TURN_COMPLETE_TYPES = new Set([
 export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages[] {
   const result: GroupedMessages[] = [];
   let currentThinking: ChatMessage[] = [];
+  // Track whether to skip the next tool_complete (from a question tool)
+  let skipNextToolComplete = false;
 
   const flushTurn = (turnComplete: boolean) => {
     if (currentThinking.length === 0) return;
@@ -102,7 +104,28 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
     } else if (TURN_COMPLETE_TYPES.has(msg.type)) {
       flushTurn(true);
     } else if (THINKING_TYPES.has(msg.type)) {
-      currentThinking.push(msg);
+      // Questions are always shown as standalone chat bubbles,
+      // splitting the turn so subsequent messages start a new thinking box.
+      // Strip the preceding tool_start that triggered the question, and
+      // flag the matching tool_complete (which arrives after answering) to skip.
+      if (msg.type === 'question') {
+        // Strip the preceding tool event that triggered the question.
+        // It may be tool_start (live, before tool completes) or tool_complete
+        // (after tool_complete merges back into the tool_start position).
+        if (currentThinking.length > 0) {
+          const last = currentThinking[currentThinking.length - 1];
+          if (last.type === 'tool_start' || last.type === 'tool_complete') {
+            currentThinking.pop();
+            if (last.type === 'tool_start') skipNextToolComplete = true;
+          }
+        }
+        flushTurn(true);
+        result.push({ type: 'standalone', message: msg });
+      } else if (msg.type === 'tool_complete' && skipNextToolComplete) {
+        skipNextToolComplete = false;
+      } else {
+        currentThinking.push(msg);
+      }
     } else {
       // Unknown type — treat as standalone to be safe
       flushTurn(true);

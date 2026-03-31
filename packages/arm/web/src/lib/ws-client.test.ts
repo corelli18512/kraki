@@ -344,6 +344,7 @@ describe('KrakiWSClient', () => {
       });
 
       // New message to sess-1 after replay complete should increment unread
+      // Only idle (turn complete) increments unread — not individual agent_message
       receiveInner({
         type: 'agent_message',
         deviceId: 'dev-1',
@@ -352,14 +353,22 @@ describe('KrakiWSClient', () => {
         sessionId: 'sess-1',
         payload: { content: 'Live from session 1' },
       });
-      // sess-2 still replaying — should not increment
       receiveInner({
-        type: 'agent_message',
+        type: 'idle',
         deviceId: 'dev-1',
         seq: 5,
         timestamp: new Date().toISOString(),
+        sessionId: 'sess-1',
+        payload: {},
+      });
+      // sess-2 still replaying — should not increment
+      receiveInner({
+        type: 'idle',
+        deviceId: 'dev-1',
+        seq: 6,
+        timestamp: new Date().toISOString(),
         sessionId: 'sess-2',
-        payload: { content: 'Still replaying session 2' },
+        payload: {},
       });
 
       expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);

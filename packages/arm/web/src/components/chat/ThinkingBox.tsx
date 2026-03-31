@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
+import Markdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '../../types/store';
 import { MessageBubble } from './MessageBubble';
 
@@ -59,8 +62,10 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
       >
         <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : 'bg-emerald-500'}`} />
 
-        <span className="text-xs font-medium text-text-secondary">
-          {summary}
+        <span className="markdown-content min-w-0 text-xs font-medium text-text-secondary [&_p]:!m-0 [&_code]:text-[11px]">
+          <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+            {summary}
+          </Markdown>
         </span>
       </button>
 
@@ -90,8 +95,10 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
                 {messages.map((msg, idx) => {
                   if (msg.type === 'agent_message') {
                     return (
-                      <div key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="text-sm leading-relaxed text-text-secondary">
-                        {msg.payload.content}
+                      <div key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="markdown-content text-sm leading-relaxed text-text-secondary">
+                        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                          {msg.payload.content}
+                        </Markdown>
                       </div>
                     );
                   }
@@ -105,8 +112,10 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
                   );
                 })}
                 {streamingText && (
-                  <div className="text-sm leading-relaxed text-text-secondary">
-                    {streamingText}
+                  <div className="markdown-content text-sm leading-relaxed text-text-secondary">
+                    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                      {streamingText}
+                    </Markdown>
                     <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-text-muted" />
                   </div>
                 )}
@@ -158,8 +167,6 @@ function getMessageSummary(msg: ChatMessage): string {
     }
     case 'permission':
       return `Permission: ${msg.payload.toolName}`;
-    case 'question':
-      return `Question: ${truncate(msg.payload.question, 50)}`;
     case 'error':
       return `Error: ${truncate(msg.payload.message, 50)}`;
     case 'idle':
