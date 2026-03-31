@@ -123,6 +123,27 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
         result.push({ type: 'standalone', message: msg });
       } else if (msg.type === 'tool_complete' && skipNextToolComplete) {
         skipNextToolComplete = false;
+      } else if (msg.type === 'tool_complete') {
+        // Replace matching tool_start with this tool_complete (merge args)
+        const toolCallId = (msg as { payload?: { toolCallId?: string } }).payload?.toolCallId;
+        if (toolCallId) {
+          const startIdx = currentThinking.findIndex(m =>
+            m.type === 'tool_start' && (m as { payload?: { toolCallId?: string } }).payload?.toolCallId === toolCallId
+          );
+          if (startIdx >= 0) {
+            const startMsg = currentThinking[startIdx];
+            const startArgs = (startMsg as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
+            const completeArgs = (msg as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
+            currentThinking[startIdx] = {
+              ...msg,
+              payload: { ...(msg as { payload: Record<string, unknown> }).payload, args: { ...startArgs, ...completeArgs } },
+            } as ChatMessage;
+          } else {
+            currentThinking.push(msg);
+          }
+        } else {
+          currentThinking.push(msg);
+        }
       } else {
         currentThinking.push(msg);
       }
