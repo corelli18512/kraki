@@ -120,11 +120,26 @@ class MessageProvider {
         })
         .slice(-PAGE_SIZE);
       if (older.length > 0) {
-        getStore().prependMessages(sessionId, older);
-        logger.info('gap filled from IndexedDB', { sessionId, beforeSeq, count: older.length });
-        this.loading.delete(loadKey);
-        getStore().removeLoadingGap(loadKey);
-        return;
+        // Check if these messages are actually new (not already in store)
+        const storeMessages = getStore().messages.get(sessionId) ?? [];
+        const storeSeqs = new Set<number>();
+        for (const m of storeMessages) {
+          const s = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+          if (typeof s === 'number') storeSeqs.add(s);
+        }
+        const newMessages = older.filter(m => {
+          const s = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+          return typeof s === 'number' && !storeSeqs.has(s);
+        });
+        if (newMessages.length > 0) {
+          getStore().prependMessages(sessionId, older);
+          logger.info('gap filled from IndexedDB', { sessionId, beforeSeq, count: older.length, newCount: newMessages.length });
+          this.loading.delete(loadKey);
+          getStore().removeLoadingGap(loadKey);
+          return;
+        }
+        // All messages already in store — gap is real (not in IndexedDB), fall through to tentacle
+        logger.info('IndexedDB messages already in store, falling through to tentacle', { sessionId, beforeSeq });
       }
     } catch {
       // IndexedDB unavailable
