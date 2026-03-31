@@ -321,38 +321,8 @@ export const useStore = create<Store>()(persist((set) => ({
         const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
         return seqA - seqB;
       });
-      // Merge tool_complete into matching tool_start (by toolCallId)
-      const toolCompletes = new Map<string, typeof merged[0]>();
-      for (const m of merged) {
-        if (m.type === 'tool_complete') {
-          const id = (m as { payload?: { toolCallId?: string } }).payload?.toolCallId;
-          if (id) toolCompletes.set(id, m);
-        }
-      }
-      let result = merged;
-      if (toolCompletes.size > 0) {
-        for (let i = 0; i < result.length; i++) {
-          if (result[i].type === 'tool_start') {
-            const id = (result[i] as { payload?: { toolCallId?: string } }).payload?.toolCallId;
-            if (id && toolCompletes.has(id)) {
-              const complete = toolCompletes.get(id)!;
-              const startArgs = (result[i] as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
-              const completePayload = (complete as { payload?: Record<string, unknown> }).payload ?? {};
-              const completeArgs = (completePayload as { args?: Record<string, unknown> }).args ?? {};
-              const startSeq = (result[i] as { seq?: number }).seq;
-              result[i] = { ...complete, seq: startSeq, payload: { ...completePayload, args: { ...startArgs, ...completeArgs } } } as typeof merged[0];
-            }
-          }
-        }
-        // Remove standalone tool_complete entries (now merged into tool_start)
-        result = result.filter(m => {
-          if (m.type !== 'tool_complete') return true;
-          const id = (m as { payload?: { toolCallId?: string } }).payload?.toolCallId;
-          return !id || !toolCompletes.has(id);
-        });
-      }
       const next = new Map(state.messages);
-      next.set(sessionId, result);
+      next.set(sessionId, merged);
       return { messages: next };
     });
   },
