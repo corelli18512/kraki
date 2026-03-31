@@ -97,7 +97,7 @@ class MessageProvider {
     // One request per session at a time
     if (this.isLoading(sessionId)) return;
 
-    const loadKey = `${sessionId}:before:${beforeSeq}`;
+    const loadKey = `${sessionId}:${beforeSeq}`;
     this.loading.add(loadKey);
     getStore().addLoadingGap(loadKey);
 
@@ -122,11 +122,30 @@ class MessageProvider {
       // IndexedDB unavailable
     }
 
-    // Request from tentacle
-    this.loading.delete(loadKey);
-    getStore().removeLoadingGap(loadKey);
+    // Request from tentacle — keep loadKey active until batch arrives
+    const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
+    if (!tentacleDeviceId || !this.sendFn) {
+      this.loading.delete(loadKey);
+      getStore().removeLoadingGap(loadKey);
+      return;
+    }
+
     const afterSeq = Math.max(0, beforeSeq - PAGE_SIZE - 1);
-    this.requestFromTentacle(sessionId, afterSeq, PAGE_SIZE);
+    const store = getStore();
+    this.sendFn({
+      type: 'request_session_replay',
+      deviceId: store.deviceId ?? '',
+      payload: { sessionId, afterSeq, limit: PAGE_SIZE, targetDeviceId: tentacleDeviceId },
+    });
+
+    logger.info('requested from tentacle', { sessionId, afterSeq, limit: PAGE_SIZE });
+
+    // Safety timeout
+    setTimeout(() => {
+      if (this.loading.delete(loadKey)) {
+        getStore().removeLoadingGap(loadKey);
+      }
+    }, 10_000);
   }
 
   /**

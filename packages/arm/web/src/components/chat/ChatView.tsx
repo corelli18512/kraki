@@ -220,7 +220,7 @@ export function ChatView() {
                         <GapMarker
                           sessionId={sessionId}
                           beforeSeq={seq}
-                          loading={loadingGaps.has(`${sessionId}:before:${seq}`)}
+                          loading={loadingGaps.has(`${sessionId}:${seq}`)}
                           scrollRef={scrollRef}
                         />
                       </div>
@@ -250,7 +250,7 @@ export function ChatView() {
                       <GapMarker
                         sessionId={sessionId}
                         beforeSeq={firstTurnSeq}
-                        loading={loadingGaps.has(`${sessionId}:before:${firstTurnSeq}`)}
+                        loading={loadingGaps.has(`${sessionId}:${firstTurnSeq}`)}
                         scrollRef={scrollRef}
                       />
                     </div>
