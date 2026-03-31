@@ -156,11 +156,17 @@ class MessageProvider {
       getStore().prependMessages(sessionId, messages as Parameters<ReturnType<typeof getStore>['prependMessages']>[1]);
     }
 
-    // Clear loading keys for this session
+    // Clear all loading keys for this session (internal + store)
     for (const key of [...this.loading]) {
       if (key.startsWith(`${sessionId}:`)) {
         this.loading.delete(key);
-        getStore().removeLoadingGap(key);
+      }
+    }
+    // Clear any gap loading keys in the store
+    const store = getStore();
+    for (const key of store.loadingGaps) {
+      if (key.startsWith(`${sessionId}:`)) {
+        store.removeLoadingGap(key);
       }
     }
   }
@@ -179,9 +185,10 @@ class MessageProvider {
       return;
     }
 
+    // Track in internal loading set (for isLoading check) but not in store loadingGaps
+    // — loadingGaps is only for gap markers in the UI, not initial sync.
     const loadKey = `${sessionId}:${afterSeq}`;
     this.loading.add(loadKey);
-    getStore().addLoadingGap(loadKey);
 
     const store = getStore();
     this.sendFn({
@@ -194,9 +201,7 @@ class MessageProvider {
 
     // Safety timeout
     setTimeout(() => {
-      if (this.loading.delete(loadKey)) {
-        getStore().removeLoadingGap(loadKey);
-      }
+      this.loading.delete(loadKey);
     }, 10_000);
   }
 }
