@@ -175,13 +175,17 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
 }
 
 /** Sent by tentacle to a device after replaying all buffered messages for a session. */
-export interface SessionReplayCompleteMessage extends BaseEnvelope {
-  type: 'session_replay_complete';
+export interface SessionReplayBatchMessage extends BaseEnvelope {
+  type: 'session_replay_batch';
   payload: {
     /** The session that was replayed. */
     sessionId: string;
-    /** The highest seq in this session's replay. */
+    /** The replayed messages, in seq order. */
+    messages: ProducerMessage[];
+    /** The highest seq included in this batch. */
     lastSeq: number;
+    /** The total highest seq in the session (for detecting if more messages are available). */
+    totalLastSeq: number;
   };
 }
 
@@ -229,7 +233,7 @@ export type ProducerMessage =
   | ErrorMessage
   | SessionModeSetMessage
   | DeviceGreetingMessage
-  | SessionReplayCompleteMessage
+  | SessionReplayBatchMessage
   | SessionListMessage
   | PermissionResolvedMessage
   | QuestionResolvedMessage;
@@ -331,6 +335,8 @@ export interface RequestSessionReplayMessage extends BaseEnvelope {
     sessionId: string;
     /** Replay messages with seq strictly greater than this value. Use 0 for full replay. */
     afterSeq: number;
+    /** Max number of messages to return. Omit for all. */
+    limit?: number;
   };
 }
 

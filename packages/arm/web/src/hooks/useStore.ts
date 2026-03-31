@@ -61,6 +61,7 @@ const initialState = {
   githubClientId: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
+  loadingGaps: new Set<string>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -143,7 +144,7 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   appendMessage: (sessionId, message) => {
-    // Write to IndexedDB (async, fire-and-forget)
+    // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
     import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const nextMsgs = new Map(state.messages);
@@ -298,9 +299,52 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModels: next };
     }),
 
+  prependMessages: (sessionId, older) => {
+    // Write to IndexedDB (idempotent by [sessionId, seq] key)
+    import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
+    set((state) => {
+      const existing = state.messages.get(sessionId) ?? [];
+      // Deduplicate by seq
+      const existingSeqs = new Set<number>();
+      for (const m of existing) {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        if (typeof seq === 'number') existingSeqs.add(seq);
+      }
+      const unique = older.filter(m => {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        return typeof seq === 'number' && !existingSeqs.has(seq);
+      });
+      if (unique.length === 0) return state;
+      const merged = [...unique, ...existing];
+      merged.sort((a, b) => {
+        const seqA = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
+        const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
+        return seqA - seqB;
+      });
+      const next = new Map(state.messages);
+      next.set(sessionId, merged);
+      return { messages: next };
+    });
+  },
+
+  addLoadingGap: (key) =>
+    set((state) => {
+      const next = new Set(state.loadingGaps);
+      next.add(key);
+      return { loadingGaps: next };
+    }),
+
+  removeLoadingGap: (key) =>
+    set((state) => {
+      const next = new Set(state.loadingGaps);
+      next.delete(key);
+      return { loadingGaps: next };
+    }),
+
   clearTransientState: () => set({
     streamingContent: new Map(),
     unreadCount: new Map(),
+    loadingGaps: new Set(),
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
     // pendingPermissions/pendingQuestions persist in IndexedDB.
@@ -325,6 +369,7 @@ export const useStore = create<Store>()(persist((set) => ({
     githubClientId: null,
   relayVersion: null,
     deviceModels: new Map(),
+    loadingGaps: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),
@@ -346,22 +391,14 @@ export const useStore = create<Store>()(persist((set) => ({
 }));
 
 /**
- * Hydrate messages from IndexedDB into the Zustand store.
- * Call once on app startup before rendering.
+ * Hydrate pending permissions and questions from IndexedDB.
+ * Messages are loaded lazily — last 50 on connect, older via gap fill.
  */
 export async function hydrateMessagesFromDB(): Promise<void> {
-  const { getAllMessages, getAllPermissions, getAllQuestions } = await import('../lib/message-db');
-  const [messages, pendingPermissions, pendingQuestions] = await Promise.all([
-    getAllMessages(),
+  const { getAllPermissions, getAllQuestions } = await import('../lib/message-db');
+  const [pendingPermissions, pendingQuestions] = await Promise.all([
     getAllPermissions(),
     getAllQuestions(),
   ]);
-  // Clean up pending_input messages from previous session (they're transient)
-  for (const [sid, msgs] of messages) {
-    const filtered = msgs.filter((m) => m.type !== 'pending_input');
-    if (filtered.length !== msgs.length) {
-      messages.set(sid, filtered);
-    }
-  }
-  useStore.setState({ messages, pendingPermissions, pendingQuestions });
+  useStore.setState({ pendingPermissions, pendingQuestions });
 }

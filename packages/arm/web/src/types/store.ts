@@ -91,6 +91,10 @@ export interface AppState {
 
   // Live capabilities from tentacle greetings
   deviceModels: Map<string, string[]>;
+
+  // Scroll-back pagination
+  /** Gap fills currently in flight, keyed by `${sessionId}:${afterSeq}` */
+  loadingGaps: Set<string>;
 }
 
 export interface AppActions {
@@ -129,6 +133,11 @@ export interface AppActions {
   setDeviceModels: (deviceId: string, models: string[]) => void;
   clearTransientState: () => void;
   reset: () => void;
+
+  // Pagination
+  prependMessages: (sessionId: string, older: ChatMessage[]) => void;
+  addLoadingGap: (key: string) => void;
+  removeLoadingGap: (key: string) => void;
 }
 
 export type Store = AppState & AppActions;

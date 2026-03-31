@@ -267,7 +267,7 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
     });
 
-    it('tracks per-session replay completion via session_replay_complete', async () => {
+    it('handles session_replay_batch without incrementing unread', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
       await vi.waitFor(() => {
@@ -290,89 +290,46 @@ describe('KrakiWSClient', () => {
         state: 'active',
         messageCount: 0,
       });
-      useStore.getState().upsertSession({
-        id: 'sess-2',
-        deviceId: 'dev-1',
-        deviceName: 'MacBook',
-        agent: 'copilot',
-        state: 'active',
-        messageCount: 0,
-      });
 
-      // Trigger session_list which will request replays for sessions with fewer messages
+      // Receive a replay batch — should not increment unread
       receiveInner({
-        type: 'session_list',
-        deviceId: 'dev-1',
-        seq: 0,
-        timestamp: new Date().toISOString(),
-        payload: {
-          sessions: [
-            { id: 'sess-1', agent: 'copilot', state: 'active', lastSeq: 5, readSeq: 0, messageCount: 3, createdAt: new Date().toISOString() },
-            { id: 'sess-2', agent: 'copilot', state: 'active', lastSeq: 5, readSeq: 0, messageCount: 3, createdAt: new Date().toISOString() },
-          ],
-        },
-      });
-
-      // Messages during replay should not increment unread
-      receiveInner({
-        type: 'agent_message',
+        type: 'session_replay_batch',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
-        sessionId: 'sess-1',
-        payload: { content: 'Replay from session 1' },
-      });
-      receiveInner({
-        type: 'agent_message',
-        deviceId: 'dev-1',
-        seq: 2,
-        timestamp: new Date().toISOString(),
-        sessionId: 'sess-2',
-        payload: { content: 'Replay from session 2' },
+        payload: {
+          sessionId: 'sess-1',
+          messages: [
+            { type: 'agent_message', deviceId: 'dev-1', seq: 1, timestamp: new Date().toISOString(), sessionId: 'sess-1', payload: { content: 'Batch message 1' } },
+            { type: 'agent_message', deviceId: 'dev-1', seq: 2, timestamp: new Date().toISOString(), sessionId: 'sess-1', payload: { content: 'Batch message 2' } },
+          ],
+          lastSeq: 2,
+          totalLastSeq: 2,
+        },
       });
 
       expect(useStore.getState().unreadCount.get('sess-1')).toBeUndefined();
-      expect(useStore.getState().unreadCount.get('sess-2')).toBeUndefined();
+      expect(useStore.getState().messages.get('sess-1')?.length).toBe(2);
 
-      // Complete replay for sess-1 only
+      // New live message after batch should increment unread
       receiveInner({
-        type: 'session_replay_complete',
+        type: 'agent_message',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
-        payload: { sessionId: 'sess-1', lastSeq: 10, totalLastSeq: 10 },
+        sessionId: 'sess-1',
+        payload: { content: 'Live message' },
       });
-
-      // New message to sess-1 after replay complete should increment unread
-      // Only idle (turn complete) increments unread — not individual agent_message
       receiveInner({
-        type: 'agent_message',
+        type: 'idle',
         deviceId: 'dev-1',
         seq: 4,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
-        payload: { content: 'Live from session 1' },
-      });
-      receiveInner({
-        type: 'idle',
-        deviceId: 'dev-1',
-        seq: 5,
-        timestamp: new Date().toISOString(),
-        sessionId: 'sess-1',
-        payload: {},
-      });
-      // sess-2 still replaying — should not increment
-      receiveInner({
-        type: 'idle',
-        deviceId: 'dev-1',
-        seq: 6,
-        timestamp: new Date().toISOString(),
-        sessionId: 'sess-2',
         payload: {},
       });
 
       expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
-      expect(useStore.getState().unreadCount.get('sess-2')).toBeUndefined();
     });
 
     it('routes session_created and creates session', async () => {

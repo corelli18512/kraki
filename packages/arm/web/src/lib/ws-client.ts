@@ -6,6 +6,7 @@ import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
+import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
@@ -17,8 +18,6 @@ export class KrakiWSClient {
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
-  /** Sessions currently being replayed — suppresses unread increments. */
-  private replayingSessions = new Set<string>();
 
   get url(): string { return this.transport.url; }
 
@@ -70,7 +69,7 @@ export class KrakiWSClient {
   // --- Actions ---
 
   /** Send through encryption layer as UnicastEnvelope. */
-  private sendEncrypted(msg: Record<string, unknown>) {
+  sendEncrypted(msg: Record<string, unknown>) {
     this.encryption.encryptOutbound(msg, (m) => this.transport.send(m));
   }
 
@@ -130,16 +129,15 @@ export class KrakiWSClient {
   }
 
   /**
-   * Handle session_list from tentacle: diff with local store, request per-session replays.
+   * Handle session_list from tentacle: update metadata, trigger initial loads via provider.
    */
   private handleSessionList(msg: SessionListMessage): void {
     const store = getStore();
     const tentacleSessions = msg.payload?.sessions ?? [];
-
     const tentacleDeviceId = msg.deviceId;
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
-    logger.info('session_list received', { tentacleDeviceId, sessionCount: tentacleSessions.length, sessions: tentacleSessions.map(s => ({ id: s.id, lastSeq: s.lastSeq, messageCount: s.messageCount })) });
+    logger.info('session_list received', { tentacleDeviceId, sessionCount: tentacleSessions.length });
 
     // Remove local sessions from this tentacle that are no longer in the list
     for (const [sid, session] of store.sessions) {
@@ -148,7 +146,7 @@ export class KrakiWSClient {
       }
     }
 
-    // Add/update sessions and request replays for stale ones
+    // Update session metadata and trigger initial loads
     for (const ts of tentacleSessions) {
       const currentStore = getStore();
       const device = currentStore.devices.get(tentacleDeviceId);
@@ -162,54 +160,28 @@ export class KrakiWSClient {
         messageCount: ts.messageCount,
       });
 
-      // Sync session mode from tentacle
       if (ts.mode) {
         store.setSessionMode(ts.id, ts.mode as 'safe' | 'plan' | 'execute' | 'delegate');
       }
 
-      // Determine local freshness from in-memory store (hydrated from IndexedDB on mount).
-      // Only count seqs within the valid per-session range.
-      const localMessages = currentStore.messages.get(ts.id);
-      let localLastSeq = 0;
-      if (localMessages) {
-        for (const m of localMessages) {
-          const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-          if (typeof seq === 'number' && seq > localLastSeq && seq <= ts.lastSeq) {
-            localLastSeq = seq;
-          }
-        }
-      }
-
-      // Request replay if tentacle has newer messages than our local cache
-      if (localLastSeq < ts.lastSeq) {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, needsReplay: true });
-        this.requestSessionReplay(tentacleDeviceId, ts.id, localLastSeq);
-      } else {
-        logger.info('session sync', { sessionId: ts.id, localLastSeq, tentacleLastSeq: ts.lastSeq, upToDate: true });
-      }
+      // Store tentacle info and request latest messages via provider
+      messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
+      messageProvider.requestLatest(ts.id);
     }
   }
 
-  /** Clear all in-progress replay tracking (used on disconnect/close). */
+  /** Clear all in-progress tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
-    this.replayingSessions.clear();
+    messageProvider.clear();
   }
 
   /**
-   * Request replay for a specific session from a tentacle.
+   * Handle a replay batch — delegate to message provider.
    */
-  private requestSessionReplay(tentacleDeviceId: string, sessionId: string, afterSeq: number): void {
-    const store = getStore();
-    this.replayingSessions.add(sessionId);
-
-    this.sendEncrypted({
-      type: 'request_session_replay',
-      deviceId: store.deviceId ?? '',
-      payload: { sessionId, afterSeq, targetDeviceId: tentacleDeviceId },
-    });
-
-    // Safety timeout
-    setTimeout(() => { this.replayingSessions.delete(sessionId); }, 10_000);
+  private handleReplayBatch(msg: import('@kraki/protocol').SessionReplayBatchMessage): void {
+    const { sessionId, messages, lastSeq, totalLastSeq } = msg.payload;
+    if (!sessionId) return;
+    messageProvider.handleBatch(sessionId, messages, lastSeq, totalLastSeq);
   }
 
   // --- Internal ---
@@ -241,11 +213,10 @@ export class KrakiWSClient {
   private encryptionCallbacks() {
     return {
       handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        replayingSessions: this.replayingSessions,
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
         onSessionList: (m) => this.handleSessionList(m),
-        onSessionReplayComplete: (sessionId) => { this.replayingSessions.delete(sessionId); },
+        onSessionReplayBatch: (m) => this.handleReplayBatch(m),
       }),
       getHandlers: () => this.handlers,
     };
@@ -336,3 +307,6 @@ export const wsClient = new KrakiWSClient();
 
 // Wire up remote log shipping
 setLogBroadcast((msg) => wsClient.sendBroadcast(msg));
+
+// Wire message provider's send function
+messageProvider.setSend((msg) => wsClient.sendEncrypted(msg));

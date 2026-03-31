@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayCompleteMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ToolCompleteMessage, ToolStartMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ToolCompleteMessage, ToolStartMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore, setStoreState } from './store-adapter';
 import { isViewingSession } from './replay';
 import type { CommandState } from './commands';
@@ -6,14 +6,13 @@ import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import type { PendingPermission, PendingQuestion } from '../types/store';
 
 export interface RouterContext {
-  replayingSessions: Set<string>;
   cmdState: CommandState;
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
   sendEncrypted?: (msg: Record<string, unknown>) => void;
   /** Called when tentacle sends session_list for sync. */
   onSessionList?: (msg: SessionListMessage) => void;
-  /** Called when tentacle signals per-session replay is complete. */
-  onSessionReplayComplete?: (sessionId: string) => void;
+  /** Called when tentacle sends a replay batch. */
+  onSessionReplayBatch?: (msg: SessionReplayBatchMessage) => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
@@ -25,12 +24,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
-  // Handle session_replay_complete — tentacle finished replaying a specific session
-  if (msg.type === 'session_replay_complete') {
-    const payload = (msg as SessionReplayCompleteMessage).payload;
-    if (payload?.sessionId) {
-      ctx.onSessionReplayComplete?.(payload.sessionId);
-    }
+  // Handle session_replay_batch — tentacle sent a batch of replayed messages
+  if (msg.type === 'session_replay_batch') {
+    ctx.onSessionReplayBatch?.(msg as SessionReplayBatchMessage);
     return;
   }
 
@@ -46,7 +42,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
-  const replaying = ctx.replayingSessions.has(sid);
+  const replaying = false; // Replay now arrives as batch, not individual messages
 
   // Drop messages for sessions we don't know about — session_list sync on
   // reconnect will recover any legitimately missed sessions.

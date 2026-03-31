@@ -326,7 +326,7 @@ export class RelayClient {
     // request_replay — replay buffered messages to the requesting device
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
-      this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq);
+      this.handleSessionReplay(msg.deviceId, msg.payload.sessionId, msg.payload.afterSeq, msg.payload.limit);
       return;
     }
 
@@ -623,36 +623,44 @@ export class RelayClient {
   /**
    * Handle a per-session replay request from a reconnecting app.
    */
-  private handleSessionReplay(requesterDeviceId: string, sessionId: string, afterSeq: number): void {
+  private handleSessionReplay(requesterDeviceId: string, sessionId: string, afterSeq: number, limit?: number): void {
     const requesterKey = this.consumerKeys.get(requesterDeviceId);
     if (!requesterKey) {
       logger.warn({ requesterDeviceId }, 'Session replay requested but no encryption key for requester');
       return;
     }
 
-    const messages = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq);
-    logger.info({ requesterDeviceId, sessionId, afterSeq, count: messages.length }, 'Replaying session messages');
+    const logged = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq, limit);
+    logger.info({ requesterDeviceId, sessionId, afterSeq, limit, count: logged.length }, 'Replaying session messages (batch)');
 
-    for (const logged of messages) {
+    // Parse logged messages into ProducerMessage objects
+    const parsed: Array<Record<string, unknown>> = [];
+    for (const entry of logged) {
       try {
-        const parsed = JSON.parse(logged.payload);
-        parsed.seq = logged.seq; // Use per-session seq, not stale inner seq
-        this.sendUnicastTo(requesterDeviceId, requesterKey, parsed);
+        const msg = JSON.parse(entry.payload);
+        msg.seq = entry.seq;
+        parsed.push(msg);
       } catch {
-        logger.warn({ seq: logged.seq, sessionId }, 'Failed to replay session message');
+        logger.warn({ seq: entry.seq, sessionId }, 'Failed to parse session message for batch');
       }
     }
 
+    const replayedLastSeq = logged.length > 0 ? logged[logged.length - 1].seq : afterSeq;
     const meta = this.sessionManager.getMeta(sessionId);
-    const lastSeq = meta?.lastSeq ?? (messages.length > 0 ? messages[messages.length - 1].seq : 0);
-    const completeMsg = {
-      type: 'session_replay_complete',
+
+    const batchMsg = {
+      type: 'session_replay_batch',
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { sessionId, lastSeq },
+      payload: {
+        sessionId,
+        messages: parsed,
+        lastSeq: replayedLastSeq,
+        totalLastSeq: meta?.lastSeq ?? replayedLastSeq,
+      },
     };
-    this.sendUnicastTo(requesterDeviceId, requesterKey, completeMsg);
+    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   // ── Client log shipping ─────────────────────────────
