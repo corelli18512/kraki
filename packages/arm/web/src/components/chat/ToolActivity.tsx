@@ -163,9 +163,8 @@ function getDetailLabel(toolName: string): string {
   }
 }
 
-/** Extract old/new strings for diff view from edit tool args. */
-function getEditDiff(toolName: string, args: Record<string, unknown>): { oldStr: string; newStr: string } | null {
-  if (toolName !== 'edit' && toolName !== 'edit_file') return null;
+/** Extract old/new strings for diff view from any tool with old_str/new_str args. */
+function getEditDiff(_toolName: string, args: Record<string, unknown>): { oldStr: string; newStr: string } | null {
   const oldStr = typeof args.old_str === 'string' ? args.old_str : '';
   const newStr = typeof args.new_str === 'string' ? args.new_str : '';
   if (!oldStr && !newStr) return null;
