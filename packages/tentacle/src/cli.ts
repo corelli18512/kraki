@@ -72,6 +72,8 @@ function printHelp(): void {
   kraki stop           Stop Kraki
   kraki update         Check for updates and install the latest version
   kraki connect        Generate QR code to connect a device
+  kraki connect --url-only
+                       Print pairing URL only (for toolbar / scripts)
   kraki status         Show status and connection info
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
@@ -326,10 +328,15 @@ async function cmdConfigReset(): Promise<void> {
   await runSetup();
 }
 
-async function cmdConnect(): Promise<void> {
+async function cmdConnect(urlOnly = false): Promise<void> {
   let config = loadConfig();
 
   if (!isDaemonRunning()) {
+    if (urlOnly) {
+      process.stderr.write('error: daemon not running\n');
+      process.exit(1);
+      return;
+    }
     const { confirm } = await import('@inquirer/prompts');
     const start = await confirm({ message: 'Kraki is not running. Start now?', default: true });
     if (!start) return;
@@ -342,11 +349,18 @@ async function cmdConnect(): Promise<void> {
   }
 
   if (!config) {
+    if (urlOnly) {
+      process.stderr.write('error: no config found\n');
+      process.exit(1);
+      return;
+    }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
     return;
   }
 
-  console.log(chalk.dim('  Requesting pairing token from relay...'));
+  if (!urlOnly) {
+    console.log(chalk.dim('  Requesting pairing token from relay...'));
+  }
 
   try {
     let token: string | undefined;
@@ -365,9 +379,21 @@ async function cmdConnect(): Promise<void> {
 
     const info = await requestPairingToken(config.relay, token);
     const pairingUrl = buildPairingUrl(info);
+
+    if (urlOnly) {
+      // Machine-readable output for the desktop toolbar — just the URL, no decoration
+      process.stdout.write(pairingUrl + '\n');
+      return;
+    }
+
     const qr = await renderQrToTerminal(pairingUrl);
     console.log(qr);
   } catch (err) {
+    if (urlOnly) {
+      process.stderr.write(`error: ${(err as Error).message}\n`);
+      process.exit(1);
+      return;
+    }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
   }
 }
@@ -416,7 +442,8 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'connect') {
-    await cmdConnect();
+    const urlOnly = args.includes('--url-only');
+    await cmdConnect(urlOnly);
     return;
   }
 

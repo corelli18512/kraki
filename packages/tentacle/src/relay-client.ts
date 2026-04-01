@@ -76,6 +76,8 @@ export class RelayClient {
   onAuthenticated: ((info: AuthOkMessage) => void) | null = null;
   /** Called on fatal error (won't reconnect) */
   onFatalError: ((message: string) => void) | null = null;
+  /** Called when the active session changes (null = no active session) */
+  onActiveSessionChange: ((session: { id: string; title?: string; state: string } | null) => void) | null = null;
 
   constructor(
     adapter: AgentAdapter,
@@ -453,6 +455,8 @@ export class RelayClient {
       const requestId = this.pendingRequestIds.get(event.sessionId);
       if (requestId) this.pendingRequestIds.delete(event.sessionId);
 
+      this.onActiveSessionChange?.({ id: event.sessionId, state: 'active' });
+
       this.send({
         type: 'session_created',
         sessionId: event.sessionId,
@@ -559,6 +563,7 @@ export class RelayClient {
 
     this.adapter.onSessionEnded = (sessionId, event) => {
       this.sessionManager.endSession(sessionId, event.reason);
+      this.onActiveSessionChange?.(null);
       this.send({
         type: 'session_ended',
         sessionId,

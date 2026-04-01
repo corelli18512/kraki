@@ -17,6 +17,7 @@ import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { createLogger } from './logger.js';
+import { initStatusFile, updateRelayState, updateActiveSession, clearStatusFile } from './status-file.js';
 import type { AgentAdapter } from './adapters/base.js';
 
 const logger = createLogger('daemon');
@@ -122,6 +123,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   relay.onStateChange = (state) => {
     logger.debug({ state }, 'Relay connection state changed');
+    updateRelayState(state);
   };
 
   relay.onAuthenticated = (info) => {
@@ -136,12 +138,20 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.fatal({ message }, 'Relay fatal error');
   };
 
+  relay.onActiveSessionChange = (session) => {
+    updateActiveSession(session);
+  };
+
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
+
+  // Write initial status file so toolbar can detect the daemon
+  initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
 
   // 6. Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down…');
+    clearStatusFile();
     relay.disconnect();
     await adapter.stop();
   };
