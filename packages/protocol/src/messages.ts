@@ -493,6 +493,18 @@ export interface DeviceLeftMessage {
   deviceId: string;
 }
 
+/** Request to remove an offline device from the user's account. */
+export interface RemoveDeviceMessage {
+  type: 'remove_device';
+  deviceId: string;
+}
+
+/** Broadcast confirmation that a device was removed. */
+export interface DeviceRemovedMessage {
+  type: 'device_removed';
+  deviceId: string;
+}
+
 /** Update user preferences on the relay (e.g. intro dismissal flags). */
 export interface UpdatePreferencesMessage {
   type: 'update_preferences';
@@ -519,6 +531,8 @@ export type ControlMessage =
   | AuthInfoResponse
   | DeviceJoinedMessage
   | DeviceLeftMessage
+  | RemoveDeviceMessage
+  | DeviceRemovedMessage
   | UpdatePreferencesMessage
   | PreferencesUpdatedMessage;
 

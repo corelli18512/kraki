@@ -201,7 +201,7 @@ describe('DeviceList', () => {
   it('renders tentacle devices', () => {
     useStore.getState().setDevices([
       { id: 'd1', name: 'MacBook Pro', role: 'tentacle', kind: 'desktop', online: true },
-      { id: 'd2', name: 'CI Server', role: 'tentacle', kind: 'server', online: false },
+      { id: 'd2', name: 'CI Server', role: 'tentacle', kind: 'server', online: true },
     ]);
     renderWithRouter(<DeviceList />);
     expect(screen.getByText('MacBook Pro')).toBeInTheDocument();
@@ -216,15 +216,14 @@ describe('DeviceList', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows online/offline indicators', () => {
+  it('shows only online tentacles', () => {
     useStore.getState().setDevices([
       { id: 'd1', name: 'Online Mac', role: 'tentacle', online: true },
       { id: 'd2', name: 'Offline Server', role: 'tentacle', online: false },
     ]);
     renderWithRouter(<DeviceList />);
-    // Both devices should be shown
     expect(screen.getByText('Online Mac')).toBeInTheDocument();
-    expect(screen.getByText('Offline Server')).toBeInTheDocument();
+    expect(screen.queryByText('Offline Server')).not.toBeInTheDocument();
   });
 });
 

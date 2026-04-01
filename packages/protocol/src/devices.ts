@@ -28,6 +28,10 @@ export interface DeviceSummary {
   online: boolean;
   /** Capabilities reported by the device (e.g. available models) */
   capabilities?: DeviceCapabilities;
+  /** ISO timestamp of last connection */
+  lastSeen?: string;
+  /** ISO timestamp of device registration */
+  createdAt?: string;
 }
 
 export interface DeviceInfo {
