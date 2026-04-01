@@ -546,6 +546,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     return {
       configDir: join(homedir(), '.copilot'),
+      streaming: true,
       ...(mcpServers && { mcpServers }),
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
