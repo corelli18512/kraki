@@ -161,14 +161,12 @@ function getMessageSummary(msg: ChatMessage): string {
     case 'agent_message': {
       const content = msg.payload.content;
       if (!content) return 'Agent thinking…';
-      const trimmed = content.trim();
-      const firstLine = trimmed.split('\n')[0];
-      return firstLine.length > 60 ? firstLine.slice(0, 57) + '…' : firstLine;
+      return content.trim();
     }
     case 'permission':
       return `Permission: ${msg.payload.toolName}`;
     case 'error':
-      return `Error: ${truncate(msg.payload.message, 50)}`;
+      return `Error: ${msg.payload.message}`;
     case 'idle':
       return 'Waiting…';
     case 'session_mode_set':
@@ -179,14 +177,9 @@ function getMessageSummary(msg: ChatMessage): string {
 }
 
 function getToolDetail(args: Record<string, unknown>): string {
-  if (typeof args.command === 'string') return truncate(`$ ${args.command}`, 50);
-  if (typeof args.path === 'string') return truncate(args.path, 50);
-  if (typeof args.pattern === 'string') return truncate(args.pattern, 50);
-  if (typeof args.url === 'string') return truncate(args.url, 50);
+  if (typeof args.command === 'string') return `$ ${args.command}`;
+  if (typeof args.path === 'string') return args.path;
+  if (typeof args.pattern === 'string') return args.pattern;
+  if (typeof args.url === 'string') return args.url;
   return '';
-}
-
-function truncate(str: string, max: number): string {
-  if (str.length <= max) return str;
-  return str.slice(0, max - 1) + '…';
 }
