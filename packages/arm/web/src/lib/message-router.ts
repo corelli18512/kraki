@@ -1,5 +1,5 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ToolCompleteMessage, ToolStartMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
-import { getStore, setStoreState } from './store-adapter';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
 import type { CommandState } from './commands';
@@ -196,6 +196,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         store.removePermission(permId);
         resolvePermissionMessage(sid, permId, resolution);
       }
+      store.appendMessage(sid, msg);
       break;
     }
 
@@ -207,6 +208,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         store.removeQuestion(qId);
         resolveQuestionMessage(sid, qId, qAnswer);
       }
+      store.appendMessage(sid, msg);
       break;
     }
 
@@ -236,41 +238,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
 
     case 'tool_complete': {
-      // Merge tool_complete into the matching tool_start by toolCallId only
-      const msgs = store.messages.get(sid);
-      const completeMsg = msg as ToolCompleteMessage;
-      const toolCallId = completeMsg.payload?.toolCallId;
-      if (msgs && toolCallId) {
-        let idx = -1;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          if (m.type === 'tool_start' && (m as ToolStartMessage).payload?.toolCallId === toolCallId) {
-            idx = i;
-            break;
-          }
-        }
-        if (idx >= 0) {
-          const original = msgs[idx] as ToolStartMessage;
-          const updated = [...msgs];
-          updated[idx] = {
-            ...msg,
-            payload: {
-              ...completeMsg.payload,
-              args: {
-                ...(original.payload?.args ?? {}),
-                ...(completeMsg.payload?.args ?? {}),
-              },
-            },
-          } as ToolCompleteMessage;
-          const next = new Map(store.messages);
-          next.set(sid, updated);
-          setStoreState({ messages: next });
-          // Sync merged messages to IndexedDB
-          import('./message-db').then(db => db.updateSessionMessages(sid, updated)).catch(() => {});
-          break;
-        }
-      }
-      // Fallback: append if no matching tool_start found
       store.appendMessage(sid, msg);
       break;
     }

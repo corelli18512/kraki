@@ -1034,7 +1034,7 @@ describe('KrakiWSClient', () => {
       });
     }
 
-    it('merges tool_complete into matching tool_start by toolCallId', async () => {
+    it('keeps both tool_start and tool_complete in message array', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1059,13 +1059,11 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('sess-1') ?? [];
-      // Should have merged — only 1 tool message (complete replaced start)
+      // Both stay in the array — merge happens at render time in useTurns
       const toolMsgs = messages.filter((m: Record<string, unknown>) => m.type === 'tool_start' || m.type === 'tool_complete');
-      expect(toolMsgs).toHaveLength(1);
-      expect(toolMsgs[0].type).toBe('tool_complete');
-      // Should preserve original args
-      expect((toolMsgs[0] as unknown as { payload: { args: { command: string }; result: string } }).payload.args.command).toBe('ls');
-      expect((toolMsgs[0] as unknown as { payload: { result: string } }).payload.result).toBe('file1.txt');
+      expect(toolMsgs).toHaveLength(2);
+      expect(toolMsgs[0].type).toBe('tool_start');
+      expect(toolMsgs[1].type).toBe('tool_complete');
     });
 
     it('does not merge tool_complete without toolCallId', async () => {

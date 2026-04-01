@@ -576,7 +576,10 @@ export class RelayClient {
       if (result) {
         try {
           await this.adapter.resumeSession(meta.id, result.context);
-          // session_created will be fired by adapter's onSessionCreated callback
+          // Restore permission mode from persisted meta
+          if (meta.mode) {
+            this.adapter.setSessionMode(meta.id, meta.mode);
+          }
         } catch {
           this.sessionManager.endSession(meta.id, 'resume_failed');
           this.send({
