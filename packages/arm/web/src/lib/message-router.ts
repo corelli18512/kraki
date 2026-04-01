@@ -21,6 +21,11 @@ export interface RouterContext {
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
 
+  // Debug: log all incoming message types
+  if (msg.type === 'agent_message_delta') {
+    logger.info('handleDataMessage: delta arrived', { type: msg.type, sessionId: 'sessionId' in msg ? msg.sessionId : undefined });
+  }
+
   // Handle session_list — tentacle's authoritative session metadata
   if (msg.type === 'session_list') {
     ctx.onSessionList?.(msg);
