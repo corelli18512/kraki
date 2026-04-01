@@ -674,8 +674,19 @@ export class CopilotAdapter extends AgentAdapter {
         return { kind: 'approved' };
       }
       if (mode === 'plan' && toolKind !== 'write') {
-        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        // In plan mode, shell commands that might write files need operator approval
+        if (toolKind === 'shell') {
+          const command = ((req.fullCommandText ?? req.command ?? req.cmd ?? req.script ?? '') as string).trim();
+          if (isShellWriteCommand(command)) {
+            // Fall through to permission request (don't auto-approve)
+          } else {
+            logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+            return { kind: 'approved' };
+          }
+        } else {
+          logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+          return { kind: 'approved' };
+        }
       }
       if (mode === 'plan' && toolKind === 'write') {
         const filePath = ((req.fileName ?? req.path ?? '') as string);
@@ -766,4 +777,39 @@ export class CopilotAdapter extends AgentAdapter {
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
     return entry;
   }
+}
+
+// ── Shell write detection ──────────────────────────────
+
+/** Patterns that indicate a shell command may write/modify files. */
+const SHELL_WRITE_PATTERNS = [
+  // Redirects (> or >>)
+  /\s>+\s/,
+  // In-place edit
+  /\bsed\s+(-[a-zA-Z]*i|--in-place)/,
+  // Write commands
+  /\btee\b/,
+  /\bmv\b/,
+  /\bcp\b/,
+  /\brm\b/,
+  /\btouch\b/,
+  /\bmkdir\b/,
+  /\brmdir\b/,
+  /\bchmod\b/,
+  /\bchown\b/,
+  /\bdd\b/,
+  // Interpreters (can execute arbitrary write code)
+  /\bpython[23]?\b/,
+  /\bnode\b/,
+  /\bruby\b/,
+  /\bperl\b/,
+  /\bphp\b/,
+  // Git write operations
+  /\bgit\s+(checkout|reset|stash|clean|revert|cherry-pick|merge|rebase)\b/,
+  // Package manager installs
+  /\b(npm|pnpm|yarn|pip|pip3|cargo|go)\s+install\b/,
+];
+
+function isShellWriteCommand(command: string): boolean {
+  return SHELL_WRITE_PATTERNS.some(pattern => pattern.test(command));
 }
