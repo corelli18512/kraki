@@ -94,8 +94,9 @@ export abstract class AgentAdapter {
   onMessage: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onMessageDelta: ((sessionId: string, event: MessageDeltaEvent) => void) | null = null;
   onPermissionRequest: ((sessionId: string, event: PermissionRequestEvent) => void) | null = null;
-  /** Called when a permission is auto-resolved (e.g. by "Always Allow" for same tool kind) */
-  onPermissionAutoResolved: ((sessionId: string, permissionId: string) => void) | null = null;
+  /** Called when a permission is auto-resolved (e.g. by "Always Allow" for same tool kind, or cancelled on cleanup) */
+  onPermissionAutoResolved: ((sessionId: string, permissionId: string, resolution: 'approved' | 'cancelled') => void) | null = null;
+  onQuestionAutoResolved: ((sessionId: string, questionId: string) => void) | null = null;
   onQuestionRequest: ((sessionId: string, event: QuestionRequestEvent) => void) | null = null;
   onToolStart: ((sessionId: string, event: ToolStartEvent) => void) | null = null;
   onToolComplete: ((sessionId: string, event: ToolCompleteEvent) => void) | null = null;

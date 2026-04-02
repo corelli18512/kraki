@@ -1,6 +1,6 @@
 {
   "name": "@kraki/protocol",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Shared TypeScript types and message definitions for the Kraki protocol",
   "repository": {
     "type": "git",

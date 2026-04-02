@@ -37,7 +37,7 @@ export function sendInput(
 export function resolvePermissionMessage(
   sessionId: string,
   permissionId: string,
-  resolution: 'approved' | 'denied' | 'always_allowed',
+  resolution: 'approved' | 'denied' | 'always_allowed' | 'cancelled',
 ): void {
   const store = getStore();
   const msgs = store.messages.get(sessionId);

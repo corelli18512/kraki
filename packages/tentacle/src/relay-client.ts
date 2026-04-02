@@ -495,14 +495,20 @@ export class RelayClient {
 
     // When a permission is auto-resolved (e.g. by Always Allow), notify relay
     // so the web app can remove the blocking card
-    this.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          type: 'approve',
-          sessionId,
-          payload: { permissionId },
-        }));
-      }
+    this.adapter.onPermissionAutoResolved = (sessionId, permissionId, resolution) => {
+      this.send({
+        type: 'permission_resolved',
+        sessionId,
+        payload: { permissionId, resolution },
+      });
+    };
+
+    this.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
+      this.send({
+        type: 'question_resolved',
+        sessionId,
+        payload: { questionId, answer: '', cancelled: true },
+      });
     };
 
     this.adapter.onQuestionRequest = (sessionId, event) => {
