@@ -31,7 +31,7 @@ const BOTTOM_RIGHT = '-bottom-0.5 -right-1';
 const EMOJI_POSITION: Record<string, string> = {
   '🔨': BOTTOM_LEFT,
   '🎣': BOTTOM_LEFT,
-  '☕': TOP_RIGHT,
+  '💭': TOP_RIGHT,
   '💤': TOP_RIGHT,
   '💡': TOP_RIGHT,
 };
