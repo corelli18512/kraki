@@ -69,6 +69,7 @@ function createAdapter(): Record<string, unknown> {
     onMessageDelta: null,
     onPermissionRequest: null,
     onPermissionAutoResolved: null,
+    onQuestionAutoResolved: null,
     onQuestionRequest: null,
     onToolStart: null,
     onToolComplete: null,

@@ -206,6 +206,7 @@ export interface PermissionResolvedMessage extends BaseEnvelope {
     | { resolution: 'approved' }
     | { resolution: 'denied'; reason?: string }
     | { resolution: 'always_allowed' }
+    | { resolution: 'cancelled'; reason?: string }
   );
 }
 
@@ -215,6 +216,7 @@ export interface QuestionResolvedMessage extends BaseEnvelope {
   payload: {
     questionId: string;
     answer: string;
+    cancelled?: boolean;
   };
 }
 

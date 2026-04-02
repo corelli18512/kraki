@@ -427,7 +427,7 @@ export class CopilotAdapter extends AgentAdapter {
         if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
           otherPending.resolve({ kind: 'approved' });
           entry.pendingPermissions.delete(otherId);
-          this.onPermissionAutoResolved?.(sessionId, otherId);
+          this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
           logger.debug({ permissionId: otherId, sessionId, toolKind: pending.toolKind }, 'permission auto-approved');
         }
       }
@@ -468,8 +468,7 @@ export class CopilotAdapter extends AgentAdapter {
   async killSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
-      for (const [, p] of entry.pendingPermissions) p.resolve({ kind: 'denied-interactively-by-user' });
-      for (const [, q] of entry.pendingQuestions) q.resolve({ answer: '', wasFreeform: true });
+      this.broadcastPendingResolutions(sessionId);
       await entry.session.abort().catch(() => {});
       await entry.session.disconnect();
       this.sessions.delete(sessionId);
@@ -482,10 +481,7 @@ export class CopilotAdapter extends AgentAdapter {
   async abortSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
-      for (const [, p] of entry.pendingPermissions) p.resolve({ kind: 'denied-interactively-by-user' });
-      for (const [, q] of entry.pendingQuestions) q.resolve({ answer: '', wasFreeform: true });
-      entry.pendingPermissions.clear();
-      entry.pendingQuestions.clear();
+      this.broadcastPendingResolutions(sessionId);
       await entry.session.abort();
       logger.debug({ sessionId }, 'session aborted');
     }
@@ -523,6 +519,22 @@ export class CopilotAdapter extends AgentAdapter {
   private cleanupSessionPermissions(sessionId: string): void {
     this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
+  }
+
+  /** Resolve all pending permissions/questions and fire callbacks so relay-client broadcasts resolutions. */
+  private broadcastPendingResolutions(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    for (const [permId, p] of entry.pendingPermissions) {
+      p.resolve({ kind: 'denied-interactively-by-user' });
+      this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
+    }
+    entry.pendingPermissions.clear();
+    for (const [qId, q] of entry.pendingQuestions) {
+      q.resolve({ answer: '', wasFreeform: true });
+      this.onQuestionAutoResolved?.(sessionId, qId);
+    }
+    entry.pendingQuestions.clear();
   }
 
   private makeResumeConfig(
@@ -572,13 +584,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   private handleUnavailableSession(sessionId: string, err: unknown): void {
-    const entry = this.sessions.get(sessionId);
-    if (entry) {
-      for (const [, p] of entry.pendingPermissions) p.resolve({ kind: 'denied-interactively-by-user' });
-      for (const [, q] of entry.pendingQuestions) q.resolve({ answer: '', wasFreeform: true });
-      entry.pendingPermissions.clear();
-      entry.pendingQuestions.clear();
-    }
+    this.broadcastPendingResolutions(sessionId);
 
     this.sessions.delete(sessionId);
     this.cleanupSessionPermissions(sessionId);

@@ -30,7 +30,7 @@ function processReplayedActions(sessionId: string, messages: ChatMessage[]): voi
   // Collect IDs that have been resolved within this batch
   const resolvedPermIds = new Set<string>();
   const resolvedQuestionIds = new Set<string>();
-  const permResolutions = new Map<string, 'approved' | 'denied' | 'always_allowed'>();
+  const permResolutions = new Map<string, 'approved' | 'denied' | 'always_allowed' | 'cancelled'>();
   const questionAnswers = new Map<string, string>();
 
   for (const msg of messages) {

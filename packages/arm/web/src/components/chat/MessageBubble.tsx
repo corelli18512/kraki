@@ -120,7 +120,7 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
       const args = message.payload.args as Record<string, unknown> | undefined;
       const argsSummary = args ? getPermissionArgsSummary(toolName, args) : '';
       const desc = message.payload.description;
-      const resolution = (message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' }).resolution;
+      const resolution = (message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' | 'cancelled' }).resolution;
       // Build a meaningful description
       const displayDesc = desc && desc !== 'Run:' && desc !== `Run: `
         ? desc
@@ -129,15 +129,21 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
           : `Run ${toolName}`;
 
       if (resolution) {
-        const isApproved = resolution !== 'denied';
-        const ResIcon = resolution === 'always_allowed' ? LockOpen : isApproved ? Check : X;
+        const isApproved = resolution === 'approved' || resolution === 'always_allowed';
+        const isCancelled = resolution === 'cancelled';
+        const ResIcon = resolution === 'always_allowed' ? LockOpen
+          : isCancelled ? CircleStop
+          : isApproved ? Check : X;
         const label = resolution === 'approved' ? 'Approved'
           : resolution === 'always_allowed' ? 'Allowed for session'
+          : resolution === 'cancelled' ? 'Cancelled'
           : 'Denied';
+        const colorClass = isApproved ? 'bg-emerald-500/10' : isCancelled ? 'bg-slate-500/10' : 'bg-red-500/10';
+        const textClass = isApproved ? 'text-emerald-600 dark:text-emerald-400' : isCancelled ? 'text-text-muted' : 'text-red-600 dark:text-red-400';
         return (
           <div className="flex justify-end">
-            <div className={`min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md px-4 py-2.5 shadow-sm sm:max-w-[70%] ${isApproved ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
-              <p className={`flex items-center gap-1 text-xs font-medium ${isApproved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+            <div className={`min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md px-4 py-2.5 shadow-sm sm:max-w-[70%] ${colorClass}`}>
+              <p className={`flex items-center gap-1 text-xs font-medium ${textClass}`}>
                 <ResIcon className="h-3.5 w-3.5" />
                 {label} · <span className="font-mono">{toolName}</span>
               </p>
