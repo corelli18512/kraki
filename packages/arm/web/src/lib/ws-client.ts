@@ -106,7 +106,7 @@ export class KrakiWSClient {
     commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg));
   }
 
-  setSessionMode(sessionId: string, mode: 'safe' | 'plan' | 'execute' | 'delegate') {
+  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
   }
 
@@ -161,7 +161,7 @@ export class KrakiWSClient {
       });
 
       if (ts.mode) {
-        store.setSessionMode(ts.id, ts.mode as 'safe' | 'plan' | 'execute' | 'delegate');
+        store.setSessionMode(ts.id, ts.mode as 'safe' | 'discuss' | 'execute' | 'delegate');
       }
 
       // Store tentacle info and request latest messages via provider

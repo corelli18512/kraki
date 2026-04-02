@@ -248,7 +248,7 @@ export class CopilotAdapter extends AgentAdapter {
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   private sessionAllowSets = new Map<string, Set<string>>();
   /** Session permission mode */
-  private sessionModes = new Map<string, 'safe' | 'plan' | 'execute' | 'delegate'>();
+  private sessionModes = new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>();
 
   constructor(options: { cliPath?: string } = {}) {
     super();
@@ -532,7 +532,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   /** Set permission mode for a session */
-  setSessionMode(sessionId: string, mode: 'safe' | 'plan' | 'execute' | 'delegate'): void {
+  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
     this.sessionModes.set(sessionId, mode);
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
@@ -694,15 +694,15 @@ export class CopilotAdapter extends AgentAdapter {
     return (req: PermissionRequest, invocation: { sessionId: string }): Promise<PermissionRequestResult> | PermissionRequestResult => {
       const sessionId = invocation.sessionId;
       const toolKind = req.kind; // e.g. 'shell', 'write', 'read', 'url', 'mcp'
-      const mode = this.sessionModes.get(sessionId) ?? 'plan';
+      const mode = this.sessionModes.get(sessionId) ?? 'discuss';
 
       // Mode-based auto-approval
       if (mode === 'execute' || mode === 'delegate') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approved' };
       }
-      if (mode === 'plan' && toolKind !== 'write') {
-        // In plan mode, shell commands that might write files need operator approval
+      if (mode === 'discuss' && toolKind !== 'write') {
+        // In discuss mode, shell commands that might write files need operator approval
         if (toolKind === 'shell') {
           const command = ((req.fullCommandText ?? req.command ?? req.cmd ?? req.script ?? '') as string).trim();
           if (isShellWriteCommand(command)) {
@@ -716,19 +716,19 @@ export class CopilotAdapter extends AgentAdapter {
           return { kind: 'approved' };
         }
       }
-      if (mode === 'plan' && toolKind === 'write') {
+      if (mode === 'discuss' && toolKind === 'write') {
         const filePath = ((req.fileName ?? req.path ?? '') as string);
-        // Allow list: files that can be written in Plan mode
-        const PLAN_MODE_WRITE_ALLOW_LIST = ['plan.md'];
-        const allowed = PLAN_MODE_WRITE_ALLOW_LIST.some(
+        // Allow list: files that can be written in Discuss mode
+        const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
+        const allowed = DISCUSS_MODE_WRITE_ALLOW_LIST.some(
           (f) => filePath.endsWith('/' + f) || filePath === f,
         );
         if (allowed) {
-          logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (plan mode allow list)');
+          logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (discuss mode allow list)');
           return { kind: 'approved' };
         }
-        logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (plan mode)');
-        return { kind: 'denied-interactively-by-user', feedback: 'No edit allowed in Plan mode. Switch to Execute mode to make changes.' };
+        logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (discuss mode)');
+        return { kind: 'denied-interactively-by-user', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
@@ -764,7 +764,7 @@ export class CopilotAdapter extends AgentAdapter {
   private makeQuestionHandler(pending: Map<string, PendingQuestion>) {
     return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> | UserInputResponse => {
       const sessionId = invocation.sessionId;
-      const mode = this.sessionModes.get(sessionId) ?? 'plan';
+      const mode = this.sessionModes.get(sessionId) ?? 'discuss';
 
       // Delegate mode: auto-answer questions
       if (mode === 'delegate') {

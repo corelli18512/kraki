@@ -202,10 +202,10 @@ describe('handleDataMessage session_mode_set', () => {
     expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
   });
 
-  it('restores plan mode (clears entry)', () => {
+  it('restores discuss mode (clears entry)', () => {
     seedSession('sess-1');
     useStore.getState().setSessionMode('sess-1', 'execute');
-    handleDataMessage(makeModeSetMsg('sess-1', 'plan') as InnerMessage, {
+    handleDataMessage(makeModeSetMsg('sess-1', 'discuss') as InnerMessage, {
       replayingSessions: new Set(["test-session"]),
       cmdState,
     });

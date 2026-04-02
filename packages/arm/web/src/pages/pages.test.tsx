@@ -226,7 +226,7 @@ describe('SessionPage', () => {
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
     expect(screen.getAllByText('Safe').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Plan').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Discuss').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Execute').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Delegate')).toBeInTheDocument();
   });

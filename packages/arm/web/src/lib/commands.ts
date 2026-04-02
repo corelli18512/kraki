@@ -161,7 +161,7 @@ export function abortSession(
 
 export function setSessionMode(
   sessionId: string,
-  mode: 'safe' | 'plan' | 'execute' | 'delegate',
+  mode: 'safe' | 'discuss' | 'execute' | 'delegate',
   send: (msg: Record<string, unknown>) => void,
 ): void {
   send({
@@ -187,7 +187,7 @@ export function setSessionMode(
       store.removePermission(perm.id);
       resolvePermissionMessage(sessionId, perm.id, 'approved');
     }
-  } else if (mode === 'plan') {
+  } else if (mode === 'discuss') {
     // Plan: approve non-write pending permissions, deny write
     const pending = [...store.pendingPermissions.values()].filter(
       (p) => p.sessionId === sessionId,

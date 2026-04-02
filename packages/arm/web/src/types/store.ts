@@ -82,7 +82,7 @@ export interface AppState {
   activeSessionId: string | null;
 
   // Per-session permission mode ('ask' = prompt user, 'auto' = auto-approve)
-  sessionModes: Map<string, 'safe' | 'plan' | 'execute' | 'delegate'>;
+  sessionModes: Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>;
 
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
@@ -125,7 +125,7 @@ export interface AppActions {
   setLastError: (message: string | null) => void;
   setNavigateToSession: (sessionId: string | null) => void;
   setActiveSessionId: (sessionId: string | null) => void;
-  setSessionMode: (sessionId: string, mode: 'safe' | 'plan' | 'execute' | 'delegate') => void;
+  setSessionMode: (sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') => void;
   setGithubClientId: (clientId: string | null) => void;
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
