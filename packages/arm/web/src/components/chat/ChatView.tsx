@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
@@ -145,8 +145,8 @@ export function ChatView() {
     setUnreadCount(0);
   }, []);
 
-  // Preserve scroll position when older messages are prepended
-  useEffect(() => {
+  // Preserve scroll position when older messages are prepended (before paint)
+  useLayoutEffect(() => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
     const prevHeight = prevScrollHeightRef.current;
