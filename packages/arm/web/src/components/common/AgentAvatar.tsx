@@ -23,6 +23,19 @@ const fallbackColor = 'bg-surface-tertiary text-text-secondary';
 const ACTIVE_EMOJIS = ['🔨', '✏️', '💭', '⏳', '👀', '💡'];
 const IDLE_EMOJIS = ['☕', '💤', '🎣'];
 
+// Position per emoji: bottom-left, top-right, or bottom-right
+const BOTTOM_LEFT = '-bottom-0.5 -left-1';
+const TOP_RIGHT = '-top-1 -right-1';
+const BOTTOM_RIGHT = '-bottom-0.5 -right-1';
+
+const EMOJI_POSITION: Record<string, string> = {
+  '🔨': BOTTOM_LEFT,
+  '🎣': BOTTOM_LEFT,
+  '☕': TOP_RIGHT,
+  '💤': TOP_RIGHT,
+  '💡': TOP_RIGHT,
+};
+
 function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -41,7 +54,7 @@ export function AgentAvatar({ agent, size = 'md', status }: AgentAvatarProps) {
         {emoji}
       </div>
       {statusEmoji && (
-        <span className={`absolute -bottom-1 -right-1 leading-none ${size === 'sm' ? 'text-[9px]' : 'text-[11px]'}`}>
+        <span className={`absolute ${EMOJI_POSITION[statusEmoji] ?? BOTTOM_RIGHT} leading-none ${size === 'sm' ? 'text-[9px]' : 'text-[11px]'}`}>
           {statusEmoji}
         </span>
       )}
