@@ -1,5 +1,8 @@
 import { useMemo } from 'react';
 import type { ChatMessage } from '../types/store';
+import { createLogger } from '../lib/logger';
+
+const logger = createLogger('useTurns');
 
 export interface Turn {
   /** Messages that form the "thinking" process (tool calls, intermediate agent messages, permissions, etc.) */
@@ -71,6 +74,20 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
   const flushTurn = (turnComplete: boolean) => {
     if (currentThinking.length === 0) return;
 
+    // Log unmerged tool_starts (tool_start without matching tool_complete)
+    const unmatchedStarts = currentThinking.filter(m => m.type === 'tool_start');
+    if (unmatchedStarts.length > 0) {
+      logger.info('unmerged tool_starts in turn', {
+        turnComplete,
+        count: unmatchedStarts.length,
+        tools: unmatchedStarts.map(m => ({
+          seq: 'seq' in m ? (m as { seq?: number }).seq : undefined,
+          toolName: (m as { payload?: { toolName?: string } }).payload?.toolName,
+          toolCallId: (m as { payload?: { toolCallId?: string } }).payload?.toolCallId,
+        })),
+      });
+    }
+
     if (!turnComplete) {
       // Turn still in progress — everything stays in thinking
       result.push({ type: 'turn', turn: { thinkingMessages: currentThinking, finalMessage: null } });
@@ -132,14 +149,26 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
           );
           if (startIdx >= 0) {
             const startMsg = currentThinking[startIdx];
-            const startArgs = (startMsg as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
-            const completeArgs = (msg as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
+            const startPayload = (startMsg as { payload?: Record<string, unknown> }).payload ?? {};
+            const completePayload = (msg as { payload?: Record<string, unknown> }).payload ?? {};
+            const startArgs = (startPayload.args ?? {}) as Record<string, unknown>;
+            const completeArgs = (completePayload.args ?? {}) as Record<string, unknown>;
             currentThinking[startIdx] = {
               ...msg,
               seq: (startMsg as { seq?: number }).seq,
-              payload: { ...(msg as { payload: Record<string, unknown> }).payload, args: { ...startArgs, ...completeArgs } },
+              payload: {
+                ...completePayload,
+                toolName: completePayload.toolName || startPayload.toolName,
+                args: { ...startArgs, ...completeArgs },
+              },
             } as ChatMessage;
           } else {
+            logger.info('tool_complete unmatched', {
+              toolCallId,
+              seq: ('seq' in msg ? (msg as { seq?: number }).seq : undefined),
+              toolName: (msg as { payload?: { toolName?: string } }).payload?.toolName,
+              thinkingTypes: currentThinking.map(m => m.type),
+            });
             currentThinking.push(msg);
           }
         } else {
