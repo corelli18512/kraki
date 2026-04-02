@@ -226,6 +226,31 @@ export class SessionManager {
   }
 
   /**
+   * Mark a session as idle (turn completed, awaiting next input).
+   * Unlike endSession, does not close the current run.
+   */
+  markIdle(sessionId: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta || meta.state === 'idle') return;
+
+    meta.state = 'idle';
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
+   * Mark a session as active (new input received, turn starting).
+   */
+  markActive(sessionId: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta || meta.state === 'active') return;
+
+    meta.state = 'active';
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
    * Delete a session permanently. Removes all files for this session.
    */
   deleteSession(sessionId: string): void {

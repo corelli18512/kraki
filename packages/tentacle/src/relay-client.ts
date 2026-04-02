@@ -344,6 +344,7 @@ export class RelayClient {
     try {
       switch (msg.type) {
         case 'send_input':
+          this.sessionManager.markActive(sessionId);
           // Broadcast user_message back to apps (round-trip confirmation)
           this.send({
             type: 'user_message',
@@ -379,6 +380,10 @@ export class RelayClient {
           break;
         case 'abort_session':
           this.adapter.abortSession(sessionId)
+            .then(() => {
+              this.sessionManager.markIdle(sessionId);
+              this.send({ type: 'idle', sessionId, payload: {} });
+            })
             .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
           break;
         case 'delete_session':
@@ -552,6 +557,7 @@ export class RelayClient {
     };
 
     this.adapter.onIdle = (sessionId) => {
+      this.sessionManager.markIdle(sessionId);
       this.send({ type: 'idle', sessionId, payload: {} });
     };
 
