@@ -146,7 +146,7 @@ export class EncryptionHandler {
       callbacks.handleDataMessage(inner);
       callbacks.getHandlers().forEach((h) => h(inner as unknown as Message));
     } catch (err) {
-      logger.error('E2E decryption failed:', err);
+      logger.error('E2E decryption failed:', err instanceof Error ? { name: err.name, message: err.message } : err);
       // Try to extract sessionId from the error context for user feedback
       // (inner is not available on decryption failure)
     }

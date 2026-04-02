@@ -82,6 +82,27 @@ function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
   });
 }
 
+// ── Base64 helpers (stack-safe for large buffers) ───────
+// String.fromCharCode(...array) blows the call stack for arrays > ~65K bytes.
+// These helpers iterate instead of spreading.
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // ── RSA config ──────────────────────────────────────────
 
 const RSA_SIGN_ALGORITHM: RsaHashedKeyGenParams = {
@@ -185,7 +206,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
       data,
     );
 
-    return btoa(String.fromCharCode(...new Uint8Array(signature)));
+    return uint8ToBase64(new Uint8Array(signature));
   }
 
   async decrypt(
@@ -200,7 +221,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
     }
 
     // 1. Unwrap AES key with our RSA-OAEP private key
-    const wrappedKey = Uint8Array.from(atob(wrappedKeyB64), c => c.charCodeAt(0));
+    const wrappedKey = base64ToUint8(wrappedKeyB64);
     const aesKeyRaw = await crypto.subtle.decrypt(
       { name: 'RSA-OAEP' },
       this.encryptKeyPair.privateKey,
@@ -218,9 +239,9 @@ export class BrowserAppKeyStore implements AppKeyStore {
 
     // 3. Decrypt ciphertext with AES-256-GCM
     // Web Crypto AES-GCM expects tag appended to ciphertext
-    const cipherBytes = Uint8Array.from(atob(payload.ciphertext), c => c.charCodeAt(0));
-    const tagBytes = Uint8Array.from(atob(payload.tag), c => c.charCodeAt(0));
-    const ivBytes = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
+    const cipherBytes = base64ToUint8(payload.ciphertext);
+    const tagBytes = base64ToUint8(payload.tag);
+    const ivBytes = base64ToUint8(payload.iv);
 
     // Concatenate ciphertext + tag (Web Crypto GCM expects them together)
     const combined = new Uint8Array(cipherBytes.length + tagBytes.length);
@@ -263,18 +284,18 @@ export class BrowserAppKeyStore implements AppKeyStore {
     // 4. Wrap AES key for each recipient's RSA-OAEP public key
     const keys: Record<string, string> = {};
     for (const r of recipients) {
-      const spkiBytes = Uint8Array.from(atob(r.publicKeyBase64), c => c.charCodeAt(0));
+      const spkiBytes = base64ToUint8(r.publicKeyBase64);
       const pubKey = await crypto.subtle.importKey(
         'spki', spkiBytes, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt'],
       );
       const wrapped = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, pubKey, aesKeyRaw);
-      keys[r.deviceId] = btoa(String.fromCharCode(...new Uint8Array(wrapped)));
+      keys[r.deviceId] = uint8ToBase64(new Uint8Array(wrapped));
     }
 
     return {
-      iv: btoa(String.fromCharCode(...iv)),
-      ciphertext: btoa(String.fromCharCode(...ciphertext)),
-      tag: btoa(String.fromCharCode(...tag)),
+      iv: uint8ToBase64(iv),
+      ciphertext: uint8ToBase64(ciphertext),
+      tag: uint8ToBase64(tag),
       keys,
     };
   }
@@ -282,15 +303,15 @@ export class BrowserAppKeyStore implements AppKeyStore {
   async encryptToBlob(plaintext: string, recipients: RecipientKey[]): Promise<BlobPayload> {
     const result = await this.encrypt(plaintext, recipients);
     // Pack iv + ciphertext + tag into a single blob
-    const ivBytes = Uint8Array.from(atob(result.iv), c => c.charCodeAt(0));
-    const cipherBytes = Uint8Array.from(atob(result.ciphertext), c => c.charCodeAt(0));
-    const tagBytes = Uint8Array.from(atob(result.tag), c => c.charCodeAt(0));
+    const ivBytes = base64ToUint8(result.iv);
+    const cipherBytes = base64ToUint8(result.ciphertext);
+    const tagBytes = base64ToUint8(result.tag);
     const combined = new Uint8Array(ivBytes.length + cipherBytes.length + tagBytes.length);
     combined.set(ivBytes, 0);
     combined.set(cipherBytes, ivBytes.length);
     combined.set(tagBytes, ivBytes.length + cipherBytes.length);
     return {
-      blob: btoa(String.fromCharCode(...combined)),
+      blob: uint8ToBase64(combined),
       keys: result.keys,
     };
   }
@@ -300,16 +321,16 @@ export class BrowserAppKeyStore implements AppKeyStore {
     deviceId: string,
   ): Promise<string> {
     // Unpack blob: iv (12 bytes) + ciphertext (N) + tag (16 bytes)
-    const raw = Uint8Array.from(atob(payload.blob), c => c.charCodeAt(0));
-    const iv = btoa(String.fromCharCode(...raw.slice(0, 12)));
-    const tag = btoa(String.fromCharCode(...raw.slice(raw.length - 16)));
-    const ciphertext = btoa(String.fromCharCode(...raw.slice(12, raw.length - 16)));
+    const raw = base64ToUint8(payload.blob);
+    const iv = uint8ToBase64(raw.slice(0, 12));
+    const tag = uint8ToBase64(raw.slice(raw.length - 16));
+    const ciphertext = uint8ToBase64(raw.slice(12, raw.length - 16));
     return this.decrypt({ iv, ciphertext, tag, keys: payload.keys }, deviceId);
   }
 
   private async exportPublicKey(key: CryptoKey): Promise<string> {
     const exported = await crypto.subtle.exportKey('spki', key);
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
+    const base64 = uint8ToBase64(new Uint8Array(exported));
     return base64;
   }
 }
