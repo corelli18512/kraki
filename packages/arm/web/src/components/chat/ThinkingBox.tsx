@@ -163,14 +163,18 @@ function getMessageSummary(msg: ChatMessage): string {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
       const detail = getToolDetail(args);
-      summary = detail || (toolName ? `Running ${toolName}` : 'Running…');
+      summary = toolName
+        ? `${toolName}${detail ? ` ${detail}` : ''}`
+        : (detail || 'Running…');
       break;
     }
     case 'tool_complete': {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
       const detail = getToolDetail(args);
-      summary = detail || toolName || 'Done';
+      summary = toolName
+        ? `${toolName}${detail ? ` ${detail}` : ''}`
+        : (detail || 'Done');
       break;
     }
     case 'agent_message': {
@@ -194,6 +198,10 @@ function getMessageSummary(msg: ChatMessage): string {
     default:
       summary = 'Processing…';
       break;
+  }
+  // Truncate to first line for thinking line preview (agent_message keeps full content for markdown)
+  if (msg.type !== 'agent_message') {
+    summary = summary.split('\n')[0];
   }
   logger.info('summary', {
     type: msg.type,
