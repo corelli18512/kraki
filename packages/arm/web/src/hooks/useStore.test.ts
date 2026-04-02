@@ -325,14 +325,14 @@ describe('useStore', () => {
     it('setSessionMode removes entry when set to plan (default)', () => {
       useStore.getState().setSessionMode('sess-1', 'execute');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(true);
-      useStore.getState().setSessionMode('sess-1', 'plan');
+      useStore.getState().setSessionMode('sess-1', 'discuss');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
     });
 
     it('setSessionMode preserves other sessions', () => {
       useStore.getState().setSessionMode('sess-1', 'execute');
       useStore.getState().setSessionMode('sess-2', 'execute');
-      useStore.getState().setSessionMode('sess-1', 'plan');
+      useStore.getState().setSessionMode('sess-1', 'discuss');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
       expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
     });

@@ -31,7 +31,7 @@ export interface SessionContext {
   updatedAt: string;
 }
 
-export type SessionMode = 'safe' | 'plan' | 'execute' | 'delegate';
+export type SessionMode = 'safe' | 'discuss' | 'execute' | 'delegate';
 
 export interface SessionMeta {
   id: string;
@@ -137,7 +137,7 @@ export class SessionManager {
       agent,
       model,
       state: 'active',
-      mode: 'plan',
+      mode: 'discuss',
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: 0,
@@ -453,7 +453,7 @@ export class SessionManager {
         model: meta.model,
         title: meta.title,
         state,
-        mode: meta.mode ?? 'plan',
+        mode: meta.mode ?? 'discuss',
         lastSeq: meta.lastSeq ?? 0,
         readSeq: meta.readSeq ?? 0,
         messageCount,

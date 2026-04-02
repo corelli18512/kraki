@@ -162,7 +162,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_mode_set': {
       const mode = (msg as SessionModeSetMessage).payload?.mode;
-      if (mode === 'safe' || mode === 'plan' || mode === 'execute' || mode === 'delegate') {
+      if (mode === 'safe' || mode === 'discuss' || mode === 'execute' || mode === 'delegate') {
         store.setSessionMode(sid, mode);
       }
       break;

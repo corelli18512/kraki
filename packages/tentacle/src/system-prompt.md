@@ -29,7 +29,7 @@ Every tool call requires explicit approval from the operator before execution.
 Wait for approval — do not assume it will be granted. Explain what you intend
 to do before each action so the operator can make an informed decision.
 
-## Discuss mode (plan)
+## Discuss mode
 
 Permission mode: discuss
 Read operations (viewing files, searching, running read-only commands) are

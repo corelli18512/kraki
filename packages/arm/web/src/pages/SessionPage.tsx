@@ -13,7 +13,7 @@ export function SessionPage() {
   const isDeviceOnline = device?.online ?? false;
   const clearUnread = useStore((s) => s.clearUnread);
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
-  const sessionMode = useStore((s) => (sessionId ? (s.sessionModes.get(sessionId) ?? 'plan') : 'plan'));
+  const sessionMode = useStore((s) => (sessionId ? (s.sessionModes.get(sessionId) ?? 'discuss') : 'discuss'));
   const status = useStore((s) => s.status);
   const reconnectAttempts = useStore((s) => s.reconnectAttempts);
   const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
@@ -99,7 +99,7 @@ export function SessionPage() {
           )}
         </div>
         {isDeviceOnline && sessionId && (
-          <ModeSelector sessionId={sessionId} currentMode={sessionMode as 'safe' | 'plan' | 'execute' | 'delegate'} />
+          <ModeSelector sessionId={sessionId} currentMode={sessionMode as 'safe' | 'discuss' | 'execute' | 'delegate'} />
         )}
       </div>
 
@@ -110,11 +110,11 @@ export function SessionPage() {
 
 // ── Mode selector with sliding pill ──────────────────────
 
-const MODES = ['safe', 'plan', 'execute', 'delegate'] as const;
+const MODES = ['safe', 'discuss', 'execute', 'delegate'] as const;
 
 const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> = {
   safe:     { pill: 'bg-emerald-400/80 dark:bg-emerald-500/60', text: 'text-emerald-900 dark:text-emerald-100' },
-  plan:     { pill: 'bg-ocean-400/80 dark:bg-ocean-500/60',     text: 'text-ocean-900 dark:text-ocean-100' },
+  discuss:  { pill: 'bg-ocean-400/80 dark:bg-ocean-500/60',     text: 'text-ocean-900 dark:text-ocean-100' },
   execute:  { pill: 'bg-amber-400/80 dark:bg-amber-500/60',     text: 'text-amber-900 dark:text-amber-100' },
   delegate: { pill: 'bg-kraki-400/80 dark:bg-kraki-500/60',     text: 'text-kraki-900 dark:text-kraki-100' },
 };
