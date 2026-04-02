@@ -136,6 +136,7 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
             const completeArgs = (msg as { payload?: { args?: Record<string, unknown> } }).payload?.args ?? {};
             currentThinking[startIdx] = {
               ...msg,
+              seq: (startMsg as { seq?: number }).seq,
               payload: { ...(msg as { payload: Record<string, unknown> }).payload, args: { ...startArgs, ...completeArgs } },
             } as ChatMessage;
           } else {
