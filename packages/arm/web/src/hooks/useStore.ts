@@ -61,6 +61,7 @@ const initialState = {
   githubClientId: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
+  deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -298,6 +299,17 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModels: next };
     }),
 
+  setDeviceModelDetails: (deviceId, details) =>
+    set((state) => {
+      const next = new Map(state.deviceModelDetails);
+      if (details.length > 0) {
+        next.set(deviceId, details);
+      } else {
+        next.delete(deviceId);
+      }
+      return { deviceModelDetails: next };
+    }),
+
   prependMessages: (sessionId, older) => {
     // Write to IndexedDB (idempotent by [sessionId, seq] key)
     import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
@@ -353,6 +365,7 @@ export const useStore = create<Store>()(persist((set) => ({
     githubClientId: null,
   relayVersion: null,
     deviceModels: new Map(),
+    deviceModelDetails: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

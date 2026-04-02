@@ -170,6 +170,8 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
     name: string;
     kind?: string;
     models?: string[];
+    /** Rich model metadata including reasoning effort support */
+    modelDetails?: import('./devices.js').ModelDetail[];
     version?: string;
   };
 }
@@ -302,6 +304,8 @@ export interface CreateSessionMessage extends BaseEnvelope {
     targetDeviceId: string;
     /** Agent model to use (e.g. "claude-sonnet-4") */
     model: string;
+    /** Reasoning effort level (only for models that support it) */
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
     /** Initial prompt to send after session is created */
     prompt?: string;
     /** Working directory for the session */

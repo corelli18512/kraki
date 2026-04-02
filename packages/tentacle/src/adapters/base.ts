@@ -8,7 +8,7 @@
  * The adapter fires them as the agent produces events.
  */
 
-import type { ToolArgs } from '@kraki/protocol';
+import type { ToolArgs, ModelDetail } from '@kraki/protocol';
 import type { SessionContext } from '../session-manager.js';
 
 // ── Callback payload types ──────────────────────────────
@@ -65,6 +65,8 @@ export interface ErrorEvent {
 export interface CreateSessionConfig {
   /** Agent-specific model identifier (e.g. "claude-opus-4.6-1m") */
   model?: string;
+  /** Reasoning effort level (for models that support it) */
+  reasoningEffort?: string;
   /** Working directory for the session */
   cwd?: string;
   /** Caller-supplied session ID (adapter may ignore) */
@@ -149,6 +151,9 @@ export abstract class AgentAdapter {
 
   /** List available models. Override in concrete adapters. */
   async listModels(): Promise<string[]> { return []; }
+
+  /** List available models with rich metadata. Override in concrete adapters. */
+  async listModelDetails(): Promise<ModelDetail[]> { return []; }
 
   /** Set permission mode for a session. Override in concrete adapters. */
   setSessionMode(_sessionId: string, _mode: 'safe' | 'plan' | 'execute' | 'delegate'): void { /* no-op by default */ }

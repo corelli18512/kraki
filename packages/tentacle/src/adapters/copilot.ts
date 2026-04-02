@@ -326,9 +326,15 @@ export class CopilotAdapter extends AgentAdapter {
       logger.info('No MCP config at ~/.copilot/mcp-config.json');
     }
 
+    const validEfforts = new Set(['low', 'medium', 'high', 'xhigh']);
+    const effort = config.reasoningEffort && validEfforts.has(config.reasoningEffort)
+      ? config.reasoningEffort as SessionConfig['reasoningEffort']
+      : undefined;
+
     const sessionConfig: SessionConfig = {
       ...(config.sessionId && { sessionId: config.sessionId }),
       ...(config.model && { model: config.model }),
+      ...(effort && { reasoningEffort: effort }),
       ...(config.cwd && { workingDirectory: config.cwd }),
       configDir: join(homedir(), '.copilot'),
       ...(mcpServers && { mcpServers }),
@@ -504,6 +510,22 @@ export class CopilotAdapter extends AgentAdapter {
     try {
       const models = await this.client.listModels();
       return models.map((m: { id: string }) => m.id);
+    } catch {
+      return [];
+    }
+  }
+
+  async listModelDetails(): Promise<import('@kraki/protocol').ModelDetail[]> {
+    if (!this.client) return [];
+    try {
+      const models = await this.client.listModels();
+      return models.map((m) => ({
+        id: m.id,
+        name: m.name ?? m.id,
+        supportsReasoningEffort: m.capabilities?.supports?.reasoningEffort ?? false,
+        ...(m.supportedReasoningEfforts && { supportedReasoningEfforts: m.supportedReasoningEfforts }),
+        ...(m.defaultReasoningEffort && { defaultReasoningEffort: m.defaultReasoningEffort }),
+      }));
     } catch {
       return [];
     }
