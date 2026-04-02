@@ -93,8 +93,10 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 5. Fetch available models for device capabilities
   let models: string[] = [];
+  let modelDetails: import('@kraki/protocol').ModelDetail[] = [];
   try {
-    models = await adapter.listModels();
+    modelDetails = await adapter.listModelDetails();
+    models = modelDetails.map(m => m.id);
     logger.debug({ count: models.length }, 'Fetched available models');
   } catch {
     logger.warn('Could not fetch available models');
@@ -111,7 +113,7 @@ export async function startWorker(): Promise<WorkerResult> {
         role: 'tentacle',
         kind: 'desktop',
         deviceId,
-        capabilities: models.length > 0 ? { models } : undefined,
+        capabilities: models.length > 0 ? { models, modelDetails } : undefined,
       },
       authMethod: config.authMethod,
       token,

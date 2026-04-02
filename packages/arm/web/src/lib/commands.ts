@@ -219,7 +219,7 @@ export function setSessionMode(
 }
 
 export function createSession(
-  opts: { targetDeviceId: string; model: string; prompt?: string; cwd?: string },
+  opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string },
   send: (msg: Record<string, unknown>) => void,
   state: CommandState,
 ): void {
@@ -234,6 +234,7 @@ export function createSession(
       requestId,
       targetDeviceId: opts.targetDeviceId,
       model: opts.model,
+      ...(opts.reasoningEffort && { reasoningEffort: opts.reasoningEffort }),
       prompt: opts.prompt,
       cwd: opts.cwd,
     },

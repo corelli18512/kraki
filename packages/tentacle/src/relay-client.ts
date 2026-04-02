@@ -418,7 +418,7 @@ export class RelayClient {
 
   private async handleCreateSession(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'create_session') return;
-    const { model, cwd, prompt, requestId } = msg.payload;
+    const { model, reasoningEffort, cwd, prompt, requestId } = msg.payload;
 
     // Pre-generate a stable sessionId and map requestId BEFORE calling the adapter.
     // This is concurrency-safe: each request gets its own unique key.
@@ -428,7 +428,7 @@ export class RelayClient {
     }
 
     try {
-      const result = await this.adapter.createSession({ model, cwd: cwd || '/', sessionId: preSessionId });
+      const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId });
 
       // If an initial prompt was provided, send it to the new session
       if (prompt && result.sessionId) {
@@ -806,6 +806,7 @@ export class RelayClient {
         name: this.options.device.name,
         kind: this.options.device.kind,
         models: this.options.device.capabilities?.models,
+        modelDetails: this.options.device.capabilities?.modelDetails,
       },
     } as ProducerMessage);
   }
@@ -823,6 +824,7 @@ export class RelayClient {
         name: this.options.device.name,
         kind: this.options.device.kind,
         models: this.options.device.capabilities?.models,
+        modelDetails: this.options.device.capabilities?.modelDetails,
       },
     };
     this.sendUnicastTo(targetDeviceId, compactPubKey, greeting);

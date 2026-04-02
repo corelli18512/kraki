@@ -119,7 +119,7 @@ export class KrakiWSClient {
     });
   }
 
-  createSession(opts: { targetDeviceId: string; model: string; prompt?: string; cwd?: string }) {
+  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string }) {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 

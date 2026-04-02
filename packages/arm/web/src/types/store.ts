@@ -3,6 +3,7 @@ import type {
   DeviceSummary,
   ProducerMessage,
   ConsumerMessage,
+  ModelDetail,
 } from '@kraki/protocol';
 
 // --- Connection ---
@@ -91,6 +92,7 @@ export interface AppState {
 
   // Live capabilities from tentacle greetings
   deviceModels: Map<string, string[]>;
+  deviceModelDetails: Map<string, ModelDetail[]>;
 }
 
 export interface AppActions {
@@ -127,6 +129,7 @@ export interface AppActions {
   setGithubClientId: (clientId: string | null) => void;
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
+  setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
   clearTransientState: () => void;
   reset: () => void;
 

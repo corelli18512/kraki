@@ -51,4 +51,19 @@ export interface DeviceInfo {
 export interface DeviceCapabilities {
   /** Available agent models (e.g. ["claude-sonnet-4", "gpt-4.1"]) */
   models?: string[];
+  /** Rich model metadata including reasoning effort support */
+  modelDetails?: ModelDetail[];
+}
+
+// ── Model metadata ──────────────────────────────────────
+
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Model info exposed through the protocol (subset of SDK ModelInfo). */
+export interface ModelDetail {
+  id: string;
+  name: string;
+  supportsReasoningEffort: boolean;
+  supportedReasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }

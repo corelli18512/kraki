@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
+import type { ReasoningEffort } from '@kraki/protocol';
 
 interface Props {
   open: boolean;
@@ -9,6 +10,14 @@ interface Props {
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
 const MODEL_PREF_KEY = 'kraki:last-model';
+const EFFORT_PREF_KEY = 'kraki:last-effort';
+
+const EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Max',
+};
 
 function getModelPrefs(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(MODEL_PREF_KEY) ?? '{}'); } catch { return {}; }
@@ -20,13 +29,25 @@ function saveModelPref(deviceId: string, model: string) {
   localStorage.setItem(MODEL_PREF_KEY, JSON.stringify(prefs));
 }
 
+function getEffortPrefs(): Record<string, ReasoningEffort> {
+  try { return JSON.parse(localStorage.getItem(EFFORT_PREF_KEY) ?? '{}'); } catch { return {}; }
+}
+
+function saveEffortPref(modelId: string, effort: ReasoningEffort) {
+  const prefs = getEffortPrefs();
+  prefs[modelId] = effort;
+  localStorage.setItem(EFFORT_PREF_KEY, JSON.stringify(prefs));
+}
+
 export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
   const deviceModels = useStore((s) => s.deviceModels);
+  const deviceModelDetails = useStore((s) => s.deviceModelDetails);
 
   const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
   const [prompt, setPrompt] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -44,6 +65,14 @@ export function NewSessionDialog({ open, onClose }: Props) {
 
   // Get models from tentacle greeting
   const models = deviceModels.get(selectedDevice) ?? [];
+  const modelDetails = deviceModelDetails.get(selectedDevice) ?? [];
+
+  // Get reasoning effort info for selected model
+  const selectedModelDetail = useMemo(
+    () => modelDetails.find((d) => d.id === model),
+    [modelDetails, model],
+  );
+  const supportedEfforts = selectedModelDetail?.supportedReasoningEfforts;
 
   // Restore last model for this device, or auto-select first
   useEffect(() => {
@@ -56,6 +85,21 @@ export function NewSessionDialog({ open, onClose }: Props) {
       setModel(models[0]);
     }
   }, [models, selectedDevice]);
+
+  // Restore or default reasoning effort when model changes
+  useEffect(() => {
+    if (!model || !selectedModelDetail?.supportsReasoningEffort) {
+      setReasoningEffort(undefined);
+      return;
+    }
+    const prefs = getEffortPrefs();
+    const lastEffort = prefs[model];
+    if (lastEffort && supportedEfforts?.includes(lastEffort)) {
+      setReasoningEffort(lastEffort);
+    } else {
+      setReasoningEffort(selectedModelDetail.defaultReasoningEffort);
+    }
+  }, [model, selectedModelDetail, supportedEfforts]);
 
   // Scroll selected model into view
   useEffect(() => {
@@ -76,11 +120,17 @@ export function NewSessionDialog({ open, onClose }: Props) {
     if (selectedDevice) saveModelPref(selectedDevice, m);
   };
 
+  const handleSelectEffort = (effort: ReasoningEffort) => {
+    setReasoningEffort(effort);
+    saveEffortPref(model, effort);
+  };
+
   const handleSubmit = () => {
     if (!canSubmit) return;
     wsClient.createSession({
       targetDeviceId: selectedDevice,
       model,
+      reasoningEffort,
       prompt: prompt.trim() || undefined,
     });
     onClose();
@@ -169,6 +219,28 @@ export function NewSessionDialog({ open, onClose }: Props) {
                 />
               )}
             </div>
+
+            {/* Reasoning effort picker — only shown when model supports it */}
+            {supportedEfforts && supportedEfforts.length > 0 && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Thinking</label>
+                <div className="flex gap-1.5">
+                  {supportedEfforts.map((effort) => (
+                    <button
+                      key={effort}
+                      onClick={() => handleSelectEffort(effort)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                        reasoningEffort === effort
+                          ? 'bg-ocean-500 text-white'
+                          : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                      }`}
+                    >
+                      {EFFORT_LABELS[effort] ?? effort}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Prompt */}
             <div>
