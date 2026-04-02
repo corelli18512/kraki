@@ -10,6 +10,13 @@ import { Pin, PinOff, Trash2 } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
+/** Message types that render as chat bubbles (not thinking steps) */
+const BUBBLE_TYPES = new Set([
+  'user_message', 'send_input', 'pending_input', 'answer',
+  'agent_message', 'question',
+  'session_created', 'session_ended', 'kill_session', 'session_deleted',
+]);
+
 interface SessionCardProps {
   session: SessionSummary;
   pinned?: boolean;
@@ -28,9 +35,9 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
 
   const draft = useStore((s) => s.drafts.get(session.id));
 
-  // Get last message preview
+  // Get last chat-bubble message for preview (skip thinking steps)
   const messages = useStore((s) => s.messages.get(session.id));
-  const lastMsg = messages?.[messages.length - 1];
+  const lastMsg = messages?.findLast((m) => BUBBLE_TYPES.has(m.type));
   let preview = '';
   if (lastMsg && 'payload' in lastMsg) {
     const payload = lastMsg.payload as Record<string, unknown>;
