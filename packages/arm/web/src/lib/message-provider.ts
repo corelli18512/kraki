@@ -9,12 +9,105 @@
  */
 
 import { getStore } from './store-adapter';
+import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { createLogger } from './logger';
+import type { ChatMessage, PendingPermission, PendingQuestion } from '../types/store';
 
 const logger = createLogger('msg-provider');
 
 const PAGE_SIZE = 100;
 const LATEST_SIZE = 50;
+
+/**
+ * Scan replayed messages for pending permissions/questions that didn't go
+ * through handleDataMessage (the live path). Without this, permissions
+ * arriving via batch replay are never added to pendingPermissions and end up
+ * folded into the ThinkingBox with no actionable PermissionInput card.
+ */
+function processReplayedActions(sessionId: string, messages: ChatMessage[]): void {
+  const store = getStore();
+
+  // Collect IDs that have been resolved within this batch
+  const resolvedPermIds = new Set<string>();
+  const resolvedQuestionIds = new Set<string>();
+  const permResolutions = new Map<string, 'approved' | 'denied' | 'always_allowed'>();
+  const questionAnswers = new Map<string, string>();
+
+  for (const msg of messages) {
+    switch (msg.type) {
+      case 'approve':
+        resolvedPermIds.add(msg.payload?.permissionId);
+        permResolutions.set(msg.payload?.permissionId, 'approved');
+        break;
+      case 'deny':
+        resolvedPermIds.add(msg.payload?.permissionId);
+        permResolutions.set(msg.payload?.permissionId, 'denied');
+        break;
+      case 'always_allow':
+        resolvedPermIds.add(msg.payload?.permissionId);
+        permResolutions.set(msg.payload?.permissionId, 'always_allowed');
+        break;
+      case 'permission_resolved':
+        resolvedPermIds.add(msg.payload?.permissionId);
+        permResolutions.set(msg.payload?.permissionId, msg.payload?.resolution);
+        break;
+      case 'answer':
+        if (msg.payload?.questionId) {
+          resolvedQuestionIds.add(msg.payload.questionId);
+          questionAnswers.set(msg.payload.questionId, msg.payload?.answer as string);
+        }
+        break;
+      case 'question_resolved':
+        if (msg.payload?.questionId) {
+          resolvedQuestionIds.add(msg.payload.questionId);
+          questionAnswers.set(msg.payload.questionId, msg.payload?.answer as string);
+        }
+        break;
+    }
+  }
+
+  // Add unresolved permissions to the store so ChatView can show PermissionInput
+  for (const msg of messages) {
+    if (msg.type === 'permission' && !resolvedPermIds.has(msg.payload?.id)) {
+      // Only add if not already tracked
+      if (!store.pendingPermissions.has(msg.payload.id)) {
+        const perm: PendingPermission = {
+          id: msg.payload.id,
+          sessionId,
+          toolName: msg.payload.toolName,
+          args: (msg.payload.args ?? {}) as Record<string, unknown>,
+          description: msg.payload.description,
+          timestamp: msg.timestamp,
+        };
+        store.addPermission(perm);
+        logger.info('restored pending permission from replay', { sessionId, permissionId: perm.id });
+      }
+    }
+    if (msg.type === 'question' && !resolvedQuestionIds.has(msg.payload?.id)) {
+      if (!store.pendingQuestions.has(msg.payload.id)) {
+        const q: PendingQuestion = {
+          id: msg.payload.id,
+          sessionId,
+          question: msg.payload.question,
+          choices: msg.payload.choices,
+          timestamp: msg.timestamp,
+        };
+        store.addQuestion(q);
+        logger.info('restored pending question from replay', { sessionId, questionId: q.id });
+      }
+    }
+  }
+
+  // Stamp resolutions on permission messages so MessageBubble renders them correctly
+  for (const [permId, resolution] of permResolutions) {
+    resolvePermissionMessage(sessionId, permId, resolution);
+    store.removePermission(permId);
+  }
+  for (const [qId, answer] of questionAnswers) {
+    resolveQuestionMessage(sessionId, qId, answer);
+    store.removeQuestion(qId);
+  }
+}
 
 class MessageProvider {
   /** In-flight requests keyed by `${sessionId}:${afterSeq}` */
@@ -78,6 +171,7 @@ class MessageProvider {
         const latestFromDb = allMsgs.slice(-LATEST_SIZE);
         if (latestFromDb.length > 0) {
           getStore().prependMessages(sessionId, latestFromDb);
+          processReplayedActions(sessionId, latestFromDb as ChatMessage[]);
           logger.info('loaded from IndexedDB', { sessionId, count: latestFromDb.length, dbLastSeq: lastSeq });
         }
       }
@@ -132,6 +226,7 @@ class MessageProvider {
         });
         if (newMessages.length > 0) {
           getStore().prependMessages(sessionId, older);
+          processReplayedActions(sessionId, older as ChatMessage[]);
           logger.info('gap filled from IndexedDB', { sessionId, beforeSeq, count: older.length, newCount: newMessages.length });
           this.loading.delete(loadKey);
           return;
@@ -172,8 +267,10 @@ class MessageProvider {
   handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
     logger.info('handleBatch received', { sessionId, count: messages?.length ?? 0 });
 
-    if (messages && messages.length > 0) {
-      getStore().prependMessages(sessionId, messages as Parameters<ReturnType<typeof getStore>['prependMessages']>[1]);
+    const typed = (messages ?? []) as ChatMessage[];
+    if (typed.length > 0) {
+      getStore().prependMessages(sessionId, typed);
+      processReplayedActions(sessionId, typed);
     }
 
     // Clear internal loading keys for this session
