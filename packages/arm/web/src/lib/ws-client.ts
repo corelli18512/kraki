@@ -191,12 +191,12 @@ export class KrakiWSClient {
 
     if (!hasCredentials) {
       // No credentials — query server capabilities so the UI can show login options
-      this.transport.send({ type: 'auth_info' });
+      this.transport.sendRaw({ type: 'auth_info' });
       return;
     }
 
     const usedToken = await sendAuth(
-      (msg) => this.transport.send(msg),
+      (msg) => this.transport.sendRaw(msg),
       this.encryption.keyStore,
       this.transport.pairingToken,
       this.transport.storedDeviceId,
@@ -235,6 +235,7 @@ export class KrakiWSClient {
 
       // --- Control messages ---
       case 'auth_ok':
+        this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
@@ -246,7 +247,7 @@ export class KrakiWSClient {
           (msg as AuthChallengeMessage).nonce,
           this.encryption.keyStore,
           this.transport.storedDeviceId,
-          (m) => this.transport.send(m),
+          (m) => this.transport.sendRaw(m),
         );
         break;
 

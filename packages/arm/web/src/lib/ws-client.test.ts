@@ -847,6 +847,14 @@ describe('KrakiWSClient', () => {
       const authMsg = JSON.parse(lastWsInstance.sentMessages[0]);
       expect(authMsg.type).toBe('auth');
 
+      // Simulate auth_ok so transport is authenticated (pings require it)
+      lastWsInstance._receive({
+        type: 'auth_ok',
+        deviceId: 'dev-web-123',
+        devices: [],
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
       // Reset messages to track just pings
       lastWsInstance.sentMessages = [];
 

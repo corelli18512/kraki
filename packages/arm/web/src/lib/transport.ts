@@ -127,6 +127,7 @@ export class KrakiTransport {
   intentionalClose = false;
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
+  private authenticated = false;
 
   get url(): string { return this._url; }
 
@@ -221,9 +222,20 @@ export class KrakiTransport {
   }
 
   send(msg: Record<string, unknown>) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
+      this.ws.send(JSON.stringify(msg));
+    }
+  }
+
+  /** Send without auth gate — used only for auth handshake messages. */
+  sendRaw(msg: Record<string, unknown>) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
     }
+  }
+
+  setAuthenticated(value: boolean) {
+    this.authenticated = value;
   }
 
   private startPing() {
@@ -249,6 +261,7 @@ export class KrakiTransport {
   }
 
   private cleanup() {
+    this.authenticated = false;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
