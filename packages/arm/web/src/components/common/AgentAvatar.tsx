@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { agentInfo } from '../../lib/format';
 
 interface AgentAvatarProps {
   agent: string;
   size?: 'sm' | 'md';
+  status?: 'active' | 'idle';
 }
 
 const sizeClasses = {
@@ -18,12 +20,31 @@ const agentColors: Record<string, string> = {
 
 const fallbackColor = 'bg-surface-tertiary text-text-secondary';
 
-export function AgentAvatar({ agent, size = 'md' }: AgentAvatarProps) {
+const ACTIVE_EMOJIS = ['🔨', '✏️', '💭', '⏳', '👀', '💡'];
+const IDLE_EMOJIS = ['☕', '💤', '🎣'];
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+export function AgentAvatar({ agent, size = 'md', status }: AgentAvatarProps) {
   const { emoji } = agentInfo(agent);
   const colorClass = agentColors[agent.toLowerCase()] ?? fallbackColor;
+  const statusEmoji = useMemo(() => {
+    if (!status) return null;
+    return status === 'active' ? pickRandom(ACTIVE_EMOJIS) : pickRandom(IDLE_EMOJIS);
+  }, [status]);
+
   return (
-    <div className={`flex shrink-0 items-center justify-center ${colorClass} ${sizeClasses[size]}`}>
-      {emoji}
+    <div className="relative inline-flex shrink-0">
+      <div className={`flex items-center justify-center ${colorClass} ${sizeClasses[size]}`}>
+        {emoji}
+      </div>
+      {statusEmoji && (
+        <span className={`absolute -bottom-1 -right-1 leading-none ${size === 'sm' ? 'text-[9px]' : 'text-[11px]'}`}>
+          {statusEmoji}
+        </span>
+      )}
     </div>
   );
 }

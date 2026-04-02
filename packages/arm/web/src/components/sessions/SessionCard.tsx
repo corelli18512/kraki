@@ -98,7 +98,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
         }`}
       >
         <div className="relative self-start shrink-0">
-          <AgentAvatar agent={session.agent} />
+          <AgentAvatar agent={session.agent} status={session.state as 'active' | 'idle'} />
           {unreadCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-kraki-500 ring-2 ring-surface-secondary" />
           )}
