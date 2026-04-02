@@ -93,6 +93,9 @@ export function ChatView() {
 
   const rawGrouped = useTurns(filteredMessages);
 
+  // Only the last turn can be active, and only if the session isn't idle
+  const sessionIdle = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].type === 'idle';
+
   // Log turn grouping for debugging
   useMemo(() => {
     if (!sessionId) return;
@@ -268,7 +271,7 @@ export function ChatView() {
               const { turn } = item;
               const isLastTurn = idx === grouped.length - 1;
               const hasStreaming = isLastTurn && !!streaming;
-              const isActive = !turn.finalMessage || hasStreaming;
+              const isActive = isLastTurn && !sessionIdle && (!turn.finalMessage || hasStreaming);
 
               // Get the first seq in this turn for gap detection
               const turnMessages = [...turn.thinkingMessages, ...(turn.finalMessage ? [turn.finalMessage] : [])];
