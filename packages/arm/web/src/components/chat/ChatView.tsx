@@ -8,7 +8,10 @@ import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { useTurns } from '../../hooks/useTurns';
 import { GapMarker } from './GapMarker';
+import { createLogger } from '../../lib/logger';
 import type { ChatMessage } from '../../types/store';
+
+const logger = createLogger('chat-view');
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
@@ -89,6 +92,30 @@ export function ChatView() {
   const hasOlderMessages = firstSeq > 1;
 
   const rawGrouped = useTurns(filteredMessages);
+
+  // Log turn grouping for debugging
+  useMemo(() => {
+    if (!sessionId) return;
+    const turns = rawGrouped.filter(g => g.type === 'turn');
+    const activeTurns = turns.filter(g => g.type === 'turn' && !g.turn.finalMessage);
+    if (activeTurns.length > 0 || turns.length > 0) {
+      logger.info('turns grouped', {
+        sessionId,
+        totalGroups: rawGrouped.length,
+        turnCount: turns.length,
+        activeTurns: activeTurns.length,
+        messageCount: filteredMessages.length,
+        turnDetails: turns.map((g, i) => ({
+          idx: i,
+          thinkingCount: g.turn.thinkingMessages.length,
+          hasFinal: !!g.turn.finalMessage,
+          finalType: g.turn.finalMessage?.type ?? 'null',
+          lastThinkingType: g.turn.thinkingMessages.length > 0 ? g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1].type : 'none',
+          lastThinkingSeq: g.turn.thinkingMessages.length > 0 ? ('seq' in g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1] ? (g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1] as { seq?: number }).seq : '?') : '?',
+        })),
+      });
+    }
+  }, [rawGrouped, sessionId, filteredMessages.length]);
 
   // Ensure streaming always attaches to a turn group
   const grouped = useMemo(() => {

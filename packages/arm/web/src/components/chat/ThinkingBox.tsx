@@ -5,6 +5,9 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '../../types/store';
 import { MessageBubble } from './MessageBubble';
+import { createLogger } from '../../lib/logger';
+
+const logger = createLogger('thinking-box');
 
 interface ThinkingBoxProps {
   messages: ChatMessage[];
@@ -53,6 +56,15 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
     : messages.length > 0
       ? getMessageSummary(messages[messages.length - 1])
       : 'Processing…';
+
+  logger.info('render', {
+    isActive,
+    messageCount: messages.length,
+    lastType: messages.length > 0 ? messages[messages.length - 1].type : 'none',
+    summary: summary.slice(0, 80),
+    messageTypes: messages.map(m => m.type),
+    seqs: messages.map(m => ('seq' in m ? (m as { seq?: number }).seq : '?')),
+  });
 
   return (
     <>
@@ -145,35 +157,52 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
 }
 
 function getMessageSummary(msg: ChatMessage): string {
+  let summary: string;
   switch (msg.type) {
     case 'tool_start': {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
       const detail = getToolDetail(args);
-      return detail || (toolName ? `Running ${toolName}` : 'Running…');
+      summary = detail || (toolName ? `Running ${toolName}` : 'Running…');
+      break;
     }
     case 'tool_complete': {
       const toolName = msg.payload.toolName;
       const args = msg.payload.args as Record<string, unknown>;
       const detail = getToolDetail(args);
-      return detail || toolName || 'Done';
+      summary = detail || toolName || 'Done';
+      break;
     }
     case 'agent_message': {
       const content = msg.payload.content;
-      if (!content) return 'Agent thinking…';
-      return content.trim();
+      if (!content) { summary = 'Agent thinking…'; break; }
+      summary = content.trim();
+      break;
     }
     case 'permission':
-      return `Permission: ${msg.payload.toolName}`;
+      summary = `Permission: ${msg.payload.toolName}`;
+      break;
     case 'error':
-      return `Error: ${msg.payload.message}`;
+      summary = `Error: ${msg.payload.message}`;
+      break;
     case 'idle':
-      return 'Waiting…';
+      summary = 'Waiting…';
+      break;
     case 'session_mode_set':
-      return `Mode: ${msg.payload.mode ?? 'updated'}`;
+      summary = `Mode: ${msg.payload.mode ?? 'updated'}`;
+      break;
     default:
-      return 'Processing…';
+      summary = 'Processing…';
+      break;
   }
+  logger.info('summary', {
+    type: msg.type,
+    seq: 'seq' in msg ? (msg as { seq?: number }).seq : '?',
+    toolName: msg.type === 'tool_start' || msg.type === 'tool_complete' ? msg.payload.toolName : undefined,
+    argKeys: msg.type === 'tool_start' || msg.type === 'tool_complete' ? Object.keys(msg.payload.args as Record<string, unknown> ?? {}) : undefined,
+    summary: summary.slice(0, 80),
+  });
+  return summary;
 }
 
 function getToolDetail(args: Record<string, unknown>): string {
