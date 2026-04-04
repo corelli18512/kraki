@@ -6,7 +6,7 @@
  * This is the tentacle's local intelligence layer.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
@@ -258,6 +258,54 @@ export class SessionManager {
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true });
     }
+  }
+
+  /**
+   * Fork a session: copy meta, context, and messages with a new ID.
+   * Returns the new session ID and run ID.
+   */
+  forkSession(sourceSessionId: string): { sessionId: string; runId: string } | null {
+    const sourceMeta = this.readMeta(sourceSessionId);
+    if (!sourceMeta) return null;
+
+    const newId = `${sourceSessionId.split('-')[0]}-${randomUUID().slice(0, 8)}`;
+    const runId = 'run_001';
+    const newDir = this.sessionDir(newId);
+    mkdirSync(join(newDir, 'runs'), { recursive: true });
+
+    const now = new Date().toISOString();
+    const meta: SessionMeta = {
+      id: newId,
+      agent: sourceMeta.agent,
+      model: sourceMeta.model,
+      title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
+      state: 'active',
+      mode: sourceMeta.mode ?? 'discuss',
+      currentRunId: runId,
+      totalRuns: 1,
+      lastSeq: sourceMeta.lastSeq ?? 0,
+      readSeq: sourceMeta.lastSeq ?? 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.writeMeta(newId, meta);
+    this.writeRun(newId, { id: runId, startedAt: now });
+
+    // Copy context
+    const context = this.readContext(sourceSessionId);
+    if (context) {
+      this.writeContext(newId, { ...context, updatedAt: now });
+    }
+
+    // Copy message log
+    const srcLog = join(this.sessionDir(sourceSessionId), 'messages.jsonl');
+    const dstLog = join(newDir, 'messages.jsonl');
+    if (existsSync(srcLog)) {
+      cpSync(srcLog, dstLog);
+    }
+
+    return { sessionId: newId, runId };
   }
 
   /**

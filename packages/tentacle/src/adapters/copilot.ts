@@ -25,7 +25,7 @@ import type {
   MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -399,6 +399,29 @@ export class CopilotAdapter extends AgentAdapter {
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> {
     await this.resumeTrackedSession(sessionId);
     return { sessionId };
+  }
+
+  async forkSession(sourceSessionId: string, newSessionId: string): Promise<{ sessionId: string }> {
+    const sdkStateDir = join(homedir(), '.copilot', 'session-state');
+    const srcDir = join(sdkStateDir, sourceSessionId);
+    const dstDir = join(sdkStateDir, newSessionId);
+
+    // Copy SDK session state if it exists
+    if (existsSync(srcDir)) {
+      cpSync(srcDir, dstDir, { recursive: true });
+      // Update the session ID in workspace.yaml
+      const yamlPath = join(dstDir, 'workspace.yaml');
+      if (existsSync(yamlPath)) {
+        let yaml = readFileSync(yamlPath, 'utf8');
+        yaml = yaml.replace(/^id:\s*.+$/m, `id: ${newSessionId}`);
+        writeFileSync(yamlPath, yaml, 'utf8');
+      }
+    }
+
+    // Resume the forked session via SDK
+    await this.resumeTrackedSession(newSessionId);
+    logger.info({ sourceSessionId, newSessionId }, 'session forked');
+    return { sessionId: newSessionId };
   }
 
   async sendMessage(sessionId: string, text: string, attachments?: string[]): Promise<void> {

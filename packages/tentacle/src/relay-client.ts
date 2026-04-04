@@ -323,6 +323,12 @@ export class RelayClient {
       return;
     }
 
+    // fork_session is special — operates on a source session, not the new one
+    if (msg.type === 'fork_session') {
+      this.handleForkSession(msg);
+      return;
+    }
+
     // request_replay — replay buffered messages to the requesting device
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
@@ -441,6 +447,41 @@ export class RelayClient {
         this.ws.send(JSON.stringify({
           type: 'server_error',
           message: `Failed to create session: ${(err as Error).message}`,
+          requestId,
+        }));
+      }
+    }
+  }
+
+  private async handleForkSession(msg: ConsumerMessage): Promise<void> {
+    if (msg.type !== 'fork_session') return;
+    const { sourceSessionId, requestId } = msg.payload;
+
+    try {
+      // 1. Fork kraki session files (meta, context, messages)
+      const result = this.sessionManager.forkSession(sourceSessionId);
+      if (!result) throw new Error(`Source session not found: ${sourceSessionId}`);
+
+      const { sessionId: newId } = result;
+      if (requestId) {
+        this.pendingRequestIds.set(newId, requestId);
+      }
+
+      // 2. Fork SDK session state and resume
+      await this.adapter.forkSession(sourceSessionId, newId);
+
+      // 3. Restore permission mode from source
+      const sourceMeta = this.sessionManager.getMeta(sourceSessionId);
+      if (sourceMeta?.mode) {
+        this.adapter.setSessionMode(newId, sourceMeta.mode);
+      }
+
+    } catch (err) {
+      logger.error({ err, sourceSessionId }, 'Fork session failed');
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          type: 'server_error',
+          message: `Failed to fork session: ${(err as Error).message}`,
           requestId,
         }));
       }
