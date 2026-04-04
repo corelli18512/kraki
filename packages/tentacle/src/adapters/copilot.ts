@@ -271,6 +271,8 @@ export class CopilotAdapter extends AgentAdapter {
     '- **discuss**: Read operations are auto-approved. Write operations require',
     '  operator approval. Discuss proposed changes before attempting writes.',
     '  Editing plan.md to make plans is allowed without approval.',
+    '  Prefer the edit/create tools for file modifications instead of shell',
+    '  commands (sed, tee, echo >, scripts, etc.).',
     '- **execute**: All tool calls are auto-approved. Be efficient and execute',
     '  directly without asking for confirmation. If unsure about intent or',
     '  approach, ask the operator for clarification before proceeding.',
@@ -749,19 +751,8 @@ export class CopilotAdapter extends AgentAdapter {
         return { kind: 'approved' };
       }
       if (mode === 'discuss' && toolKind !== 'write') {
-        // In discuss mode, shell commands that might write files need operator approval
-        if (toolKind === 'shell') {
-          const command = ((req.fullCommandText ?? req.command ?? req.cmd ?? req.script ?? '') as string).trim();
-          if (isShellWriteCommand(command)) {
-            // Fall through to permission request (don't auto-approve)
-          } else {
-            logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-            return { kind: 'approved' };
-          }
-        } else {
-          logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-          return { kind: 'approved' };
-        }
+        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+        return { kind: 'approved' };
       }
       if (mode === 'discuss' && toolKind === 'write') {
         const filePath = ((req.fileName ?? req.path ?? '') as string);
@@ -852,39 +843,4 @@ export class CopilotAdapter extends AgentAdapter {
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
     return entry;
   }
-}
-
-// ── Shell write detection ──────────────────────────────
-
-/** Patterns that indicate a shell command may write/modify files. */
-const SHELL_WRITE_PATTERNS = [
-  // Redirects (> or >>)
-  /\s>+\s/,
-  // In-place edit
-  /\bsed\s+(-[a-zA-Z]*i|--in-place)/,
-  // Write commands
-  /\btee\b/,
-  /\bmv\b/,
-  /\bcp\b/,
-  /\brm\b/,
-  /\btouch\b/,
-  /\bmkdir\b/,
-  /\brmdir\b/,
-  /\bchmod\b/,
-  /\bchown\b/,
-  /\bdd\b/,
-  // Interpreters (can execute arbitrary write code)
-  /\bpython[23]?\b/,
-  /\bnode\b/,
-  /\bruby\b/,
-  /\bperl\b/,
-  /\bphp\b/,
-  // Git write operations
-  /\bgit\s+(checkout|reset|stash|clean|revert|cherry-pick|merge|rebase)\b/,
-  // Package manager installs
-  /\b(npm|pnpm|yarn|pip|pip3|cargo|go)\s+install\b/,
-];
-
-function isShellWriteCommand(command: string): boolean {
-  return SHELL_WRITE_PATTERNS.some(pattern => pattern.test(command));
 }

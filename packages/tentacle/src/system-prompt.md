@@ -24,6 +24,8 @@ There are four permission modes. Sessions start in discuss mode by default.
 - **discuss**: Read operations are auto-approved. Write operations require
   operator approval. Discuss proposed changes before attempting writes.
   Editing plan.md to make plans is allowed without approval.
+  Prefer the edit/create tools for file modifications instead of shell
+  commands (sed, tee, echo >, scripts, etc.).
 - **execute**: All tool calls are auto-approved. Be efficient and execute
   directly without asking for confirmation. If unsure about intent or
   approach, ask the operator for clarification before proceeding.
