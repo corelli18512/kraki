@@ -165,6 +165,14 @@ export interface SessionModeSetMessage extends BaseEnvelope {
   };
 }
 
+export interface SessionModelSetMessage extends BaseEnvelope {
+  type: 'session_model_set';
+  payload: {
+    model: string;
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
+  };
+}
+
 export interface SessionDeletedMessage extends BaseEnvelope {
   type: 'session_deleted';
   payload: Record<string, never>;
@@ -256,6 +264,7 @@ export type ProducerMessage =
   | ErrorMessage
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
+  | SessionModelSetMessage
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
   | SessionListMessage
@@ -340,6 +349,14 @@ export interface SetSessionModeMessage extends BaseEnvelope {
   };
 }
 
+export interface SetSessionModelMessage extends BaseEnvelope {
+  type: 'set_session_model';
+  payload: {
+    model: string;
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
+  };
+}
+
 export interface DeleteSessionMessage extends BaseEnvelope {
   type: 'delete_session';
   payload: Record<string, never>;
@@ -396,6 +413,7 @@ export type ConsumerMessage =
   | CreateSessionMessage
   | ForkSessionMessage
   | SetSessionModeMessage
+  | SetSessionModelMessage
   | DeleteSessionMessage
   | MarkReadMessage
   | RequestSessionReplayMessage

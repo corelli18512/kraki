@@ -437,6 +437,18 @@ export class RelayClient {
           });
           break;
         }
+        case 'set_session_model': {
+          const { model, reasoningEffort } = msg.payload;
+          this.adapter.setSessionModel(sessionId, model, reasoningEffort)
+            .catch((err) => logger.error({ err, sessionId }, 'setSessionModel failed'));
+          this.sessionManager.setModel(sessionId, model);
+          this.send({
+            type: 'session_model_set',
+            sessionId,
+            payload: { model, reasoningEffort },
+          });
+          break;
+        }
         default:
           break;
       }

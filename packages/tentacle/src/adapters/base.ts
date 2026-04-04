@@ -168,4 +168,7 @@ export abstract class AgentAdapter {
 
   /** Generate a title for a session via LLM. Override in concrete adapters. */
   async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> { return null; }
+
+  /** Change model (and optionally reasoning effort) for a session. Override in concrete adapters. */
+  async setSessionModel(_sessionId: string, _model: string, _reasoningEffort?: string): Promise<void> { /* no-op by default */ }
 }

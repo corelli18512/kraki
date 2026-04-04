@@ -379,6 +379,17 @@ export class SessionManager {
   }
 
   /**
+   * Set session model.
+   */
+  setModel(sessionId: string, model: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.model = model;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
    * Get all sessions that need resume on restart (active, idle, or disconnected).
    */
   getResumableSessions(): SessionMeta[] {

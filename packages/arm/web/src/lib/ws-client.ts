@@ -110,6 +110,10 @@ export class KrakiWSClient {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
   }
 
+  setSessionModel(sessionId: string, model: string, reasoningEffort?: string) {
+    commands.setSessionModel(sessionId, model, (msg) => this.sendEncrypted(msg), reasoningEffort);
+  }
+
   deleteSession(sessionId: string) {
     // delete_session is now an encrypted unicast to the tentacle
     this.sendEncrypted({

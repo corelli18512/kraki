@@ -218,6 +218,25 @@ export function setSessionMode(
   }
 }
 
+export function setSessionModel(
+  sessionId: string,
+  model: string,
+  send: (msg: Record<string, unknown>) => void,
+  reasoningEffort?: string,
+): void {
+  send({
+    type: 'set_session_model',
+    sessionId,
+    payload: { model, ...(reasoningEffort && { reasoningEffort }) },
+  });
+  // Optimistically update the local session model
+  const store = getStore();
+  const session = store.sessions.get(sessionId);
+  if (session) {
+    store.upsertSession({ ...session, model });
+  }
+}
+
 export function createSession(
   opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string },
   send: (msg: Record<string, unknown>) => void,

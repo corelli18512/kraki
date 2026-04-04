@@ -624,6 +624,17 @@ export class CopilotAdapter extends AgentAdapter {
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 
+  /** Change model for a session via SDK */
+  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
+      logger.warn({ sessionId }, 'setSessionModel: session not found');
+      return;
+    }
+    await entry.session.setModel(model);
+    logger.info({ sessionId, model }, 'Session model changed');
+  }
+
   /** Clean up session-scoped permission state */
   private cleanupSessionPermissions(sessionId: string): void {
     this.sessionAllowSets.delete(sessionId);

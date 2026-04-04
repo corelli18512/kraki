@@ -45,6 +45,7 @@ function createMockSession(sessionId: string) {
     send: vi.fn(),
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn(),
+    setModel: vi.fn().mockResolvedValue(undefined),
     getMessages: vi.fn().mockResolvedValue([]),
     on: vi.fn((event: string, handler: Function) => {
       if (!listeners.has(event)) listeners.set(event, []);
@@ -1214,6 +1215,25 @@ describe('CopilotAdapter', () => {
       const { sessionId } = await adapter.createSession({});
       await adapter.sendMessage(sessionId, 'hi', []);
       expect(mockSessions[0].send).toHaveBeenCalledWith({ prompt: 'hi' });
+    });
+  });
+
+  // ── setSessionModel ────────────────────────────────
+
+  describe('setSessionModel', () => {
+    it('calls session.setModel on the SDK session', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({ model: 'gpt-5' });
+
+      await adapter.setSessionModel(sessionId, 'claude-opus-4');
+
+      expect(mockSessions[0].setModel).toHaveBeenCalledWith('claude-opus-4');
+    });
+
+    it('does not throw for unknown session', async () => {
+      await adapter.start();
+      await adapter.setSessionModel('nonexistent', 'gpt-5');
+      // Should not throw
     });
   });
 });
