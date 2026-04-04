@@ -96,6 +96,15 @@ export function App() {
     hydrateMessagesFromDB().catch(() => {});
   }, []);
 
+  // Update document.title with total unread count
+  const unreadCount = useStore((s) => s.unreadCount);
+  useEffect(() => {
+    const BASE_TITLE = 'Kraki';
+    let total = 0;
+    for (const count of unreadCount.values()) total += count;
+    document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
+  }, [unreadCount]);
+
   useEffect(() => {
     if (navigateToSession) {
       navigate(`/session/${navigateToSession}`);
