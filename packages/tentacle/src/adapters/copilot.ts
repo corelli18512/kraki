@@ -775,6 +775,14 @@ export class CopilotAdapter extends AgentAdapter {
         });
       }
     });
+
+    session.on('session.title_changed', (event) => {
+      const data = event.data as Record<string, unknown>;
+      const title = data?.title as string | undefined;
+      if (title) {
+        this.onTitleChanged?.(sessionId, title);
+      }
+    });
   }
 
   // ── Permission handler factory ────────────────────
@@ -882,5 +890,52 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
     return entry;
+  }
+
+  // ── Title generation via throwaway session ────────
+
+  private static readonly TITLE_SYSTEM_PROMPT = [
+    'You generate concise titles for coding sessions. Given a user request and',
+    'optionally an agent response, produce a short descriptive title.',
+    '',
+    'Rules:',
+    '- 8-12 words, under 60 characters',
+    '- Describe the task, not the tool (e.g. "Fix auth token refresh" not "Debug code")',
+    '- No quotes, no punctuation at the end, no prefixes like "Session:" or "Title:"',
+    '- Just the title text, nothing else',
+  ].join('\n');
+
+  async generateTitle(context: { firstUserMessage: string; firstAgentResponse?: string; lastUserMessage?: string }): Promise<string | null> {
+    if (!this.client) return null;
+
+    let prompt = context.firstUserMessage.slice(0, 500);
+    if (context.lastUserMessage && context.lastUserMessage !== context.firstUserMessage) {
+      prompt += `\n\nLatest request: ${context.lastUserMessage.slice(0, 300)}`;
+    }
+
+    let session: CopilotSession | null = null;
+    try {
+      session = await this.client.createSession({
+        systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
+        streaming: true,
+        onPermissionRequest: () => ({ kind: 'approved' as const }),
+        onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
+      });
+
+      const response = await session.sendAndWait({ prompt }, 15_000);
+      const title = (response?.data?.content ?? '').trim();
+
+      if (!title || title.length > 100) return null;
+      return title;
+    } catch (err) {
+      logger.warn({ err }, 'Title generation failed');
+      return null;
+    } finally {
+      if (session) {
+        const throwawayId = session.sessionId;
+        await session.disconnect().catch(() => {});
+        await this.client?.deleteSession(throwawayId).catch(() => {});
+      }
+    }
   }
 }

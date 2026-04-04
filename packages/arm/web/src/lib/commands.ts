@@ -257,3 +257,21 @@ export function forkSession(
     },
   });
 }
+
+export function renameSession(
+  sessionId: string,
+  title: string,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  // Optimistically update local store
+  const store = getStore();
+  const session = store.sessions.get(sessionId);
+  if (session) {
+    store.upsertSession({ ...session, title: title || undefined });
+  }
+  send({
+    type: 'rename_session',
+    sessionId,
+    payload: { title },
+  });
+}

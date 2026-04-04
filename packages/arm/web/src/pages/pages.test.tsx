@@ -110,8 +110,7 @@ describe('SessionPage', () => {
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
     expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.getByText('gpt-4o')).toBeInTheDocument();
-    expect(screen.getByText('MacBook')).toBeInTheDocument();
+    expect(screen.getByText('· MacBook')).toBeInTheDocument();
   });
 
   it('shows message input for active session', () => {

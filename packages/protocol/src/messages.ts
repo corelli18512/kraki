@@ -170,6 +170,17 @@ export interface SessionDeletedMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+/** Broadcast by tentacle when a session title changes (manual or auto-generated). */
+export interface SessionTitleUpdatedMessage extends BaseEnvelope {
+  type: 'session_title_updated';
+  payload: {
+    /** Manual user-set title (undefined = not set) */
+    title?: string;
+    /** LLM-generated title */
+    autoTitle?: string;
+  };
+}
+
 /** Greeting sent by tentacle to a newly joined app via unicast. */
 export interface DeviceGreetingMessage extends BaseEnvelope {
   type: 'device_greeting';
@@ -244,6 +255,7 @@ export type ProducerMessage =
   | ActiveMessage
   | ErrorMessage
   | SessionModeSetMessage
+  | SessionTitleUpdatedMessage
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
   | SessionListMessage
@@ -364,6 +376,15 @@ export interface RequestSessionReplayMessage extends BaseEnvelope {
   };
 }
 
+/** Sent by app to tentacle to rename a session. */
+export interface RenameSessionMessage extends BaseEnvelope {
+  type: 'rename_session';
+  payload: {
+    /** New manual title. Empty string clears manual title (reverts to auto-title). */
+    title: string;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -377,7 +398,8 @@ export type ConsumerMessage =
   | SetSessionModeMessage
   | DeleteSessionMessage
   | MarkReadMessage
-  | RequestSessionReplayMessage;
+  | RequestSessionReplayMessage
+  | RenameSessionMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
