@@ -344,7 +344,6 @@ export class RelayClient {
     try {
       switch (msg.type) {
         case 'send_input':
-          this.sessionManager.markActive(sessionId);
           // Broadcast user_message back to apps (round-trip confirmation)
           this.send({
             type: 'user_message',
@@ -352,6 +351,7 @@ export class RelayClient {
             payload: { content: msg.payload.text },
           });
           this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments)
+            .then(() => this.sessionManager.markActive(sessionId))
             .catch((err) => logger.error({ err, sessionId }, 'sendMessage failed'));
           break;
         case 'approve':
@@ -592,7 +592,8 @@ export class RelayClient {
           if (meta.mode) {
             this.adapter.setSessionMode(meta.id, meta.mode);
           }
-        } catch {
+        } catch (err) {
+          logger.warn({ err, sessionId: meta.id }, 'Session resume failed after restart');
           this.sessionManager.endSession(meta.id, 'resume_failed');
           this.send({
             type: 'session_ended',
