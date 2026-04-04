@@ -73,6 +73,8 @@ export interface SessionCreatedMessage extends BaseEnvelope {
     model?: string;
     /** Echoed from create_session for request tracking */
     requestId?: string;
+    /** Current last message seq (0 for new sessions, >0 for forks) */
+    lastSeq?: number;
   };
 }
 
@@ -331,6 +333,16 @@ export interface DeleteSessionMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+export interface ForkSessionMessage extends BaseEnvelope {
+  type: 'fork_session';
+  payload: {
+    /** Client-generated request ID for tracking success/failure */
+    requestId: string;
+    /** Session to fork from */
+    sourceSessionId: string;
+  };
+}
+
 export interface MarkReadMessage extends BaseEnvelope {
   type: 'mark_read';
   payload: {
@@ -361,6 +373,7 @@ export type ConsumerMessage =
   | KillSessionMessage
   | AbortSessionMessage
   | CreateSessionMessage
+  | ForkSessionMessage
   | SetSessionModeMessage
   | DeleteSessionMessage
   | MarkReadMessage

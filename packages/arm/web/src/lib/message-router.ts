@@ -4,6 +4,7 @@ import { isViewingSession } from './replay';
 import { createLogger } from './logger';
 import type { CommandState } from './commands';
 import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
+import { messageProvider } from './message-provider';
 import type { PendingPermission, PendingQuestion } from '../types/store';
 
 const logger = createLogger('msg-router');
@@ -73,7 +74,14 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         state: 'active',
         messageCount: 0,
       });
-      store.appendMessage(sid, msg);
+      const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
+      const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
+      store.appendMessage(sid, enriched);
+      // Set tentacle info so message provider can route replay requests
+      messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
+      if (lastSeq && lastSeq > 0) {
+        messageProvider.requestLatest(sid);
+      }
       const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;
       // Show initial prompt as user message if we sent one via create_session

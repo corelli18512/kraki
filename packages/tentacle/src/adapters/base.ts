@@ -119,6 +119,12 @@ export abstract class AgentAdapter {
   /** Create a new agent session. */
   abstract createSession(config: CreateSessionConfig): Promise<{ sessionId: string }>;
 
+  /** Fork a session by copying SDK state and resuming the copy. */
+  async forkSession(sourceSessionId: string, newSessionId: string): Promise<{ sessionId: string }> {
+    // Default: just resume with the new ID (adapters that manage SDK state should override)
+    return this.resumeSession(newSessionId);
+  }
+
   /** Resume a previously created session with recovery context. */
   abstract resumeSession(sessionId: string, context?: SessionContext): Promise<{ sessionId: string }>;
 

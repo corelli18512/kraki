@@ -6,7 +6,7 @@ import { useStore } from '../../hooks/useStore';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { wsClient } from '../../lib/ws-client';
 import { SwipeableCard } from './SwipeableCard';
-import { Pin, PinOff, Trash2 } from 'lucide-react';
+import { Pin, PinOff, Trash2, GitFork } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
@@ -83,6 +83,12 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
       label: pinned ? 'Unpin' : 'Pin',
       bgClass: 'bg-teal-400 dark:bg-teal-800',
       onClick: () => { togglePin(session.id); setOpenSwipeId?.(null); },
+    },
+    {
+      icon: <GitFork className="h-4 w-4" />,
+      label: 'Fork',
+      bgClass: 'bg-indigo-400 dark:bg-indigo-800',
+      onClick: () => { wsClient.forkSession(session.id); setOpenSwipeId?.(null); },
     },
     {
       icon: <Trash2 className="h-4 w-4" />,
@@ -166,6 +172,12 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
             className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-tertiary"
           >
             {pinned ? <><PinOff className="h-3.5 w-3.5" /> Unpin</> : <><Pin className="h-3.5 w-3.5" /> Pin to top</>}
+          </button>
+          <button
+            onClick={() => { wsClient.forkSession(session.id); setMenuPos(null); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-tertiary"
+          >
+            <GitFork className="h-3.5 w-3.5" /> Fork session
           </button>
           <button
             onClick={() => { setMenuPos(null); setConfirmDelete(true); }}

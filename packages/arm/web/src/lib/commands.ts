@@ -240,3 +240,20 @@ export function createSession(
     },
   });
 }
+
+export function forkSession(
+  sourceSessionId: string,
+  send: (msg: Record<string, unknown>) => void,
+  state: CommandState,
+): void {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  state.pendingCreateRequests.add(requestId);
+  send({
+    type: 'fork_session',
+    sessionId: sourceSessionId,
+    payload: {
+      requestId,
+      sourceSessionId,
+    },
+  });
+}

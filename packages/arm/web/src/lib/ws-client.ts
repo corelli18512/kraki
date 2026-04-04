@@ -123,6 +123,10 @@ export class KrakiWSClient {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
+  forkSession(sourceSessionId: string) {
+    commands.forkSession(sourceSessionId, (msg) => this.sendEncrypted(msg), this.cmdState);
+  }
+
   markRead(sessionId: string): void {
     // Local-only in thin relay — no relay message needed
     markSessionRead(sessionId);
