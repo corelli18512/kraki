@@ -38,7 +38,7 @@ export interface SessionMeta {
   agent: string;
   model?: string;
   title?: string;
-  state: 'active' | 'idle' | 'disconnected';
+  state: 'active' | 'idle' | 'ended' | 'disconnected';
   mode: SessionMode;
   currentRunId: string;
   totalRuns: number;
@@ -213,7 +213,7 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return;
 
-    meta.state = 'idle';
+    meta.state = 'ended';
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
 
@@ -243,7 +243,7 @@ export class SessionManager {
    */
   markActive(sessionId: string): void {
     const meta = this.readMeta(sessionId);
-    if (!meta || meta.state === 'active') return;
+    if (!meta || meta.state === 'active' || meta.state === 'ended') return;
 
     meta.state = 'active';
     meta.updatedAt = new Date().toISOString();
@@ -318,7 +318,7 @@ export class SessionManager {
   }
 
   /**
-   * Get all sessions that were active/disconnected (need resume on restart).
+   * Get all sessions that need resume on restart (active, idle, or disconnected).
    */
   getResumableSessions(): SessionMeta[] {
     const sessions: SessionMeta[] = [];
@@ -326,7 +326,7 @@ export class SessionManager {
 
     for (const dir of readdirSync(this.sessionsDir)) {
       const meta = this.readMeta(dir);
-      if (meta && (meta.state === 'active' || meta.state === 'disconnected')) {
+      if (meta && (meta.state === 'active' || meta.state === 'idle' || meta.state === 'disconnected')) {
         sessions.push(meta);
       }
     }
