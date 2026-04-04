@@ -63,7 +63,7 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
       return (
         <div className="flex items-center justify-center py-2">
           <span className="flex items-center gap-1.5 text-xs text-text-muted">
-            {emoji} {label} session {message.payload.forked ? 'forked' : 'started'}
+            {emoji} {label} session {(message.payload.forked || message.seq > 1) ? 'forked' : 'started'}
             {message.payload.model && (
               <span className="text-text-muted">({message.payload.model})</span>
             )}
