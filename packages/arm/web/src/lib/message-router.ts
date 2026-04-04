@@ -74,9 +74,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         state: 'active',
         messageCount: 0,
       });
-      store.appendMessage(sid, msg);
-      // Set tentacle info so message provider can route replay requests
       const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
+      const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
+      store.appendMessage(sid, enriched);
+      // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
       if (lastSeq && lastSeq > 0) {
         messageProvider.requestLatest(sid);
