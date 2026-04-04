@@ -409,12 +409,22 @@ export class CopilotAdapter extends AgentAdapter {
     // Copy SDK session state if it exists
     if (existsSync(srcDir)) {
       cpSync(srcDir, dstDir, { recursive: true });
+
       // Update the session ID in workspace.yaml
       const yamlPath = join(dstDir, 'workspace.yaml');
       if (existsSync(yamlPath)) {
         let yaml = readFileSync(yamlPath, 'utf8');
         yaml = yaml.replace(/^id:\s*.+$/m, `id: ${newSessionId}`);
         writeFileSync(yamlPath, yaml, 'utf8');
+      }
+
+      // Rewrite all session ID references in events.jsonl so the SDK
+      // treats this as a fully independent session (not a shared conversation).
+      const eventsPath = join(dstDir, 'events.jsonl');
+      if (existsSync(eventsPath)) {
+        let events = readFileSync(eventsPath, 'utf8');
+        events = events.replaceAll(sourceSessionId, newSessionId);
+        writeFileSync(eventsPath, events, 'utf8');
       }
     }
 
