@@ -250,6 +250,7 @@ export function forkSession(
   state.pendingCreateRequests.add(requestId);
   send({
     type: 'fork_session',
+    sessionId: sourceSessionId,
     payload: {
       requestId,
       sourceSessionId,

@@ -421,6 +421,13 @@ export class CopilotAdapter extends AgentAdapter {
     // Resume the forked session via SDK
     await this.resumeTrackedSession(newSessionId);
     logger.info({ sourceSessionId, newSessionId }, 'session forked');
+
+    // Notify relay so it broadcasts session_created to all arms
+    this.onSessionCreated?.({
+      sessionId: newSessionId,
+      agent: 'copilot',
+    });
+
     return { sessionId: newSessionId };
   }
 
