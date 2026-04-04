@@ -73,6 +73,8 @@ export interface SessionCreatedMessage extends BaseEnvelope {
     model?: string;
     /** Echoed from create_session for request tracking */
     requestId?: string;
+    /** Current last message seq (0 for new sessions, >0 for forks) */
+    lastSeq?: number;
   };
 }
 

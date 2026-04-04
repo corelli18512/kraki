@@ -476,9 +476,6 @@ export class RelayClient {
         this.adapter.setSessionMode(newId, sourceMeta.mode);
       }
 
-      // 4. Broadcast updated session list so web gets tentacle info for the fork
-      this.broadcastSessionList();
-
     } catch (err) {
       logger.error({ err, sourceSessionId }, 'Fork session failed');
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -503,10 +500,11 @@ export class RelayClient {
       const requestId = this.pendingRequestIds.get(event.sessionId);
       if (requestId) this.pendingRequestIds.delete(event.sessionId);
 
+      const meta = this.sessionManager.getMeta(event.sessionId);
       this.send({
         type: 'session_created',
         sessionId: event.sessionId,
-        payload: { agent: event.agent, model: event.model, requestId },
+        payload: { agent: event.agent, model: event.model, requestId, lastSeq: meta?.lastSeq ?? 0 },
       });
     };
 
