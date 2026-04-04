@@ -350,8 +350,9 @@ export class RelayClient {
             sessionId,
             payload: { content: msg.payload.text },
           });
+          this.sessionManager.markActive(sessionId);
+          this.send({ type: 'active', sessionId, payload: {} });
           this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments)
-            .then(() => this.sessionManager.markActive(sessionId))
             .catch((err) => logger.error({ err, sessionId }, 'sendMessage failed'));
           break;
         case 'approve':

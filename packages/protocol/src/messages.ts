@@ -144,6 +144,11 @@ export interface IdleMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+export interface ActiveMessage extends BaseEnvelope {
+  type: 'active';
+  payload: Record<string, never>;
+}
+
 export interface ErrorMessage extends BaseEnvelope {
   type: 'error';
   payload: {
@@ -234,6 +239,7 @@ export type ProducerMessage =
   | ToolStartMessage
   | ToolCompleteMessage
   | IdleMessage
+  | ActiveMessage
   | ErrorMessage
   | SessionModeSetMessage
   | DeviceGreetingMessage

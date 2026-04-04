@@ -160,6 +160,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    case 'active': {
+      const activated = store.sessions.get(sid);
+      if (activated) store.upsertSession({ ...activated, state: 'active' });
+      break;
+    }
+
     case 'session_mode_set': {
       const mode = (msg as SessionModeSetMessage).payload?.mode;
       if (mode === 'safe' || mode === 'discuss' || mode === 'execute' || mode === 'delegate') {
