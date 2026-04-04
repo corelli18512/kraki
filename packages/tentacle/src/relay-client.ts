@@ -504,7 +504,7 @@ export class RelayClient {
       this.send({
         type: 'session_created',
         sessionId: event.sessionId,
-        payload: { agent: event.agent, model: event.model, requestId, lastSeq: meta?.lastSeq ?? 0 },
+        payload: { agent: event.agent, model: event.model ?? meta?.model, requestId, lastSeq: meta?.lastSeq ?? 0 },
       });
     };
 
