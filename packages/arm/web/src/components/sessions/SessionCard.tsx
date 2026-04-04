@@ -13,7 +13,7 @@ const PREVIEW_MAX_LENGTH = 50;
 /** Message types that render as chat bubbles (not thinking steps) */
 const BUBBLE_TYPES = new Set([
   'user_message', 'send_input', 'pending_input', 'answer',
-  'agent_message', 'question',
+  'agent_message', 'question', 'error',
   'session_created', 'session_ended', 'kill_session', 'session_deleted',
 ]);
 
