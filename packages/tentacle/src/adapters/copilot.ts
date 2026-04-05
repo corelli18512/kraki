@@ -915,17 +915,27 @@ export class CopilotAdapter extends AgentAdapter {
 
     let session: CopilotSession | null = null;
     try {
+      logger.info('Creating throwaway session for title generation');
       session = await this.client.createSession({
+        configDir: join(homedir(), '.copilot'),
         systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
         streaming: true,
         onPermissionRequest: () => ({ kind: 'approved' as const }),
         onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
       });
+      logger.info({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');
 
-      const response = await session.sendAndWait({ prompt }, 15_000);
-      const title = (response?.data?.content ?? '').trim();
+      const titlePrompt = `Generate a title for this coding session.\n\nUser request: "${prompt}"\n\nRespond with ONLY the title (8-12 words, under 60 characters). No explanation.`;
+      const response = await session.sendAndWait({ prompt: titlePrompt }, 15_000);
+      let title = (response?.data?.content ?? '').trim();
+      // Clean up: strip quotes, trailing punctuation, "Title:" prefix
+      title = title.replace(/^["']|["']$/g, '').replace(/^(Title|Session):\s*/i, '').replace(/[.!]$/, '').trim();
+      logger.info({ throwawayId: session.sessionId, title: title.slice(0, 80) }, 'Throwaway session responded');
 
-      if (!title || title.length > 100) return null;
+      // Take only the first line if multi-line
+      title = title.split('\n')[0].trim();
+
+      if (!title || title.length > 80) return null;
       return title;
     } catch (err) {
       logger.warn({ err }, 'Title generation failed');
@@ -933,6 +943,7 @@ export class CopilotAdapter extends AgentAdapter {
     } finally {
       if (session) {
         const throwawayId = session.sessionId;
+        logger.debug({ throwawayId }, 'Cleaning up throwaway session');
         await session.disconnect().catch(() => {});
         await this.client?.deleteSession(throwawayId).catch(() => {});
       }

@@ -953,6 +953,9 @@ export class RelayClient {
     // Schedule: turn 1, turn 5, then every 20 turns
     const shouldGenerate = turns === 1 || turns === 5
       || (turns > 5 && (turns - 5) % 20 === 0);
+
+    logger.debug({ sessionId, turns, shouldGenerate }, 'maybeGenerateTitle check');
+
     if (!shouldGenerate) return;
 
     // One generation in flight per session
@@ -976,6 +979,8 @@ export class RelayClient {
         }
       } catch { /* skip */ }
     }
+
+    logger.info({ sessionId, turns, firstUserMessage: firstUserMessage.slice(0, 50), hasAgent: !!firstAgentResponse }, 'Title generation starting');
 
     if (!firstUserMessage) {
       this.titleGenerationInFlight.delete(sessionId);
