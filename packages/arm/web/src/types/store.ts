@@ -97,9 +97,6 @@ export interface AppState {
 
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
-
-  // Sessions deleted locally while their tentacle was offline (UI suppression)
-  locallyDeletedSessions: Set<string>;
 }
 
 export interface AppActions {
@@ -138,8 +135,6 @@ export interface AppActions {
   setDeviceModels: (deviceId: string, models: string[]) => void;
   setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
-  addLocallyDeleted: (sessionId: string) => void;
-  removeLocallyDeleted: (sessionId: string) => void;
   clearTransientState: () => void;
   reset: () => void;
 

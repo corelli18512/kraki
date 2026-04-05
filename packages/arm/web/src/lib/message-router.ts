@@ -212,7 +212,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_deleted': {
       store.removeSession(sid);
-      store.removeLocallyDeleted(sid);
       break;
     }
 

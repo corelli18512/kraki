@@ -63,7 +63,6 @@ const initialState = {
   deviceModels: new Map<string, string[]>(),
   deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
-  locallyDeletedSessions: new Set<string>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -319,21 +318,6 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionUsage: next };
     }),
 
-  addLocallyDeleted: (sessionId) =>
-    set((state) => {
-      const next = new Set(state.locallyDeletedSessions);
-      next.add(sessionId);
-      return { locallyDeletedSessions: next };
-    }),
-
-  removeLocallyDeleted: (sessionId) =>
-    set((state) => {
-      if (!state.locallyDeletedSessions.has(sessionId)) return state;
-      const next = new Set(state.locallyDeletedSessions);
-      next.delete(sessionId);
-      return { locallyDeletedSessions: next };
-    }),
-
   prependMessages: (sessionId, older) => {
     // Write to IndexedDB (idempotent by [sessionId, seq] key)
     import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
@@ -371,35 +355,30 @@ export const useStore = create<Store>()(persist((set) => ({
     // pendingPermissions/pendingQuestions persist in IndexedDB.
   }),
 
-  reset: () => {
-    // Clear offline queue localStorage (separate from Zustand persistence)
-    try { localStorage.removeItem('kraki-offline-queue'); } catch { /* ignore */ }
-    set({
-      ...initialState,
-      sessions: new Map(),
-      devices: new Map(),
-      messages: new Map(),
-      pendingPermissions: new Map(),
-      pendingQuestions: new Map(),
-      streamingContent: new Map(),
-      pinnedSessions: new Set(),
-      unreadCount: new Map(),
-      lastError: null,
-      drafts: new Map(),
-      navigateToSession: null,
-      activeSessionId: null,
-      user: null,
-      sessionModes: new Map(),
-      githubClientId: null,
-      relayVersion: null,
-      deviceModels: new Map(),
-      deviceModelDetails: new Map(),
-      sessionUsage: new Map(),
-      locallyDeletedSessions: new Set(),
-      reconnectAttempts: 0,
-      nextReconnectDelayMs: null,
-    });
-  },
+  reset: () => set({
+    ...initialState,
+    sessions: new Map(),
+    devices: new Map(),
+    messages: new Map(),
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    streamingContent: new Map(),
+    pinnedSessions: new Set(),
+    unreadCount: new Map(),
+    lastError: null,
+    drafts: new Map(),
+    navigateToSession: null,
+    activeSessionId: null,
+    user: null,
+    sessionModes: new Map(),
+    githubClientId: null,
+  relayVersion: null,
+    deviceModels: new Map(),
+    deviceModelDetails: new Map(),
+    sessionUsage: new Map(),
+    reconnectAttempts: 0,
+    nextReconnectDelayMs: null,
+  }),
 }), {
   name: 'kraki-store',
   storage: createJSONStorage(() => localStorage, {
@@ -413,7 +392,6 @@ export const useStore = create<Store>()(persist((set) => ({
     pinnedSessions: state.pinnedSessions,
     sessionModes: state.sessionModes,
     drafts: state.drafts,
-    locallyDeletedSessions: state.locallyDeletedSessions,
     // messages are stored in IndexedDB, not localStorage
   }),
 }));
