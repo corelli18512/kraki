@@ -76,6 +76,7 @@ export function ChatView() {
   const filteredMessages = useMemo(
     () => messages.filter((msg) => {
       if (msg.type === 'permission' && pendingPermIds.has(msg.payload.id)) return false;
+      if (msg.type === 'active') return false;
       return true;
     }),
     [messages, pendingPermIds],
