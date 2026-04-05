@@ -174,6 +174,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'active': {
       const activated = store.sessions.get(sid);
       if (activated) store.upsertSession({ ...activated, state: 'active' });
+      store.appendMessage(sid, msg);
       break;
     }
 
