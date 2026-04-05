@@ -76,6 +76,9 @@ function createAdapter(): Record<string, unknown> {
     onIdle: null,
     onError: null,
     onSessionEnded: null,
+    onTitleChanged: null,
+    generateTitle: vi.fn(async () => null),
+    setSessionMode: vi.fn(),
   };
 }
 
@@ -86,9 +89,19 @@ function createSessionManager(): Record<string, unknown> {
     createSession: vi.fn(),
     endSession: vi.fn(),
     markDisconnected: vi.fn(),
+    markIdle: vi.fn(),
+    markActive: vi.fn(),
     updateContext: vi.fn(),
     getContext: vi.fn(() => null),
+    getMeta: vi.fn(() => null),
     setTitle: vi.fn(),
+    setAutoTitle: vi.fn(),
+    setMode: vi.fn(),
+    deleteSession: vi.fn(),
+    markRead: vi.fn(),
+    getSessionList: vi.fn(() => []),
+    getMessagesAfterSeq: vi.fn(() => []),
+    appendMessage: vi.fn(() => 1),
   };
 }
 
@@ -184,5 +197,102 @@ describe('RelayClient auth negotiation', () => {
 
     const auth = JSON.parse(sockets[0].sent[0]);
     expect(auth.auth).toEqual({ method: 'open', sharedKey: 'shared-secret' });
+  });
+});
+
+describe('RelayClient title generation', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function connectClient() {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      null, // no encryption for tests
+    );
+    client.connect();
+    sockets[0].emit('open');
+    // Complete auth
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [],
+    })));
+    return { adapter, sm, client };
+  }
+
+  it('triggers title generation on first idle', async () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle' });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      { seq: 1, type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: { content: 'fix the login bug' } }), ts: '' },
+    ]);
+    (adapter.generateTitle as ReturnType<typeof vi.fn>).mockResolvedValue('Fix login authentication bug');
+
+    // Fire idle
+    const onIdle = adapter.onIdle as (sessionId: string) => void;
+    onIdle('s1');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(adapter.generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ lastUserMessage: 'fix the login bug' }),
+    );
+  });
+
+  it('skips title generation when manual title is set', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle', title: 'My custom name' });
+
+    const onIdle = adapter.onIdle as (sessionId: string) => void;
+    onIdle('s1');
+
+    expect(adapter.generateTitle).not.toHaveBeenCalled();
+  });
+
+  it('skips non-scheduled turns (turn 2-4)', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle' });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      { seq: 1, type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: { content: 'hello' } }), ts: '' },
+    ]);
+    (adapter.generateTitle as ReturnType<typeof vi.fn>).mockResolvedValue('Test title');
+
+    const onIdle = adapter.onIdle as (sessionId: string) => void;
+    onIdle('s1'); // turn 1 — should fire
+    onIdle('s1'); // turn 2 — skip
+    onIdle('s1'); // turn 3 — skip
+    onIdle('s1'); // turn 4 — skip
+
+    expect(adapter.generateTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles rename_session consumer message', () => {
+    const { sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', title: 'New name', autoTitle: 'Auto' });
+
+    const ws = sockets[0];
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'rename_session',
+      sessionId: 's1',
+      payload: { title: 'New name' },
+    })));
+
+    expect(smMock.setTitle).toHaveBeenCalledWith('s1', 'New name');
   });
 });

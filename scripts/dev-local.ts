@@ -18,7 +18,7 @@
 
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
@@ -153,18 +153,22 @@ function killPortUsers(port: number): void {
 
 /** Terminate stale local-dev daemon-workers that would reconnect to our relay. */
 function killOrphanDevDaemons(): void {
-  try {
-    const output = execSync('ps -eo pid,args 2>/dev/null', { encoding: 'utf8' });
-    for (const line of output.split('\n')) {
-      if (!line.includes('__daemon-worker')) continue;
-      // Only target dev daemons (run via tsx from source), not the global kraki binary
-      if (!line.includes('tsx') && !line.includes('ts-node')) continue;
-      const pid = parseInt(line.trim(), 10);
-      if (pid && pid !== process.pid) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+  // Check all .tmp/kraki-local dirs for daemon.pid files (covers all worktrees)
+  const searchRoots = [
+    resolve(process.cwd(), '..'),  // sibling worktrees
+    process.cwd(),                  // this worktree
+  ];
+  for (const root of searchRoots) {
+    try {
+      for (const entry of readdirSync(root)) {
+        const pidPath = join(root, entry, '.tmp', 'kraki-local', 'daemon.pid');
+        const pid = readPid(pidPath);
+        if (pid && pid !== process.pid && isPidAlive(pid)) {
+          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+        }
       }
-    }
-  } catch { /* ps failed — fine */ }
+    } catch { /* dir not readable — skip */ }
+  }
 }
 
 async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {

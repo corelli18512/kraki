@@ -978,7 +978,7 @@ export class RelayClient {
     // For context: last 3 user messages, most recent first
     const recentMessages = userMessages.slice(-3).reverse();
 
-    logger.info({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
+    logger.debug({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
 
     if (!lastUserMessage) {
       this.titleGenerationInFlight.delete(sessionId);
