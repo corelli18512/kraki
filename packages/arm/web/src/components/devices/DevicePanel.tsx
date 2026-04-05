@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary } from '@kraki/protocol';
@@ -7,7 +6,6 @@ import { X } from 'lucide-react';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
-  // SQLite dates may lack T/Z — normalize for browser parsing
   const normalized = iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`;
   const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return '—';
@@ -18,17 +16,20 @@ export function DevicePanel({
   device,
   models,
   isCurrentDevice,
+  selectedSessionId,
+  onSelectSession,
   onClose,
 }: {
   device: DeviceSummary;
   models?: string[];
   isCurrentDevice: boolean;
+  selectedSessionId: string | null;
+  onSelectSession: (id: string) => void;
   onClose: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const sessions = useStore((s) => s.sessions);
-  const navigate = useNavigate();
 
   const deviceSessions = [...sessions.values()].filter((s) => s.deviceId === device.id);
   const canRemove = !device.online && !isCurrentDevice;
@@ -52,7 +53,8 @@ export function DevicePanel({
   };
 
   return (
-    <div className="overflow-y-auto">
+    <>
+      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -87,70 +89,67 @@ export function DevicePanel({
         </div>
         <button
           onClick={onClose}
-          className="rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+          className="rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary sm:hidden"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="grid gap-4 px-5 pb-4 sm:grid-cols-2">
-        {/* Left column: sessions + remove */}
-        <div className="space-y-4">
-          <div>
-            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-              Sessions{deviceSessions.length > 0 ? ` (${deviceSessions.length})` : ''}
-            </h3>
-            {deviceSessions.length > 0 ? (
-              <div className="space-y-0.5">
-                {deviceSessions.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => navigate(`/session/${s.id}`)}
-                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
-                  >
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.state === 'active' ? 'bg-emerald-400' : 'bg-slate-400'}`} />
-                    <span className="truncate">{s.agent}{s.model ? ` · ${s.model}` : ''}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-[11px] text-text-muted">No sessions on this device</p>
-            )}
+      <div className="space-y-4 px-5 pb-4">
+        {/* Device info */}
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-[11px]">
+            <span className="text-text-muted">Added</span>
+            <span className="text-text-secondary">{formatDate(device.createdAt)}</span>
+          </div>
+          <div className="flex justify-between text-[11px]">
+            <span className="text-text-muted">Last online</span>
+            <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
           </div>
         </div>
 
-        {/* Right column: info + models */}
-        <div className="space-y-4">
+        {/* Models */}
+        {models && models.length > 0 && (
           <div>
-            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Info</h3>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[11px]">
-                <span className="text-text-muted">Added</span>
-                <span className="text-text-secondary">{formatDate(device.createdAt)}</span>
-              </div>
-              <div className="flex justify-between text-[11px]">
-                <span className="text-text-muted">Last online</span>
-                <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
-              </div>
+            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Supported Models</h3>
+            <div className="flex flex-wrap gap-1">
+              {models.map((m) => (
+                <span key={m} className="rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] text-text-secondary">
+                  {m}
+                </span>
+              ))}
             </div>
           </div>
+        )}
 
-          {models && models.length > 0 && (
-            <div>
-              <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Supported Models</h3>
-              <div className="flex flex-wrap gap-1">
-                {models.map((m) => (
-                  <span key={m} className="rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] text-text-secondary">
-                    {m}
-                  </span>
-                ))}
-              </div>
+        {/* Sessions */}
+        <div>
+          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+            Sessions{deviceSessions.length > 0 ? ` (${deviceSessions.length})` : ''}
+          </h3>
+          {deviceSessions.length > 0 ? (
+            <div className="space-y-0.5">
+              {deviceSessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => onSelectSession(s.id)}
+                  className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] transition-colors ${
+                    selectedSessionId === s.id
+                      ? 'bg-ocean-500/15 text-ocean-400 font-medium'
+                      : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                  }`}
+                >
+                  <span className="truncate">{s.title ?? s.autoTitle ?? `${s.agent}${s.model ? ` · ${s.model}` : ''}`}</span>
+                </button>
+              ))}
             </div>
+          ) : (
+            <p className="text-[11px] text-text-muted">No sessions on this device</p>
           )}
         </div>
       </div>
 
-      {/* Confirm dialog */}
+      {/* Confirm remove dialog */}
       {confirmOpen && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
@@ -182,6 +181,6 @@ export function DevicePanel({
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
