@@ -13,6 +13,8 @@ export interface SessionSummary {
   deviceName: string;
   agent: string;
   model?: string;
+  title?: string;
+  autoTitle?: string;
   state: SessionState;
   messageCount: number;
 }
@@ -23,6 +25,7 @@ export interface SessionDigest {
   agent: string;
   model?: string;
   title?: string;
+  autoTitle?: string;
   state: SessionState;
   mode: SessionMode;
   lastSeq: number;

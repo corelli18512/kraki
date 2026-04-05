@@ -127,6 +127,10 @@ export class KrakiWSClient {
     commands.forkSession(sourceSessionId, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
+  renameSession(sessionId: string, title: string) {
+    commands.renameSession(sessionId, title, (msg) => this.sendEncrypted(msg));
+  }
+
   markRead(sessionId: string): void {
     // Local-only in thin relay — no relay message needed
     markSessionRead(sessionId);
@@ -160,6 +164,8 @@ export class KrakiWSClient {
         deviceName: device?.name ?? tentacleDeviceId,
         agent: ts.agent,
         model: ts.model,
+        title: ts.title,
+        autoTitle: ts.autoTitle,
         state: ts.state as 'active' | 'idle',
         messageCount: ts.messageCount,
       });

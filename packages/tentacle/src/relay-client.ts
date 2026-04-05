@@ -62,6 +62,12 @@ export class RelayClient {
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
 
+  // ── Title generation state ──────────────────────────
+  /** Turn count per session (for title generation scheduling) */
+  private turnCounts = new Map<string, number>();
+  /** Sessions currently generating a title (prevent concurrent generation) */
+  private titleGenerationInFlight = new Set<string>();
+
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -415,6 +421,22 @@ export class RelayClient {
           });
           break;
         }
+        case 'rename_session': {
+          const newTitle = msg.payload.title;
+          if (newTitle) {
+            this.sessionManager.setTitle(sessionId, newTitle);
+          } else {
+            // Empty string = clear manual title
+            this.sessionManager.setTitle(sessionId, '');
+          }
+          const meta = this.sessionManager.getMeta(sessionId);
+          this.send({
+            type: 'session_title_updated',
+            sessionId,
+            payload: { title: meta?.title, autoTitle: meta?.autoTitle },
+          });
+          break;
+        }
         default:
           break;
       }
@@ -437,9 +459,14 @@ export class RelayClient {
     try {
       const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId });
 
-      // If an initial prompt was provided, send it to the new session
+      // If an initial prompt was provided, send it to the new session.
+      // Otherwise mark idle — the SDK only fires session.idle after a turn
+      // completes, so without a prompt the session would stay 'active' forever.
       if (prompt && result.sessionId) {
         await this.adapter.sendMessage(result.sessionId, prompt);
+      } else if (result.sessionId) {
+        this.sessionManager.markIdle(result.sessionId);
+        this.send({ type: 'idle', sessionId: result.sessionId, payload: {} });
       }
     } catch (err) {
       this.pendingRequestIds.delete(preSessionId);
@@ -470,11 +497,9 @@ export class RelayClient {
       // 2. Fork SDK session state and resume
       await this.adapter.forkSession(sourceSessionId, newId);
 
-      // 3. Restore permission mode from source
-      const sourceMeta = this.sessionManager.getMeta(sourceSessionId);
-      if (sourceMeta?.mode) {
-        this.adapter.setSessionMode(newId, sourceMeta.mode);
-      }
+      // 3. Forked session is idle until the user sends a message
+      this.sessionManager.markIdle(newId);
+      this.send({ type: 'idle', sessionId: newId, payload: {} });
 
     } catch (err) {
       logger.error({ err, sourceSessionId }, 'Fork session failed');
@@ -602,6 +627,7 @@ export class RelayClient {
     this.adapter.onIdle = (sessionId) => {
       this.sessionManager.markIdle(sessionId);
       this.send({ type: 'idle', sessionId, payload: {} });
+      this.maybeGenerateTitle(sessionId);
     };
 
     this.adapter.onError = (sessionId, event) => {
@@ -614,11 +640,26 @@ export class RelayClient {
 
     this.adapter.onSessionEnded = (sessionId, event) => {
       this.sessionManager.endSession(sessionId, event.reason);
+      this.turnCounts.delete(sessionId);
+      this.titleGenerationInFlight.delete(sessionId);
       this.send({
         type: 'session_ended',
         sessionId,
         payload: { reason: event.reason },
       });
+    };
+
+    // SDK title fallback — use as fast placeholder while LLM generation runs
+    this.adapter.onTitleChanged = (sessionId, title) => {
+      const meta = this.sessionManager.getMeta(sessionId);
+      if (!meta?.autoTitle) {
+        this.sessionManager.setAutoTitle(sessionId, title);
+        this.send({
+          type: 'session_title_updated',
+          sessionId,
+          payload: { title: meta?.title, autoTitle: title },
+        });
+      }
     };
   }
 
@@ -895,6 +936,77 @@ export class RelayClient {
     }
     // Flush queued messages now that we have consumer keys
     this.flushE2eQueue();
+  }
+
+  // ── Title generation scheduling ──────────────────────
+
+  private maybeGenerateTitle(sessionId: string): void {
+    const turns = (this.turnCounts.get(sessionId) ?? 0) + 1;
+    this.turnCounts.set(sessionId, turns);
+
+    const meta = this.sessionManager.getMeta(sessionId);
+    if (!meta) return;
+
+    // Manual title set — skip auto-generation
+    if (meta.title) return;
+
+    // Schedule: turn 1, turn 5, then every 20 turns
+    const shouldGenerate = turns === 1 || turns === 5
+      || (turns > 5 && (turns - 5) % 20 === 0);
+
+    logger.debug({ sessionId, turns, shouldGenerate }, 'maybeGenerateTitle check');
+
+    if (!shouldGenerate) return;
+
+    // One generation in flight per session
+    if (this.titleGenerationInFlight.has(sessionId)) return;
+    this.titleGenerationInFlight.add(sessionId);
+
+    // Read context from message log — focus on recent messages
+    const allMsgs = this.sessionManager.getMessagesAfterSeq(sessionId, 0);
+    const userMessages: string[] = [];
+    for (const m of allMsgs) {
+      try {
+        const parsed = JSON.parse(m.payload);
+        if (parsed.type === 'user_message' && parsed.payload?.content) {
+          userMessages.push(parsed.payload.content);
+        }
+      } catch { /* skip */ }
+    }
+
+    const lastUserMessage = userMessages[userMessages.length - 1] ?? '';
+    // For context: last 3 user messages, most recent first
+    const recentMessages = userMessages.slice(-3).reverse();
+
+    logger.debug({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
+
+    if (!lastUserMessage) {
+      this.titleGenerationInFlight.delete(sessionId);
+      return;
+    }
+
+    this.adapter.generateTitle({
+      firstUserMessage: recentMessages[recentMessages.length - 1] ?? lastUserMessage,
+      lastUserMessage,
+      recentMessages,
+    })
+      .then((title) => {
+        if (title) {
+          this.sessionManager.setAutoTitle(sessionId, title);
+          this.send({
+            type: 'session_title_updated',
+            sessionId,
+            payload: { title: this.sessionManager.getMeta(sessionId)?.title, autoTitle: title },
+          });
+          logger.info({ sessionId, title, turn: turns }, 'Auto-title generated');
+        }
+      })
+      .catch((err) => {
+        logger.warn({ err, sessionId }, 'Title generation failed');
+      })
+      .finally(() => {
+        this.titleGenerationInFlight.delete(sessionId);
+      });
   }
 
   // ── Stale connection detection ───────────────────────

@@ -775,6 +775,14 @@ export class CopilotAdapter extends AgentAdapter {
         });
       }
     });
+
+    session.on('session.title_changed', (event) => {
+      const data = event.data as Record<string, unknown>;
+      const title = data?.title as string | undefined;
+      if (title) {
+        this.onTitleChanged?.(sessionId, title);
+      }
+    });
   }
 
   // ── Permission handler factory ────────────────────
@@ -882,5 +890,67 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`Session not found: ${sessionId}`);
     return entry;
+  }
+
+  // ── Title generation via throwaway session ────────
+
+  private static readonly TITLE_SYSTEM_PROMPT = [
+    'You generate concise titles for coding sessions.',
+    'The title should reflect what the user is CURRENTLY working on, not the full history.',
+    'If the topic changed, use the most recent topic.',
+    '',
+    'Rules:',
+    '- 4-10 words, under 50 characters',
+    '- Describe the current task concisely',
+    '- No quotes, no punctuation at the end, no prefixes',
+    '- Just the title text, nothing else',
+  ].join('\n');
+
+  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> {
+    if (!this.client) return null;
+
+    // Build prompt focused on recent context
+    let prompt: string;
+    if (context.recentMessages && context.recentMessages.length > 1) {
+      const recent = context.recentMessages.map((m, i) => `${i + 1}. ${m.slice(0, 200)}`).join('\n');
+      prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}\n\nTitle should reflect the CURRENT topic.`;
+    } else {
+      prompt = `Generate a title for: "${(context.lastUserMessage ?? context.firstUserMessage).slice(0, 500)}"`;
+    }
+
+    let session: CopilotSession | null = null;
+    try {
+      logger.debug('Creating throwaway session for title generation');
+      session = await this.client.createSession({
+        configDir: join(homedir(), '.copilot'),
+        systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
+        streaming: true,
+        onPermissionRequest: () => ({ kind: 'approved' as const }),
+        onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
+      });
+      logger.debug({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');
+
+      const response = await session.sendAndWait({ prompt }, 15_000);
+      let title = (response?.data?.content ?? '').trim();
+      // Clean up: strip quotes, trailing punctuation, "Title:" prefix
+      title = title.replace(/^["']|["']$/g, '').replace(/^(Title|Session):\s*/i, '').replace(/[.!]$/, '').trim();
+      logger.debug({ throwawayId: session.sessionId, title: title.slice(0, 80) }, 'Throwaway session responded');
+
+      // Take only the first line if multi-line
+      title = title.split('\n')[0].trim();
+
+      if (!title || title.length > 80) return null;
+      return title;
+    } catch (err) {
+      logger.warn({ err }, 'Title generation failed');
+      return null;
+    } finally {
+      if (session) {
+        const throwawayId = session.sessionId;
+        logger.debug({ throwawayId }, 'Cleaning up throwaway session');
+        await session.disconnect().catch(() => {});
+        await this.client?.deleteSession(throwawayId).catch(() => {});
+      }
+    }
   }
 }

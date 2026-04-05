@@ -105,6 +105,8 @@ export abstract class AgentAdapter {
   onIdle: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
+  /** Called when the agent produces a title for a session (e.g. via SDK event). */
+  onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
 
   // --- Lifecycle ---
 
@@ -163,4 +165,7 @@ export abstract class AgentAdapter {
 
   /** Set permission mode for a session. Override in concrete adapters. */
   setSessionMode(_sessionId: string, _mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void { /* no-op by default */ }
+
+  /** Generate a title for a session via LLM. Override in concrete adapters. */
+  async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> { return null; }
 }

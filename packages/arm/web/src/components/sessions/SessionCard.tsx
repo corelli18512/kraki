@@ -119,27 +119,37 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             {pinned && null}
-            <span className="text-xs font-semibold text-text-primary">{label}</span>
+            <span className="truncate text-xs font-semibold text-text-primary">
+              {session.title ?? session.autoTitle ?? label}
+            </span>
+            {!device?.online && (
+              <span className="shrink-0 rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-medium text-text-muted">offline</span>
+            )}
+            {lastTimestamp && (
+              <span className="ml-auto shrink-0 text-[10px] text-text-muted">{sessionTime(lastTimestamp)}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 mt-0.5">
+            {machineName && (
+              <>
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    isDeviceOnline ? 'bg-emerald-400' : 'bg-slate-400'
+                  }`}
+                />
+                <span className="text-[10px] text-text-muted">{machineName}</span>
+              </>
+            )}
+            {(session.title || session.autoTitle) && (
+              <>
+                {machineName && <span className="text-[10px] text-text-muted">·</span>}
+                <span className="text-[10px] text-text-muted">{label}</span>
+              </>
+            )}
             {session.model && (
               <span className="text-[10px] text-text-muted">{session.model}</span>
             )}
-            {!device?.online && (
-              <span className="rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-medium text-text-muted">offline</span>
-            )}
-            {lastTimestamp && (
-              <span className="ml-auto text-[10px] text-text-muted">{sessionTime(lastTimestamp)}</span>
-            )}
           </div>
-          {machineName && (
-            <div className="flex items-center gap-1 mt-0.5">
-              <span
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  isDeviceOnline ? 'bg-emerald-400' : 'bg-slate-400'
-                }`}
-              />
-              <span className="text-[10px] text-text-muted">{machineName}</span>
-            </div>
-          )}
           <p className="mt-0.5 truncate text-[11px] text-text-secondary">
             {draft && !isActive ? (
               <><span className="font-medium text-red-500">[draft]</span> {truncate(draft, PREVIEW_MAX_LENGTH)}</>

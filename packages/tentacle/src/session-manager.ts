@@ -38,6 +38,7 @@ export interface SessionMeta {
   agent: string;
   model?: string;
   title?: string;
+  autoTitle?: string;
   state: 'active' | 'idle' | 'ended' | 'disconnected';
   mode: SessionMode;
   currentRunId: string;
@@ -279,8 +280,9 @@ export class SessionManager {
       agent: sourceMeta.agent,
       model: sourceMeta.model,
       title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
+      autoTitle: sourceMeta.autoTitle,
       state: 'active',
-      mode: sourceMeta.mode ?? 'discuss',
+      mode: 'discuss',
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: sourceMeta.lastSeq ?? 0,
@@ -349,7 +351,18 @@ export class SessionManager {
   setTitle(sessionId: string, title: string): void {
     const meta = this.readMeta(sessionId);
     if (!meta) return;
-    meta.title = title;
+    meta.title = title || undefined;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
+   * Set LLM-generated auto-title.
+   */
+  setAutoTitle(sessionId: string, autoTitle: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.autoTitle = autoTitle;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
   }
@@ -469,6 +482,7 @@ export class SessionManager {
     agent: string;
     model?: string;
     title?: string;
+    autoTitle?: string;
     state: 'active' | 'idle';
     mode: SessionMode;
     lastSeq: number;
@@ -500,6 +514,7 @@ export class SessionManager {
         agent: meta.agent,
         model: meta.model,
         title: meta.title,
+        autoTitle: meta.autoTitle,
         state,
         mode: meta.mode ?? 'discuss',
         lastSeq: meta.lastSeq ?? 0,

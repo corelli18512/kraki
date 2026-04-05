@@ -101,6 +101,43 @@ describe('SessionManager', () => {
       sm.setTitle(sessionId, 'Fix auth token refresh');
       expect(sm.getMeta(sessionId)!.title).toBe('Fix auth token refresh');
     });
+
+    it('should set and persist autoTitle', () => {
+      const { sessionId } = sm.createSession('copilot');
+      expect(sm.getMeta(sessionId)!.autoTitle).toBeUndefined();
+
+      sm.setAutoTitle(sessionId, 'Refactoring auth middleware');
+      expect(sm.getMeta(sessionId)!.autoTitle).toBe('Refactoring auth middleware');
+    });
+
+    it('should clear manual title with empty string', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.setTitle(sessionId, 'My custom name');
+      expect(sm.getMeta(sessionId)!.title).toBe('My custom name');
+
+      sm.setTitle(sessionId, '');
+      expect(sm.getMeta(sessionId)!.title).toBeUndefined();
+    });
+
+    it('should include autoTitle in session list', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.setAutoTitle(sessionId, 'Working on tests');
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry?.autoTitle).toBe('Working on tests');
+    });
+
+    it('should copy autoTitle when forking', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.setAutoTitle(sessionId, 'Original auto title');
+      sm.setTitle(sessionId, 'Manual title');
+
+      const forked = sm.forkSession(sessionId)!;
+      const forkedMeta = sm.getMeta(forked.sessionId)!;
+      expect(forkedMeta.autoTitle).toBe('Original auto title');
+      expect(forkedMeta.title).toBe('Fork of Manual title');
+    });
   });
 
   // ── End session ───────────────────────────────────────

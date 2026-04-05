@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
@@ -59,6 +59,7 @@ export function SessionPage() {
   }
 
   const { label } = agentInfo(session.agent);
+  const displayTitle = session.title ?? session.autoTitle;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -85,18 +86,31 @@ export function SessionPage() {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-semibold text-text-primary">{label}</span>
-            {session.model && (
+          {sessionId && (
+            <SessionTitle
+              sessionId={sessionId}
+              displayTitle={displayTitle}
+              hasManualTitle={!!session.title}
+              label={label}
+            />
+          )}
+          <div className="flex items-center gap-1">
+            {!displayTitle && session.model && (
               <span className="text-xs text-text-muted">{session.model}</span>
+            )}
+            {displayTitle && (
+              <>
+                <span className="text-[10px] text-text-muted">{label}</span>
+                {session.model && <span className="text-[10px] text-text-muted">· {session.model}</span>}
+              </>
             )}
             {!isDeviceOnline && (
               <span className="rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-medium text-text-muted">offline</span>
             )}
+            {session.deviceName && (
+              <span className="text-[10px] text-text-muted">· {session.deviceName}</span>
+            )}
           </div>
-          {session.deviceName && (
-            <p className="text-[10px] text-text-muted">{session.deviceName}</p>
-          )}
         </div>
         {isDeviceOnline && sessionId && (
           <ModeSelector sessionId={sessionId} currentMode={sessionMode as 'safe' | 'discuss' | 'execute' | 'delegate'} />
@@ -104,6 +118,83 @@ export function SessionPage() {
       </div>
 
       <ChatView />
+    </div>
+  );
+}
+
+// ── Inline editable session title ─────────────────────
+
+function SessionTitle({ sessionId, displayTitle, hasManualTitle, label }: {
+  sessionId: string;
+  displayTitle?: string;
+  hasManualTitle: boolean;
+  label: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEditing = useCallback(() => {
+    setDraft(displayTitle ?? '');
+    setEditing(true);
+  }, [displayTitle]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  const save = useCallback(() => {
+    const trimmed = draft.trim();
+    wsClient.renameSession(sessionId, trimmed);
+    setEditing(false);
+  }, [sessionId, draft]);
+
+  const cancel = useCallback(() => {
+    setEditing(false);
+  }, []);
+
+  const clearManualTitle = useCallback(() => {
+    wsClient.renameSession(sessionId, '');
+  }, [sessionId]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') cancel();
+        }}
+        className="w-full bg-transparent text-sm font-semibold text-text-primary outline-none border-b border-kraki-400"
+        placeholder="Session title…"
+        maxLength={80}
+      />
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={startEditing}
+        className="truncate text-sm font-semibold text-text-primary hover:text-kraki-500 transition-colors"
+        title="Click to rename"
+      >
+        {displayTitle ?? label}
+      </button>
+      {hasManualTitle && (
+        <button
+          onClick={clearManualTitle}
+          className="shrink-0 rounded p-0.5 text-text-muted hover:text-text-secondary hover:bg-surface-tertiary transition-colors"
+          title="Clear manual title"
+        >
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

@@ -18,7 +18,7 @@
 
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
@@ -134,6 +134,40 @@ async function terminatePid(pid: number | null, label: string): Promise<void> {
     await waitForProcessExit(pid, 500);
   } catch {
     console.warn(`⚠️  Failed to fully stop ${label} (PID ${pid})`);
+  }
+}
+
+/** Terminate any processes listening on or connected to a given port. */
+function killPortUsers(port: number): void {
+  try {
+    const output = execSync(`lsof -ti tcp:${port} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    if (!output) return;
+    for (const pidStr of output.split('\n')) {
+      const pid = parseInt(pidStr, 10);
+      if (pid && pid !== process.pid) {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* lsof failed or no listeners — fine */ }
+}
+
+/** Terminate stale local-dev daemon-workers that would reconnect to our relay. */
+function killOrphanDevDaemons(): void {
+  // Check all .tmp/kraki-local dirs for daemon.pid files (covers all worktrees)
+  const searchRoots = [
+    resolve(process.cwd(), '..'),  // sibling worktrees
+    process.cwd(),                  // this worktree
+  ];
+  for (const root of searchRoots) {
+    try {
+      for (const entry of readdirSync(root)) {
+        const pidPath = join(root, entry, '.tmp', 'kraki-local', 'daemon.pid');
+        const pid = readPid(pidPath);
+        if (pid && pid !== process.pid && isPidAlive(pid)) {
+          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+        }
+      }
+    } catch { /* dir not readable — skip */ }
   }
 }
 
@@ -343,6 +377,9 @@ async function start(args: string[]): Promise<void> {
 
   ensureDirs();
   await stopLocalStack({ includeLauncher: true, silent: true });
+  killOrphanDevDaemons();
+  killPortUsers(RELAY_PORT);
+  killPortUsers(REDIRECT_PORT);
   ensureLocalStateVersion();
   writePid(PID_FILES.launcher, process.pid);
 
@@ -353,6 +390,10 @@ async function start(args: string[]): Promise<void> {
   });
 
   console.log('🧠 Starting local head...');
+  // Clean head DB to prevent stale device accumulation across restarts
+  for (const suffix of ['', '-shm', '-wal']) {
+    try { unlinkSync(HEAD_DB_PATH + suffix); } catch { /* may not exist */ }
+  }
   headProcess = startHead();
   hookChildExit(headProcess, 'Local head');
 

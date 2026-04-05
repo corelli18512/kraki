@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionTitleUpdatedMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -171,6 +171,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'active': {
       const activated = store.sessions.get(sid);
       if (activated) store.upsertSession({ ...activated, state: 'active' });
+      store.appendMessage(sid, msg);
       break;
     }
 
@@ -178,6 +179,19 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const mode = (msg as SessionModeSetMessage).payload?.mode;
       if (mode === 'safe' || mode === 'discuss' || mode === 'execute' || mode === 'delegate') {
         store.setSessionMode(sid, mode);
+      }
+      break;
+    }
+
+    case 'session_title_updated': {
+      const titleMsg = msg as SessionTitleUpdatedMessage;
+      const session = store.sessions.get(sid);
+      if (session) {
+        store.upsertSession({
+          ...session,
+          title: titleMsg.payload.title,
+          autoTitle: titleMsg.payload.autoTitle,
+        });
       }
       break;
     }

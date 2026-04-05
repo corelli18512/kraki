@@ -48,7 +48,6 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const [selectedDevice, setSelectedDevice] = useState('');
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
-  const [prompt, setPrompt] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
   // Default to last selected device, or single tentacle
@@ -131,10 +130,8 @@ export function NewSessionDialog({ open, onClose }: Props) {
       targetDeviceId: selectedDevice,
       model,
       reasoningEffort,
-      prompt: prompt.trim() || undefined,
     });
     onClose();
-    setPrompt('');
   };
 
   if (!open) return null;
@@ -241,20 +238,6 @@ export function NewSessionDialog({ open, onClose }: Props) {
                 </div>
               </div>
             )}
-
-            {/* Prompt */}
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">
-                Initial prompt <span className="text-text-muted">(optional)</span>
-              </label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="What should the agent work on?"
-                rows={3}
-                className="w-full resize-none rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-kraki-500"
-              />
-            </div>
 
             {/* Submit */}
             <button
