@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary } from '@kraki/protocol';
-import { X } from 'lucide-react';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -55,44 +54,42 @@ export function DevicePanel({
   return (
     <>
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
-            <h2 className="truncate text-sm font-semibold text-text-primary">{device.name}</h2>
-            <span className="text-[11px] text-text-muted">{statusLabel}</span>
-            {isCurrentDevice && (
-              <span className="rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
-                This device
-              </span>
-            )}
-            {!isCurrentDevice && (
-              <span className="relative flex items-center">
-                <button
-                  onClick={() => canRemove ? setConfirmOpen(true) : setShowTooltip((v) => !v)}
-                  onMouseEnter={() => !canRemove && setShowTooltip(true)}
-                  onMouseLeave={() => setShowTooltip(false)}
-                  className={`peer rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                    canRemove ? 'text-red-500 hover:bg-red-500/10' : 'text-text-muted opacity-50'
-                  }`}
-                >
-                  Remove
-                </button>
-                {!canRemove && showTooltip && (
-                  <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 -translate-y-1/2 whitespace-nowrap rounded-md bg-surface-tertiary px-2 py-1 text-[10px] text-text-secondary shadow-lg">
-                    Disconnect the device first
-                  </span>
-                )}
-              </span>
-            )}
-          </div>
-        </div>
+      <div className="flex items-center gap-2 px-5 py-3 min-w-0">
         <button
           onClick={onClose}
-          className="rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary sm:hidden"
+          className="mr-0.5 text-text-secondary hover:text-text-primary sm:hidden"
         >
-          <X className="h-4 w-4" />
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
         </button>
+        <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
+        <h2 className="truncate text-sm font-semibold text-text-primary">{device.name}</h2>
+        <span className="text-[11px] text-text-muted">{statusLabel}</span>
+        {isCurrentDevice && (
+          <span className="rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
+            This device
+          </span>
+        )}
+        {!isCurrentDevice && (
+          <span className="relative flex items-center">
+            <button
+              onClick={() => canRemove ? setConfirmOpen(true) : setShowTooltip((v) => !v)}
+              onMouseEnter={() => !canRemove && setShowTooltip(true)}
+              onMouseLeave={() => setShowTooltip(false)}
+              className={`peer rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                canRemove ? 'text-red-500 hover:bg-red-500/10' : 'text-text-muted opacity-50'
+              }`}
+            >
+              Remove
+            </button>
+            {!canRemove && showTooltip && (
+              <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 -translate-y-1/2 whitespace-nowrap rounded-md bg-surface-tertiary px-2 py-1 text-[10px] text-text-secondary shadow-lg">
+                Disconnect the device first
+              </span>
+            )}
+          </span>
+        )}
       </div>
 
       <div className="space-y-4 px-5 pb-4">
@@ -128,15 +125,15 @@ export function DevicePanel({
             Sessions{deviceSessions.length > 0 ? ` (${deviceSessions.length})` : ''}
           </h3>
           {deviceSessions.length > 0 ? (
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {deviceSessions.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => onSelectSession(s.id)}
-                  className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] transition-colors ${
+                  className={`flex w-full items-center gap-1.5 rounded-lg border border-border-primary px-2.5 py-1.5 text-left text-[11px] transition-colors ${
                     selectedSessionId === s.id
-                      ? 'bg-ocean-500/15 text-ocean-400 font-medium'
-                      : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                      ? 'bg-surface-tertiary text-text-primary font-medium'
+                      : 'bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
                   }`}
                 >
                   <span className="truncate">{s.title ?? s.autoTitle ?? `${s.agent}${s.model ? ` · ${s.model}` : ''}`}</span>

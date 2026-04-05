@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
 import { agentInfo } from '../lib/format';
 import { AgentAvatar } from '../components/common/AgentAvatar';
-import { wsClient } from '../lib/ws-client';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -13,7 +12,6 @@ export function SessionPage() {
   const isDeviceOnline = device?.online ?? false;
   const clearUnread = useStore((s) => s.clearUnread);
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
-  const sessionMode = useStore((s) => (sessionId ? (s.sessionModes.get(sessionId) ?? 'discuss') : 'discuss'));
   const status = useStore((s) => s.status);
   const reconnectAttempts = useStore((s) => s.reconnectAttempts);
   const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
@@ -86,23 +84,18 @@ export function SessionPage() {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          {sessionId && (
-            <SessionTitle
-              sessionId={sessionId}
-              displayTitle={displayTitle}
-              hasManualTitle={!!session.title}
-              label={label}
-            />
-          )}
+          <span className="block truncate text-sm font-semibold text-text-primary">
+            {displayTitle ?? label}
+          </span>
           <div className="flex items-center gap-1">
-            {!displayTitle && session.model && (
-              <span className="text-xs text-text-muted">{session.model}</span>
-            )}
             {displayTitle && (
               <>
                 <span className="text-[10px] text-text-muted">{label}</span>
                 {session.model && <span className="text-[10px] text-text-muted">· {session.model}</span>}
               </>
+            )}
+            {!displayTitle && session.model && (
+              <span className="text-xs text-text-muted">{session.model}</span>
             )}
             {!isDeviceOnline && (
               <span className="rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-medium text-text-muted">offline</span>
@@ -112,214 +105,19 @@ export function SessionPage() {
             )}
           </div>
         </div>
-        {isDeviceOnline && sessionId && (
-          <ModeSelector sessionId={sessionId} currentMode={sessionMode as 'safe' | 'discuss' | 'execute' | 'delegate'} />
-        )}
+        {/* More button — navigates to session settings in device page */}
+        <button
+          onClick={() => navigate(`/devices?device=${session.deviceId}&session=${sessionId}`)}
+          className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+          title="Session settings"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+          </svg>
+        </button>
       </div>
 
       <ChatView />
     </div>
-  );
-}
-
-// ── Inline editable session title ─────────────────────
-
-function SessionTitle({ sessionId, displayTitle, hasManualTitle, label }: {
-  sessionId: string;
-  displayTitle?: string;
-  hasManualTitle: boolean;
-  label: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const startEditing = useCallback(() => {
-    setDraft(displayTitle ?? '');
-    setEditing(true);
-  }, [displayTitle]);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
-  const save = useCallback(() => {
-    const trimmed = draft.trim();
-    wsClient.renameSession(sessionId, trimmed);
-    setEditing(false);
-  }, [sessionId, draft]);
-
-  const cancel = useCallback(() => {
-    setEditing(false);
-  }, []);
-
-  const clearManualTitle = useCallback(() => {
-    wsClient.renameSession(sessionId, '');
-  }, [sessionId]);
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') save();
-          if (e.key === 'Escape') cancel();
-        }}
-        className="w-full bg-transparent text-sm font-semibold text-text-primary outline-none border-b border-kraki-400"
-        placeholder="Session title…"
-        maxLength={80}
-      />
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-1">
-      <button
-        onClick={startEditing}
-        className="truncate text-sm font-semibold text-text-primary hover:text-kraki-500 transition-colors"
-        title="Click to rename"
-      >
-        {displayTitle ?? label}
-      </button>
-      {hasManualTitle && (
-        <button
-          onClick={clearManualTitle}
-          className="shrink-0 rounded p-0.5 text-text-muted hover:text-text-secondary hover:bg-surface-tertiary transition-colors"
-          title="Clear manual title"
-        >
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      )}
-    </div>
-  );
-}
-
-// ── Mode selector with sliding pill ──────────────────────
-
-const MODES = ['safe', 'discuss', 'execute', 'delegate'] as const;
-
-const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> = {
-  safe:     { pill: 'bg-emerald-400/80 dark:bg-emerald-500/60', text: 'text-emerald-900 dark:text-emerald-100' },
-  discuss:  { pill: 'bg-ocean-400/80 dark:bg-ocean-500/60',     text: 'text-ocean-900 dark:text-ocean-100' },
-  execute:  { pill: 'bg-amber-400/80 dark:bg-amber-500/60',     text: 'text-amber-900 dark:text-amber-100' },
-  delegate: { pill: 'bg-kraki-400/80 dark:bg-kraki-500/60',     text: 'text-kraki-900 dark:text-kraki-100' },
-};
-
-function ModeSelector({ sessionId, currentMode }: { sessionId: string; currentMode: typeof MODES[number] }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mobileContainerRef = useRef<HTMLDivElement>(null);
-  const [pill, setPill] = useState({ left: 0, width: 0 });
-  const [mobilePill, setMobilePill] = useState<{ left: number; width: number } | null>(null);
-  const [mobileExpanded, setMobileExpanded] = useState(false);
-  const [mobileClosing, setMobileClosing] = useState(false);
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const activeIdx = MODES.indexOf(currentMode);
-  const colors = MODE_COLORS[currentMode];
-
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
-    if (btn) {
-      setPill({ left: btn.offsetLeft, width: btn.offsetWidth });
-    }
-  }, [activeIdx]);
-
-  useLayoutEffect(() => {
-    if (!mobileExpanded) {
-      setMobilePill(null);
-      return;
-    }
-    const container = mobileContainerRef.current;
-    if (!container) return;
-    const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
-    if (btn) {
-      setMobilePill({ left: btn.offsetLeft, width: btn.offsetWidth });
-    }
-  }, [activeIdx, mobileExpanded]);
-
-  const closeMobile = () => {
-    setMobileClosing(true);
-    setTimeout(() => {
-      setMobileExpanded(false);
-      setMobileClosing(false);
-    }, 200);
-  };
-
-  // Auto-collapse on mobile after 3s
-  useEffect(() => {
-    if (mobileExpanded && !mobileClosing) {
-      collapseTimerRef.current = setTimeout(closeMobile, 3000);
-      return () => clearTimeout(collapseTimerRef.current);
-    }
-  }, [mobileExpanded, mobileClosing, currentMode]);
-
-  const handleMobileSelect = (mode: typeof MODES[number]) => {
-    wsClient.setSessionMode(sessionId, mode);
-    clearTimeout(collapseTimerRef.current);
-    collapseTimerRef.current = setTimeout(closeMobile, 3000);
-  };
-
-  return (
-    <>
-      {/* Desktop */}
-      <div ref={containerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
-        <div
-          className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
-          style={{ left: pill.left, width: pill.width }}
-        />
-        {MODES.map((mode) => (
-          <button
-            key={mode}
-            onClick={() => wsClient.setSessionMode(sessionId, mode)}
-            className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-              currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
-            }`}
-          >
-            {mode.charAt(0).toUpperCase() + mode.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Mobile: collapsed = selected pill only */}
-      {!mobileExpanded && (
-        <button
-          onClick={() => setMobileExpanded(true)}
-          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:hidden ${colors.pill} ${colors.text}`}
-        >
-          {currentMode.charAt(0).toUpperCase() + currentMode.slice(1)}
-        </button>
-      )}
-
-      {/* Mobile: expanded = all modes with sliding pill */}
-      {mobileExpanded && (
-        <div className={`absolute inset-0 flex items-center justify-end bg-gradient-to-l from-surface-primary via-surface-primary to-transparent pl-12 pr-4 sm:hidden ${mobileClosing ? 'animate-slide-out-right' : 'animate-slide-in-right'}`}>
-          <div ref={mobileContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
-            {mobilePill && (
-              <div
-                className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
-                style={{ left: mobilePill.left, width: mobilePill.width }}
-              />
-            )}
-            {MODES.map((mode) => (
-              <button
-                key={mode}
-                onClick={() => handleMobileSelect(mode)}
-                className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
-                  currentMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </>
   );
 }

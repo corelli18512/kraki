@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { DevicePanel } from './DevicePanel';
 import { SessionInfoPanel } from './SessionInfoPanel';
@@ -25,8 +26,9 @@ export function DeviceGrid() {
   const sessionUsage = useStore((s) => s.sessionUsage);
   const sessions = useStore((s) => s.sessions);
   const myDeviceId = useStore((s) => s.deviceId);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(searchParams.get('device'));
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(searchParams.get('session'));
   const isDesktop = useIsDesktop();
 
   const tentacles = [...devices.values()]
@@ -155,10 +157,10 @@ function DeviceButton({
   return (
     <button
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+      className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
         isSelected
-          ? 'bg-surface-tertiary text-text-primary'
-          : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+          ? 'border-border-primary bg-surface-tertiary text-text-primary'
+          : 'border-border-primary bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
       }`}
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
