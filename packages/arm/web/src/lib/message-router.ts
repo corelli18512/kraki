@@ -187,6 +187,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_mode_set': {
+      // Skip our own echoes — mode was already applied optimistically
+      if (ctx.cmdState.consumeModeEcho(sid)) break;
       const mode = (msg as SessionModeSetMessage).payload?.mode;
       if (mode === 'safe' || mode === 'discuss' || mode === 'execute' || mode === 'delegate') {
         store.setSessionMode(sid, mode);

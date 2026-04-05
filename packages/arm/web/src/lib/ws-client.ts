@@ -107,7 +107,7 @@ export class KrakiWSClient {
   }
 
   setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') {
-    commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
+    commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
   setSessionModel(sessionId: string, model: string, reasoningEffort?: string) {

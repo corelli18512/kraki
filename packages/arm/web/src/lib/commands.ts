@@ -5,11 +5,32 @@ import { getStore, setStoreState } from './store-adapter';
 export class CommandState {
   readonly pendingPrompts = new Map<string, string>();
   readonly pendingCreateRequests = new Set<string>();
+  /** Count of in-flight mode changes per session (for echo suppression). */
+  readonly pendingModeChanges = new Map<string, number>();
 
   /** Clean up a failed request (called on server_error with requestId). */
   clearRequest(requestId: string): void {
     this.pendingPrompts.delete(requestId);
     this.pendingCreateRequests.delete(requestId);
+  }
+
+  /** Track an outgoing mode change so the echo can be suppressed. */
+  trackModeChange(sessionId: string): void {
+    this.pendingModeChanges.set(sessionId, (this.pendingModeChanges.get(sessionId) ?? 0) + 1);
+  }
+
+  /**
+   * Consume one pending mode echo. Returns true if this was our own echo
+   * (caller should skip it), false if it came from another source.
+   */
+  consumeModeEcho(sessionId: string): boolean {
+    const count = this.pendingModeChanges.get(sessionId) ?? 0;
+    if (count > 0) {
+      if (count === 1) this.pendingModeChanges.delete(sessionId);
+      else this.pendingModeChanges.set(sessionId, count - 1);
+      return true;
+    }
+    return false;
   }
 }
 
@@ -163,7 +184,9 @@ export function setSessionMode(
   sessionId: string,
   mode: 'safe' | 'discuss' | 'execute' | 'delegate',
   send: (msg: Record<string, unknown>) => void,
+  state?: CommandState,
 ): void {
+  state?.trackModeChange(sessionId);
   send({
     type: 'set_session_mode',
     sessionId,
