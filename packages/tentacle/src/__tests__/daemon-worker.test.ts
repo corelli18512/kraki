@@ -83,6 +83,7 @@ vi.mock('../config.js', () => ({
   getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
   getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
+  getVersion: vi.fn(() => '0.0.0-test'),
 }));
 
 let mockExecSyncReturn = 'fake-token\n';

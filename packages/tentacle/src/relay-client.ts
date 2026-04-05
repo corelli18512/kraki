@@ -37,6 +37,8 @@ export interface RelayClientOptions {
   reconnectDelay?: number;
   /** Max reconnect attempts. Default: Infinity */
   maxReconnects?: number;
+  /** Tentacle version string (included in device_greeting) */
+  version?: string;
 }
 
 export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
@@ -958,6 +960,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         models: this.options.device.capabilities?.models,
         modelDetails: this.options.device.capabilities?.modelDetails,
+        version: this.options.version,
       },
     } as ProducerMessage);
   }
@@ -976,6 +979,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         models: this.options.device.capabilities?.models,
         modelDetails: this.options.device.capabilities?.modelDetails,
+        version: this.options.version,
       },
     };
     this.sendUnicastTo(targetDeviceId, compactPubKey, greeting);

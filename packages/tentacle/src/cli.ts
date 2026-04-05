@@ -15,52 +15,16 @@
  */
 
 import chalk from 'chalk';
-import { join, dirname, resolve } from 'node:path';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
-import { isSea } from 'node:sea';
 
-import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, loadChannelKey, type KrakiConfig } from './config.js';
+import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
 import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
-
-declare const __KRAKI_VERSION__: string | undefined;
-
-// ── Version ─────────────────────────────────────────────
-
-function resolvePackageRootFromArgv(): string | null {
-  const scriptPath = process.argv[1];
-  if (!scriptPath) return null;
-  try {
-    const realPath = realpathSync(resolve(scriptPath));
-    return resolve(dirname(realPath), '..');
-  } catch {
-    return resolve(dirname(resolve(scriptPath)), '..');
-  }
-}
-
-function getVersion(): string {
-  if (typeof __KRAKI_VERSION__ !== 'undefined') {
-    return __KRAKI_VERSION__;
-  }
-
-  if (isSea()) {
-    return '0.0.0';
-  }
-
-  try {
-    const packageRoot = resolvePackageRootFromArgv();
-    if (!packageRoot) return '0.0.0';
-    const pkgPath = join(packageRoot, 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    return pkg.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}
 
 // ── Help ────────────────────────────────────────────────
 

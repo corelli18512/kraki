@@ -11,7 +11,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
@@ -118,6 +118,7 @@ export async function startWorker(): Promise<WorkerResult> {
       authMethod: config.authMethod,
       token,
       reconnectDelay: 3000,
+      version: getVersion(),
     },
     keyManager,
   );

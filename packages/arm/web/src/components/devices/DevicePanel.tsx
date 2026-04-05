@@ -14,6 +14,7 @@ function formatDate(iso?: string): string {
 export function DevicePanel({
   device,
   models,
+  version,
   isCurrentDevice,
   selectedSessionId,
   onSelectSession,
@@ -21,6 +22,7 @@ export function DevicePanel({
 }: {
   device: DeviceSummary;
   models?: string[];
+  version?: string;
   isCurrentDevice: boolean;
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
@@ -103,6 +105,12 @@ export function DevicePanel({
             <span className="text-text-muted">Last online</span>
             <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
           </div>
+          {version && (
+            <div className="flex justify-between text-[11px]">
+              <span className="text-text-muted">Version</span>
+              <span className="text-text-secondary">{version}</span>
+            </div>
+          )}
         </div>
 
         {/* Models */}

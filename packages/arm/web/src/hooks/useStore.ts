@@ -62,6 +62,7 @@ const initialState = {
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
   deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
+  deviceVersions: new Map<string, string>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
 };
 
@@ -309,6 +310,13 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModelDetails: next };
     }),
 
+  setDeviceVersion: (deviceId, version) =>
+    set((state) => {
+      const next = new Map(state.deviceVersions);
+      next.set(deviceId, version);
+      return { deviceVersions: next };
+    }),
+
   setSessionUsage: (sessionId, usage) =>
     set((state) => {
       const next = new Map(state.sessionUsage);
@@ -376,6 +384,7 @@ export const useStore = create<Store>()(persist((set) => ({
   relayVersion: null,
     deviceModels: new Map(),
     deviceModelDetails: new Map(),
+    deviceVersions: new Map(),
     sessionUsage: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,

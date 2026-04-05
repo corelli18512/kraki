@@ -49,6 +49,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     if (greeting?.modelDetails) {
       store.setDeviceModelDetails(msg.deviceId, greeting.modelDetails);
     }
+    if (greeting?.version) {
+      store.setDeviceVersion(msg.deviceId, greeting.version);
+    }
     return;
   }
 

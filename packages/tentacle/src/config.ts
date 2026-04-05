@@ -5,10 +5,11 @@
  * the root can be overridden with KRAKI_HOME.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync, realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { isSea } from 'node:sea';
 import type { AuthMethod } from '@kraki/protocol';
 
 // ── Types ───────────────────────────────────────────────
@@ -25,6 +26,41 @@ export interface KrakiConfig {
 }
 
 export const DEFAULT_LOG_VERBOSITY: KrakiLogVerbosity = 'normal';
+
+// ── Version ─────────────────────────────────────────────
+
+declare const __KRAKI_VERSION__: string | undefined;
+
+function resolvePackageRootFromArgv(): string | null {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) return null;
+  try {
+    const realPath = realpathSync(resolve(scriptPath));
+    return resolve(dirname(realPath), '..');
+  } catch {
+    return resolve(dirname(resolve(scriptPath)), '..');
+  }
+}
+
+export function getVersion(): string {
+  if (typeof __KRAKI_VERSION__ !== 'undefined') {
+    return __KRAKI_VERSION__;
+  }
+
+  if (isSea()) {
+    return '0.0.0';
+  }
+
+  try {
+    const packageRoot = resolvePackageRootFromArgv();
+    if (!packageRoot) return '0.0.0';
+    const pkgPath = join(packageRoot, 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 // ── Paths ───────────────────────────────────────────────
 

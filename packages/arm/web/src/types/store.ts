@@ -94,6 +94,7 @@ export interface AppState {
   // Live capabilities from tentacle greetings
   deviceModels: Map<string, string[]>;
   deviceModelDetails: Map<string, ModelDetail[]>;
+  deviceVersions: Map<string, string>;
 
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
@@ -135,6 +136,7 @@ export interface AppActions {
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
   setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
+  setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   clearTransientState: () => void;
   reset: () => void;

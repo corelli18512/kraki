@@ -43,6 +43,7 @@ vi.mock('../config.js', () => ({
   getConfigPath: (...args: unknown[]) => mockGetConfigPath(...args),
   getKrakiHome: (...args: unknown[]) => mockGetKrakiHome(...args),
   getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
+  getVersion: vi.fn(() => '1.2.3'),
   loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
 }));
 

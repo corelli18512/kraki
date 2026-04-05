@@ -22,6 +22,7 @@ export function DeviceGrid() {
   const devices = useStore((s) => s.devices);
   const deviceModels = useStore((s) => s.deviceModels);
   const deviceModelDetails = useStore((s) => s.deviceModelDetails);
+  const deviceVersions = useStore((s) => s.deviceVersions);
   const sessionUsage = useStore((s) => s.sessionUsage);
   const sessions = useStore((s) => s.sessions);
   const myDeviceId = useStore((s) => s.deviceId);
@@ -58,6 +59,7 @@ export function DeviceGrid() {
   const selectedSession = effectiveSessionId ? sessions.get(effectiveSessionId) : undefined;
 
   const models = selectedDevice ? deviceModels.get(selectedDevice.id) : undefined;
+  const version = selectedDevice ? deviceVersions.get(selectedDevice.id) : undefined;
 
   const handleSelectDevice = useCallback((id: string) => {
     setSelectedDeviceId((prev) => prev === id ? null : id);
@@ -112,6 +114,7 @@ export function DeviceGrid() {
           <DevicePanel
             device={selectedDevice}
             models={models}
+            version={version}
             isCurrentDevice={selectedDevice.id === myDeviceId}
             selectedSessionId={effectiveSessionId}
             onSelectSession={handleSelectSession}
