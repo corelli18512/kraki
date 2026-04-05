@@ -124,4 +124,68 @@ describe('Storage', () => {
       expect(user2Devices[0].name).toBe('Desktop');
     });
   });
+
+  // --- Pending messages ---
+
+  describe('pending messages', () => {
+    beforeEach(() => {
+      storage.upsertUser('u1', 'alice');
+      storage.upsertDevice('dev-1', 'u1', 'Laptop', 'tentacle');
+    });
+
+    it('inserts and flushes pending messages', () => {
+      storage.insertPending('dev-1', 'u1', '{"type":"unicast","to":"dev-1","blob":"a"}');
+      storage.insertPending('dev-1', 'u1', '{"type":"unicast","to":"dev-1","blob":"b"}');
+
+      const flushed = storage.flushPending('dev-1');
+      expect(flushed).toHaveLength(2);
+      expect(JSON.parse(flushed[0]).blob).toBe('a');
+      expect(JSON.parse(flushed[1]).blob).toBe('b');
+
+      // Second flush returns empty
+      expect(storage.flushPending('dev-1')).toHaveLength(0);
+    });
+
+    it('does not return messages for other devices', () => {
+      storage.upsertDevice('dev-2', 'u1', 'Desktop', 'tentacle');
+      storage.insertPending('dev-1', 'u1', '{"blob":"for-dev1"}');
+      storage.insertPending('dev-2', 'u1', '{"blob":"for-dev2"}');
+
+      const flushed = storage.flushPending('dev-1');
+      expect(flushed).toHaveLength(1);
+      expect(JSON.parse(flushed[0]).blob).toBe('for-dev1');
+    });
+
+    it('enforces per-device cap by dropping oldest', () => {
+      for (let i = 0; i < 205; i++) {
+        storage.insertPending('dev-1', 'u1', `{"i":${i}}`);
+      }
+
+      const flushed = storage.flushPending('dev-1');
+      expect(flushed).toHaveLength(200);
+      // Oldest 5 were dropped
+      expect(JSON.parse(flushed[0]).i).toBe(5);
+      expect(JSON.parse(flushed[199]).i).toBe(204);
+    });
+
+    it('deletes pending messages when device is removed', () => {
+      storage.insertPending('dev-1', 'u1', '{"blob":"queued"}');
+      storage.deletePendingForDevice('dev-1');
+
+      expect(storage.flushPending('dev-1')).toHaveLength(0);
+    });
+
+    it('expires old messages', () => {
+      storage.insertPending('dev-1', 'u1', '{"blob":"old"}');
+      // Manually backdate the entry
+      // @ts-expect-error — accessing private db for test
+      storage['db'].prepare(
+        "UPDATE pending_messages SET created_at = datetime('now', '-31 days')"
+      ).run();
+
+      const expired = storage.expirePending();
+      expect(expired).toBe(1);
+      expect(storage.flushPending('dev-1')).toHaveLength(0);
+    });
+  });
 });

@@ -188,6 +188,9 @@ export class RelayClient {
       }
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
+      // Process queued messages from the relay BEFORE broadcasting session list
+      // so that deletes/mode changes are applied first
+      this.processPendingMessages(this.authInfo.pendingMessages);
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
       this.broadcastSessionList();
@@ -521,6 +524,32 @@ export class RelayClient {
           message: `Failed to fork session: ${(err as Error).message}`,
           requestId,
         }));
+      }
+    }
+  }
+
+  // ── Pending message processing ─────────────────────
+
+  /**
+   * Process queued unicast envelopes delivered by the relay in auth_ok.
+   * These are messages sent by arms while this tentacle was offline.
+   * Must run before broadcastSessionList so deletes/mode changes take effect first.
+   */
+  private processPendingMessages(messages?: UnicastEnvelope[]): void {
+    if (!messages || messages.length === 0 || !this.keyManager || !this.authInfo) return;
+
+    logger.info(`Processing ${messages.length} pending message(s) from relay`);
+    for (const envelope of messages) {
+      try {
+        const decrypted = decryptFromBlob(
+          { blob: envelope.blob, keys: envelope.keys },
+          this.authInfo.deviceId,
+          this.keyManager.getKeyPair().privateKey,
+        );
+        const inner = JSON.parse(decrypted);
+        this.handleConsumerMessage(inner as ConsumerMessage);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to process pending message');
       }
     }
   }

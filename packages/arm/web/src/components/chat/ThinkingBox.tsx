@@ -49,12 +49,15 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
     isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 40;
   };
 
-  if (messages.length === 0 && !streamingText) return null;
+  // Skip 'active' messages — they're structural (create in-progress turn), not displayable
+  const visibleMessages = messages.filter(m => m.type !== 'active');
+
+  if (visibleMessages.length === 0 && !streamingText) return null;
 
   const summary = streamingText
     ? streamingText.trim()
-    : messages.length > 0
-      ? getMessageSummary(messages[messages.length - 1])
+    : visibleMessages.length > 0
+      ? getMessageSummary(visibleMessages[visibleMessages.length - 1])
       : 'Processing…';
 
   logger.info('render', {
@@ -105,6 +108,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
             <div ref={contentRef} onScroll={handleScroll} className="min-w-0 overflow-y-auto px-5 py-4">
               <div className="min-w-0 space-y-3">
                 {messages.map((msg, idx) => {
+                  if (msg.type === 'active') return null;
                   if (msg.type === 'agent_message') {
                     return (
                       <div key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`} className="markdown-content text-sm leading-relaxed text-text-secondary">

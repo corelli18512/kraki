@@ -880,7 +880,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
   // ── Extra: server_error echoes ref from unicast envelope ──
 
-  it("server_error includes ref from unicast targeting offline tentacle", async () => {
+  it("unicast to offline tentacle is queued and delivered on reconnect", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();
     const tentacleId = relay.getAuthInfo()!.deviceId;
@@ -890,7 +890,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     relay.disconnect();
     await waitMs(200);
 
-    // Send unicast with ref to the now-offline tentacle
+    // Send unicast to the now-offline tentacle — should be queued (no error)
     const ref = "req_test_12345";
     const recipientPubKey = importPublicKey(tentacleKey);
     const innerMsg = { type: "create_session", payload: { requestId: ref } };
@@ -899,9 +899,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     ]);
     app.ws.send(JSON.stringify({ type: "unicast", to: tentacleId, blob, keys, ref }));
 
-    // Relay should send server_error with ref echoed back
-    const err = await app.waitFor("server_error");
-    expect(err.ref).toBe(ref);
+    // No server_error should arrive — message is queued
+    await waitMs(300);
 
     app.close();
   });

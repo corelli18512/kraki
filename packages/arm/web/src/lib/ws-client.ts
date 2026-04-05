@@ -115,12 +115,14 @@ export class KrakiWSClient {
   }
 
   deleteSession(sessionId: string) {
-    // delete_session is now an encrypted unicast to the tentacle
+    // Send delete to tentacle — relay queues if device is offline
     this.sendEncrypted({
       type: 'delete_session',
       sessionId,
       payload: {},
     });
+    // Optimistic local remove
+    getStore().removeSession(sessionId);
   }
 
   createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string }) {
@@ -312,7 +314,7 @@ export class KrakiWSClient {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
           getStore().setDeviceModels(left.deviceId, []);
-          getStore().removeDevice(left.deviceId);
+          getStore().setDeviceOnline(left.deviceId, false);
         }
         break;
       }
