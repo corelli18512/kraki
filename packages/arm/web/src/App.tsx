@@ -4,7 +4,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
 import { useWebSocket } from './hooks/useWebSocket';
-import { useStore, hydrateMessagesFromDB } from './hooks/useStore';
+import { useStore } from './hooks/useStore';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 
@@ -90,11 +90,6 @@ export function App() {
   const reconnectExhausted = isReconnecting && reconnectAttempts >= MAX_AUTO_RECONNECT_ATTEMPTS;
   const firstConnectFailed = !wasConnectedRef.current && (status === 'error' || status === 'disconnected');
   const showBlockingOverlay = firstConnectFailed || reconnectExhausted;
-
-  // Hydrate messages from IndexedDB on mount
-  useEffect(() => {
-    hydrateMessagesFromDB().catch(() => {});
-  }, []);
 
   // Update document.title with total unread count
   const unreadCount = useStore((s) => s.unreadCount);

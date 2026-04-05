@@ -12,12 +12,6 @@ vi.mock('./message-db', () => ({
   deleteSessionMessages: async () => {},
   updateSessionMessages: async () => {},
   clearAllMessages: async () => {},
-  putPermission: async () => {},
-  removePermissionFromDB: async () => {},
-  getAllPermissions: async () => new Map(),
-  putQuestion: async () => {},
-  removeQuestionFromDB: async () => {},
-  getAllQuestions: async () => new Map(),
 }));
 
 vi.mock('./encryption', () => ({

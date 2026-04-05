@@ -197,7 +197,6 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   addPermission: (perm) => {
-    import('../lib/message-db').then(db => db.putPermission(perm)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.set(perm.id, perm);
@@ -206,7 +205,6 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   removePermission: (id) => {
-    import('../lib/message-db').then(db => db.removePermissionFromDB(id)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingPermissions);
       next.delete(id);
@@ -215,7 +213,6 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   addQuestion: (q) => {
-    import('../lib/message-db').then(db => db.putQuestion(q)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.set(q.id, q);
@@ -224,7 +221,6 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   removeQuestion: (id) => {
-    import('../lib/message-db').then(db => db.removeQuestionFromDB(id)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(id);
@@ -350,9 +346,12 @@ export const useStore = create<Store>()(persist((set) => ({
     streamingContent: new Map(),
     unreadCount: new Map(),
     sessionUsage: new Map(),
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
-    // pendingPermissions/pendingQuestions persist in IndexedDB.
+    // pendingPermissions/pendingQuestions are in-memory only —
+    // restored from message replay via processReplayedActions on reconnect.
   }),
 
   reset: () => set({
@@ -395,16 +394,3 @@ export const useStore = create<Store>()(persist((set) => ({
     // messages are stored in IndexedDB, not localStorage
   }),
 }));
-
-/**
- * Hydrate pending permissions and questions from IndexedDB.
- * Messages are loaded lazily — last 50 on connect, older via gap fill.
- */
-export async function hydrateMessagesFromDB(): Promise<void> {
-  const { getAllPermissions, getAllQuestions } = await import('../lib/message-db');
-  const [pendingPermissions, pendingQuestions] = await Promise.all([
-    getAllPermissions(),
-    getAllQuestions(),
-  ]);
-  useStore.setState({ pendingPermissions, pendingQuestions });
-}

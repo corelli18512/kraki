@@ -6,13 +6,11 @@
  */
 
 import { openDB, type IDBPDatabase } from 'idb';
-import type { ChatMessage, PendingPermission, PendingQuestion } from '../types/store';
+import type { ChatMessage } from '../types/store';
 
 const DB_NAME = 'kraki-messages';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_NAME = 'messages';
-const PERMISSIONS_STORE = 'pending-permissions';
-const QUESTIONS_STORE = 'pending-questions';
 
 interface StoredMessage {
   sessionId: string;
@@ -30,9 +28,16 @@ function getDB(): Promise<IDBPDatabase> {
           const store = db.createObjectStore(STORE_NAME, { keyPath: ['sessionId', 'seq'] });
           store.createIndex('sessionId', 'sessionId', { unique: false });
         }
-        if (oldVersion < 2) {
-          db.createObjectStore(PERMISSIONS_STORE, { keyPath: 'id' });
-          db.createObjectStore(QUESTIONS_STORE, { keyPath: 'id' });
+        // v2 added pending-permissions and pending-questions stores.
+        // v3 removes them — pending state is now in-memory only,
+        // restored from message replay on reconnect.
+        if (oldVersion >= 2 && oldVersion < 3) {
+          if (db.objectStoreNames.contains('pending-permissions')) {
+            db.deleteObjectStore('pending-permissions');
+          }
+          if (db.objectStoreNames.contains('pending-questions')) {
+            db.deleteObjectStore('pending-questions');
+          }
         }
       },
     });
@@ -159,40 +164,4 @@ export async function updateSessionMessages(sessionId: string, messages: ChatMes
 export async function clearAllMessages(): Promise<void> {
   const db = await getDB();
   await db.clear(STORE_NAME);
-}
-
-// ── Pending permissions ─────────────────────────────────
-
-export async function putPermission(perm: PendingPermission): Promise<void> {
-  const db = await getDB();
-  await db.put(PERMISSIONS_STORE, perm);
-}
-
-export async function removePermissionFromDB(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete(PERMISSIONS_STORE, id);
-}
-
-export async function getAllPermissions(): Promise<Map<string, PendingPermission>> {
-  const db = await getDB();
-  const all = await db.getAll(PERMISSIONS_STORE) as PendingPermission[];
-  return new Map(all.map(p => [p.id, p]));
-}
-
-// ── Pending questions ───────────────────────────────────
-
-export async function putQuestion(q: PendingQuestion): Promise<void> {
-  const db = await getDB();
-  await db.put(QUESTIONS_STORE, q);
-}
-
-export async function removeQuestionFromDB(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete(QUESTIONS_STORE, id);
-}
-
-export async function getAllQuestions(): Promise<Map<string, PendingQuestion>> {
-  const db = await getDB();
-  const all = await db.getAll(QUESTIONS_STORE) as PendingQuestion[];
-  return new Map(all.map(q => [q.id, q]));
 }
