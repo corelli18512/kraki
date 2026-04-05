@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { DevicePanel } from './DevicePanel';
@@ -9,13 +9,12 @@ function useIsDesktop(): boolean {
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches,
   );
-  useState(() => {
-    if (typeof window === 'undefined') return;
+  useEffect(() => {
     const mql = window.matchMedia('(min-width: 640px)');
     const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
     mql.addEventListener('change', handler);
     return () => mql.removeEventListener('change', handler);
-  });
+  }, []);
   return isDesktop;
 }
 
@@ -30,6 +29,14 @@ export function DeviceGrid() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(searchParams.get('device'));
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(searchParams.get('session'));
   const isDesktop = useIsDesktop();
+
+  // Sync selection when URL query params change (e.g. navigating from chat page)
+  useEffect(() => {
+    const device = searchParams.get('device');
+    const session = searchParams.get('session');
+    if (device) setSelectedDeviceId(device);
+    if (session) setSelectedSessionId(session);
+  }, [searchParams]);
 
   const tentacles = [...devices.values()]
     .filter((d) => d.role === 'tentacle')

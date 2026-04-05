@@ -170,12 +170,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
             </div>
             <div className="flex justify-between text-[11px]">
               <span className="text-text-muted">Output</span>
-              <span className="text-text-secondary">
-                {formatTokens(usage.outputTokens)}
-                {usage.totalCost > 0 && (
-                  <span className="ml-1.5 text-text-muted">({usage.totalCost.toFixed(2)})</span>
-                )}
-              </span>
+              <span className="font-medium text-text-secondary">{formatTokens(usage.outputTokens)}</span>
             </div>
             {usage.cacheReadTokens > 0 && (
               <div className="flex justify-between text-[11px]">
