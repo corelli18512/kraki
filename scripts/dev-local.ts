@@ -169,6 +169,22 @@ function killOrphanDevDaemons(): void {
       }
     } catch { /* dir not readable — skip */ }
   }
+
+  // Also kill any daemon-worker processes connected to our local relay port,
+  // regardless of PID file state (catches orphans from crashed dev sessions).
+  try {
+    const pids = execSync(`lsof -i :${RELAY_PORT} -t 2>/dev/null`, { encoding: 'utf8' }).trim();
+    for (const pidStr of pids.split('\n')) {
+      const pid = parseInt(pidStr, 10);
+      if (!pid || pid === process.pid) continue;
+      try {
+        const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf8' });
+        if (cmd.includes('__daemon-worker')) {
+          process.kill(pid, 'SIGTERM');
+        }
+      } catch { /* process gone */ }
+    }
+  } catch { /* lsof unavailable or no results */ }
 }
 
 async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {
