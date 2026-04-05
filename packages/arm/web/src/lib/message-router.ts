@@ -167,7 +167,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const idleUsage = (msg as IdleMessage).payload?.usage;
       if (idleUsage) store.setSessionUsage(sid, idleUsage);
       // Only visible chat bubbles count as unread — idle marks a completed turn
-      if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
+      if (!replaying && !isViewingSession(sid)) {
+        store.incrementUnread(sid);
+      } else if (!replaying && isViewingSession(sid) && document.hasFocus()) {
+        // Actively viewing this session — broadcast readSeq so other arms clear unread
+        import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid)).catch(() => {});
+      }
       break;
     }
 
