@@ -137,6 +137,36 @@ async function terminatePid(pid: number | null, label: string): Promise<void> {
   }
 }
 
+/** Terminate any processes listening on or connected to a given port. */
+function killPortUsers(port: number): void {
+  try {
+    const output = execSync(`lsof -ti tcp:${port} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    if (!output) return;
+    for (const pidStr of output.split('\n')) {
+      const pid = parseInt(pidStr, 10);
+      if (pid && pid !== process.pid) {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* lsof failed or no listeners — fine */ }
+}
+
+/** Terminate stale local-dev daemon-workers that would reconnect to our relay. */
+function killOrphanDevDaemons(): void {
+  try {
+    const output = execSync('ps -eo pid,args 2>/dev/null', { encoding: 'utf8' });
+    for (const line of output.split('\n')) {
+      if (!line.includes('__daemon-worker')) continue;
+      // Only target dev daemons (run via tsx from source), not the global kraki binary
+      if (!line.includes('tsx') && !line.includes('ts-node')) continue;
+      const pid = parseInt(line.trim(), 10);
+      if (pid && pid !== process.pid) {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* ps failed — fine */ }
+}
+
 async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {
   const launcherPid = readPid(PID_FILES.launcher);
   const headPid = readPid(PID_FILES.head);
@@ -343,6 +373,9 @@ async function start(args: string[]): Promise<void> {
 
   ensureDirs();
   await stopLocalStack({ includeLauncher: true, silent: true });
+  killOrphanDevDaemons();
+  killPortUsers(RELAY_PORT);
+  killPortUsers(REDIRECT_PORT);
   ensureLocalStateVersion();
   writePid(PID_FILES.launcher, process.pid);
 
