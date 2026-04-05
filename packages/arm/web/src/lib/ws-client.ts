@@ -10,12 +10,14 @@ import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
+import { OfflineQueue } from './offline-queue';
 
 const logger = createLogger('ws-client');
 
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
+  private offlineQueue = new OfflineQueue();
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
 
@@ -115,7 +117,25 @@ export class KrakiWSClient {
   }
 
   deleteSession(sessionId: string) {
-    // delete_session is now an encrypted unicast to the tentacle
+    const store = getStore();
+    const session = store.sessions.get(sessionId);
+    const device = session ? store.devices.get(session.deviceId) : undefined;
+
+    if (!device?.online) {
+      // Device offline — remove locally, queue delete for when device reconnects
+      const targetDeviceId = session?.deviceId;
+      if (targetDeviceId) {
+        this.offlineQueue.enqueue(
+          { type: 'delete_session', sessionId, payload: {} },
+          targetDeviceId,
+        );
+      }
+      store.addLocallyDeleted(sessionId);
+      store.removeSession(sessionId);
+      return;
+    }
+
+    // Device online — send delete_session directly
     this.sendEncrypted({
       type: 'delete_session',
       sessionId,
@@ -160,6 +180,12 @@ export class KrakiWSClient {
 
     // Update session metadata and trigger initial loads
     for (const ts of tentacleSessions) {
+      // Skip sessions that were locally deleted — the queued delete_session
+      // will fire on drain and clean them up on the tentacle
+      if (store.locallyDeletedSessions.has(ts.id)) {
+        continue;
+      }
+
       const currentStore = getStore();
       const device = currentStore.devices.get(tentacleDeviceId);
       store.upsertSession({
@@ -304,6 +330,13 @@ export class KrakiWSClient {
         const joined = msg as DeviceJoinedMessage;
         if (joined.device) {
           getStore().upsertDevice(joined.device);
+          // Drain offline queue for this device now that it's back online
+          if (joined.device.role === 'tentacle') {
+            const queued = this.offlineQueue.drain(joined.device.id);
+            for (const m of queued) {
+              this.sendEncrypted(m);
+            }
+          }
         }
         break;
       }
