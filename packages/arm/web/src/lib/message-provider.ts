@@ -156,6 +156,10 @@ class MessageProvider {
     const totalLastSeq = this.tentacleLastSeq.get(sessionId) ?? 0;
     if (totalLastSeq === 0) return;
 
+    // Mark loading early to prevent duplicate requests from concurrent callers
+    const earlyLoadKey = `${sessionId}:latest`;
+    this.loading.add(earlyLoadKey);
+
     logger.info('requestLatest', { sessionId, totalLastSeq });
 
     // Check IndexedDB first
@@ -186,6 +190,8 @@ class MessageProvider {
         this.requestFromTentacle(sessionId, afterSeq);
       }
     }
+
+    this.loading.delete(earlyLoadKey);
   }
 
   /**

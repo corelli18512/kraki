@@ -920,24 +920,32 @@ export class RelayClient {
 
     const recipients: RecipientKey[] = [];
     for (const [deviceId, compactKey] of this.consumerKeys) {
-      recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
+      try {
+        recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
+      } catch (err) {
+        logger.warn({ err, deviceId }, 'Skipping device with invalid public key');
+      }
     }
+    if (recipients.length === 0) return;
 
-    const plaintext = JSON.stringify(msg);
-    const { blob, keys } = encryptToBlob(plaintext, recipients);
+    try {
+      const plaintext = JSON.stringify(msg);
+      const { blob, keys } = encryptToBlob(plaintext, recipients);
 
-    const envelope: BroadcastEnvelope = {
-      type: 'broadcast',
-      blob,
-      keys,
-    };
+      const envelope: BroadcastEnvelope = {
+        type: 'broadcast',
+        blob,
+        keys,
+      };
 
-    // Send push notifications for permission and question messages
-    if (msg.type === 'permission' || msg.type === 'question') {
-      envelope.notify = true;
+      if (msg.type === 'permission' || msg.type === 'question') {
+        envelope.notify = true;
+      }
+
+      this.ws.send(JSON.stringify(envelope));
+    } catch (err) {
+      logger.error({ err }, 'Encrypted broadcast failed');
     }
-
-    this.ws.send(JSON.stringify(envelope));
   }
 
   /**
@@ -946,20 +954,24 @@ export class RelayClient {
   private sendUnicastTo(targetDeviceId: string, compactPubKey: string, msg: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
-    const recipientPubKey = importPublicKey(compactPubKey);
-    const plaintext = JSON.stringify(msg);
-    const { blob, keys } = encryptToBlob(plaintext, [
-      { deviceId: targetDeviceId, publicKey: recipientPubKey },
-    ]);
+    try {
+      const recipientPubKey = importPublicKey(compactPubKey);
+      const plaintext = JSON.stringify(msg);
+      const { blob, keys } = encryptToBlob(plaintext, [
+        { deviceId: targetDeviceId, publicKey: recipientPubKey },
+      ]);
 
-    const envelope: UnicastEnvelope = {
-      type: 'unicast',
-      to: targetDeviceId,
-      blob,
-      keys,
-    };
+      const envelope: UnicastEnvelope = {
+        type: 'unicast',
+        to: targetDeviceId,
+        blob,
+        keys,
+      };
 
-    this.ws.send(JSON.stringify(envelope));
+      this.ws.send(JSON.stringify(envelope));
+    } catch (err) {
+      logger.error({ err, targetDeviceId }, 'Encrypted unicast failed');
+    }
   }
 
   /**

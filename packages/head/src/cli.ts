@@ -73,6 +73,10 @@ function flag(name: string, fallback: string): string {
 }
 
 const PORT = parseInt(flag('port', process.env.PORT || '4000'), 10);
+if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`Invalid port: ${flag('port', process.env.PORT || '4000')}. Must be 1-65535.`);
+  process.exit(1);
+}
 const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
 const API_KEY = process.env.API_KEY;
