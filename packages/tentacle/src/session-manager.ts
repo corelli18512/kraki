@@ -280,7 +280,7 @@ export class SessionManager {
       model: sourceMeta.model,
       title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
       state: 'active',
-      mode: sourceMeta.mode ?? 'discuss',
+      mode: 'discuss',
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: sourceMeta.lastSeq ?? 0,

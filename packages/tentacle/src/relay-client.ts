@@ -437,9 +437,14 @@ export class RelayClient {
     try {
       const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId });
 
-      // If an initial prompt was provided, send it to the new session
+      // If an initial prompt was provided, send it to the new session.
+      // Otherwise mark idle — the SDK only fires session.idle after a turn
+      // completes, so without a prompt the session would stay 'active' forever.
       if (prompt && result.sessionId) {
         await this.adapter.sendMessage(result.sessionId, prompt);
+      } else if (result.sessionId) {
+        this.sessionManager.markIdle(result.sessionId);
+        this.send({ type: 'idle', sessionId: result.sessionId, payload: {} });
       }
     } catch (err) {
       this.pendingRequestIds.delete(preSessionId);
@@ -470,11 +475,9 @@ export class RelayClient {
       // 2. Fork SDK session state and resume
       await this.adapter.forkSession(sourceSessionId, newId);
 
-      // 3. Restore permission mode from source
-      const sourceMeta = this.sessionManager.getMeta(sourceSessionId);
-      if (sourceMeta?.mode) {
-        this.adapter.setSessionMode(newId, sourceMeta.mode);
-      }
+      // 3. Forked session is idle until the user sends a message
+      this.sessionManager.markIdle(newId);
+      this.send({ type: 'idle', sessionId: newId, payload: {} });
 
     } catch (err) {
       logger.error({ err, sourceSessionId }, 'Fork session failed');

@@ -142,7 +142,15 @@ import {
 describe('CopilotAdapter', () => {
   let adapter: CopilotAdapter;
 
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
+    // Isolate from real environment tokens so the mock execSync controls the value
+    savedEnv.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    savedEnv.GH_TOKEN = process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+
     mockSessions = [];
     capturedSessionConfigs = [];
     capturedResumeConfigs = [];
@@ -168,6 +176,14 @@ describe('CopilotAdapter', () => {
       return '';
     });
     adapter = new CopilotAdapter();
+  });
+
+  afterEach(() => {
+    // Restore environment
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
   });
 
   // ── Exports & inheritance ────────────────────────────
