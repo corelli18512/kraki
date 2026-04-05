@@ -62,6 +62,7 @@ const initialState = {
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
   deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
+  sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -310,6 +311,13 @@ export const useStore = create<Store>()(persist((set) => ({
       return { deviceModelDetails: next };
     }),
 
+  setSessionUsage: (sessionId, usage) =>
+    set((state) => {
+      const next = new Map(state.sessionUsage);
+      next.set(sessionId, usage);
+      return { sessionUsage: next };
+    }),
+
   prependMessages: (sessionId, older) => {
     // Write to IndexedDB (idempotent by [sessionId, seq] key)
     import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
@@ -341,6 +349,7 @@ export const useStore = create<Store>()(persist((set) => ({
   clearTransientState: () => set({
     streamingContent: new Map(),
     unreadCount: new Map(),
+    sessionUsage: new Map(),
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
     // pendingPermissions/pendingQuestions persist in IndexedDB.
@@ -366,6 +375,7 @@ export const useStore = create<Store>()(persist((set) => ({
   relayVersion: null,
     deviceModels: new Map(),
     deviceModelDetails: new Map(),
+    sessionUsage: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

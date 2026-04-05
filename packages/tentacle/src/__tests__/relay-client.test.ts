@@ -77,8 +77,11 @@ function createAdapter(): Record<string, unknown> {
     onError: null,
     onSessionEnded: null,
     onTitleChanged: null,
+    onUsageUpdate: null,
     generateTitle: vi.fn(async () => null),
     setSessionMode: vi.fn(),
+    getSessionUsage: vi.fn(() => null),
+    setSessionUsage: vi.fn(),
   };
 }
 
@@ -102,6 +105,7 @@ function createSessionManager(): Record<string, unknown> {
     getSessionList: vi.fn(() => []),
     getMessagesAfterSeq: vi.fn(() => []),
     appendMessage: vi.fn(() => 1),
+    setUsage: vi.fn(),
   };
 }
 

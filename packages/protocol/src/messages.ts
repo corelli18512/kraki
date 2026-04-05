@@ -143,7 +143,10 @@ export interface ToolCompleteMessage extends BaseEnvelope {
 
 export interface IdleMessage extends BaseEnvelope {
   type: 'idle';
-  payload: Record<string, never>;
+  payload: {
+    /** Cumulative session token usage (present when tracked by adapter) */
+    usage?: import('./sessions.js').SessionUsage;
+  };
 }
 
 export interface ActiveMessage extends BaseEnvelope {
@@ -613,6 +616,6 @@ export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
 import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
-import type { SessionSummary, SessionDigest, SessionMode } from './sessions.js';
+import type { SessionSummary, SessionDigest, SessionMode, SessionUsage } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, SessionUsage, ToolArgs };

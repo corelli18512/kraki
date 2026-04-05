@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -163,6 +163,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
+      // Extract usage from idle payload
+      const idleUsage = (msg as IdleMessage).payload?.usage;
+      if (idleUsage) store.setSessionUsage(sid, idleUsage);
       // Only visible chat bubbles count as unread — idle marks a completed turn
       if (!replaying && !isViewingSession(sid)) store.incrementUnread(sid);
       break;

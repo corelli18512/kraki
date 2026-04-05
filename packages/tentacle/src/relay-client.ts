@@ -638,8 +638,14 @@ export class RelayClient {
 
     this.adapter.onIdle = (sessionId) => {
       this.sessionManager.markIdle(sessionId);
-      this.send({ type: 'idle', sessionId, payload: {} });
+      const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
+      if (usage) this.sessionManager.setUsage(sessionId, usage);
+      this.send({ type: 'idle', sessionId, payload: { usage } });
       this.maybeGenerateTitle(sessionId);
+    };
+
+    this.adapter.onUsageUpdate = (sessionId, usage) => {
+      this.sessionManager.setUsage(sessionId, usage);
     };
 
     this.adapter.onError = (sessionId, event) => {
@@ -687,6 +693,10 @@ export class RelayClient {
           // Restore permission mode from persisted meta
           if (meta.mode) {
             this.adapter.setSessionMode(meta.id, meta.mode);
+          }
+          // Restore persisted usage totals so accumulation continues
+          if (meta.usage) {
+            this.adapter.setSessionUsage(meta.id, meta.usage);
           }
         } catch (err) {
           logger.warn({ err, sessionId: meta.id }, 'Session resume failed after restart');

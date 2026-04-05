@@ -178,6 +178,12 @@ export class KrakiWSClient {
         store.setSessionMode(ts.id, ts.mode as 'safe' | 'discuss' | 'execute' | 'delegate');
       }
 
+      // Restore cumulative usage from tentacle
+      const tsRecord = ts as Record<string, unknown>;
+      if (tsRecord.usage && typeof tsRecord.usage === 'object') {
+        store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
+      }
+
       // Store tentacle info and request latest messages via provider
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
       messageProvider.requestLatest(ts.id);
