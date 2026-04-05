@@ -644,5 +644,57 @@ describe('HeadServer (thin relay)', () => {
       const res = await waitForMessageOfType(ws, 'server_error');
       expect(res.message).toContain('to');
     });
+
+    it('should queue unicast for offline device and deliver on reconnect', async () => {
+      head = await createHead();
+
+      // Connect tentacle, note its deviceId, then disconnect
+      const { ws: tentacleWs, authOk: tentacleAuth } = await authConnect(head.port, 'Tentacle', 'tentacle', { deviceId: 'dev-t1' });
+      const tentacleDeviceId = tentacleAuth.deviceId as string;
+      tentacleWs.close();
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Connect an app and send a unicast to the offline tentacle
+      const { ws: appWs } = await authConnect(head.port, 'Phone', 'app');
+      appWs.send(JSON.stringify({
+        type: 'unicast',
+        to: tentacleDeviceId,
+        blob: 'encrypted-delete-blob',
+        keys: { [tentacleDeviceId]: 'wrapped-key' },
+      }));
+      // No server_error should come back — give it a moment
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Reconnect tentacle — auth_ok should contain pendingMessages
+      const tentacle2 = connect(head.port);
+      await waitForOpen(tentacle2);
+      tentacle2.send(JSON.stringify({
+        type: 'auth',
+        auth: { method: 'open' },
+        device: { name: 'Tentacle', role: 'tentacle', deviceId: tentacleDeviceId },
+      }));
+      const authOk2 = await waitForMessage(tentacle2);
+      expect(authOk2.type).toBe('auth_ok');
+      expect(authOk2.pendingMessages).toHaveLength(1);
+      const pending = (authOk2.pendingMessages as Record<string, unknown>[])[0];
+      expect(pending.blob).toBe('encrypted-delete-blob');
+      expect((pending.keys as Record<string, string>)[tentacleDeviceId]).toBe('wrapped-key');
+
+      // Second reconnect should have no pending messages
+      tentacle2.close();
+      await new Promise((r) => setTimeout(r, 100));
+      const tentacle3 = connect(head.port);
+      await waitForOpen(tentacle3);
+      tentacle3.send(JSON.stringify({
+        type: 'auth',
+        auth: { method: 'open' },
+        device: { name: 'Tentacle', role: 'tentacle', deviceId: tentacleDeviceId },
+      }));
+      const authOk3 = await waitForMessage(tentacle3);
+      expect(authOk3.pendingMessages).toBeUndefined();
+
+      appWs.close();
+      tentacle3.close();
+    });
   });
 });

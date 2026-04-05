@@ -479,6 +479,8 @@ export interface AuthOkMessage {
   githubClientId?: string;
   /** Relay server version */
   relayVersion?: string;
+  /** Queued unicast envelopes received while this device was offline */
+  pendingMessages?: UnicastEnvelope[];
 }
 
 export type AuthErrorCode =

@@ -100,6 +100,12 @@ export class HeadServer {
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.startPingInterval();
+
+    // Expire old pending messages on startup
+    const expired = this.storage.expirePending();
+    if (expired > 0) {
+      getLogger().info('Expired pending messages on startup', { count: expired });
+    }
   }
 
   private startPingInterval(): void {
@@ -316,8 +322,9 @@ export class HeadServer {
 
     const targetWs = this.connections.get(msg.to);
     if (!targetWs) {
-      logger.debug('Unicast target offline', { to: msg.to });
-      ws.send(JSON.stringify({ type: 'server_error', message: 'Target device not found or offline', ref: msg.ref }));
+      // Target offline — queue for delivery on reconnect
+      this.storage.insertPending(msg.to, senderUserId, JSON.stringify(msg));
+      logger.debug('Unicast queued for offline device', { from: state.deviceId, to: msg.to });
       return;
     }
 
@@ -534,6 +541,7 @@ export class HeadServer {
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
     const fullUser = this.storage.getUser(user.userId);
+    const pendingMessages = this.flushPendingEnvelopes(deviceId);
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
@@ -542,6 +550,7 @@ export class HeadServer {
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
       relayVersion: this.options.version,
+      ...(pendingMessages.length > 0 && { pendingMessages }),
     }));
 
     // Notify other connected devices about the reconnected device
@@ -588,6 +597,7 @@ export class HeadServer {
     });
 
     const fullUser = this.storage.getUser(user.id);
+    const pendingMessages = this.flushPendingEnvelopes(deviceId);
     ws.send(JSON.stringify({
       type: 'auth_ok',
       deviceId,
@@ -596,6 +606,7 @@ export class HeadServer {
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),
       relayVersion: this.options.version,
+      ...(pendingMessages.length > 0 && { pendingMessages }),
     }));
 
     // Notify other connected devices about the new device
@@ -702,6 +713,7 @@ export class HeadServer {
     }
 
     this.storage.deleteDevice(targetDeviceId);
+    this.storage.deletePendingForDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
 
     // Broadcast removal to all remaining user devices
@@ -791,6 +803,24 @@ export class HeadServer {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'server_error', message }));
     }
+  }
+
+  /** Flush pending messages from SQLite, parse into envelope objects. */
+  private flushPendingEnvelopes(deviceId: string): UnicastEnvelope[] {
+    const logger = getLogger();
+    const rows = this.storage.flushPending(deviceId);
+    if (rows.length === 0) return [];
+
+    const envelopes: UnicastEnvelope[] = [];
+    for (const raw of rows) {
+      try {
+        envelopes.push(JSON.parse(raw));
+      } catch {
+        logger.warn('Failed to parse pending message', { deviceId });
+      }
+    }
+    logger.info('Flushed pending messages', { deviceId, count: envelopes.length });
+    return envelopes;
   }
 
   close(): void {

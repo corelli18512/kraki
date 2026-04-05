@@ -1132,7 +1132,7 @@ describe('KrakiWSClient', () => {
       expect(devices.get('dev-new')?.name).toBe('iPad');
     });
 
-    it('removes device on device_left', async () => {
+    it('marks device offline on device_left', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1143,7 +1143,8 @@ describe('KrakiWSClient', () => {
         deviceId: 'dev-1',
       });
 
-      expect(useStore.getState().devices.has('dev-1')).toBe(false);
+      expect(useStore.getState().devices.has('dev-1')).toBe(true);
+      expect(useStore.getState().devices.get('dev-1')?.online).toBe(false);
     });
   });
 });
