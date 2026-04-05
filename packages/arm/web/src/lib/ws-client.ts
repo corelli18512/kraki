@@ -175,6 +175,8 @@ export class KrakiWSClient {
   /**
    * Handle session_list from tentacle: update metadata, trigger initial loads via provider.
    */
+  // TODO: Batch store updates — currently each session triggers individual Zustand set() calls,
+  // causing N re-renders on reconnect. Build maps first, then set() once.
   private handleSessionList(msg: SessionListMessage): void {
     const store = getStore();
     const tentacleSessions = msg.payload?.sessions ?? [];

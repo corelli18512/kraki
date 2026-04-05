@@ -115,7 +115,11 @@ export const useStore = create<Store>()(persist((set) => ({
       drafts.delete(sessionId);
       const pinnedSessions = new Set(state.pinnedSessions);
       pinnedSessions.delete(sessionId);
-      return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions };
+      const sessionModes = new Map(state.sessionModes);
+      sessionModes.delete(sessionId);
+      const sessionUsage = new Map(state.sessionUsage);
+      sessionUsage.delete(sessionId);
+      return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage };
     });
   },
 
@@ -278,7 +282,7 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.sessionModes);
       if (mode === 'discuss') {
-        next.delete(sessionId); // plan is default, no need to store
+        next.delete(sessionId); // discuss is default, no need to store
       } else {
         next.set(sessionId, mode);
       }

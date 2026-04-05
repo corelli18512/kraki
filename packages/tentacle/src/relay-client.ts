@@ -52,6 +52,7 @@ export class RelayClient {
   private state: RelayClientState = 'disconnected';
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private intentionalDisconnect = false;
   private authInfo: AuthOkMessage | null = null;
   /** Cached consumer public keys for E2E encryption */
   private consumerKeys = new Map<string, string>();
@@ -59,6 +60,14 @@ export class RelayClient {
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
+  private static readonly TRANSIENT_TYPES = new Set([
+    'agent_message_delta',
+    'session_mode_set',
+    'session_title_updated',
+    'session_model_set',
+    'session_pinned',
+    'session_read',
+  ]);
   /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
   /** Prefer challenge auth when the relay already knows this device */
@@ -103,6 +112,7 @@ export class RelayClient {
    */
   connect(): void {
     if (this.ws) return;
+    this.intentionalDisconnect = false;
     this.setState('connecting');
 
     const ws = new WebSocket(this.options.relayUrl);
@@ -135,7 +145,9 @@ export class RelayClient {
       this.stopStaleCheck();
       this.ws = null;
       this.setState('disconnected');
-      this.scheduleReconnect();
+      if (!this.intentionalDisconnect) {
+        this.scheduleReconnect();
+      }
     });
 
     ws.on('error', () => {
@@ -152,6 +164,7 @@ export class RelayClient {
    * Disconnect from the relay. No reconnect.
    */
   disconnect(): void {
+    this.intentionalDisconnect = true;
     this.stopStaleCheck();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -502,13 +515,12 @@ export class RelayClient {
       }
     } catch (err) {
       this.pendingRequestIds.delete(preSessionId);
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          type: 'server_error',
-          message: `Failed to create session: ${(err as Error).message}`,
-          requestId,
-        }));
-      }
+      const errorMsg = `Failed to create session: ${(err as Error).message}`;
+      this.send({
+        type: 'error',
+        sessionId: '',
+        payload: { message: errorMsg },
+      });
     }
   }
 
@@ -535,13 +547,12 @@ export class RelayClient {
 
     } catch (err) {
       logger.error({ err, sourceSessionId }, 'Fork session failed');
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({
-          type: 'server_error',
-          message: `Failed to fork session: ${(err as Error).message}`,
-          requestId,
-        }));
-      }
+      const errorMsg = `Failed to fork session: ${(err as Error).message}`;
+      this.send({
+        type: 'error',
+        sessionId: '',
+        payload: { message: errorMsg },
+      });
     }
   }
 
@@ -801,9 +812,12 @@ export class RelayClient {
     const logged = this.sessionManager.getMessagesAfterSeq(sessionId, afterSeq, limit);
     logger.info({ requesterDeviceId, sessionId, afterSeq, limit, count: logged.length }, 'Replaying session messages (batch)');
 
-    // Parse logged messages into ProducerMessage objects
+    // Parse logged messages into ProducerMessage objects.
+    // Filter out transient types that may exist in older logs — they don't
+    // belong in the content stream and would create seq gaps on the arm.
     const parsed: Array<Record<string, unknown>> = [];
     for (const entry of logged) {
+      if (RelayClient.TRANSIENT_TYPES.has(entry.type)) continue;
       try {
         const msg = JSON.parse(entry.payload);
         msg.seq = entry.seq;
@@ -872,15 +886,7 @@ export class RelayClient {
     // on reconnect and don't need per-session seq or replay logging.
     const type = enriched.type as string;
     const sessionId = enriched.sessionId as string | undefined;
-    const TRANSIENT_TYPES = new Set([
-      'agent_message_delta',
-      'session_mode_set',
-      'session_title_updated',
-      'session_model_set',
-      'session_pinned',
-      'session_read',
-    ]);
-    if (sessionId && !TRANSIENT_TYPES.has(type)) {
+    if (sessionId && !RelayClient.TRANSIENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
     }
 
@@ -1042,10 +1048,11 @@ export class RelayClient {
     if (this.titleGenerationInFlight.has(sessionId)) return;
     this.titleGenerationInFlight.add(sessionId);
 
-    // Read context from message log — focus on recent messages
-    const allMsgs = this.sessionManager.getMessagesAfterSeq(sessionId, 0);
+    // Read only recent messages — full log is unnecessary for title context
+    const lastSeq = meta.lastSeq ?? 0;
+    const recentMsgs = this.sessionManager.getMessagesAfterSeq(sessionId, Math.max(0, lastSeq - 20));
     const userMessages: string[] = [];
-    for (const m of allMsgs) {
+    for (const m of recentMsgs) {
       try {
         const parsed = JSON.parse(m.payload);
         if (parsed.type === 'user_message' && parsed.payload?.content) {
@@ -1057,6 +1064,8 @@ export class RelayClient {
     const lastUserMessage = userMessages[userMessages.length - 1] ?? '';
     // For context: last 3 user messages, most recent first
     const recentMessages = userMessages.slice(-3).reverse();
+    // Include current auto-title so the LLM can refine rather than regenerate
+    const currentTitle = meta.autoTitle;
 
     logger.debug({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
 
@@ -1069,6 +1078,7 @@ export class RelayClient {
       firstUserMessage: recentMessages[recentMessages.length - 1] ?? lastUserMessage,
       lastUserMessage,
       recentMessages,
+      currentTitle,
     })
       .then((title) => {
         if (title) {

@@ -230,11 +230,14 @@ export class ThrottledAuthProvider implements AuthProvider {
   private maxAttempts: number;
   private windowMs: number;
   private failures = new Map<string, { count: number; firstAt: number }>();
+  private cleanupTimer: ReturnType<typeof setInterval>;
 
   constructor(inner: AuthProvider, maxAttempts = 5, windowMs = 60_000) {
     this.inner = inner;
     this.maxAttempts = maxAttempts;
     this.windowMs = windowMs;
+    this.cleanupTimer = setInterval(() => this.cleanup(), windowMs * 2);
+    this.cleanupTimer.unref();
   }
 
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {

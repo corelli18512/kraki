@@ -535,15 +535,6 @@ export class SessionManager {
       const meta = this.readMeta(dir);
       if (!meta) continue;
 
-      const logPath = join(this.sessionDir(dir), 'messages.jsonl');
-      let messageCount = 0;
-      if (existsSync(logPath)) {
-        try {
-          const content = readFileSync(logPath, 'utf8');
-          messageCount = content.split('\n').filter(l => l.length > 0).length;
-        } catch { /* ignore */ }
-      }
-
       // Map 'disconnected' to 'idle' for external consumers
       const state: 'active' | 'idle' = meta.state === 'active' ? 'active' : 'idle';
 
@@ -558,7 +549,7 @@ export class SessionManager {
         pinned: meta.pinned || undefined,
         lastSeq: meta.lastSeq ?? 0,
         readSeq: meta.readSeq ?? 0,
-        messageCount,
+        messageCount: meta.lastSeq ?? 0,
         createdAt: meta.createdAt,
         usage: meta.usage,
       });

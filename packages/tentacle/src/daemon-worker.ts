@@ -149,8 +149,8 @@ export async function startWorker(): Promise<WorkerResult> {
     await adapter.stop();
   };
 
-  process.on('SIGTERM', async () => { await shutdown(); process.exit(0); });
-  process.on('SIGINT', async () => { await shutdown(); process.exit(0); });
+  process.on('SIGTERM', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
+  process.on('SIGINT', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
 
   return { adapter, relay, sessionManager, shutdown };
 }

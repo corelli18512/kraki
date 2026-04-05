@@ -28,6 +28,7 @@ interface ClientState {
   userId?: string;
   authenticated: boolean;
   ip?: string;
+  isAlive: boolean;
   pendingNonce?: string;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
@@ -110,13 +111,30 @@ export class HeadServer {
 
   private startPingInterval(): void {
     this.pingTimer = setInterval(() => {
-      const msg = JSON.stringify({ type: 'ping' });
+      const jsonPing = JSON.stringify({ type: 'ping' });
       for (const [deviceId, ws] of this.connections) {
+        const state = this.clients.get(ws);
+        if (state && !state.isAlive) {
+          // Missed last pong — connection is dead
+          getLogger().info('Terminating stale connection (no pong)', { deviceId });
+          this.removeConnection(deviceId);
+          continue;
+        }
+        if (state) state.isAlive = false;
         try {
-          if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();        // protocol-level ping (browsers auto-respond)
+            ws.send(jsonPing); // JSON ping for proxy keepalive
+          }
         } catch {
           this.removeConnection(deviceId);
         }
+      }
+
+      // Sweep expired pairing tokens
+      const now = Date.now();
+      for (const [token, data] of this.pairingTokens) {
+        if (now > data.expiresAt) this.pairingTokens.delete(token);
       }
     }, HeadServer.PING_INTERVAL);
   }
@@ -169,11 +187,13 @@ export class HeadServer {
 
   private onConnection(ws: WebSocket, req?: HttpIncomingMessage): void {
     const ip = req?.socket?.remoteAddress ?? req?.headers['x-forwarded-for']?.toString() ?? 'unknown';
-    const state: ClientState = { authenticated: false, ip };
+    const state: ClientState = { authenticated: false, isAlive: true, ip };
     const logger = getLogger();
 
     this.clients.set(ws, state);
     logger.debug('WebSocket connected', { ip });
+
+    ws.on('pong', () => { state.isAlive = true; });
 
     ws.on('message', (data) => {
       try {
@@ -195,13 +215,19 @@ export class HeadServer {
       if (state.deviceId) {
         const disconnectedDeviceId = state.deviceId;
         const disconnectedUserId = state.userId;
-        this.connections.delete(disconnectedDeviceId);
-        this.userByDevice.delete(disconnectedDeviceId);
-        logger.info('Device disconnected', { deviceId: disconnectedDeviceId });
 
-        // Notify other connected devices that this device left
-        if (disconnectedUserId) {
-          this.broadcastDeviceLeft(disconnectedUserId, disconnectedDeviceId);
+        // Only clean up if this socket is still the active connection.
+        // A reconnecting device may have already replaced us in the map.
+        if (this.connections.get(disconnectedDeviceId) === ws) {
+          this.connections.delete(disconnectedDeviceId);
+          this.userByDevice.delete(disconnectedDeviceId);
+          logger.info('Device disconnected', { deviceId: disconnectedDeviceId });
+
+          if (disconnectedUserId) {
+            this.broadcastDeviceLeft(disconnectedUserId, disconnectedDeviceId);
+          }
+        } else {
+          logger.debug('Stale socket closed (already replaced by reconnect)', { deviceId: disconnectedDeviceId });
         }
       }
       this.clients.delete(ws);
@@ -299,7 +325,8 @@ export class HeadServer {
     }
 
     if (msg.type === 'pong') {
-      return; // silently accept pong responses
+      state.isAlive = true;
+      return;
     }
 
     this.sendError(ws, `Unknown message type: ${msg.type}`);
@@ -373,7 +400,9 @@ export class HeadServer {
   }
 
   private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string): void {
-    ws.send(JSON.stringify({ type: 'auth_error', code, message }));
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'auth_error', code, message }));
+    }
   }
 
   // --- Auth ---

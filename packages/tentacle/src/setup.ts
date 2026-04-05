@@ -130,9 +130,13 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
     const { execSync } = await import('node:child_process');
     const platform = (await import('node:os')).platform();
     if (platform === 'darwin') {
-      execSync(`echo -n "${data.user_code}" | pbcopy`, { stdio: 'ignore' });
+      execSync('pbcopy', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
     } else {
-      execSync(`echo -n "${data.user_code}" | xclip -selection clipboard 2>/dev/null || echo -n "${data.user_code}" | xsel --clipboard 2>/dev/null`, { stdio: 'ignore' });
+      try {
+        execSync('xclip -selection clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
+      } catch {
+        execSync('xsel --clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
+      }
     }
     console.log(chalk.dim(`    Device code copied to clipboard: ${chalk.bold(data.user_code)}`));
   } catch {
@@ -144,10 +148,10 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
   await input({ message: 'Press Enter to open GitHub in your browser…', theme: promptTheme });
 
   try {
-    const { execSync } = await import('node:child_process');
+    const { spawnSync } = await import('node:child_process');
     const platform = (await import('node:os')).platform();
     const openCmd = platform === 'darwin' ? 'open' : 'xdg-open';
-    execSync(`${openCmd} "${data.verification_uri}"`, { stdio: 'ignore' });
+    spawnSync(openCmd, [data.verification_uri], { stdio: 'ignore' });
   } catch { /* browser open failed — user can navigate manually */ }
 
   // 4. Poll for authorization

@@ -108,15 +108,9 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
  */
 export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<number> {
   const db = await getDB();
-  const index = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).index('sessionId');
-  const records = await index.getAll(sessionId) as StoredMessage[];
-  let last = 0;
-  for (const r of records) {
-    if (r.seq > last && (maxSeq === undefined || r.seq <= maxSeq)) {
-      last = r.seq;
-    }
-  }
-  return last;
+  const range = IDBKeyRange.bound([sessionId, 0], [sessionId, maxSeq ?? Number.MAX_SAFE_INTEGER]);
+  const cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
+  return (cursor?.value as StoredMessage | undefined)?.seq ?? 0;
 }
 
 /**

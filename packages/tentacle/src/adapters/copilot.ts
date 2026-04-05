@@ -268,11 +268,13 @@ export class CopilotAdapter extends AgentAdapter {
     '',
     'There are four permission modes. Sessions start in discuss mode by default.',
     '',
-    '- **safe**: Every tool call requires explicit operator approval. Explain what',
-    '  you intend to do before each action so the operator can decide.',
-    '- **discuss**: Read operations are auto-approved. Write operations require',
-    '  operator approval. Discuss proposed changes before attempting writes.',
-    '  Editing plan.md to make plans is allowed without approval.',
+    '- **safe**: Every tool call requires explicit operator approval, unless the',
+    '  operator has previously clicked "Always Allow" for that tool kind in the',
+    '  current session. Explain what you intend to do before each action so the',
+    '  operator can decide.',
+    '- **discuss**: Read operations are auto-approved. Write operations are',
+    '  auto-denied (returns denial feedback); except `plan.md` (auto-approve).',
+    '  Discuss proposed changes before attempting writes.',
     '  Do not use shell commands (sed, tee, echo >, scripts, etc.) to modify',
     '  files — use the edit/create tools instead.',
     '- **execute**: All tool calls are auto-approved. Be efficient and execute',
@@ -620,7 +622,7 @@ export class CopilotAdapter extends AgentAdapter {
   setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
     const prev = this.sessionModes.get(sessionId);
     this.sessionModes.set(sessionId, mode);
-    if (prev && prev !== mode) {
+    if ((prev ?? 'discuss') !== mode) {
       this.pendingModeSignals.set(sessionId, mode);
     }
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
@@ -949,16 +951,23 @@ export class CopilotAdapter extends AgentAdapter {
     '- Just the title text, nothing else',
   ].join('\n');
 
-  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> {
+  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[]; currentTitle?: string }): Promise<string | null> {
     if (!this.client) return null;
 
     // Build prompt focused on recent context
     let prompt: string;
     if (context.recentMessages && context.recentMessages.length > 1) {
       const recent = context.recentMessages.map((m, i) => `${i + 1}. ${m.slice(0, 200)}`).join('\n');
-      prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}\n\nTitle should reflect the CURRENT topic.`;
+      prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}`;
+      if (context.currentTitle) {
+        prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
+      }
+      prompt += '\n\nTitle should reflect the CURRENT topic.';
     } else {
       prompt = `Generate a title for: "${(context.lastUserMessage ?? context.firstUserMessage).slice(0, 500)}"`;
+      if (context.currentTitle) {
+        prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
+      }
     }
 
     let session: CopilotSession | null = null;
