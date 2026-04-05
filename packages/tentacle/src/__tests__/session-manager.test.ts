@@ -140,6 +140,23 @@ describe('SessionManager', () => {
     });
   });
 
+  // ── Model ──────────────────────────────────────────────
+
+  describe('session model', () => {
+    it('should set and persist model', () => {
+      const { sessionId } = sm.createSession('copilot', 'claude-sonnet-4');
+      expect(sm.getMeta(sessionId)!.model).toBe('claude-sonnet-4');
+
+      sm.setModel(sessionId, 'claude-opus-4');
+      expect(sm.getMeta(sessionId)!.model).toBe('claude-opus-4');
+    });
+
+    it('should no-op for non-existent session', () => {
+      sm.setModel('sess_nope', 'gpt-5');
+      // No throw
+    });
+  });
+
   // ── End session ───────────────────────────────────────
 
   describe('end session', () => {

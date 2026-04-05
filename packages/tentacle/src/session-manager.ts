@@ -47,6 +47,8 @@ export interface SessionMeta {
   readSeq: number;
   createdAt: string;
   updatedAt: string;
+  /** Cumulative token usage (persisted across restarts) */
+  usage?: import('@kraki/protocol').SessionUsage;
 }
 
 export interface RunRecord {
@@ -379,6 +381,28 @@ export class SessionManager {
   }
 
   /**
+   * Set session model.
+   */
+  setModel(sessionId: string, model: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.model = model;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
+   * Update cumulative token usage for a session.
+   */
+  setUsage(sessionId: string, usage: import('@kraki/protocol').SessionUsage): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.usage = usage;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
    * Get all sessions that need resume on restart (active, idle, or disconnected).
    */
   getResumableSessions(): SessionMeta[] {
@@ -489,6 +513,7 @@ export class SessionManager {
     readSeq: number;
     messageCount: number;
     createdAt: string;
+    usage?: import('@kraki/protocol').SessionUsage;
   }> {
     const result: ReturnType<SessionManager['getSessionList']> = [];
     if (!existsSync(this.sessionsDir)) return result;
@@ -521,6 +546,7 @@ export class SessionManager {
         readSeq: meta.readSeq ?? 0,
         messageCount,
         createdAt: meta.createdAt,
+        usage: meta.usage,
       });
     }
     return result;

@@ -4,6 +4,7 @@ import type {
   ProducerMessage,
   ConsumerMessage,
   ModelDetail,
+  SessionUsage,
 } from '@kraki/protocol';
 
 // --- Connection ---
@@ -93,6 +94,9 @@ export interface AppState {
   // Live capabilities from tentacle greetings
   deviceModels: Map<string, string[]>;
   deviceModelDetails: Map<string, ModelDetail[]>;
+
+  // Per-session cumulative token usage
+  sessionUsage: Map<string, SessionUsage>;
 }
 
 export interface AppActions {
@@ -130,6 +134,7 @@ export interface AppActions {
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
   setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
+  setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   clearTransientState: () => void;
   reset: () => void;
 

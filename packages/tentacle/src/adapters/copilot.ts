@@ -251,6 +251,8 @@ export class CopilotAdapter extends AgentAdapter {
   private sessionModes = new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>();
   /** Sessions with a pending mode change to prepend on next user message */
   private pendingModeSignals = new Map<string, string>();
+  /** Per-session cumulative token usage */
+  private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
 
   constructor(options: { cliPath?: string } = {}) {
     super();
@@ -624,11 +626,33 @@ export class CopilotAdapter extends AgentAdapter {
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 
+  /** Change model for a session via SDK */
+  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
+      logger.warn({ sessionId }, 'setSessionModel: session not found');
+      return;
+    }
+    await entry.session.setModel(model);
+    logger.info({ sessionId, model }, 'Session model changed');
+  }
+
+  /** Get current cumulative usage for a session */
+  getSessionUsage(sessionId: string): import('@kraki/protocol').SessionUsage | null {
+    return this.sessionUsage.get(sessionId) ?? null;
+  }
+
+  /** Restore persisted usage totals on session resume */
+  setSessionUsage(sessionId: string, usage: import('@kraki/protocol').SessionUsage): void {
+    this.sessionUsage.set(sessionId, { ...usage });
+  }
+
   /** Clean up session-scoped permission state */
   private cleanupSessionPermissions(sessionId: string): void {
     this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
+    this.sessionUsage.delete(sessionId);
   }
 
   /** Resolve all pending permissions/questions and fire callbacks so relay-client broadcasts resolutions. */
@@ -782,6 +806,25 @@ export class CopilotAdapter extends AgentAdapter {
       if (title) {
         this.onTitleChanged?.(sessionId, title);
       }
+    });
+
+    session.on('assistant.usage', (event) => {
+      const data = event.data as Record<string, unknown>;
+      const prev = this.sessionUsage.get(sessionId) ?? {
+        inputTokens: 0, outputTokens: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0,
+        totalCost: 0, totalDurationMs: 0,
+      };
+      const updated = {
+        inputTokens: prev.inputTokens + ((data.inputTokens as number) ?? 0),
+        outputTokens: prev.outputTokens + ((data.outputTokens as number) ?? 0),
+        cacheReadTokens: prev.cacheReadTokens + ((data.cacheReadTokens as number) ?? 0),
+        cacheWriteTokens: prev.cacheWriteTokens + ((data.cacheWriteTokens as number) ?? 0),
+        totalCost: prev.totalCost + ((data.cost as number) ?? 0),
+        totalDurationMs: prev.totalDurationMs + ((data.duration as number) ?? 0),
+      };
+      this.sessionUsage.set(sessionId, updated);
+      this.onUsageUpdate?.(sessionId, updated);
     });
   }
 

@@ -77,8 +77,11 @@ function createAdapter(): Record<string, unknown> {
     onError: null,
     onSessionEnded: null,
     onTitleChanged: null,
+    onUsageUpdate: null,
     generateTitle: vi.fn(async () => null),
     setSessionMode: vi.fn(),
+    getSessionUsage: vi.fn(() => null),
+    setSessionUsage: vi.fn(),
   };
 }
 
@@ -102,6 +105,7 @@ function createSessionManager(): Record<string, unknown> {
     getSessionList: vi.fn(() => []),
     getMessagesAfterSeq: vi.fn(() => []),
     appendMessage: vi.fn(() => 1),
+    setUsage: vi.fn(),
   };
 }
 
@@ -294,5 +298,103 @@ describe('RelayClient title generation', () => {
     })));
 
     expect(smMock.setTitle).toHaveBeenCalledWith('s1', 'New name');
+  });
+});
+
+describe('RelayClient set_session_model', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildConnectedClient() {
+    const adapter = {
+      ...createAdapter(),
+      setSessionModel: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+      sendMessage: vi.fn(() => Promise.resolve()),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      resumeSession: vi.fn(() => Promise.resolve({ sessionId: 'test' })),
+      createSession: vi.fn(() => Promise.resolve({ sessionId: 'test' })),
+      forkSession: vi.fn(() => Promise.resolve({ sessionId: 'test' })),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_1', model: 'old-model' })),
+      setModel: vi.fn(),
+      setMode: vi.fn(),
+      markIdle: vi.fn(),
+      markActive: vi.fn(),
+      markRead: vi.fn(),
+      deleteSession: vi.fn(),
+      appendMessage: vi.fn(() => 1),
+      getSessionList: vi.fn(() => []),
+      getMessagesAfterSeq: vi.fn(() => []),
+    };
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    // Complete auth so handleConsumerMessage can run
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+    return { adapter, sm, client };
+  }
+
+  it('calls adapter.setSessionModel and sessionManager.setModel on set_session_model', () => {
+    const { adapter, sm } = buildConnectedClient();
+    const ws = sockets[0];
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { model: 'claude-opus-4' },
+    })));
+
+    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined);
+    expect(sm.setModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4');
+  });
+
+  it('broadcasts session_model_set after handling set_session_model', () => {
+    buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { model: 'gpt-5', reasoningEffort: 'high' },
+    })));
+
+    // Find the session_model_set broadcast in sent messages
+    const sent = ws.sent.map(s => JSON.parse(s));
+    const modelSet = sent.find(m => m.type === 'session_model_set');
+    expect(modelSet).toBeDefined();
+    expect(modelSet.payload.model).toBe('gpt-5');
+    expect(modelSet.payload.reasoningEffort).toBe('high');
+    expect(modelSet.sessionId).toBe('sess_1');
   });
 });

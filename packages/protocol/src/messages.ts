@@ -143,7 +143,10 @@ export interface ToolCompleteMessage extends BaseEnvelope {
 
 export interface IdleMessage extends BaseEnvelope {
   type: 'idle';
-  payload: Record<string, never>;
+  payload: {
+    /** Cumulative session token usage (present when tracked by adapter) */
+    usage?: import('./sessions.js').SessionUsage;
+  };
 }
 
 export interface ActiveMessage extends BaseEnvelope {
@@ -162,6 +165,14 @@ export interface SessionModeSetMessage extends BaseEnvelope {
   type: 'session_mode_set';
   payload: {
     mode: import('./sessions.js').SessionMode;
+  };
+}
+
+export interface SessionModelSetMessage extends BaseEnvelope {
+  type: 'session_model_set';
+  payload: {
+    model: string;
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
   };
 }
 
@@ -256,6 +267,7 @@ export type ProducerMessage =
   | ErrorMessage
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
+  | SessionModelSetMessage
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
   | SessionListMessage
@@ -340,6 +352,14 @@ export interface SetSessionModeMessage extends BaseEnvelope {
   };
 }
 
+export interface SetSessionModelMessage extends BaseEnvelope {
+  type: 'set_session_model';
+  payload: {
+    model: string;
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
+  };
+}
+
 export interface DeleteSessionMessage extends BaseEnvelope {
   type: 'delete_session';
   payload: Record<string, never>;
@@ -396,6 +416,7 @@ export type ConsumerMessage =
   | CreateSessionMessage
   | ForkSessionMessage
   | SetSessionModeMessage
+  | SetSessionModelMessage
   | DeleteSessionMessage
   | MarkReadMessage
   | RequestSessionReplayMessage
@@ -595,6 +616,6 @@ export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
 import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
-import type { SessionSummary, SessionDigest, SessionMode } from './sessions.js';
+import type { SessionSummary, SessionDigest, SessionMode, SessionUsage } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, SessionUsage, ToolArgs };

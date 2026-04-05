@@ -8,7 +8,7 @@
  * The adapter fires them as the agent produces events.
  */
 
-import type { ToolArgs, ModelDetail } from '@kraki/protocol';
+import type { ToolArgs, ModelDetail, SessionUsage } from '@kraki/protocol';
 import type { SessionContext } from '../session-manager.js';
 
 // ── Callback payload types ──────────────────────────────
@@ -107,6 +107,8 @@ export abstract class AgentAdapter {
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
   /** Called when the agent produces a title for a session (e.g. via SDK event). */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
+  /** Called with updated cumulative token usage for a session */
+  onUsageUpdate: ((sessionId: string, usage: SessionUsage) => void) | null = null;
 
   // --- Lifecycle ---
 
@@ -168,4 +170,13 @@ export abstract class AgentAdapter {
 
   /** Generate a title for a session via LLM. Override in concrete adapters. */
   async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> { return null; }
+
+  /** Change model (and optionally reasoning effort) for a session. Override in concrete adapters. */
+  async setSessionModel(_sessionId: string, _model: string, _reasoningEffort?: string): Promise<void> { /* no-op by default */ }
+
+  /** Get current cumulative usage for a session. Override in concrete adapters. */
+  getSessionUsage(_sessionId: string): SessionUsage | null { return null; }
+
+  /** Restore persisted usage totals (called on session resume). */
+  setSessionUsage(_sessionId: string, _usage: SessionUsage): void { /* no-op by default */ }
 }

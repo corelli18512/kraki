@@ -110,6 +110,10 @@ export class KrakiWSClient {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg));
   }
 
+  setSessionModel(sessionId: string, model: string, reasoningEffort?: string) {
+    commands.setSessionModel(sessionId, model, (msg) => this.sendEncrypted(msg), reasoningEffort);
+  }
+
   deleteSession(sessionId: string) {
     // delete_session is now an encrypted unicast to the tentacle
     this.sendEncrypted({
@@ -172,6 +176,12 @@ export class KrakiWSClient {
 
       if (ts.mode) {
         store.setSessionMode(ts.id, ts.mode as 'safe' | 'discuss' | 'execute' | 'delegate');
+      }
+
+      // Restore cumulative usage from tentacle
+      const tsRecord = ts as Record<string, unknown>;
+      if (tsRecord.usage && typeof tsRecord.usage === 'object') {
+        store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
 
       // Store tentacle info and request latest messages via provider

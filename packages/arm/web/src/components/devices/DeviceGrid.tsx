@@ -1,29 +1,72 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { DevicePanel } from './DevicePanel';
+import { SessionInfoPanel } from './SessionInfoPanel';
+import type { DeviceSummary } from '@kraki/protocol';
+
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches,
+  );
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 640px)');
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, []);
+  return isDesktop;
+}
 
 export function DeviceGrid() {
   const devices = useStore((s) => s.devices);
   const deviceModels = useStore((s) => s.deviceModels);
+  const deviceModelDetails = useStore((s) => s.deviceModelDetails);
+  const sessionUsage = useStore((s) => s.sessionUsage);
+  const sessions = useStore((s) => s.sessions);
   const myDeviceId = useStore((s) => s.deviceId);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const cardRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const [searchParams] = useSearchParams();
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(searchParams.get('device'));
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(searchParams.get('session'));
+  const isDesktop = useIsDesktop();
+
+  // Sync selection when URL query params change (e.g. navigating from chat page)
+  useEffect(() => {
+    const device = searchParams.get('device');
+    const session = searchParams.get('session');
+    if (device) setSelectedDeviceId(device);
+    if (session) setSelectedSessionId(session);
+  }, [searchParams]);
 
   const tentacles = [...devices.values()]
     .filter((d) => d.role === 'tentacle')
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const handleSelect = useCallback((id: string) => {
-    const next = selectedId === id ? null : id;
-    setSelectedId(next);
-    if (next) {
-      requestAnimationFrame(() => {
-        cardRefs.current.get(next)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      });
-    }
-  }, [selectedId]);
+  // Desktop: auto-select first device + first session. Mobile: user navigates.
+  const effectiveDeviceId = selectedDeviceId && devices.has(selectedDeviceId)
+    ? selectedDeviceId
+    : isDesktop && tentacles.length > 0 ? tentacles[0].id : null;
+  const selectedDevice = effectiveDeviceId ? devices.get(effectiveDeviceId) : undefined;
 
-  const selected = selectedId ? devices.get(selectedId) : undefined;
+  const deviceSessions = useMemo(
+    () => selectedDevice ? [...sessions.values()].filter((s) => s.deviceId === selectedDevice.id) : [],
+    [sessions, selectedDevice],
+  );
+  const effectiveSessionId = selectedSessionId && sessions.has(selectedSessionId)
+    ? selectedSessionId
+    : isDesktop && deviceSessions.length > 0 ? deviceSessions[0].id : null;
+  const selectedSession = effectiveSessionId ? sessions.get(effectiveSessionId) : undefined;
+
+  const models = selectedDevice ? deviceModels.get(selectedDevice.id) : undefined;
+
+  const handleSelectDevice = useCallback((id: string) => {
+    setSelectedDeviceId((prev) => prev === id ? null : id);
+    setSelectedSessionId(null);
+  }, []);
+
+  const handleSelectSession = useCallback((id: string) => {
+    setSelectedSessionId((prev) => prev === id ? null : id);
+  }, []);
 
   if (tentacles.length === 0) {
     return (
@@ -38,60 +81,102 @@ export function DeviceGrid() {
     );
   }
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* Card grid — takes remaining space, scrolls independently */}
-      <div className={`min-h-0 overflow-y-auto p-4 ${selected ? 'h-1/3 sm:flex-1' : 'flex-1'}`}>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {tentacles.map((device) => {
-            const hasGreeting = deviceModels.has(device.id);
-            const dotClass = device.online && hasGreeting
-              ? 'bg-emerald-400'
-              : device.online
-                ? 'animate-pulse bg-amber-400'
-                : 'bg-slate-400';
-            const statusLabel = device.online && hasGreeting
-              ? 'online'
-              : device.online
-                ? 'connecting…'
-                : 'offline';
-            const isSelected = selectedId === device.id;
-            const isSelf = device.id === myDeviceId;
+  // Mobile: single column based on explicit user selection (not auto-selected)
+  const mobileView = selectedSessionId && selectedDeviceId
+    ? 'session'
+    : selectedDeviceId
+      ? 'device'
+      : 'list';
 
-            return (
-              <button
-                key={device.id}
-                ref={(el) => { if (el) cardRefs.current.set(device.id, el); }}
-                onClick={() => handleSelect(device.id)}
-                className={`flex items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors hover:bg-surface-tertiary ${
-                  isSelected ? 'border-border-primary bg-surface-tertiary' : 'border-border-primary bg-surface-secondary'
-                }`}
-              >
-                <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">{device.name}</span>
-                {isSelf && (
-                  <span className="shrink-0 rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
-                    You
-                  </span>
-                )}
-                <span className="shrink-0 text-[10px] text-text-muted">{statusLabel}</span>
-              </button>
-            );
-          })}
+  return (
+    <div className="flex min-h-0 flex-1">
+      {/* Column 1: device list */}
+      <div className={`min-h-0 w-full shrink-0 overflow-y-auto border-r border-border-primary p-3 sm:block sm:w-56 ${mobileView !== 'list' ? 'hidden' : ''}`}>
+        <div className="space-y-1">
+          {tentacles.map((d) => (
+            <DeviceButton
+              key={d.id}
+              device={d}
+              hasGreeting={deviceModels.has(d.id)}
+              isSelected={effectiveDeviceId === d.id}
+              isSelf={d.id === myDeviceId}
+              onClick={() => handleSelectDevice(d.id)}
+            />
+          ))}
         </div>
       </div>
 
-      {/* Detail panel — 2/3 on mobile, flex on desktop, scrolls independently */}
-      {selected && (
-        <div className="min-h-0 h-2/3 sm:flex-1 overflow-y-auto border-t border-border-primary">
+      {/* Column 2: device detail */}
+      {selectedDevice ? (
+        <div className={`min-h-0 min-w-0 flex-1 overflow-y-auto ${selectedSession ? 'sm:max-w-sm' : ''} ${mobileView !== 'device' ? 'hidden sm:block' : ''}`}>
           <DevicePanel
-            device={selected}
-            models={deviceModels.get(selected.id)}
-            isCurrentDevice={selected.id === myDeviceId}
-            onClose={() => setSelectedId(null)}
+            device={selectedDevice}
+            models={models}
+            isCurrentDevice={selectedDevice.id === myDeviceId}
+            selectedSessionId={effectiveSessionId}
+            onSelectSession={handleSelectSession}
+            onClose={() => { setSelectedDeviceId(null); setSelectedSessionId(null); }}
+          />
+        </div>
+      ) : (
+        <div className="hidden flex-1 items-center justify-center sm:flex">
+          <p className="text-sm text-text-muted">Select a device to view details</p>
+        </div>
+      )}
+
+      {/* Column 3: session info */}
+      {selectedSession && selectedDevice && (
+        <div className={`min-h-0 min-w-0 flex-1 overflow-y-auto border-l border-border-primary sm:block ${mobileView !== 'session' ? 'hidden' : ''}`}>
+          <SessionInfoPanel
+            session={selectedSession}
+            usage={sessionUsage.get(selectedSession.id)}
+            models={models}
+            modelDetails={deviceModelDetails.get(selectedDevice.id)}
+            onClose={() => setSelectedSessionId(null)}
           />
         </div>
       )}
     </div>
+  );
+}
+
+// ── Device list button ──────────────────────────────
+
+function DeviceButton({
+  device,
+  hasGreeting,
+  isSelected,
+  isSelf,
+  onClick,
+}: {
+  device: DeviceSummary;
+  hasGreeting: boolean;
+  isSelected: boolean;
+  isSelf: boolean;
+  onClick: () => void;
+}) {
+  const dotClass = device.online && hasGreeting
+    ? 'bg-emerald-400'
+    : device.online
+      ? 'animate-pulse bg-amber-400'
+      : 'bg-slate-400';
+
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+        isSelected
+          ? 'border-border-primary bg-surface-tertiary text-text-primary'
+          : 'border-border-primary bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+      }`}
+    >
+      <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+      <span className="min-w-0 flex-1 truncate text-xs font-medium">{device.name}</span>
+      {isSelf && (
+        <span className="shrink-0 rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
+          You
+        </span>
+      )}
+    </button>
   );
 }

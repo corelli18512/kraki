@@ -23,7 +23,7 @@ export function DevicesPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col">
         <DeviceGrid />
       </div>
     </div>
