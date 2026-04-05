@@ -115,13 +115,20 @@ export class KrakiWSClient {
   }
 
   deleteSession(sessionId: string) {
-    // Send delete to tentacle — relay queues if device is offline
-    this.sendEncrypted({
-      type: 'delete_session',
-      sessionId,
-      payload: {},
-    });
-    // Optimistic local remove
+    // Check if we can reach the tentacle before removing local state
+    const session = getStore().sessions.get(sessionId);
+    const deviceId = session?.deviceId;
+    const device = deviceId ? getStore().devices.get(deviceId) : undefined;
+    const hasKey = !!(device?.encryptionKey ?? device?.publicKey);
+    if (hasKey) {
+      this.sendEncrypted({
+        type: 'delete_session',
+        sessionId,
+        payload: {},
+      });
+    }
+    // Always remove locally — if device is unreachable, session_list
+    // will reconcile when the tentacle comes back online
     getStore().removeSession(sessionId);
   }
 
