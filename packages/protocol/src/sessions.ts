@@ -43,4 +43,5 @@ export interface SessionDigest {
   messageCount: number;
   createdAt: string;
   usage?: SessionUsage;
+  pinned?: boolean;
 }

@@ -123,6 +123,7 @@ export interface AppActions {
   addQuestion: (q: PendingQuestion) => void;
   removeQuestion: (id: string) => void;
   togglePin: (sessionId: string) => void;
+  setPinnedSessions: (pinned: Set<string>) => void;
   incrementUnread: (sessionId: string) => void;
   clearUnread: (sessionId: string) => void;
   setDraft: (sessionId: string, text: string) => void;

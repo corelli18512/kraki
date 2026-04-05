@@ -239,6 +239,8 @@ export const useStore = create<Store>()(persist((set) => ({
       return { pinnedSessions: next };
     }),
 
+  setPinnedSessions: (pinned) => set({ pinnedSessions: pinned }),
+
   incrementUnread: (sessionId) =>
     set((state) => {
       const next = new Map(state.unreadCount);
@@ -388,9 +390,9 @@ export const useStore = create<Store>()(persist((set) => ({
     sessions: state.sessions,
     devices: state.devices,
     unreadCount: state.unreadCount,
-    pinnedSessions: state.pinnedSessions,
     sessionModes: state.sessionModes,
     drafts: state.drafts,
     // messages are stored in IndexedDB, not localStorage
+    // pinnedSessions are synced from tentacle via session_list / session_pinned
   }),
 }));

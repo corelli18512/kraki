@@ -137,9 +137,32 @@ export class KrakiWSClient {
     commands.renameSession(sessionId, title, (msg) => this.sendEncrypted(msg));
   }
 
-  markRead(sessionId: string): void {
-    // Local-only in thin relay — no relay message needed
+  pinSession(sessionId: string, pinned: boolean) {
+    commands.pinSession(sessionId, pinned, (msg) => this.sendEncrypted(msg));
+  }
+
+  markRead(sessionId: string, seq?: number): void {
     markSessionRead(sessionId);
+    // Send to tentacle so it persists readSeq and broadcasts to other arms
+    const resolvedSeq = seq ?? this.getLastSeq(sessionId);
+    if (resolvedSeq > 0) {
+      this.sendEncrypted({
+        type: 'mark_read',
+        sessionId,
+        payload: { seq: resolvedSeq },
+      });
+    }
+  }
+
+  private getLastSeq(sessionId: string): number {
+    const msgs = getStore().messages.get(sessionId);
+    if (!msgs || msgs.length === 0) return 0;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+      if (typeof seq === 'number' && seq > 0) return seq;
+    }
+    return 0;
   }
 
   /**
@@ -161,6 +184,7 @@ export class KrakiWSClient {
     }
 
     // Update session metadata and trigger initial loads
+    const pinnedFromTentacle = new Set<string>();
     for (const ts of tentacleSessions) {
       const currentStore = getStore();
       const device = currentStore.devices.get(tentacleDeviceId);
@@ -186,10 +210,26 @@ export class KrakiWSClient {
         store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
 
+      // Sync pin state from tentacle
+      if (ts.pinned) {
+        pinnedFromTentacle.add(ts.id);
+      }
+
       // Store tentacle info and request latest messages via provider
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
       messageProvider.requestLatest(ts.id);
     }
+
+    // Apply pin state from tentacle (replaces local pins for this tentacle's sessions)
+    const currentPinned = new Set(store.pinnedSessions);
+    // Remove pins for sessions owned by this tentacle, then add back the ones tentacle says are pinned
+    for (const sid of tentacleIds) {
+      currentPinned.delete(sid);
+    }
+    for (const sid of pinnedFromTentacle) {
+      currentPinned.add(sid);
+    }
+    store.setPinnedSessions(currentPinned);
   }
 
   /** Clear all in-progress tracking (used on disconnect/close). */

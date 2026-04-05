@@ -157,6 +157,38 @@ describe('SessionManager', () => {
     });
   });
 
+  // ── Pin state ────────────────────────────────────────
+
+  describe('session pin', () => {
+    it('should set and persist pin state', () => {
+      const { sessionId } = sm.createSession('copilot');
+      expect(sm.getMeta(sessionId)!.pinned).toBeUndefined();
+
+      sm.setPin(sessionId, true);
+      expect(sm.getMeta(sessionId)!.pinned).toBe(true);
+
+      sm.setPin(sessionId, false);
+      expect(sm.getMeta(sessionId)!.pinned).toBeUndefined();
+    });
+
+    it('should include pinned in session list', () => {
+      const { sessionId: s1 } = sm.createSession('copilot');
+      const { sessionId: s2 } = sm.createSession('copilot');
+      sm.setPin(s1, true);
+
+      const list = sm.getSessionList();
+      const entry1 = list.find(s => s.id === s1)!;
+      const entry2 = list.find(s => s.id === s2)!;
+      expect(entry1.pinned).toBe(true);
+      expect(entry2.pinned).toBeUndefined();
+    });
+
+    it('should no-op for non-existent session', () => {
+      sm.setPin('sess_nope', true);
+      // No throw
+    });
+  });
+
   // ── End session ───────────────────────────────────────
 
   describe('end session', () => {

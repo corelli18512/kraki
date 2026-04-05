@@ -30,7 +30,9 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
   const isActive = sessionId === session.id;
   const { emoji, label } = agentInfo(session.agent);
   const device = useStore((s) => s.devices.get(session.deviceId));
-  const togglePin = useStore((s) => s.togglePin);
+  const handleTogglePin = () => {
+    import('../../lib/ws-client').then(({ wsClient }) => wsClient.pinSession(session.id, !pinned));
+  };
   const unreadCount = useStore((s) => isActive ? 0 : (s.unreadCount.get(session.id) ?? 0));
 
   const draft = useStore((s) => s.drafts.get(session.id));
@@ -82,7 +84,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
       icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />,
       label: pinned ? 'Unpin' : 'Pin',
       bgClass: 'bg-teal-400 dark:bg-teal-800',
-      onClick: () => { togglePin(session.id); setOpenSwipeId?.(null); },
+      onClick: () => { handleTogglePin(); setOpenSwipeId?.(null); },
     },
     {
       icon: <GitFork className="h-4 w-4" />,
@@ -178,7 +180,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
           style={{ left: menuPos.x, top: menuPos.y }}
         >
           <button
-            onClick={() => { togglePin(session.id); setMenuPos(null); }}
+            onClick={() => { handleTogglePin(); setMenuPos(null); }}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-tertiary"
           >
             {pinned ? <><PinOff className="h-3.5 w-3.5" /> Unpin</> : <><Pin className="h-3.5 w-3.5" /> Pin to top</>}

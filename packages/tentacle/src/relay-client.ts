@@ -412,6 +412,11 @@ export class RelayClient {
           break;
         case 'mark_read':
           this.sessionManager.markRead(sessionId, msg.payload.seq);
+          this.send({
+            type: 'session_read',
+            sessionId,
+            payload: { seq: msg.payload.seq },
+          });
           break;
         case 'set_session_mode': {
           const mode = msg.payload.mode;
@@ -449,6 +454,16 @@ export class RelayClient {
             type: 'session_model_set',
             sessionId,
             payload: { model, reasoningEffort },
+          });
+          break;
+        }
+        case 'pin_session': {
+          const pinned = msg.payload.pinned;
+          this.sessionManager.setPin(sessionId, pinned);
+          this.send({
+            type: 'session_pinned',
+            sessionId,
+            payload: { pinned },
           });
           break;
         }

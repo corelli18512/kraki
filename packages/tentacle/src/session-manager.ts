@@ -41,6 +41,7 @@ export interface SessionMeta {
   autoTitle?: string;
   state: 'active' | 'idle' | 'ended' | 'disconnected';
   mode: SessionMode;
+  pinned?: boolean;
   currentRunId: string;
   totalRuns: number;
   lastSeq: number;
@@ -381,6 +382,17 @@ export class SessionManager {
   }
 
   /**
+   * Set session pin state.
+   */
+  setPin(sessionId: string, pinned: boolean): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    meta.pinned = pinned || undefined;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
+  /**
    * Set session model.
    */
   setModel(sessionId: string, model: string): void {
@@ -509,6 +521,7 @@ export class SessionManager {
     autoTitle?: string;
     state: 'active' | 'idle';
     mode: SessionMode;
+    pinned?: boolean;
     lastSeq: number;
     readSeq: number;
     messageCount: number;
@@ -542,6 +555,7 @@ export class SessionManager {
         autoTitle: meta.autoTitle,
         state,
         mode: meta.mode ?? 'discuss',
+        pinned: meta.pinned || undefined,
         lastSeq: meta.lastSeq ?? 0,
         readSeq: meta.readSeq ?? 0,
         messageCount,

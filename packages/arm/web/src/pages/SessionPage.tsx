@@ -32,11 +32,18 @@ export function SessionPage() {
 
   // Clear unread when viewing session + notify server
   useEffect(() => {
-    if (sessionId) {
-      clearUnread(sessionId);
-      // Dynamic import to avoid circular deps
-      import('../lib/ws-client').then(({ wsClient }) => wsClient.markRead(sessionId));
-    }
+    if (!sessionId) return;
+
+    const doMarkRead = () => {
+      if (document.hasFocus()) {
+        clearUnread(sessionId);
+        import('../lib/ws-client').then(({ wsClient }) => wsClient.markRead(sessionId));
+      }
+    };
+
+    doMarkRead();
+    window.addEventListener('focus', doMarkRead);
+    return () => window.removeEventListener('focus', doMarkRead);
   }, [sessionId, clearUnread]);
 
   if (!session) {

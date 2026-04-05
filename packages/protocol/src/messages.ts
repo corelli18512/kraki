@@ -251,6 +251,23 @@ export interface QuestionResolvedMessage extends BaseEnvelope {
   };
 }
 
+/** Broadcast by tentacle when a session's pin state changes. */
+export interface SessionPinnedMessage extends BaseEnvelope {
+  type: 'session_pinned';
+  payload: {
+    pinned: boolean;
+  };
+}
+
+/** Broadcast by tentacle when a session's read position is updated. */
+export interface SessionReadMessage extends BaseEnvelope {
+  type: 'session_read';
+  payload: {
+    /** The highest seq marked as read */
+    seq: number;
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -268,6 +285,8 @@ export type ProducerMessage =
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
   | SessionModelSetMessage
+  | SessionPinnedMessage
+  | SessionReadMessage
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
   | SessionListMessage
@@ -405,6 +424,13 @@ export interface RenameSessionMessage extends BaseEnvelope {
   };
 }
 
+export interface PinSessionMessage extends BaseEnvelope {
+  type: 'pin_session';
+  payload: {
+    pinned: boolean;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -420,7 +446,8 @@ export type ConsumerMessage =
   | DeleteSessionMessage
   | MarkReadMessage
   | RequestSessionReplayMessage
-  | RenameSessionMessage;
+  | RenameSessionMessage
+  | PinSessionMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method

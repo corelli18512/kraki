@@ -330,6 +330,7 @@ describe('RelayClient set_session_model', () => {
       ...createSessionManager(),
       getMeta: vi.fn(() => ({ id: 'sess_1', model: 'old-model' })),
       setModel: vi.fn(),
+      setPin: vi.fn(),
       setMode: vi.fn(),
       markIdle: vi.fn(),
       markActive: vi.fn(),
@@ -396,5 +397,51 @@ describe('RelayClient set_session_model', () => {
     expect(modelSet.payload.model).toBe('gpt-5');
     expect(modelSet.payload.reasoningEffort).toBe('high');
     expect(modelSet.sessionId).toBe('sess_1');
+  });
+
+  it('persists and broadcasts session_pinned on pin_session', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'pin_session',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { pinned: true },
+    })));
+
+    expect(sm.setPin).toHaveBeenCalledWith('sess_1', true);
+
+    const sent = ws.sent.map(s => JSON.parse(s));
+    const pinned = sent.find(m => m.type === 'session_pinned');
+    expect(pinned).toBeDefined();
+    expect(pinned.payload.pinned).toBe(true);
+    expect(pinned.sessionId).toBe('sess_1');
+  });
+
+  it('broadcasts session_read on mark_read', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'mark_read',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { seq: 42 },
+    })));
+
+    expect(sm.markRead).toHaveBeenCalledWith('sess_1', 42);
+
+    const sent = ws.sent.map(s => JSON.parse(s));
+    const readMsg = sent.find(m => m.type === 'session_read');
+    expect(readMsg).toBeDefined();
+    expect(readMsg.payload.seq).toBe(42);
+    expect(readMsg.sessionId).toBe('sess_1');
   });
 });

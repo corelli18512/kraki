@@ -294,3 +294,24 @@ export function renameSession(
     payload: { title },
   });
 }
+
+export function pinSession(
+  sessionId: string,
+  pinned: boolean,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  // Optimistically update local store
+  const store = getStore();
+  const next = new Set(store.pinnedSessions);
+  if (pinned) {
+    next.add(sessionId);
+  } else {
+    next.delete(sessionId);
+  }
+  store.setPinnedSessions(next);
+  send({
+    type: 'pin_session',
+    sessionId,
+    payload: { pinned },
+  });
+}

@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -205,6 +205,38 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         const session = store.sessions.get(sid);
         if (session) {
           store.upsertSession({ ...session, model });
+        }
+      }
+      break;
+    }
+
+    case 'session_pinned': {
+      const pinned = (msg as SessionPinnedMessage).payload?.pinned;
+      const next = new Set(store.pinnedSessions);
+      if (pinned) {
+        next.add(sid);
+      } else {
+        next.delete(sid);
+      }
+      store.setPinnedSessions(next);
+      break;
+    }
+
+    case 'session_read': {
+      const readSeq = (msg as SessionReadMessage).payload?.seq;
+      if (typeof readSeq === 'number' && !isViewingSession(sid)) {
+        // Only clear unread up to the broadcast seq — keep unread for messages beyond it
+        const msgs = store.messages.get(sid);
+        if (msgs) {
+          const maxLocalSeq = msgs.reduce((max, m) => {
+            const s = 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
+            return s > max ? s : max;
+          }, 0);
+          if (readSeq >= maxLocalSeq) {
+            store.clearUnread(sid);
+          }
+        } else {
+          store.clearUnread(sid);
         }
       }
       break;
