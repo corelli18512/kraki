@@ -868,9 +868,19 @@ export class RelayClient {
 
     // Log message to per-session store for replay.
     // Skip transient types that are redundant for state reconstruction.
+    // Metadata messages (title, model, pin, read) are synced via session_list
+    // on reconnect and don't need per-session seq or replay logging.
     const type = enriched.type as string;
     const sessionId = enriched.sessionId as string | undefined;
-    if (sessionId && type !== 'agent_message_delta' && type !== 'session_mode_set') {
+    const TRANSIENT_TYPES = new Set([
+      'agent_message_delta',
+      'session_mode_set',
+      'session_title_updated',
+      'session_model_set',
+      'session_pinned',
+      'session_read',
+    ]);
+    if (sessionId && !TRANSIENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
     }
 
