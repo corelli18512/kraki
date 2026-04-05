@@ -181,6 +181,8 @@ class MessageProvider {
       }
     } catch {
       // IndexedDB unavailable
+    } finally {
+      this.loading.delete(earlyLoadKey);
     }
 
     // If tentacle has newer messages, request the gap
@@ -190,8 +192,6 @@ class MessageProvider {
         this.requestFromTentacle(sessionId, afterSeq);
       }
     }
-
-    this.loading.delete(earlyLoadKey);
   }
 
   /**
