@@ -178,7 +178,7 @@ function killOrphanDevDaemons(): void {
       const pid = parseInt(pidStr, 10);
       if (!pid || pid === process.pid) continue;
       try {
-        const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf8' });
+        const cmd = execSync(`ps -ww -p ${pid} -o command=`, { encoding: 'utf8' });
         if (cmd.includes('__daemon-worker')) {
           process.kill(pid, 'SIGTERM');
         }
