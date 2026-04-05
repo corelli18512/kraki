@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail } from '@kraki/protocol';
-import { MessageSquare, GitFork, Trash2 } from 'lucide-react';
+import { MessageSquare, GitFork, Trash2, Pencil } from 'lucide-react';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -26,6 +26,9 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [pendingEffort, setPendingEffort] = useState<string | undefined>(undefined);
+  const [editing, setEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const activeModel = pendingModel ?? session.model;
   const activeModelDetail = modelDetails?.find((d) => d.id === activeModel);
@@ -54,9 +57,23 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
 
   const sessionName = session.title ?? session.autoTitle ?? `${session.agent}${session.model ? ` · ${session.model}` : ''}`;
 
+  const startEditing = useCallback(() => {
+    setTitleDraft(session.title ?? session.autoTitle ?? '');
+    setEditing(true);
+  }, [session.title, session.autoTitle]);
+
+  useEffect(() => {
+    if (editing) titleInputRef.current?.focus();
+  }, [editing]);
+
+  const saveTitle = useCallback(() => {
+    wsClient.renameSession(session.id, titleDraft.trim());
+    setEditing(false);
+  }, [session.id, titleDraft]);
+
   return (
     <div className="flex h-full flex-col">
-      {/* Header — breadcrumb on mobile, title on desktop */}
+      {/* Header — tappable to rename */}
       <div className="shrink-0 px-5 py-3">
         <div className="flex items-center gap-1.5">
           <button
@@ -67,7 +84,29 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <h3 className="text-sm font-semibold text-text-primary truncate">{sessionName}</h3>
+          {editing ? (
+            <input
+              ref={titleInputRef}
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={saveTitle}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveTitle();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-text-primary outline-none border-b border-kraki-400"
+              placeholder="Session title…"
+              maxLength={80}
+            />
+          ) : (
+            <button
+              onClick={startEditing}
+              className="group flex min-w-0 items-center gap-1.5"
+            >
+              <span className="truncate text-sm font-semibold text-text-primary">{sessionName}</span>
+              <Pencil className="h-3 w-3 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100" />
+            </button>
+          )}
         </div>
       </div>
 
