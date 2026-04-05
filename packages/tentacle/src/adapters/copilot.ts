@@ -895,22 +895,27 @@ export class CopilotAdapter extends AgentAdapter {
   // ── Title generation via throwaway session ────────
 
   private static readonly TITLE_SYSTEM_PROMPT = [
-    'You generate concise titles for coding sessions. Given a user request and',
-    'optionally an agent response, produce a short descriptive title.',
+    'You generate concise titles for coding sessions.',
+    'The title should reflect what the user is CURRENTLY working on, not the full history.',
+    'If the topic changed, use the most recent topic.',
     '',
     'Rules:',
-    '- 8-12 words, under 60 characters',
-    '- Describe the task, not the tool (e.g. "Fix auth token refresh" not "Debug code")',
-    '- No quotes, no punctuation at the end, no prefixes like "Session:" or "Title:"',
+    '- 4-10 words, under 50 characters',
+    '- Describe the current task concisely',
+    '- No quotes, no punctuation at the end, no prefixes',
     '- Just the title text, nothing else',
   ].join('\n');
 
-  async generateTitle(context: { firstUserMessage: string; firstAgentResponse?: string; lastUserMessage?: string }): Promise<string | null> {
+  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> {
     if (!this.client) return null;
 
-    let prompt = context.firstUserMessage.slice(0, 500);
-    if (context.lastUserMessage && context.lastUserMessage !== context.firstUserMessage) {
-      prompt += `\n\nLatest request: ${context.lastUserMessage.slice(0, 300)}`;
+    // Build prompt focused on recent context
+    let prompt: string;
+    if (context.recentMessages && context.recentMessages.length > 1) {
+      const recent = context.recentMessages.map((m, i) => `${i + 1}. ${m.slice(0, 200)}`).join('\n');
+      prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}\n\nTitle should reflect the CURRENT topic.`;
+    } else {
+      prompt = `Generate a title for: "${(context.lastUserMessage ?? context.firstUserMessage).slice(0, 500)}"`;
     }
 
     let session: CopilotSession | null = null;
@@ -925,8 +930,7 @@ export class CopilotAdapter extends AgentAdapter {
       });
       logger.info({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');
 
-      const titlePrompt = `Generate a title for this coding session.\n\nUser request: "${prompt}"\n\nRespond with ONLY the title (8-12 words, under 60 characters). No explanation.`;
-      const response = await session.sendAndWait({ prompt: titlePrompt }, 15_000);
+      const response = await session.sendAndWait({ prompt }, 15_000);
       let title = (response?.data?.content ?? '').trim();
       // Clean up: strip quotes, trailing punctuation, "Title:" prefix
       title = title.replace(/^["']|["']$/g, '').replace(/^(Title|Session):\s*/i, '').replace(/[.!]$/, '').trim();

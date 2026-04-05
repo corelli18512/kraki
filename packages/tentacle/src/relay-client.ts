@@ -962,35 +962,33 @@ export class RelayClient {
     if (this.titleGenerationInFlight.has(sessionId)) return;
     this.titleGenerationInFlight.add(sessionId);
 
-    // Read context from message log
-    const msgs = this.sessionManager.getMessagesAfterSeq(sessionId, 0, 20);
-    let firstUserMessage = '';
-    let firstAgentResponse = '';
-    let lastUserMessage = '';
-    for (const m of msgs) {
+    // Read context from message log — focus on recent messages
+    const allMsgs = this.sessionManager.getMessagesAfterSeq(sessionId, 0);
+    const userMessages: string[] = [];
+    for (const m of allMsgs) {
       try {
         const parsed = JSON.parse(m.payload);
         if (parsed.type === 'user_message' && parsed.payload?.content) {
-          if (!firstUserMessage) firstUserMessage = parsed.payload.content;
-          lastUserMessage = parsed.payload.content;
-        }
-        if (parsed.type === 'agent_message' && parsed.payload?.content && !firstAgentResponse) {
-          firstAgentResponse = parsed.payload.content;
+          userMessages.push(parsed.payload.content);
         }
       } catch { /* skip */ }
     }
 
-    logger.info({ sessionId, turns, firstUserMessage: firstUserMessage.slice(0, 50), hasAgent: !!firstAgentResponse }, 'Title generation starting');
+    const lastUserMessage = userMessages[userMessages.length - 1] ?? '';
+    // For context: last 3 user messages, most recent first
+    const recentMessages = userMessages.slice(-3).reverse();
 
-    if (!firstUserMessage) {
+    logger.info({ sessionId, turns, lastUserMessage: lastUserMessage.slice(0, 50), totalUserMsgs: userMessages.length }, 'Title generation starting');
+
+    if (!lastUserMessage) {
       this.titleGenerationInFlight.delete(sessionId);
       return;
     }
 
     this.adapter.generateTitle({
-      firstUserMessage,
-      firstAgentResponse: firstAgentResponse || undefined,
-      lastUserMessage: turns > 1 ? lastUserMessage : undefined,
+      firstUserMessage: recentMessages[recentMessages.length - 1] ?? lastUserMessage,
+      lastUserMessage,
+      recentMessages,
     })
       .then((title) => {
         if (title) {

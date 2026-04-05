@@ -167,5 +167,5 @@ export abstract class AgentAdapter {
   setSessionMode(_sessionId: string, _mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void { /* no-op by default */ }
 
   /** Generate a title for a session via LLM. Override in concrete adapters. */
-  async generateTitle(_context: { firstUserMessage: string; firstAgentResponse?: string; lastUserMessage?: string }): Promise<string | null> { return null; }
+  async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[] }): Promise<string | null> { return null; }
 }
