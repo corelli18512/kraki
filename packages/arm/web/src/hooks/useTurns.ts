@@ -47,7 +47,6 @@ const THINKING_TYPES = new Set([
   'deny',
   'always_allow',
   'session_mode_set',
-  'active',
 ]);
 
 /** Message types that signal the end of an agent turn */
