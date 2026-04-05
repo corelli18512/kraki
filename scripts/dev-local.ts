@@ -353,6 +353,10 @@ async function start(args: string[]): Promise<void> {
   });
 
   console.log('🧠 Starting local head...');
+  // Clean head DB to prevent stale device accumulation across restarts
+  for (const suffix of ['', '-shm', '-wal']) {
+    try { unlinkSync(HEAD_DB_PATH + suffix); } catch { /* may not exist */ }
+  }
   headProcess = startHead();
   hookChildExit(headProcess, 'Local head');
 
