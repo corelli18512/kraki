@@ -64,6 +64,7 @@ const initialState = {
   deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
   deviceVersions: new Map<string, string>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
+  sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -119,7 +120,9 @@ export const useStore = create<Store>()(persist((set) => ({
       sessionModes.delete(sessionId);
       const sessionUsage = new Map(state.sessionUsage);
       sessionUsage.delete(sessionId);
-      return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage };
+      const sessionPreviews = new Map(state.sessionPreviews);
+      sessionPreviews.delete(sessionId);
+      return { sessions, messages, pendingPermissions, pendingQuestions, streamingContent, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
     });
   },
 
@@ -261,6 +264,13 @@ export const useStore = create<Store>()(persist((set) => ({
       return { unreadCount: next };
     }),
 
+  setSessionPreview: (sessionId, preview) =>
+    set((state) => {
+      const next = new Map(state.sessionPreviews);
+      next.set(sessionId, preview);
+      return { sessionPreviews: next };
+    }),
+
   setDraft: (sessionId, text) =>
     set((state) => {
       const next = new Map(state.drafts);
@@ -360,6 +370,7 @@ export const useStore = create<Store>()(persist((set) => ({
     streamingContent: new Map(),
     unreadCount: new Map(),
     sessionUsage: new Map(),
+    sessionPreviews: new Map(),
     pendingPermissions: new Map(),
     pendingQuestions: new Map(),
     // messages are NOT touched — they're managed by IndexedDB hydration.
@@ -390,6 +401,7 @@ export const useStore = create<Store>()(persist((set) => ({
     deviceModelDetails: new Map(),
     deviceVersions: new Map(),
     sessionUsage: new Map(),
+    sessionPreviews: new Map(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

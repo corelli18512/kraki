@@ -42,6 +42,12 @@ export interface PendingQuestion {
   timestamp: string;
 }
 
+export interface SessionPreview {
+  text: string;
+  type: string;
+  timestamp: string;
+}
+
 // --- Store ---
 
 export interface AppState {
@@ -69,6 +75,9 @@ export interface AppState {
 
   // Tracks unread notification count per session
   unreadCount: Map<string, number>;
+
+  // Session preview (last meaningful message for list display and sort)
+  sessionPreviews: Map<string, SessionPreview>;
 
   // Last server/system error for UI display
   lastError: string | null;
@@ -127,6 +136,7 @@ export interface AppActions {
   setPinnedSessions: (pinned: Set<string>) => void;
   incrementUnread: (sessionId: string) => void;
   clearUnread: (sessionId: string) => void;
+  setSessionPreview: (sessionId: string, preview: SessionPreview) => void;
   setDraft: (sessionId: string, text: string) => void;
   setLastError: (message: string | null) => void;
   setNavigateToSession: (sessionId: string | null) => void;

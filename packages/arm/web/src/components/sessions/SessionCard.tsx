@@ -10,13 +10,6 @@ import { Pin, PinOff, Trash2, GitFork } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
-/** Message types that render as chat bubbles (not thinking steps) */
-const BUBBLE_TYPES = new Set([
-  'user_message', 'send_input', 'pending_input', 'answer',
-  'agent_message', 'question', 'error',
-  'session_created', 'session_ended', 'kill_session', 'session_deleted',
-]);
-
 interface SessionCardProps {
   session: SessionSummary;
   pinned?: boolean;
@@ -37,34 +30,10 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
 
   const draft = useStore((s) => s.drafts.get(session.id));
 
-  // Get last chat-bubble message for preview (skip thinking steps)
-  const messages = useStore((s) => s.messages.get(session.id));
-  const lastMsg = messages?.findLast((m) => BUBBLE_TYPES.has(m.type));
-  let preview = '';
-  if (lastMsg && 'payload' in lastMsg) {
-    const payload = lastMsg.payload as Record<string, unknown>;
-    if ('content' in payload && typeof payload.content === 'string') {
-      preview = truncate(payload.content, PREVIEW_MAX_LENGTH);
-    } else if ('message' in payload && typeof payload.message === 'string') {
-      preview = truncate(payload.message, PREVIEW_MAX_LENGTH);
-    } else if (lastMsg.type === 'tool_start' || lastMsg.type === 'tool_complete') {
-      const toolName = typeof payload.toolName === 'string' ? payload.toolName : 'tool';
-      const args = payload.args as Record<string, unknown> | undefined;
-      const summary = args && typeof args.command === 'string' ? `$ ${truncate(args.command, PREVIEW_MAX_LENGTH - 4)}`
-        : args && typeof args.path === 'string' ? truncate(args.path as string, PREVIEW_MAX_LENGTH)
-        : '';
-      preview = summary ? `${toolName} ${summary}` : toolName;
-    } else if (lastMsg.type === 'question') {
-      preview = truncate(typeof payload.question === 'string' ? `❓ ${payload.question}` : '❓', PREVIEW_MAX_LENGTH);
-    } else if (lastMsg.type === 'permission') {
-      const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
-      preview = truncate(`🔒 ${toolName}`, PREVIEW_MAX_LENGTH);
-    } else if (lastMsg.type === 'answer') {
-      preview = truncate(typeof payload.answer === 'string' ? payload.answer as string : '', PREVIEW_MAX_LENGTH);
-    }
-  }
-
-  const lastTimestamp = lastMsg && 'timestamp' in lastMsg ? (lastMsg as { timestamp: string }).timestamp : '';
+  // Preview from centralized session preview service
+  const sessionPreview = useStore((s) => s.sessionPreviews.get(session.id));
+  const preview = sessionPreview ? truncate(sessionPreview.text, PREVIEW_MAX_LENGTH) : '';
+  const lastTimestamp = sessionPreview?.timestamp ?? '';
   const isDeviceOnline = device?.online ?? false;
   const machineName = session.deviceName || device?.name;
 

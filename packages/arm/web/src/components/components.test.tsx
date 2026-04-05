@@ -139,24 +139,22 @@ describe('SessionCard', () => {
 
   it('shows message preview from last message', () => {
     useStore.getState().setSessions([session]);
-    useStore.getState().appendMessage('s1', {
-      type: 'agent_message',
-      deviceId: 'd1', seq: 1,
-      timestamp: new Date().toISOString(), sessionId: 's1',
-      payload: { content: 'Here is the analysis result' },
-    } as ChatMessage);
+    useStore.getState().setSessionPreview('s1', {
+      text: 'Here is the analysis result',
+      type: 'agent',
+      timestamp: new Date().toISOString(),
+    });
     renderWithRouter(<SessionCard session={session} />);
     expect(screen.getByText('Here is the analysis result')).toBeInTheDocument();
   });
 
   it('shows error message as preview', () => {
     useStore.getState().setSessions([session]);
-    useStore.getState().appendMessage('s1', {
+    useStore.getState().setSessionPreview('s1', {
+      text: 'Something went wrong',
       type: 'error',
-      deviceId: 'd1', seq: 1,
-      timestamp: new Date().toISOString(), sessionId: 's1',
-      payload: { message: 'Something went wrong' },
-    } as ChatMessage);
+      timestamp: new Date().toISOString(),
+    });
     renderWithRouter(<SessionCard session={session} />);
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
   });

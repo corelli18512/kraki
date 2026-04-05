@@ -11,7 +11,7 @@ export function useSessionShortcuts() {
   const params = useParams<{ sessionId: string }>();
   const sessions = useStore((s) => s.sessions);
   const pinnedSessions = useStore((s) => s.pinnedSessions);
-  const messages = useStore((s) => s.messages);
+  const sessionPreviews = useStore((s) => s.sessionPreviews);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -22,12 +22,8 @@ export function useSessionShortcuts() {
         const aPinned = pinnedSessions.has(a.id) ? 0 : 1;
         const bPinned = pinnedSessions.has(b.id) ? 0 : 1;
         if (aPinned !== bPinned) return aPinned - bPinned;
-        const aLast = messages.get(a.id);
-        const bLast = messages.get(b.id);
-        const aTime = aLast?.length ? aLast[aLast.length - 1] : null;
-        const bTime = bLast?.length ? bLast[bLast.length - 1] : null;
-        const aTs = aTime && 'timestamp' in aTime ? aTime.timestamp : '';
-        const bTs = bTime && 'timestamp' in bTime ? bTime.timestamp : '';
+        const aTs = sessionPreviews.get(a.id)?.timestamp ?? '';
+        const bTs = sessionPreviews.get(b.id)?.timestamp ?? '';
         if (aTs !== bTs) return bTs.localeCompare(aTs);
         return a.id.localeCompare(b.id);
       });
@@ -51,5 +47,5 @@ export function useSessionShortcuts() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sessions, pinnedSessions, messages, params.sessionId, navigate]);
+  }, [sessions, pinnedSessions, sessionPreviews, params.sessionId, navigate]);
 }

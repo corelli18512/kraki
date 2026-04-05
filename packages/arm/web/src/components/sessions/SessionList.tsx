@@ -3,17 +3,10 @@ import { useStore } from '../../hooks/useStore';
 import { SessionCard } from './SessionCard';
 import { NewSessionDialog } from './NewSessionDialog';
 
-/** Message types that render as chat bubbles (not thinking steps) */
-const BUBBLE_TYPES = new Set([
-  'user_message', 'send_input', 'pending_input', 'answer',
-  'agent_message', 'question',
-  'session_created', 'session_ended', 'kill_session', 'session_deleted',
-]);
-
 export function SessionList() {
   const sessions = useStore((s) => s.sessions);
   const pinnedSessions = useStore((s) => s.pinnedSessions);
-  const messages = useStore((s) => s.messages);
+  const sessionPreviews = useStore((s) => s.sessionPreviews);
   const devices = useStore((s) => s.devices);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
@@ -26,11 +19,9 @@ export function SessionList() {
     const bPinned = pinnedSessions.has(b.id) ? 0 : 1;
     if (aPinned !== bPinned) return aPinned - bPinned;
 
-    // Then by most recent chat-bubble message (newest first)
-    const aLast = messages.get(a.id)?.findLast((m) => BUBBLE_TYPES.has(m.type));
-    const bLast = messages.get(b.id)?.findLast((m) => BUBBLE_TYPES.has(m.type));
-    const aTs = aLast && 'timestamp' in aLast ? (aLast as { timestamp: string }).timestamp : '';
-    const bTs = bLast && 'timestamp' in bLast ? (bLast as { timestamp: string }).timestamp : '';
+    // Then by most recent preview timestamp (newest first)
+    const aTs = sessionPreviews.get(a.id)?.timestamp ?? '';
+    const bTs = sessionPreviews.get(b.id)?.timestamp ?? '';
     if (aTs !== bTs) return bTs.localeCompare(aTs);
 
     // Fallback: alphabetical by ID

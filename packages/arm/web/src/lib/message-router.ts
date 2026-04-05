@@ -5,9 +5,23 @@ import { createLogger } from './logger';
 import type { CommandState } from './commands';
 import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { messageProvider } from './message-provider';
-import type { PendingPermission, PendingQuestion } from '../types/store';
+import type { PendingPermission, PendingQuestion, SessionPreview } from '../types/store';
 
 const logger = createLogger('msg-router');
+
+const PREVIEW_MAX = 80;
+function truncPreview(s: string): string {
+  return s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX) + '…' : s;
+}
+
+/** Set session preview and optionally increment unread. */
+function updatePreview(sid: string, preview: SessionPreview, notify: boolean): void {
+  const store = getStore();
+  store.setSessionPreview(sid, preview);
+  if (notify && !isViewingSession(sid)) {
+    store.incrementUnread(sid);
+  }
+}
 
 export interface RouterContext {
   cmdState: CommandState;
@@ -131,6 +145,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'error':
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
+      updatePreview(sid, {
+        text: truncPreview((msg.payload as Record<string, unknown>).message as string ?? 'Error'),
+        type: 'error',
+        timestamp: msg.timestamp,
+      }, !replaying);
       break;
 
     case 'permission': {
@@ -145,6 +164,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
       store.addPermission(perm);
       store.appendMessage(sid, msg);
+      updatePreview(sid, {
+        text: truncPreview(`🔒 ${msg.payload.toolName}`),
+        type: 'permission',
+        timestamp: msg.timestamp,
+      }, !replaying);
       break;
     }
 
@@ -158,6 +182,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       };
       store.addQuestion(q);
       store.appendMessage(sid, msg);
+      updatePreview(sid, {
+        text: truncPreview(`❓ ${msg.payload.question}`),
+        type: 'question',
+        timestamp: msg.timestamp,
+      }, !replaying);
       break;
     }
 
@@ -169,11 +198,22 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // Extract usage from idle payload
       const idleUsage = (msg as IdleMessage).payload?.usage;
       if (idleUsage) store.setSessionUsage(sid, idleUsage);
-      // Only visible chat bubbles count as unread — idle marks a completed turn
-      if (!replaying && !isViewingSession(sid)) {
-        store.incrementUnread(sid);
-      } else if (!replaying && isViewingSession(sid) && document.hasFocus()) {
-        // Actively viewing this session — broadcast readSeq so other arms clear unread
+      // Set preview from last agent_message in this turn
+      const sessionMsgs = store.messages.get(sid);
+      if (sessionMsgs) {
+        for (let i = sessionMsgs.length - 1; i >= 0; i--) {
+          const m = sessionMsgs[i];
+          if (m.type === 'agent_message' && 'payload' in m) {
+            const content = (m.payload as Record<string, unknown>).content;
+            if (typeof content === 'string') {
+              updatePreview(sid, { text: truncPreview(content), type: 'agent', timestamp: msg.timestamp }, !replaying);
+            }
+            break;
+          }
+          if (m.type === 'user_message' || m.type === 'idle') break;
+        }
+      }
+      if (!replaying && isViewingSession(sid) && document.hasFocus()) {
         import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid)).catch(() => {});
       }
       break;
@@ -306,6 +346,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         resolveQuestionMessage(sid, qId, msg.payload?.answer as string);
       }
       store.appendMessage(sid, msg);
+      const answerText = typeof msg.payload?.answer === 'string' ? msg.payload.answer as string : '';
+      if (answerText) {
+        updatePreview(sid, { text: truncPreview(answerText), type: 'answer', timestamp: msg.timestamp }, false);
+      }
       break;
     }
 
@@ -315,6 +359,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       store.resolvePendingInput(sid, msg.seq);
       if (!hadPending) {
         store.appendMessage(sid, msg);
+      }
+      const userContent = (msg.payload as Record<string, unknown>).content;
+      if (typeof userContent === 'string') {
+        updatePreview(sid, { text: truncPreview(userContent), type: 'user', timestamp: msg.timestamp }, false);
       }
       break;
     }
