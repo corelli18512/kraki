@@ -59,6 +59,7 @@ const initialState = {
   activeSessionId: null,
   sessionModes: new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>(),
   githubClientId: null,
+  vapidPublicKey: null,
   relayVersion: null,
   deviceModels: new Map<string, string[]>(),
   deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
@@ -308,6 +309,7 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   setGithubClientId: (clientId) => set({ githubClientId: clientId }),
+  setVapidPublicKey: (key) => set({ vapidPublicKey: key }),
   setRelayVersion: (version) => set({ relayVersion: version }),
 
   setDeviceModels: (deviceId, models) =>
@@ -404,6 +406,7 @@ export const useStore = create<Store>()(persist((set) => ({
     user: null,
     sessionModes: new Map(),
     githubClientId: null,
+    vapidPublicKey: null,
   relayVersion: null,
     deviceModels: new Map(),
     deviceModelDetails: new Map(),

@@ -74,7 +74,14 @@ export class PushManager {
       provider.close?.();
     }
   }
+
+  /** Get the VAPID public key if a web_push provider is configured. */
+  getVapidPublicKey(): string | undefined {
+    const wp = this.providers.get('web_push') as { vapidPublicKey?: string } | undefined;
+    return wp?.vapidPublicKey;
+  }
 }
 
 export { type PushProvider, type PushPayload, type PushResult } from './provider.js';
 export { ApnsProvider, type ApnsConfig } from './apns.js';
+export { WebPushProvider, type WebPushConfig } from './web-push.js';

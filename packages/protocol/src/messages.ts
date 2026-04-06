@@ -522,10 +522,12 @@ export interface AuthOkMessage {
   deviceId: string;
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
-  user: { id: string; login: string; provider: string; email?: string };
+  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown> };
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
+  /** VAPID public key for Web Push (present when web_push is enabled) */
+  vapidPublicKey?: string;
   /** Relay server version */
   relayVersion?: string;
   /** Queued unicast envelopes received while this device was offline */
@@ -598,6 +600,8 @@ export interface AuthInfoResponse {
   methods: AuthMethod['method'][];
   /** GitHub OAuth client ID (present when github_oauth is available) */
   githubClientId?: string;
+  /** VAPID public key for Web Push (present when web_push is enabled) */
+  vapidPublicKey?: string;
 }
 
 /** Sent to all connected devices when a new device joins the user's account. */

@@ -987,7 +987,7 @@ export class RelayClient {
       }
 
       if (previewSummary) {
-        const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50) });
+        const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
         const previewBlob = encryptToBlob(preview, recipients);
         envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
       }

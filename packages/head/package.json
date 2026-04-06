@@ -1,7 +1,7 @@
 {
   "name": "@kraki/head",
   "version": "0.7.0",
-  "description": "Kraki relay server \u2014 the brain that routes messages between tentacles and apps",
+  "description": "Kraki relay server — the brain that routes messages between tentacles and apps",
   "repository": {
     "type": "git",
     "url": "https://github.com/corelli18512/kraki",
@@ -37,11 +37,13 @@
     "dotenv": "^17.3.1",
     "undici": "^7.24.5",
     "uuid": "^13.0.0",
+    "web-push": "^3.6.7",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
     "@types/uuid": "^10.0.0",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.5.0",
     "@vitest/coverage-v8": "^3.2.4",
     "tsx": "^4.0.0",
