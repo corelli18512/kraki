@@ -108,7 +108,9 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
               <>
                 <span
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    isDeviceOnline ? 'bg-emerald-400' : 'bg-slate-400'
+                    !isDeviceOnline ? 'bg-slate-400'
+                    : session.state === 'active' ? 'bg-blue-400 animate-pulse'
+                    : 'bg-emerald-400'
                   }`}
                 />
                 <span className="text-[10px] text-text-muted">{machineName}</span>
