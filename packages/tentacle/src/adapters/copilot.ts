@@ -25,9 +25,9 @@ import type {
   MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync } from 'node:fs';
 import * as moduleApi from 'node:module';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
@@ -445,7 +445,7 @@ export class CopilotAdapter extends AgentAdapter {
     return { sessionId: newSessionId };
   }
 
-  async sendMessage(sessionId: string, text: string, attachments?: string[]): Promise<void> {
+  async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
@@ -454,8 +454,27 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     const opts: MessageOptions = { prompt: text };
+    const tempFiles: string[] = [];
+
+    // Convert image attachments to files in the SDK session directory
     if (attachments?.length) {
-      opts.attachments = attachments.map((path) => ({ type: 'file' as const, path }));
+      const entry = this.sessions.get(sessionId);
+      const sdkFilesDir = entry
+        ? join(homedir(), '.copilot', 'session-state', sessionId, 'files')
+        : tmpdir();
+      const sdkAttachments: Array<{ type: 'file'; path: string; displayName?: string }> = [];
+      for (const att of attachments) {
+        if (att.type === 'image') {
+          const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/webp' ? '.webp' : '.jpg';
+          const fileName = `kraki-img-${Date.now()}${ext}`;
+          const filePath = join(sdkFilesDir, fileName);
+          mkdirSync(sdkFilesDir, { recursive: true });
+          writeFileSync(filePath, Buffer.from(att.data, 'base64'));
+          if (!entry) tempFiles.push(filePath);
+          sdkAttachments.push({ type: 'file' as const, path: filePath, displayName: fileName });
+        }
+      }
+      if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
 
     let entry = this.getSession(sessionId);
@@ -487,6 +506,10 @@ export class CopilotAdapter extends AgentAdapter {
           this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
         }
         throw retryErr;
+      }
+    } finally {
+      for (const f of tempFiles) {
+        try { unlinkSync(f); } catch { /* best effort */ }
       }
     }
   }
@@ -761,14 +784,28 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('tool.execution_complete', (event) => {
       const data = event.data as Record<string, unknown>;
       const rawResult = data.result;
-      // SDK sends result as { content: string } or as a plain string
-      const result = typeof rawResult === 'object' && rawResult !== null
-        ? (rawResult as Record<string, unknown>).content as string ?? ''
-        : (rawResult ?? data.output ?? '') as string;
+      // SDK sends result as { content: string, contents?: [...] } or as a plain string
+      const resultObj = typeof rawResult === 'object' && rawResult !== null
+        ? rawResult as Record<string, unknown>
+        : null;
+      const result = resultObj?.content as string ?? (typeof rawResult === 'string' ? rawResult : (data.output as string ?? ''));
+
+      // Extract image attachments from structured content blocks (result.contents)
+      const attachments: import('@kraki/protocol').Attachment[] = [];
+      const contentBlocks = resultObj?.contents as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(contentBlocks)) {
+        for (const block of contentBlocks) {
+          if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+            attachments.push({ type: 'image', data: block.data as string, mimeType: block.mimeType as string });
+          }
+        }
+      }
+
       this.onToolComplete?.(sessionId, {
         toolName: data.toolName as string,
         result,
         toolCallId: data.toolCallId as string | undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
       });
     });
 

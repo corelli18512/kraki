@@ -19,6 +19,7 @@ export interface PendingInputMessage {
   sessionId: string;
   text: string;
   timestamp: string;
+  attachments?: import('@kraki/protocol').Attachment[];
 }
 
 export type ChatMessage = ProducerMessage | ConsumerMessage | PendingInputMessage;

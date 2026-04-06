@@ -38,6 +38,7 @@ export function sendInput(
   sessionId: string,
   text: string,
   send: (msg: Record<string, unknown>) => void,
+  attachments?: import('@kraki/protocol').Attachment[],
 ): void {
   const store = getStore();
   store.appendMessage(sessionId, {
@@ -46,11 +47,12 @@ export function sendInput(
     sessionId,
     text,
     timestamp: new Date().toISOString(),
+    attachments,
   });
   send({
     type: 'send_input',
     sessionId,
-    payload: { text },
+    payload: { text, ...(attachments?.length && { attachments }) },
   });
 }
 

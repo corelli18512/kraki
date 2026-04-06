@@ -324,7 +324,7 @@ describe('MessageInput', () => {
     const input = screen.getByPlaceholderText('Send a message…');
     await user.type(input, 'Hello there');
     await user.click(screen.getByLabelText('Send message'));
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello there');
+    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello there', undefined);
   });
 
   it('sends message on Enter key', async () => {
@@ -336,7 +336,7 @@ describe('MessageInput', () => {
     );
     const input = screen.getByPlaceholderText('Send a message…');
     await user.type(input, 'Hello{Enter}');
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello');
+    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello', undefined);
   });
 
   it('does not send on Shift+Enter (newline)', async () => {

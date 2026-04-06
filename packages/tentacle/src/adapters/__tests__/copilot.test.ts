@@ -110,6 +110,9 @@ vi.mock('node:fs', () => ({
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
   readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  mkdirSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  cpSync: vi.fn(),
 }));
 
 vi.mock('node:module', () => ({
@@ -442,11 +445,13 @@ describe('CopilotAdapter', () => {
     it('includes attachments when provided', async () => {
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
-      await adapter.sendMessage(sessionId, 'check this', ['file.png']);
-      expect(mockSessions[0].send).toHaveBeenCalledWith({
-        prompt: 'check this',
-        attachments: [{ type: 'file', path: 'file.png' }],
-      });
+      await adapter.sendMessage(sessionId, 'check this', [{ type: 'image', mimeType: 'image/png', data: 'iVBOR' }]);
+      expect(mockSessions[0].send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'check this',
+          attachments: [expect.objectContaining({ type: 'file' })],
+        }),
+      );
     });
 
     it('resumes and retries when the SDK says the session is not found', async () => {
