@@ -17,10 +17,8 @@ function truncPreview(s: string): string {
 /** Set session preview and optionally increment unread. */
 function updatePreview(sid: string, preview: SessionPreview, notify: boolean): void {
   const store = getStore();
-  store.setSessionPreview(sid, preview);
-  if (notify && !isViewingSession(sid)) {
-    store.incrementUnread(sid);
-  }
+  const shouldIncrement = notify && !isViewingSession(sid);
+  store.setSessionPreview(sid, preview, shouldIncrement);
 }
 
 export interface RouterContext {

@@ -136,7 +136,7 @@ export interface AppActions {
   setPinnedSessions: (pinned: Set<string>) => void;
   incrementUnread: (sessionId: string) => void;
   clearUnread: (sessionId: string) => void;
-  setSessionPreview: (sessionId: string, preview: SessionPreview) => void;
+  setSessionPreview: (sessionId: string, preview: SessionPreview, incrementUnread?: boolean) => void;
   setDraft: (sessionId: string, text: string) => void;
   setLastError: (message: string | null) => void;
   setNavigateToSession: (sessionId: string | null) => void;

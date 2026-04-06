@@ -264,11 +264,16 @@ export const useStore = create<Store>()(persist((set) => ({
       return { unreadCount: next };
     }),
 
-  setSessionPreview: (sessionId, preview) =>
+  setSessionPreview: (sessionId, preview, doIncrementUnread) =>
     set((state) => {
-      const next = new Map(state.sessionPreviews);
-      next.set(sessionId, preview);
-      return { sessionPreviews: next };
+      const previews = new Map(state.sessionPreviews);
+      previews.set(sessionId, preview);
+      if (doIncrementUnread) {
+        const unread = new Map(state.unreadCount);
+        unread.set(sessionId, (unread.get(sessionId) ?? 0) + 1);
+        return { sessionPreviews: previews, unreadCount: unread };
+      }
+      return { sessionPreviews: previews };
     }),
 
   setDraft: (sessionId, text) =>
