@@ -80,6 +80,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const shouldAutoFocus = shouldAutoFocusTextInput();
   const [imageAttachment, setImageAttachment] = useState<Attachment | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [pendingReplaceFile, setPendingReplaceFile] = useState<File | null>(null);
 
   const compressAndAttach = useCallback(async (file: File) => {
     const img = new window.Image();
@@ -127,13 +128,25 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) compressAndAttach(file);
+    if (!file) return;
+    if (imageAttachment) { setPendingReplaceFile(file); } else { compressAndAttach(file); }
     e.target.value = '';
-  }, [compressAndAttach]);
+  }, [imageAttachment, compressAndAttach]);
 
   const clearImage = useCallback(() => {
     setImageAttachment(null);
     setImagePreview(null);
+  }, []);
+
+  const confirmReplace = useCallback(() => {
+    if (pendingReplaceFile) {
+      compressAndAttach(pendingReplaceFile);
+      setPendingReplaceFile(null);
+    }
+  }, [pendingReplaceFile, compressAndAttach]);
+
+  const cancelReplace = useCallback(() => {
+    setPendingReplaceFile(null);
   }, []);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
@@ -143,11 +156,12 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
         const file = item.getAsFile();
-        if (file) compressAndAttach(file);
+        if (!file) return;
+        if (imageAttachment) { setPendingReplaceFile(file); } else { compressAndAttach(file); }
         return;
       }
     }
-  }, [compressAndAttach]);
+  }, [imageAttachment, compressAndAttach]);
 
   // Auto-focus on mount (when navigating into a session)
   useEffect(() => {
@@ -341,6 +355,18 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
         </button>
         </div>
       </div>
+      {pendingReplaceFile && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={cancelReplace}>
+          <div className="mx-4 rounded-xl bg-surface-primary p-4 shadow-xl border border-border-primary" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm font-medium text-text-primary">Replace image?</p>
+            <p className="mt-1 text-xs text-text-muted">The current image will be replaced with the new one.</p>
+            <div className="mt-3 flex justify-end gap-2">
+              <button onClick={cancelReplace} className="rounded-lg px-3 py-1.5 text-xs font-medium text-text-muted hover:bg-surface-tertiary">Cancel</button>
+              <button onClick={confirmReplace} className="rounded-lg bg-kraki-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-kraki-600">Replace</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
