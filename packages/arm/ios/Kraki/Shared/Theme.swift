@@ -1,3 +1,4 @@
+#if os(iOS)
 /// Theme — App-wide colors, fonts, and style constants.
 
 import SwiftUI
@@ -39,3 +40,5 @@ extension View {
             )
     }
 }
+
+#endif

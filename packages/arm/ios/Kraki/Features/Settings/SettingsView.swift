@@ -1,3 +1,4 @@
+#if os(iOS)
 /// SettingsView — App settings matching the web sidebar settings panel.
 ///
 /// Shows account info, app version, theme picker, debug toggle, and sign-out.
@@ -41,7 +42,7 @@ struct SettingsView: View {
                             .fill(Color.krakiPrimary.opacity(0.15))
                         Text(String(user.login.prefix(1)).uppercased())
                             .font(.headline.weight(.semibold))
-                            .foregroundStyle(.krakiPrimary)
+                            .foregroundStyle(Color.krakiPrimary)
                     }
                     .frame(width: 40, height: 40)
 
@@ -156,3 +157,5 @@ enum AppColorScheme: String, CaseIterable {
         }
     }
 }
+
+#endif

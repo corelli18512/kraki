@@ -18,3 +18,4 @@ ROADMAP.md
 KRAKI_FILE_BY_FILE_REVIEW.md
 AGENTS.md
 .playwright-mcp/
+packages/arm/ios/.build/

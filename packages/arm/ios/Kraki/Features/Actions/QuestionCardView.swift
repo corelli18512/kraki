@@ -1,3 +1,4 @@
+#if os(iOS)
 /// QuestionCardView — Violet-bordered action card for agent questions.
 ///
 /// Mirrors QuestionInput.tsx. Shows the question text, optional choice
@@ -125,3 +126,5 @@ struct QuestionStackView: View {
         }
     }
 }
+
+#endif

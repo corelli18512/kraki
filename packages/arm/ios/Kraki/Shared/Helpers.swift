@@ -1,3 +1,4 @@
+#if os(iOS)
 /// Helpers — Utility functions for formatting dates, numbers, and text.
 
 import Foundation
@@ -87,3 +88,5 @@ func getArgsSummary(toolName: String?, args: [String: AnyCodable]?) -> String? {
         return nil
     }
 }
+
+#endif

@@ -1,3 +1,4 @@
+#if os(iOS)
 /// SessionInfoSheet — Detail sheet for session metadata, usage, and mode.
 ///
 /// Presented from the session detail "more" button as a medium-detent sheet.
@@ -192,3 +193,5 @@ struct SessionInfoSheet: View {
         .font(.subheadline)
     }
 }
+
+#endif
