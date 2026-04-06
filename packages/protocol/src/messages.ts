@@ -33,12 +33,14 @@ export interface UnicastEnvelope {
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
 export interface BroadcastEnvelope {
   type: 'broadcast';
-  /** Hint for future push notification support. Not yet implemented. */
-  notify?: boolean;
   /** Encrypted payload: base64(iv + ciphertext + tag) */
   blob: string;
   /** Per-device RSA-OAEP encrypted AES key (base64) */
   keys: Record<string, string>;
+  /** Encrypted preview for push notifications to offline devices.
+   *  Presence signals the relay to send a push. Contains a truncated
+   *  summary encrypted with the same recipients as the main blob. */
+  pushPreview?: BlobPayload;
 }
 
 export type RelayEnvelope = UnicastEnvelope | BroadcastEnvelope;
@@ -614,6 +616,39 @@ export interface PreferencesUpdatedMessage {
   preferences: Record<string, unknown>;
 }
 
+// ── Push notification token management ──────────────────
+
+/** Register a push notification token for this device. */
+export interface RegisterPushTokenMessage {
+  type: 'register_push_token';
+  payload: {
+    /** Push provider type */
+    provider: import('./devices.js').PushProviderType;
+    /** Device token from the push service */
+    token: string;
+    /** APNs environment */
+    environment?: 'production' | 'sandbox';
+    /** APNs topic (bundle ID) */
+    bundleId?: string;
+  };
+}
+
+/** Confirmation that a push token was registered. */
+export interface PushTokenRegisteredMessage {
+  type: 'push_token_registered';
+  payload: {
+    provider: import('./devices.js').PushProviderType;
+  };
+}
+
+/** Remove the push token for this device. */
+export interface UnregisterPushTokenMessage {
+  type: 'unregister_push_token';
+  payload: {
+    provider: import('./devices.js').PushProviderType;
+  };
+}
+
 export type ControlMessage =
   | AuthMessage
   | AuthOkMessage
@@ -631,7 +666,10 @@ export type ControlMessage =
   | RemoveDeviceMessage
   | DeviceRemovedMessage
   | UpdatePreferencesMessage
-  | PreferencesUpdatedMessage;
+  | PreferencesUpdatedMessage
+  | RegisterPushTokenMessage
+  | PushTokenRegisteredMessage
+  | UnregisterPushTokenMessage;
 
 // ============================================================
 // Union of all messages
@@ -644,7 +682,7 @@ export type InnerMessage = ProducerMessage | ConsumerMessage;
 export type Message = RelayEnvelope | ControlMessage;
 
 // Re-export types used in control messages
-import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities } from './devices.js';
+import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, PushProviderType } from './devices.js';
 import type { SessionSummary, SessionDigest, SessionMode, SessionUsage } from './sessions.js';
 import type { ToolArgs } from './tools.js';
-export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, SessionSummary, SessionDigest, SessionMode, SessionUsage, ToolArgs };
+export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, PushProviderType, SessionSummary, SessionDigest, SessionMode, SessionUsage, ToolArgs };

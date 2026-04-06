@@ -188,4 +188,100 @@ describe('Storage', () => {
       expect(storage.flushPending('dev-1')).toHaveLength(0);
     });
   });
+
+  // --- Push tokens ---
+
+  describe('push tokens', () => {
+    beforeEach(() => {
+      storage.upsertUser('u1', 'alice');
+      storage.upsertDevice('dev-1', 'u1', 'Phone', 'app', 'ios');
+      storage.upsertDevice('dev-2', 'u1', 'Laptop', 'tentacle', 'desktop');
+    });
+
+    it('upserts and retrieves a push token', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'token_abc', 'production', 'com.kraki');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(tokens).toHaveLength(1);
+      expect(tokens[0].deviceId).toBe('dev-1');
+      expect(tokens[0].provider).toBe('apns');
+      expect(tokens[0].token).toBe('token_abc');
+      expect(tokens[0].environment).toBe('production');
+      expect(tokens[0].bundleId).toBe('com.kraki');
+    });
+
+    it('upsert replaces existing token for same device+provider', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'old_token');
+      storage.upsertPushToken('dev-1', 'apns', 'new_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(tokens).toHaveLength(1);
+      expect(tokens[0].token).toBe('new_token');
+    });
+
+    it('supports multiple providers per device', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'apns_token');
+      storage.upsertPushToken('dev-1', 'fcm', 'fcm_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(tokens).toHaveLength(2);
+      expect(tokens.map(t => t.provider).sort()).toEqual(['apns', 'fcm']);
+    });
+
+    it('deletes a push token by device+provider', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'token_abc');
+      expect(storage.deletePushToken('dev-1', 'apns')).toBe(true);
+      expect(storage.getPushTokensForOfflineDevices('u1', [])).toHaveLength(0);
+    });
+
+    it('returns false when deleting non-existent token', () => {
+      expect(storage.deletePushToken('dev-1', 'apns')).toBe(false);
+    });
+
+    it('deletes all tokens for a device', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'token_1');
+      storage.upsertPushToken('dev-1', 'fcm', 'token_2');
+      storage.deletePushTokensForDevice('dev-1');
+      expect(storage.getPushTokensForOfflineDevices('u1', [])).toHaveLength(0);
+    });
+
+    it('excludes online devices from offline query', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'phone_token');
+      storage.upsertPushToken('dev-2', 'apns', 'laptop_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', ['dev-1']);
+      expect(tokens).toHaveLength(1);
+      expect(tokens[0].deviceId).toBe('dev-2');
+    });
+
+    it('returns all tokens when no devices are online', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'phone_token');
+      storage.upsertPushToken('dev-2', 'apns', 'laptop_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(tokens).toHaveLength(2);
+    });
+
+    it('returns empty when all devices are online', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'phone_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', ['dev-1', 'dev-2']);
+      expect(tokens).toHaveLength(0);
+    });
+
+    it('cascades on device delete', () => {
+      storage.upsertPushToken('dev-1', 'apns', 'token_abc');
+      storage.deleteDevice('dev-1');
+      expect(storage.getPushTokensForOfflineDevices('u1', [])).toHaveLength(0);
+    });
+
+    it('does not return tokens for other users', () => {
+      storage.upsertUser('u2', 'bob');
+      storage.upsertDevice('dev-3', 'u2', 'Bob Phone', 'app', 'ios');
+      storage.upsertPushToken('dev-1', 'apns', 'alice_token');
+      storage.upsertPushToken('dev-3', 'apns', 'bob_token');
+
+      const aliceTokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(aliceTokens).toHaveLength(1);
+      expect(aliceTokens[0].token).toBe('alice_token');
+
+      const bobTokens = storage.getPushTokensForOfflineDevices('u2', []);
+      expect(bobTokens).toHaveLength(1);
+      expect(bobTokens[0].token).toBe('bob_token');
+    });
+  });
 });

@@ -55,6 +55,10 @@ export interface DeviceCapabilities {
   modelDetails?: ModelDetail[];
 }
 
+// ── Push notification providers ──────────────────────────
+
+export type PushProviderType = 'apns' | 'fcm' | 'web_push';
+
 // ── Model metadata ──────────────────────────────────────
 
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';

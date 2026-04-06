@@ -928,4 +928,116 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     app.close();
   });
+
+  // --- Push token registration ---
+
+  it("register_push_token stores token and relay acks", async () => {
+    const app = await connectApp(env.port);
+
+    app.send({
+      type: "register_push_token",
+      payload: { provider: "apns", token: "device_token_123", environment: "sandbox", bundleId: "com.kraki" },
+    });
+
+    const ack = await app.waitFor("push_token_registered");
+    expect((ack.payload as Record<string, unknown>).provider).toBe("apns");
+
+    // Verify it was stored
+    const tokens = env.storage.getPushTokensForOfflineDevices(
+      app.authOk.user ? (app.authOk.user as Record<string, unknown>).id as string : "",
+      [],
+    );
+    expect(tokens.some(t => t.token === "device_token_123")).toBe(true);
+
+    app.close();
+  });
+
+  it("unregister_push_token removes token from storage", async () => {
+    const app = await connectApp(env.port);
+    const userId = (app.authOk.user as Record<string, unknown>).id as string;
+
+    // Register then unregister
+    app.send({
+      type: "register_push_token",
+      payload: { provider: "apns", token: "token_to_remove" },
+    });
+    await app.waitFor("push_token_registered");
+
+    app.send({
+      type: "unregister_push_token",
+      payload: { provider: "apns" },
+    });
+
+    // Give it a moment to process
+    await waitMs(100);
+
+    const tokens = env.storage.getPushTokensForOfflineDevices(userId, []);
+    expect(tokens).toHaveLength(0);
+
+    app.close();
+  });
+
+  it("device removal cleans up push tokens", async () => {
+    // Connect two apps
+    const app1 = await connectApp(env.port, "Phone A");
+    const app2 = await connectApp(env.port, "Phone B");
+    const userId = (app1.authOk.user as Record<string, unknown>).id as string;
+
+    // Register push tokens for both
+    app1.send({
+      type: "register_push_token",
+      payload: { provider: "apns", token: "token_a" },
+    });
+    await app1.waitFor("push_token_registered");
+
+    app2.send({
+      type: "register_push_token",
+      payload: { provider: "apns", token: "token_b" },
+    });
+    await app2.waitFor("push_token_registered");
+
+    // Disconnect app2, then remove its device via app1
+    const app2DeviceId = app2.deviceId;
+    app2.close();
+    await waitMs(200);
+
+    app1.send({ type: "remove_device", deviceId: app2DeviceId });
+    await app1.waitFor("device_removed");
+
+    // Only app1's token should remain
+    const tokens = env.storage.getPushTokensForOfflineDevices(userId, []);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].token).toBe("token_a");
+
+    app1.close();
+  });
+
+  it("broadcast with pushPreview is forwarded to online app via WS (push requires PushManager)", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    // Register a push token for the app
+    app.send({
+      type: "register_push_token",
+      payload: { provider: "apns", token: "test_token" },
+    });
+    await app.waitFor("push_token_registered");
+
+    // Trigger a permission — tentacle should build pushPreview
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    adapter.onPermissionRequest?.(sessionId, {
+      id: "perm-1",
+      toolArgs: { type: "shell", command: "npm test" },
+      description: "Run shell command: npm test",
+    });
+
+    // App should receive the permission via WS (it's online)
+    const perm = await app.waitFor("permission");
+    expect(perm.type).toBe("permission");
+    expect((perm.payload as Record<string, unknown>).id).toBe("perm-1");
+
+    app.close();
+  });
 });

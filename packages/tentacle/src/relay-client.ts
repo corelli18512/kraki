@@ -939,7 +939,12 @@ export class RelayClient {
       };
 
       if (msg.type === 'permission' || msg.type === 'question') {
-        envelope.notify = true;
+        const summary = msg.type === 'permission'
+          ? `Permission: ${(msg.payload as Record<string, unknown>).description ?? msg.type}`
+          : `Question: ${(msg.payload as Record<string, unknown>).question ?? msg.type}`;
+        const preview = JSON.stringify({ type: msg.type, summary: summary.slice(0, 100) });
+        const previewBlob = encryptToBlob(preview, recipients);
+        envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
       }
 
       this.ws.send(JSON.stringify(envelope));

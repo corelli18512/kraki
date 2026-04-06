@@ -36,6 +36,8 @@ import { HeadServer } from './server.js';
 import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider } from './auth.js';
 import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
+import { PushManager, ApnsProvider } from './push/index.js';
+import type { PushProvider as IPushProvider } from './push/index.js';
 
 // --- CLI flags ---
 const args = process.argv.slice(2);
@@ -50,6 +52,7 @@ if (args.includes('--help') || args.includes('-h')) {
     --port <n>      Server port (default: 4000, env: PORT)
     --db <path>     SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>   Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
+    --push <type>   Push providers: apns (comma-separated, env: PUSH_PROVIDERS)
     --log <level>   Log level: debug | info | warn | error (default: info)
     --help, -h      Show this help
     --version, -v   Show version
@@ -57,6 +60,13 @@ if (args.includes('--help') || args.includes('-h')) {
   GitHub OAuth (env only, for web login):
     GITHUB_CLIENT_ID      GitHub OAuth App client ID
     GITHUB_CLIENT_SECRET  GitHub OAuth App client secret
+
+  APNs push notifications (env only):
+    APNS_KEY_PATH         Path to .p8 private key file
+    APNS_KEY_ID           Key ID from Apple Developer
+    APNS_TEAM_ID          Team ID from Apple Developer
+    APNS_BUNDLE_ID        App bundle ID (APNs topic)
+    APNS_ENVIRONMENT      production | sandbox (default: production)
   `);
   process.exit(0);
 }
@@ -85,6 +95,7 @@ const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const PAIRING = process.env.PAIRING_ENABLED !== 'false'; // default true
 const LOG_LEVEL = flag('log', process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error';
 const LOG_PATH = process.env.LOG_PATH;
+const PUSH_PROVIDERS = flag('push', process.env.PUSH_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 function createAuthProviders(): Map<string, AuthProvider> {
   const providers = new Map<string, AuthProvider>();
@@ -135,10 +146,42 @@ logger.info('Kraki Head starting...');
 
 const authProviders = createAuthProviders();
 const storage = new Storage(DB_PATH);
+
+// --- Push providers ---
+let pushManager: PushManager | undefined;
+if (PUSH_PROVIDERS.length > 0) {
+  const pushProviderInstances: IPushProvider[] = [];
+  for (const provider of PUSH_PROVIDERS) {
+    switch (provider) {
+      case 'apns': {
+        const keyPath = process.env.APNS_KEY_PATH;
+        const keyId = process.env.APNS_KEY_ID;
+        const teamId = process.env.APNS_TEAM_ID;
+        const bundleId = process.env.APNS_BUNDLE_ID;
+        if (!keyPath || !keyId || !teamId || !bundleId) {
+          console.error('Error: APNs requires APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
+          process.exit(1);
+        }
+        pushProviderInstances.push(new ApnsProvider({
+          keyPath, keyId, teamId, bundleId,
+          environment: (process.env.APNS_ENVIRONMENT as 'production' | 'sandbox') ?? 'production',
+        }));
+        logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
+        break;
+      }
+      default:
+        console.error(`Error: Unknown push provider '${provider}'. Use: apns`);
+        process.exit(1);
+    }
+  }
+  pushManager = new PushManager(storage, pushProviderInstances);
+}
+
 const head = new HeadServer(storage, {
   authProviders,
   pairingEnabled: PAIRING,
   version: VERSION,
+  pushManager,
 });
 
 const httpServer = createServer((req, res) => {

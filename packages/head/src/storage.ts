@@ -37,6 +37,16 @@ export interface StoredDevice {
   createdAt: string;
 }
 
+export interface StoredPushToken {
+  deviceId: string;
+  provider: string;
+  token: string;
+  environment: string | null;
+  bundleId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredUser {
   userId: string;
   username: string;
@@ -46,7 +56,7 @@ export interface StoredUser {
   createdAt: string;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class Storage {
   private db: Database.Database;
@@ -105,6 +115,21 @@ export class Storage {
           created_at        TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_pending_target ON pending_messages(target_device_id);
+      `);
+    }
+
+    if (currentVersion < 4) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS push_tokens (
+          device_id   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+          provider    TEXT NOT NULL,
+          token       TEXT NOT NULL,
+          environment TEXT,
+          bundle_id   TEXT,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (device_id, provider)
+        );
       `);
     }
 
@@ -245,6 +270,62 @@ export class Storage {
       `DELETE FROM pending_messages WHERE created_at < datetime('now', '-${Storage.PENDING_TTL_DAYS} days')`
     ).run();
     return result.changes;
+  }
+
+  // --- Push tokens ---
+
+  upsertPushToken(deviceId: string, provider: string, token: string, environment?: string, bundleId?: string): void {
+    this.db.prepare(`
+      INSERT INTO push_tokens (device_id, provider, token, environment, bundle_id)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(device_id, provider) DO UPDATE SET
+        token = excluded.token,
+        environment = excluded.environment,
+        bundle_id = excluded.bundle_id,
+        updated_at = datetime('now')
+    `).run(deviceId, provider, token, environment ?? null, bundleId ?? null);
+  }
+
+  deletePushToken(deviceId: string, provider: string): boolean {
+    const result = this.db.prepare(
+      'DELETE FROM push_tokens WHERE device_id = ? AND provider = ?'
+    ).run(deviceId, provider);
+    return result.changes > 0;
+  }
+
+  deletePushTokensForDevice(deviceId: string): void {
+    this.db.prepare('DELETE FROM push_tokens WHERE device_id = ?').run(deviceId);
+  }
+
+  /** Get push tokens for offline devices of a user (devices NOT in the online set). */
+  getPushTokensForOfflineDevices(userId: string, onlineDeviceIds: string[]): StoredPushToken[] {
+    if (onlineDeviceIds.length === 0) {
+      // All devices are offline — return all tokens for user's devices
+      const rows = this.db.prepare(`
+        SELECT pt.device_id, pt.provider, pt.token, pt.environment, pt.bundle_id, pt.created_at, pt.updated_at
+        FROM push_tokens pt
+        JOIN devices d ON pt.device_id = d.id
+        WHERE d.user_id = ?
+      `).all(userId) as Array<{ device_id: string; provider: string; token: string; environment: string | null; bundle_id: string | null; created_at: string; updated_at: string }>;
+      return rows.map(r => this.mapPushTokenRow(r));
+    }
+
+    const placeholders = onlineDeviceIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT pt.device_id, pt.provider, pt.token, pt.environment, pt.bundle_id, pt.created_at, pt.updated_at
+      FROM push_tokens pt
+      JOIN devices d ON pt.device_id = d.id
+      WHERE d.user_id = ? AND pt.device_id NOT IN (${placeholders})
+    `).all(userId, ...onlineDeviceIds) as Array<{ device_id: string; provider: string; token: string; environment: string | null; bundle_id: string | null; created_at: string; updated_at: string }>;
+    return rows.map(r => this.mapPushTokenRow(r));
+  }
+
+  private mapPushTokenRow(row: { device_id: string; provider: string; token: string; environment: string | null; bundle_id: string | null; created_at: string; updated_at: string }): StoredPushToken {
+    return {
+      deviceId: row.device_id, provider: row.provider, token: row.token,
+      environment: row.environment, bundleId: row.bundle_id,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    };
   }
 
   // --- Cleanup ---

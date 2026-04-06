@@ -1,7 +1,10 @@
 export { Storage } from './storage.js';
+export type { StoredDevice, StoredUser, StoredPushToken } from './storage.js';
 export { HeadServer } from './server.js';
 export type { HeadServerOptions } from './server.js';
 export { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider } from './auth.js';
 export type { AuthProvider, AuthUser, AuthOutcome, AuthCredentials } from './auth.js';
 export { Logger, getLogger, setGlobalLogger } from './logger.js';
 export type { LoggerOptions, LogLevel } from './logger.js';
+export { PushManager, ApnsProvider } from './push/index.js';
+export type { PushProvider, PushPayload, PushResult, ApnsConfig } from './push/index.js';

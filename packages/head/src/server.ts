@@ -11,6 +11,7 @@ import { Storage } from './storage.js';
 import type { AuthProvider, AuthUser, AuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
+import type { PushManager } from './push/index.js';
 
 function importPublicKey(compactKey: string): string {
   const lines = compactKey.match(/.{1,64}/g) ?? [];
@@ -47,6 +48,7 @@ export interface HeadServerOptions {
   pairingEnabled?: boolean;
   pairingTtl?: number;
   version?: string;
+  pushManager?: PushManager;
 }
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
@@ -319,6 +321,16 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'register_push_token') {
+      this.handleRegisterPushToken(ws, state, msg);
+      return;
+    }
+
+    if (msg.type === 'unregister_push_token') {
+      this.handleUnregisterPushToken(ws, state, msg);
+      return;
+    }
+
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong' }));
       return;
@@ -373,12 +385,15 @@ export class HeadServer {
 
     // Find all other connected devices for this user
     const userDevices = this.storage.getDevicesByUser(senderUserId);
+    const onlineDeviceIds: string[] = [senderDeviceId];
+
     for (const device of userDevices) {
       if (device.id === senderDeviceId) continue;
 
       const targetWs = this.connections.get(device.id);
       if (!targetWs) continue;
 
+      onlineDeviceIds.push(device.id);
       try {
         if (targetWs.readyState === WebSocket.OPEN) {
           targetWs.send(JSON.stringify(msg));
@@ -387,6 +402,12 @@ export class HeadServer {
         logger.warn('Broadcast send failed, removing connection', { to: device.id });
         this.removeConnection(device.id);
       }
+    }
+
+    // Send push notifications to offline devices with registered tokens
+    if (msg.pushPreview && this.options.pushManager) {
+      this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, msg.pushPreview)
+        .catch(err => logger.warn('Push notification send failed', { error: (err as Error).message }));
     }
   }
 
@@ -743,10 +764,55 @@ export class HeadServer {
 
     this.storage.deleteDevice(targetDeviceId);
     this.storage.deletePendingForDevice(targetDeviceId);
+    this.storage.deletePushTokensForDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
 
     // Broadcast removal to all remaining user devices
     this.broadcastDeviceRemoved(state.userId, targetDeviceId);
+  }
+
+  // --- Push token management ---
+
+  private handleRegisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
+    const logger = getLogger();
+    if (!state.userId || !state.deviceId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+
+    const payload = msg.payload as Record<string, unknown> | undefined;
+    if (!payload || typeof payload.token !== 'string' || typeof payload.provider !== 'string') {
+      this.sendError(ws, 'Invalid push token: payload.token and payload.provider required');
+      return;
+    }
+
+    this.storage.upsertPushToken(
+      state.deviceId,
+      payload.provider as string,
+      payload.token as string,
+      payload.environment as string | undefined,
+      payload.bundleId as string | undefined,
+    );
+
+    logger.info('Push token registered', { deviceId: state.deviceId, provider: payload.provider });
+    ws.send(JSON.stringify({ type: 'push_token_registered', payload: { provider: payload.provider } }));
+  }
+
+  private handleUnregisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
+    const logger = getLogger();
+    if (!state.userId || !state.deviceId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+
+    const payload = msg.payload as Record<string, unknown> | undefined;
+    if (!payload || typeof payload.provider !== 'string') {
+      this.sendError(ws, 'Invalid unregister: payload.provider required');
+      return;
+    }
+
+    this.storage.deletePushToken(state.deviceId, payload.provider as string);
+    logger.info('Push token unregistered', { deviceId: state.deviceId, provider: payload.provider });
   }
 
   private broadcastDeviceRemoved(userId: string, removedDeviceId: string): void {
@@ -861,5 +927,6 @@ export class HeadServer {
       ws.close();
     }
     this.wss.close();
+    this.options.pushManager?.close();
   }
 }
