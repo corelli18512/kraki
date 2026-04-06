@@ -213,8 +213,39 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     <div className="relative shrink-0 bg-surface-primary px-3 pb-3 pt-1.5 sm:px-4 sm:pb-4 sm:pt-2">
       <div className="pointer-events-none absolute inset-x-0 -top-4 h-4 bg-gradient-to-t from-surface-primary to-transparent" />
       <div className="mx-auto max-w-3xl">
-        {/* Mode switcher row */}
-        <div className="relative mb-1.5 flex items-center justify-end gap-1.5">
+        {/* Top bar: image button (left) + mode switcher (right) */}
+        <div className="relative mb-1.5 flex items-center gap-1.5">
+          <input
+            id={`img-upload-${sessionId}`}
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleFileSelect}
+            style={{ display: 'none' }}
+          />
+          {imagePreview ? (
+            <div className="relative shrink-0">
+              <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
+                <img src={imagePreview} alt="Preview" className="h-14 w-14 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
+              </label>
+              <button
+                onClick={clearImage}
+                aria-label="Remove image"
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
+              >
+                <X className="h-3 w-3 text-text-muted" />
+              </button>
+            </div>
+          ) : (
+            <label
+              htmlFor={`img-upload-${sessionId}`}
+              aria-label="Attach image"
+              className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''}`}
+            >
+              <ImageIcon className="h-4.5 w-4.5" />
+            </label>
+          )}
+          <div className="flex-1" />
           {/* Desktop: always show all modes */}
           <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
             <div
@@ -270,36 +301,6 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
 
         {/* Input row */}
         <div className="relative flex gap-2">
-          <input
-            id={`img-upload-${sessionId}`}
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={handleFileSelect}
-            style={{ display: 'none' }}
-          />
-          {imagePreview ? (
-            <div className="relative shrink-0 self-center">
-              <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
-                <img src={imagePreview} alt="Preview" className="h-10 w-10 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
-              </label>
-              <button
-                onClick={clearImage}
-                aria-label="Remove image"
-                className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
-              >
-                <X className="h-2.5 w-2.5 text-text-muted" />
-              </button>
-            </div>
-          ) : (
-            <label
-              htmlFor={`img-upload-${sessionId}`}
-              aria-label="Attach image"
-              className={`flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center self-center rounded-xl text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''}`}
-            >
-              <ImageIcon className="h-5 w-5" />
-            </label>
-          )}
           <textarea
             ref={textareaRef}
             value={text}
