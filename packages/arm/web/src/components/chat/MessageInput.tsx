@@ -225,7 +225,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               <button
                 key={mode}
                 onClick={() => wsClient.setSessionMode(sessionId, mode)}
-                className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+                className={`relative z-10 px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${
                   sessionMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
                 }`}
               >
@@ -256,7 +256,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
                   <button
                     key={mode}
                     onClick={() => handleMobileSelect(mode)}
-                    className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+                    className={`relative z-10 px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${
                       sessionMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
                     }`}
                   >
