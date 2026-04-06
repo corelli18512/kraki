@@ -36,7 +36,7 @@ import { HeadServer } from './server.js';
 import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider } from './auth.js';
 import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
-import { PushManager, ApnsProvider } from './push/index.js';
+import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
 
 // --- CLI flags ---
@@ -52,7 +52,7 @@ if (args.includes('--help') || args.includes('-h')) {
     --port <n>      Server port (default: 4000, env: PORT)
     --db <path>     SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>   Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
-    --push <type>   Push providers: apns (comma-separated, env: PUSH_PROVIDERS)
+    --push <type>   Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
     --log <level>   Log level: debug | info | warn | error (default: info)
     --help, -h      Show this help
     --version, -v   Show version
@@ -67,6 +67,11 @@ if (args.includes('--help') || args.includes('-h')) {
     APNS_TEAM_ID          Team ID from Apple Developer
     APNS_BUNDLE_ID        App bundle ID (APNs topic)
     APNS_ENVIRONMENT      production | sandbox (default: production)
+
+  Web Push / VAPID (env only):
+    VAPID_PUBLIC_KEY      VAPID public key (base64url, from web-push generate-vapid-keys)
+    VAPID_PRIVATE_KEY     VAPID private key (base64url)
+    VAPID_EMAIL           Contact email (e.g. mailto:admin@example.com)
   `);
   process.exit(0);
 }
@@ -169,8 +174,20 @@ if (PUSH_PROVIDERS.length > 0) {
         logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
         break;
       }
+      case 'web_push': {
+        const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+        const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+        const vapidEmail = process.env.VAPID_EMAIL;
+        if (!vapidPublicKey || !vapidPrivateKey || !vapidEmail) {
+          console.error('Error: Web Push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL');
+          process.exit(1);
+        }
+        pushProviderInstances.push(new WebPushProvider({ vapidPublicKey, vapidPrivateKey, vapidEmail }));
+        logger.info('Web Push provider configured', { email: vapidEmail });
+        break;
+      }
       default:
-        console.error(`Error: Unknown push provider '${provider}'. Use: apns`);
+        console.error(`Error: Unknown push provider '${provider}'. Use: apns, web_push`);
         process.exit(1);
     }
   }

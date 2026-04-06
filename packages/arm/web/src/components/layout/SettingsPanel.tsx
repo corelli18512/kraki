@@ -3,12 +3,24 @@ import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { isDebugLoggingEnabled, setDebugLogging } from '../../lib/logger';
+import { isPushSupported, isPushSubscribed, subscribeToPush, unsubscribeFromPush, getPushPermission } from '../../lib/push';
 import { version } from '../../../package.json';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
+  const vapidPublicKey = useStore((s) => s.vapidPublicKey);
   const [debugLog, setDebugLog] = useState(isDebugLoggingEnabled);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const pushSupported = isPushSupported();
+  const pushDenied = getPushPermission() === 'denied';
+
+  // Check current push subscription state on mount
+  useEffect(() => {
+    if (!pushSupported) return;
+    isPushSubscribed().then(setPushEnabled);
+  }, [pushSupported, open]);
 
   // Close on Escape (overlay mode only)
   useEffect(() => {
@@ -47,6 +59,57 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
           </button>
         </div>
       </section>
+
+      {pushSupported && vapidPublicKey && (
+        <section>
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+            Notifications
+          </h3>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-text-primary">Push notifications</p>
+              <p className="text-[11px] text-text-muted">
+                {pushDenied
+                  ? 'Blocked by browser — reset in site settings'
+                  : 'Get notified when agents need attention'}
+              </p>
+            </div>
+            <button
+              disabled={pushLoading || pushDenied}
+              onClick={async () => {
+                setPushLoading(true);
+                try {
+                  if (pushEnabled) {
+                    const ok = await unsubscribeFromPush();
+                    if (ok) {
+                      wsClient.send({ type: 'unregister_push_token', payload: { provider: 'web_push' } });
+                      setPushEnabled(false);
+                    }
+                  } else {
+                    const token = await subscribeToPush(vapidPublicKey);
+                    if (token) {
+                      wsClient.send({ type: 'register_push_token', payload: { provider: 'web_push', token } });
+                      setPushEnabled(true);
+                    }
+                  }
+                } finally {
+                  setPushLoading(false);
+                }
+              }}
+              className={`relative h-6 w-11 rounded-full transition-colors ${
+                pushDenied ? 'cursor-not-allowed opacity-40 bg-slate-300' :
+                pushEnabled ? 'bg-kraki-500' : 'bg-slate-300'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  pushEnabled && !pushDenied ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        </section>
+      )}
 
       <section>
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">

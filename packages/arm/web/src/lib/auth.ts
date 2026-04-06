@@ -99,6 +99,9 @@ export function processAuthOk(
   if (msg.githubClientId) {
     store.setGithubClientId(msg.githubClientId);
   }
+  if (msg.vapidPublicKey) {
+    store.setVapidPublicKey(msg.vapidPublicKey);
+  }
   if (msg.relayVersion) {
     store.setRelayVersion(msg.relayVersion);
   }

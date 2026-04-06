@@ -98,6 +98,9 @@ export interface AppState {
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
 
+  // VAPID public key from relay (for Web Push)
+  vapidPublicKey: string | null;
+
   // Relay server version
   relayVersion: string | null;
 
@@ -144,6 +147,7 @@ export interface AppActions {
   setActiveSessionId: (sessionId: string | null) => void;
   setSessionMode: (sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') => void;
   setGithubClientId: (clientId: string | null) => void;
+  setVapidPublicKey: (key: string | null) => void;
   setRelayVersion: (version: string | null) => void;
   setDeviceModels: (deviceId: string, models: string[]) => void;
   setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;

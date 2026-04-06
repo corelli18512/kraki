@@ -162,6 +162,10 @@ export class HeadServer {
     return ghProvider?.oauthConfigured ? ghProvider.getClientId() : undefined;
   }
 
+  private getVapidPublicKey(): string | undefined {
+    return this.options.pushManager?.getVapidPublicKey();
+  }
+
   private findGitHubProvider(): GitHubAuthProvider | undefined {
     const provider = this.options.authProviders?.get('github') ?? this.options.authProvider;
     if (!provider) return undefined;
@@ -264,6 +268,7 @@ export class HeadServer {
           type: 'auth_info_response',
           methods,
           githubClientId: this.getGitHubClientId(),
+          vapidPublicKey: this.getVapidPublicKey(),
         }));
         return;
       }
@@ -599,6 +604,7 @@ export class HeadServer {
       user: { id: user.userId, login: user.username, provider: user.provider, preferences: fullUser?.preferences },
       devices: this.getDeviceSummaries(user.userId),
       githubClientId: this.getGitHubClientId(),
+      vapidPublicKey: this.getVapidPublicKey(),
       relayVersion: this.options.version,
       ...(pendingMessages.length > 0 && { pendingMessages }),
     }));
@@ -655,6 +661,7 @@ export class HeadServer {
       user: { id: user.id, login: user.login, provider: user.provider, preferences: fullUser?.preferences },
       devices: this.getDeviceSummaries(user.id),
       githubClientId: this.getGitHubClientId(),
+      vapidPublicKey: this.getVapidPublicKey(),
       relayVersion: this.options.version,
       ...(pendingMessages.length > 0 && { pendingMessages }),
     }));

@@ -353,6 +353,9 @@ export class KrakiWSClient {
         if (info.githubClientId) {
           getStore().setGithubClientId(info.githubClientId);
         }
+        if (info.vapidPublicKey) {
+          getStore().setVapidPublicKey(info.vapidPublicKey);
+        }
         getStore().setReconnectState(0, null);
         getStore().setStatus('awaiting_login');
         break;
