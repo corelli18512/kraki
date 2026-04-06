@@ -48,12 +48,16 @@ export class WebPushProvider implements PushProvider {
       return { success: true };
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;
+      const body = (err as { body?: string }).body;
       if (statusCode === 404 || statusCode === 410) {
         logger.info('Web push subscription expired', { endpoint: subscription.endpoint?.slice(-30) });
         return { success: false, gone: true, error: 'Subscription expired' };
       }
-      logger.warn('Web push send failed', { status: statusCode, error: (err as Error).message });
-      return { success: false, error: (err as Error).message };
+      logger.warn('Web push send failed', {
+        status: statusCode,
+        error: (err as Error).message || body || String(err),
+      });
+      return { success: false, error: (err as Error).message || body || 'Unknown error' };
     }
   }
 }
