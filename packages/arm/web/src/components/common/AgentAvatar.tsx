@@ -4,6 +4,7 @@ interface AgentAvatarProps {
   agent: string;
   size?: 'sm' | 'md';
   status?: 'active' | 'idle';
+  badge?: 'question' | 'permission';
 }
 
 const sizeClasses = {
@@ -19,18 +20,22 @@ const agentColors: Record<string, string> = {
 
 const fallbackColor = 'bg-surface-tertiary text-text-secondary';
 
-export function AgentAvatar({ agent, size = 'md', status }: AgentAvatarProps) {
+export function AgentAvatar({ agent, size = 'md', status, badge }: AgentAvatarProps) {
   const { emoji } = agentInfo(agent);
   const colorClass = agentColors[agent.toLowerCase()] ?? fallbackColor;
+  const badgeSize = size === 'sm' ? 'text-[9px]' : 'text-[11px]';
+
+  // Badge priority: permission > question > idle coffee
+  const badgeEmoji = badge === 'permission' ? '🔑' : badge === 'question' ? '❓' : status === 'idle' ? '☕' : null;
 
   return (
     <div className="relative inline-flex shrink-0">
       <div className={`flex items-center justify-center ${colorClass} ${sizeClasses[size]}`}>
         {emoji}
       </div>
-      {status === 'idle' && (
-        <span className={`absolute -bottom-0.5 -right-1 leading-none ${size === 'sm' ? 'text-[9px]' : 'text-[11px]'}`}>
-          ☕
+      {badgeEmoji && (
+        <span className={`absolute -bottom-0.5 -right-1 leading-none ${badgeSize}`}>
+          {badgeEmoji}
         </span>
       )}
     </div>

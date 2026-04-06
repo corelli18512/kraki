@@ -37,12 +37,12 @@ function rebuildPreview(sessionId: string): void {
 
     if (m.type === 'question' && payload) {
       const q = typeof payload.question === 'string' ? payload.question : '';
-      preview = { text: `❓ ${q}`.slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
+      preview = { text: q.slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
       break;
     }
     if (m.type === 'permission' && payload) {
       const tool = typeof payload.toolName === 'string' ? payload.toolName : '';
-      preview = { text: `🔒 ${tool}`.slice(0, PREVIEW_MAX), type: 'permission', timestamp: ts };
+      preview = { text: tool.slice(0, PREVIEW_MAX), type: 'permission', timestamp: ts };
       break;
     }
     if (m.type === 'error' && payload) {

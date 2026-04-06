@@ -169,7 +169,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       store.addPermission(perm);
       store.appendMessage(sid, msg);
       updatePreview(sid, {
-        text: truncPreview(`🔒 ${msg.payload.toolName}`),
+        text: truncPreview(msg.payload.toolName),
         type: 'permission',
         timestamp: msg.timestamp,
       }, !replaying);
@@ -187,7 +187,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       store.addQuestion(q);
       store.appendMessage(sid, msg);
       updatePreview(sid, {
-        text: truncPreview(`❓ ${msg.payload.question}`),
+        text: truncPreview(msg.payload.question),
         type: 'question',
         timestamp: msg.timestamp,
       }, !replaying);
