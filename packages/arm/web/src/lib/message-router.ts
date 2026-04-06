@@ -139,10 +139,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
-      // Set preview eagerly — idle will overwrite with the final version + trigger unread
-      if (typeof msg.payload.content === 'string') {
-        updatePreview(sid, { text: truncPreview(msg.payload.content), type: 'agent', timestamp: msg.timestamp }, false);
-      }
+      // Preview is set by idle handler (final answer only) and rebuildPreview (IDB/replay).
+      // Setting it here would show intermediate thinking-step messages.
       break;
     }
 
