@@ -23,8 +23,14 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const setDraft = useStore((s) => s.setDraft);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss') as typeof MODES[number];
   const session = useStore((s) => s.sessions.get(sessionId));
-  const hasPendingInput = useStore((s) => (s.messages.get(sessionId) ?? []).some((m) => m.type === 'pending_input'));
-  const isIdle = (!session || session.state !== 'active') && !hasPendingInput;
+  const sessionActive = session?.state === 'active';
+  const [awaitingActive, setAwaitingActive] = useState(false);
+  const isIdle = !sessionActive && !awaitingActive;
+
+  // Clear awaitingActive once session goes active
+  useEffect(() => {
+    if (sessionActive) setAwaitingActive(false);
+  }, [sessionActive]);
   const modeContainerRef = useRef<HTMLDivElement>(null);
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
@@ -200,6 +206,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     wsClient.sendInput(sessionId, trimmed || '[image]', attachments);
     setDraft(sessionId, '');
     clearImage();
+    setAwaitingActive(true);
     if (!shouldAutoFocus) textareaRef.current?.blur();
   };
 
