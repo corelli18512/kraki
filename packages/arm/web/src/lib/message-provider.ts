@@ -11,12 +11,69 @@
 import { getStore } from './store-adapter';
 import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { createLogger } from './logger';
-import type { ChatMessage, PendingPermission, PendingQuestion } from '../types/store';
+import type { ChatMessage, PendingPermission, PendingQuestion, SessionPreview } from '../types/store';
 
 const logger = createLogger('msg-provider');
 
 const PAGE_SIZE = 100;
 const LATEST_SIZE = 50;
+const PREVIEW_MAX = 80;
+
+/**
+ * Rebuild session preview from the current messages in the store.
+ * Scans backwards for the last meaningful message (agent answer after idle,
+ * question, permission, error, user_message, or answer).
+ */
+function rebuildPreview(sessionId: string): void {
+  const store = getStore();
+  const msgs = store.messages.get(sessionId);
+  if (!msgs || msgs.length === 0) return;
+
+  let preview: SessionPreview | null = null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    const ts = 'timestamp' in m ? (m as { timestamp: string }).timestamp : '';
+    const payload = 'payload' in m ? (m.payload as Record<string, unknown>) : null;
+
+    if (m.type === 'question' && payload) {
+      const q = typeof payload.question === 'string' ? payload.question : '';
+      preview = { text: `❓ ${q}`.slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
+      break;
+    }
+    if (m.type === 'permission' && payload) {
+      const tool = typeof payload.toolName === 'string' ? payload.toolName : '';
+      preview = { text: `🔒 ${tool}`.slice(0, PREVIEW_MAX), type: 'permission', timestamp: ts };
+      break;
+    }
+    if (m.type === 'error' && payload) {
+      const msg = typeof payload.message === 'string' ? payload.message : 'Error';
+      preview = { text: msg.slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
+      break;
+    }
+    if (m.type === 'user_message' && payload) {
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      preview = { text: content.slice(0, PREVIEW_MAX), type: 'user', timestamp: ts };
+      break;
+    }
+    if (m.type === 'answer' && payload) {
+      const answer = typeof payload.answer === 'string' ? payload.answer : '';
+      if (answer) { preview = { text: answer.slice(0, PREVIEW_MAX), type: 'answer', timestamp: ts }; break; }
+    }
+    if (m.type === 'agent_message' && payload) {
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      // Only use agent_message if it's the final answer (followed by idle or is the last message)
+      const next = msgs[i + 1];
+      if (!next || next.type === 'idle') {
+        preview = { text: content.slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
+        break;
+      }
+    }
+  }
+
+  if (preview) {
+    store.setSessionPreview(sessionId, preview);
+  }
+}
 
 /**
  * Scan replayed messages for pending permissions/questions that didn't go
@@ -166,12 +223,12 @@ class MessageProvider {
       dbLastSeq = lastSeq;
 
       if (lastSeq > 0) {
-        // Load latest LATEST_SIZE from DB into store
         const allMsgs = await db.getMessages(sessionId);
         const latestFromDb = allMsgs.slice(-LATEST_SIZE);
         if (latestFromDb.length > 0) {
           getStore().prependMessages(sessionId, latestFromDb);
           processReplayedActions(sessionId, latestFromDb as ChatMessage[]);
+          rebuildPreview(sessionId);
           logger.info('loaded from IndexedDB', { sessionId, count: latestFromDb.length, dbLastSeq: lastSeq });
         }
       }
@@ -271,6 +328,7 @@ class MessageProvider {
     if (typed.length > 0) {
       getStore().prependMessages(sessionId, typed);
       processReplayedActions(sessionId, typed);
+      rebuildPreview(sessionId);
     }
 
     // Clear internal loading keys for this session
