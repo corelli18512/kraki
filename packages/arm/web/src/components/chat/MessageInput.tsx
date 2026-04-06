@@ -338,7 +338,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             className={`relative flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-xl text-white transition-all duration-500 active:scale-95 ${
               isIdle
                 ? 'bg-kraki-500 hover:bg-kraki-600 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100'
-                : 'animate-pulse-subtle bg-red-500/70 hover:bg-red-500'
+                : 'animate-pulse-subtle bg-kraki-500 hover:bg-kraki-600'
             }`}
           >
             <svg
