@@ -12,8 +12,9 @@ const INITIAL_DELAY_SECS: u64 = 5;
 pub static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Fetches the latest release tag from the GitHub API via curl subprocess.
+/// Considers releases tagged with "v" prefix (e.g. v0.8.0).
 pub fn fetch_latest_version() -> Option<String> {
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases");
 
     let output = std::process::Command::new("curl")
         .args([
@@ -30,16 +31,30 @@ pub fn fetch_latest_version() -> Option<String> {
         return None;
     }
 
-    parse_tag_name(&String::from_utf8(output.stdout).ok()?)
+    let body = String::from_utf8(output.stdout).ok()?;
+    // Find the first tag_name matching "v..."
+    for tag in extract_tag_names(&body) {
+        if let Some(ver) = tag.strip_prefix('v') {
+            return Some(ver.to_string());
+        }
+    }
+    None
 }
 
-fn parse_tag_name(json: &str) -> Option<String> {
+/// Extract all "tag_name" values from a JSON array of releases.
+fn extract_tag_names(json: &str) -> Vec<String> {
     let key = "\"tag_name\":";
-    let start = json.find(key)? + key.len();
-    let rest = json[start..].trim_start_matches([' ', '"']);
-    let end = rest.find('"')?;
-    let tag = &rest[..end];
-    Some(tag.strip_prefix('v').unwrap_or(tag).to_string())
+    let mut tags = Vec::new();
+    let mut pos = 0;
+    while let Some(idx) = json[pos..].find(key) {
+        let start = pos + idx + key.len();
+        let rest = json[start..].trim_start_matches([' ', '"']);
+        if let Some(end) = rest.find('"') {
+            tags.push(rest[..end].to_string());
+        }
+        pos = start;
+    }
+    tags
 }
 
 /// Returns true if `latest` is strictly newer than `current` (semver comparison).
@@ -101,8 +116,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_tag_name() {
-        let json = r#"{"tag_name":"v0.4.8","name":"Release 0.4.8"}"#;
-        assert_eq!(parse_tag_name(json), Some("0.4.8".to_string()));
+    fn test_extract_tag_names() {
+        let json = r#"[{"tag_name":"v0.8.0"},{"tag_name":"v0.7.2"}]"#;
+        let tags = extract_tag_names(json);
+        assert_eq!(tags, vec!["v0.8.0", "v0.7.2"]);
     }
 }

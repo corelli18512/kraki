@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kraki",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "identifier": "cloud.corelli.kraki.toolbar",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm exec vite",
     "beforeBuildCommand": "pnpm build:icons && pnpm build"
   },
   "app": {
@@ -24,13 +24,6 @@
         "center": true
       }
     ],
-    "trayIcon": {
-      "id": "kraki-tray",
-      "iconPath": "icons/tray-disconnected.png",
-      "iconAsTemplate": true,
-      "menuOnLeftClick": true,
-      "tooltip": "Kraki"
-    },
     "security": {
       "csp": null
     }

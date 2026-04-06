@@ -80,6 +80,22 @@ jobs:
       - name: Generate tray icons
         run: pnpm --filter @kraki/toolbar build:icons
 
+      - name: Inject tentacle version into toolbar
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          echo "Injecting version $VERSION into toolbar"
+          sed -i.bak "s/^version = .*/version = \"$VERSION\"/" packages/toolbar/src-tauri/Cargo.toml
+          rm -f packages/toolbar/src-tauri/Cargo.toml.bak
+          node -e "
+            const fs = require('fs');
+            for (const f of ['packages/toolbar/src-tauri/tauri.conf.json', 'packages/toolbar/package.json']) {
+              const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+              j.version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+            }
+          "
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -87,7 +103,7 @@ jobs:
         with:
           projectPath: packages/toolbar
           tagName: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-          releaseName: Kraki Toolbar ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          releaseName: Kraki ${{ github.event.release.tag_name || github.event.inputs.tag }}
           releaseBody: Desktop toolbar for Kraki — macOS menu bar & Windows system tray.
           releaseDraft: false
           prerelease: false

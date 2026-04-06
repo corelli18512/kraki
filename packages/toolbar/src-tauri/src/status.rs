@@ -10,6 +10,7 @@ const POLL_INTERVAL_SECS: u64 = 2;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DaemonStatus {
     #[serde(default)]
     pub daemon_running: bool,

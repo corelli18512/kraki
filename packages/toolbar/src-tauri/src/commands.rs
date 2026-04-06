@@ -1,4 +1,3 @@
-use std::process::Stdio;
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 

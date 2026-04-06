@@ -1,6 +1,6 @@
 {
   "name": "@kraki/toolbar",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "description": "Kraki desktop toolbar — macOS menu bar & Windows system tray for tentacle",
   "private": true,
   "type": "module",

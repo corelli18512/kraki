@@ -12,7 +12,8 @@ const ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
 
 pub fn setup_tray(app: &mut App) -> tauri::Result<()> {
-    let menu = build_menu(app, &DaemonStatus::default(), None)?;
+    let handle = app.handle();
+    let menu = build_menu(handle, &DaemonStatus::default(), None)?;
     let icon = Image::from_bytes(ICON_DISCONNECTED)?;
 
     TrayIconBuilder::with_id("kraki-tray")
@@ -116,11 +117,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "pair" => open_qr_window(app),
         "do_update" | "check_updates" => {
-            // Trigger a fresh check then open releases page
+            let is_check = id == "check_updates";
             let app = app.clone();
             std::thread::spawn(move || {
-                if id == "check_updates" {
-                    // Perform an on-demand check
+                if is_check {
                     let current = env!("CARGO_PKG_VERSION");
                     if let Some(latest) = crate::update::fetch_latest_version() {
                         if crate::update::is_newer(&latest, current) {
