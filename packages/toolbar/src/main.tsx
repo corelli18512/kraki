@@ -1,13 +1,18 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import QrWindow from './windows/QrWindow.js';
+import SetupWindow from './windows/SetupWindow.js';
 import './index.css';
 
-// The toolbar has no main window — the tray menu is managed by Rust.
-// This React app only renders the QR pairing window, identified by the
-// window label set in tauri.conf.json.
+// Route by Tauri window label — the toolbar has no main window,
+// only purpose-specific windows opened from Rust.
+const label = getCurrentWindow().label;
+
+const Window = label === 'setup' ? SetupWindow : QrWindow;
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <QrWindow />
+    <Window />
   </React.StrictMode>,
 );

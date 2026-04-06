@@ -38,6 +38,9 @@ function printHelp(): void {
   kraki connect        Generate QR code to connect a device
   kraki connect --url-only
                        Print pairing URL only (for toolbar / scripts)
+  kraki setup --headless
+                       Non-interactive setup (for toolbar / scripts)
+  kraki doctor         Print environment status as JSON
   kraki status         Show status and connection info
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
@@ -362,6 +365,66 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   }
 }
 
+// ── kraki setup --headless — non-interactive setup ──────
+
+function getArgValue(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+async function cmdSetupHeadless(args: string[]): Promise<void> {
+  const relay = getArgValue(args, '--relay');
+  const auth = getArgValue(args, '--auth') ?? 'github_token';
+  const deviceName = getArgValue(args, '--device-name');
+  const githubToken = getArgValue(args, '--github-token');
+
+  if (!relay) {
+    process.stderr.write('error: --relay is required\n');
+    process.exit(1);
+    return;
+  }
+
+  // Resolve GitHub token: explicit flag > gh CLI > saved token
+  if (auth === 'github_token' && githubToken) {
+    const { saveGitHubToken } = await import('./config.js');
+    saveGitHubToken(githubToken);
+  }
+
+  const { hostname } = await import('node:os');
+  const { getOrCreateDeviceId, DEFAULT_LOG_VERBOSITY } = await import('./config.js');
+  const deviceId = getOrCreateDeviceId();
+
+  const config: KrakiConfig = {
+    relay,
+    authMethod: auth as KrakiConfig['authMethod'],
+    device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
+    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
+  };
+
+  saveConfig(config);
+  process.stdout.write(JSON.stringify({ ok: true, configPath: getConfigPath() }) + '\n');
+}
+
+// ── kraki doctor — environment status as JSON ───────────
+
+async function cmdDoctor(): Promise<void> {
+  const { checkGhAuth, checkCopilotCli } = await import('./checks.js');
+  const config = loadConfig();
+  const ghAuth = checkGhAuth();
+  const copilot = checkCopilotCli();
+
+  const result = {
+    configExists: config !== null,
+    daemonRunning: isDaemonRunning(),
+    ghAuth: ghAuth.authenticated,
+    ghUser: ghAuth.username ?? null,
+    copilotCli: copilot.found,
+    copilotVersion: copilot.version ?? null,
+  };
+
+  process.stdout.write(JSON.stringify(result) + '\n');
+}
+
 // ── Arg parsing ─────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -408,6 +471,21 @@ async function main(): Promise<void> {
   if (cmd === 'connect') {
     const urlOnly = args.includes('--url-only');
     await cmdConnect(urlOnly);
+    return;
+  }
+
+  if (cmd === 'setup') {
+    if (args.includes('--headless')) {
+      await cmdSetupHeadless(args);
+    } else {
+      const config = await runSetup();
+      await silentStart(config);
+    }
+    return;
+  }
+
+  if (cmd === 'doctor') {
+    await cmdDoctor();
     return;
   }
 

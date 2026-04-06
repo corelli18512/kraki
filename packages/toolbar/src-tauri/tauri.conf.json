@@ -22,6 +22,16 @@
         "decorations": true,
         "alwaysOnTop": true,
         "center": true
+      },
+      {
+        "label": "setup",
+        "title": "Set up Kraki",
+        "width": 480,
+        "height": 580,
+        "resizable": false,
+        "visible": false,
+        "decorations": true,
+        "center": true
       }
     ],
     "security": {

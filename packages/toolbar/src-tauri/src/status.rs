@@ -26,12 +26,21 @@ fn default_relay_state() -> String {
     "disconnected".to_string()
 }
 
-fn get_status_path() -> std::path::PathBuf {
+fn get_kraki_home() -> std::path::PathBuf {
     let home = std::env::var("KRAKI_HOME").unwrap_or_else(|_| {
         let base = dirs_next();
         format!("{base}/.kraki")
     });
-    std::path::PathBuf::from(home).join("status.json")
+    std::path::PathBuf::from(home)
+}
+
+fn get_status_path() -> std::path::PathBuf {
+    get_kraki_home().join("status.json")
+}
+
+/// Check if Kraki has been configured (config.json exists).
+pub fn config_exists() -> bool {
+    get_kraki_home().join("config.json").exists()
 }
 
 fn dirs_next() -> String {
