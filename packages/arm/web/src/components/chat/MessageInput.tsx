@@ -230,8 +230,9 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           onChange={handleFileSelect}
           style={{ display: 'none' }}
         />
-        <div className="relative mb-1.5 flex items-start gap-1.5">
-          {imagePreview ? (
+        {/* Image thumbnail — floats above input, doesn't affect row height */}
+        {imagePreview && (
+          <div className="mb-1.5 flex">
             <div className="relative shrink-0">
               <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
                 <img src={imagePreview} alt="Preview" className="h-14 w-14 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
@@ -244,7 +245,10 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
                 <X className="h-3 w-3 text-text-muted" />
               </button>
             </div>
-          ) : (
+          </div>
+        )}
+        <div className="relative mb-1.5 flex items-center gap-1.5">
+          {!imagePreview && (
             <label
               htmlFor={`img-upload-${sessionId}`}
               aria-label="Attach image"
