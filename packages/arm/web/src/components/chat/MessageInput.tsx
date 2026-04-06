@@ -255,7 +255,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           {/* Desktop: always show all modes */}
           <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
             <div
-              className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+              className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-500 ease-in-out ${colors.pill}`}
               style={{ left: pill.left, width: pill.width }}
             />
             {MODES.map((mode) => (
@@ -285,7 +285,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               <div ref={mobileContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
                 {mobilePill && (
                   <div
-                    className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+                    className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-500 ease-in-out ${colors.pill}`}
                     style={{ left: mobilePill.left, width: mobilePill.width }}
                   />
                 )}
@@ -335,19 +335,19 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             onClick={isIdle ? handleSend : () => wsClient.abortSession(sessionId)}
             disabled={isIdle && !text.trim() && !imageAttachment}
             aria-label={isIdle ? 'Send message' : 'Stop'}
-            className={`relative flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl text-white transition-all duration-300 active:scale-95 ${
+            className={`relative flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-xl text-white transition-all duration-500 active:scale-95 ${
               isIdle
                 ? 'bg-kraki-500 hover:bg-kraki-600 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100'
                 : 'animate-pulse-subtle bg-red-500/70 hover:bg-red-500'
             }`}
           >
             <svg
-              className={`absolute h-4 w-4 transition-all duration-300 ${isIdle ? 'scale-100 opacity-100' : 'scale-0 opacity-0'}`}
+              className={`absolute h-4 w-4 transition-all duration-500 ${isIdle ? 'scale-100 opacity-100' : 'scale-0 opacity-0'}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
             </svg>
-            <Square className={`absolute h-3.5 w-3.5 fill-current transition-all duration-300 ${isIdle ? 'scale-0 opacity-0' : 'scale-100 opacity-100'}`} />
+            <Square className={`absolute h-3.5 w-3.5 fill-current transition-all duration-500 ${isIdle ? 'scale-0 opacity-0' : 'scale-100 opacity-100'}`} />
           </button>
         </div>
       </div>
