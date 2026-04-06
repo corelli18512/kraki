@@ -66,6 +66,13 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     setTimeout(() => { setMobileExpanded(false); setMobileClosing(false); }, 200);
   };
 
+  // Auto-collapse mobile mode switcher after 3s
+  useEffect(() => {
+    if (!mobileExpanded || mobileClosing) return;
+    const timer = setTimeout(closeMobile, 3000);
+    return () => clearTimeout(timer);
+  }, [mobileExpanded, mobileClosing]);
+
   const handleMobileSelect = (mode: typeof MODES[number]) => {
     wsClient.setSessionMode(sessionId, mode);
     closeMobile();
@@ -211,7 +218,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       handleSend();
     }
@@ -261,6 +268,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             {MODES.map((mode) => (
               <button
                 key={mode}
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => wsClient.setSessionMode(sessionId, mode)}
                 className={`relative z-10 px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${
                   sessionMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
@@ -273,6 +281,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           {/* Mobile collapsed: show current mode only */}
           {!mobileExpanded && (
             <button
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setMobileExpanded(true)}
               className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:hidden ${colors.pill} ${colors.text}`}
             >
@@ -292,6 +301,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
                 {MODES.map((mode) => (
                   <button
                     key={mode}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => handleMobileSelect(mode)}
                     className={`relative z-10 px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${
                       sessionMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
