@@ -30,6 +30,7 @@ packages/arm/web/e2e-*.png
 
 # Xcode / iOS build artifacts
 packages/arm/ios/build/
+packages/arm/ios/.build/
 packages/arm/ios/DerivedData/
 *.xcuserdata
 xcuserdata/

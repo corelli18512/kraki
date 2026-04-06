@@ -1,3 +1,4 @@
+#if os(iOS)
 /// DeviceDetailView — Full device info panel with models, sessions, and removal.
 ///
 /// Mirrors DevicePanel.tsx. Shows device metadata, supported models,
@@ -88,7 +89,7 @@ struct DeviceDetailView: View {
             if isCurrentDevice {
                 Text("This device")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.krakiPrimary)
+                    .foregroundStyle(Color.krakiPrimary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Color.krakiPrimary.opacity(0.12))
@@ -219,7 +220,7 @@ struct FlowLayout: Layout {
         let rows = computeRows(proposal: proposal, subviews: subviews)
         var height: CGFloat = 0
         for (i, row) in rows.enumerated() {
-            let rowHeight = row.map(\.sizeThatFits(.unspecified).height).max() ?? 0
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
             height += rowHeight + (i > 0 ? spacing : 0)
         }
         return CGSize(width: proposal.width ?? 0, height: height)
@@ -229,7 +230,7 @@ struct FlowLayout: Layout {
         let rows = computeRows(proposal: proposal, subviews: subviews)
         var y = bounds.minY
         for row in rows {
-            let rowHeight = row.map(\.sizeThatFits(.unspecified).height).max() ?? 0
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
             var x = bounds.minX
             for subview in row {
                 let size = subview.sizeThatFits(.unspecified)
@@ -257,3 +258,5 @@ struct FlowLayout: Layout {
         return rows
     }
 }
+
+#endif

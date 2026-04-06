@@ -1,3 +1,4 @@
+#if os(iOS)
 /// PermissionCardView — Amber-bordered action card for tool permission requests.
 ///
 /// Mirrors PermissionInput.tsx. Shows the tool, description, args summary,
@@ -151,3 +152,5 @@ struct PermissionStackView: View {
         }
     }
 }
+
+#endif

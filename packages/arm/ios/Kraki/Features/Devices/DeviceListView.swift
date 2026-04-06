@@ -1,3 +1,4 @@
+#if os(iOS)
 /// DeviceListView — NavigationStack list of devices grouped by online status.
 ///
 /// Mirrors the mobile column of DeviceGrid.tsx. Shows tentacle devices
@@ -127,3 +128,5 @@ private struct DeviceRow: View {
         }
     }
 }
+
+#endif

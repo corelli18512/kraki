@@ -1,3 +1,4 @@
+#if os(iOS)
 /// MarkdownText — Simple markdown rendering using SwiftUI's built-in
 /// AttributedString parser plus a custom code-block handler.
 
@@ -118,3 +119,5 @@ private func parseSegments(_ text: String) -> [MarkdownSegment] {
 
     return segments
 }
+
+#endif
