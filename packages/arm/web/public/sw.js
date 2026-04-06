@@ -46,19 +46,17 @@ self.addEventListener('notificationclick', (event) => {
   notifEvent.notification.close();
 
   const sessionId = notifEvent.notification.data?.sessionId;
-  const url = sessionId ? `/session/${sessionId}` : '/';
+  const path = sessionId ? `/session/${sessionId}` : '/';
+  const fullUrl = new URL(path, self.location.origin).href;
 
   notifEvent.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // If Kraki is already open, focus it
       for (const client of windowClients) {
-        if (client.url.includes(self.location.origin)) {
-          client.navigate(url);
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
           return client.focus();
         }
       }
-      // Otherwise open a new window
-      return self.clients.openWindow(url);
+      return self.clients.openWindow(fullUrl);
     })
   );
 });

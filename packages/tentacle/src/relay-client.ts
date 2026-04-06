@@ -934,8 +934,8 @@ export class RelayClient {
     }
 
     if (this.keyManager) {
-      if (this.onlineConsumers.size === 0) {
-        // No consumers online — queue (bounded to prevent memory growth)
+      if (this.consumerKeys.size === 0) {
+        // No consumer keys at all — queue until a device registers
         if (this.pendingE2eQueue.length < 1000) {
           this.pendingE2eQueue.push(msg);
         } else {
@@ -944,7 +944,15 @@ export class RelayClient {
         return;
       }
 
+      // Broadcast to all known devices (online get it via WS, offline via pushPreview)
       this.sendEncrypted(msg);
+
+      // Also queue if no online consumers, so new devices get it on connect
+      if (this.onlineConsumers.size === 0) {
+        if (this.pendingE2eQueue.length < 1000) {
+          this.pendingE2eQueue.push(msg);
+        }
+      }
       return;
     }
 
