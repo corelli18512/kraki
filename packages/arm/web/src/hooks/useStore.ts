@@ -370,9 +370,9 @@ export const useStore = create<Store>()(persist((set) => ({
     streamingContent: new Map(),
     unreadCount: new Map(),
     sessionUsage: new Map(),
-    sessionPreviews: new Map(),
     pendingPermissions: new Map(),
     pendingQuestions: new Map(),
+    // sessionPreviews kept — persisted snapshot shown until rebuildPreview refreshes.
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
     // pendingPermissions/pendingQuestions are in-memory only —
@@ -416,6 +416,7 @@ export const useStore = create<Store>()(persist((set) => ({
     devices: state.devices,
     unreadCount: state.unreadCount,
     sessionModes: state.sessionModes,
+    sessionPreviews: state.sessionPreviews,
     drafts: state.drafts,
     // messages are stored in IndexedDB, not localStorage
     // pinnedSessions are synced from tentacle via session_list / session_pinned
