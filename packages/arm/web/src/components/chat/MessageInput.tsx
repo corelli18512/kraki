@@ -230,33 +230,27 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           onChange={handleFileSelect}
           style={{ display: 'none' }}
         />
-        {/* Image thumbnail — floats above input, doesn't affect row height */}
-        {imagePreview && (
-          <div className="mb-1.5 flex">
-            <div className="relative shrink-0">
-              <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
-                <img src={imagePreview} alt="Preview" className="h-14 w-14 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
-              </label>
-              <button
-                onClick={clearImage}
-                aria-label="Remove image"
-                className="absolute -right-1.5 -top-1.5 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
-              >
-                <X className="h-3 w-3 text-text-muted" />
-              </button>
-            </div>
-          </div>
-        )}
         <div className="relative mb-1.5 flex items-center gap-1.5">
-          {!imagePreview && (
-            <label
-              htmlFor={`img-upload-${sessionId}`}
-              aria-label="Attach image"
-              className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''}`}
-            >
+          <label
+            htmlFor={`img-upload-${sessionId}`}
+            aria-label={imagePreview ? 'Replace image' : 'Attach image'}
+            className={`shrink-0 cursor-pointer rounded-lg transition-colors active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''} ${imagePreview ? '' : 'flex h-8 w-8 items-center justify-center text-text-muted hover:bg-surface-tertiary hover:text-text-primary'}`}
+          >
+            {imagePreview ? (
+              <div className="relative">
+                <img src={imagePreview} alt="Preview" className="h-8 w-8 rounded-lg border border-border-primary object-cover transition-opacity hover:opacity-80" />
+                <button
+                  onClick={(e) => { e.preventDefault(); clearImage(); }}
+                  aria-label="Remove image"
+                  className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
+                >
+                  <X className="h-2.5 w-2.5 text-text-muted" />
+                </button>
+              </div>
+            ) : (
               <ImagePlus className="h-4.5 w-4.5" />
-            </label>
-          )}
+            )}
+          </label>
           <div className="flex-1" />
           {/* Desktop: always show all modes */}
           <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
