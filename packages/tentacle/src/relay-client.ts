@@ -54,8 +54,10 @@ export class RelayClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect = false;
   private authInfo: AuthOkMessage | null = null;
-  /** Cached consumer public keys for E2E encryption */
+  /** Cached consumer public keys for E2E encryption (includes offline devices for pushPreview) */
   private consumerKeys = new Map<string, string>();
+  /** Device IDs of currently connected consumers (for queue decision) */
+  private onlineConsumers = new Set<string>();
   /** Messages queued when E2E is enabled but no consumer keys are available yet */
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
@@ -264,6 +266,7 @@ export class RelayClient {
         const key = device.encryptionKey ?? device.publicKey;
         if (key) {
           this.consumerKeys.set(device.id, key);
+          this.onlineConsumers.add(device.id);
           this.flushE2eQueue();
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
@@ -276,7 +279,15 @@ export class RelayClient {
 
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
+      this.onlineConsumers.delete(deviceId);
+      // Keep consumerKeys — offline devices still need pushPreview encrypted for them.
+      return;
+    }
+
+    if (msg.type === 'device_removed') {
+      const deviceId = msg.deviceId as string;
       this.consumerKeys.delete(deviceId);
+      this.onlineConsumers.delete(deviceId);
       return;
     }
 
@@ -923,7 +934,7 @@ export class RelayClient {
     }
 
     if (this.keyManager) {
-      if (this.consumerKeys.size === 0) {
+      if (this.onlineConsumers.size === 0) {
         // No consumers online — queue (bounded to prevent memory growth)
         if (this.pendingE2eQueue.length < 1000) {
           this.pendingE2eQueue.push(msg);
@@ -1067,7 +1078,7 @@ export class RelayClient {
    * Flush queued E2E messages once consumer keys become available.
    */
   private flushE2eQueue(): void {
-    if (this.consumerKeys.size === 0 || this.pendingE2eQueue.length === 0) return;
+    if (this.onlineConsumers.size === 0 || this.pendingE2eQueue.length === 0) return;
     const queued = this.pendingE2eQueue.splice(0);
     for (const msg of queued) {
       this.sendEncrypted(msg);
@@ -1076,10 +1087,14 @@ export class RelayClient {
 
   private updateConsumerKeys(devices: DeviceSummary[]): void {
     this.consumerKeys.clear();
+    this.onlineConsumers.clear();
     for (const d of devices) {
       if (d.role === 'app') {
         const key = d.encryptionKey ?? d.publicKey;
-        if (key) this.consumerKeys.set(d.id, key);
+        if (key) {
+          this.consumerKeys.set(d.id, key);
+          if (d.online) this.onlineConsumers.add(d.id);
+        }
       }
     }
     // Flush queued messages now that we have consumer keys
