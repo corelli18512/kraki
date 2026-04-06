@@ -213,17 +213,17 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     <div className="relative shrink-0 bg-surface-primary px-3 pb-3 pt-1.5 sm:px-4 sm:pb-4 sm:pt-2">
       <div className="pointer-events-none absolute inset-x-0 -top-4 h-4 bg-gradient-to-t from-surface-primary to-transparent" />
       <div className="mx-auto max-w-3xl">
-        {/* Top bar: image button (left) + mode switcher (right) */}
-        <div className="relative mb-1.5 flex items-center gap-1.5">
-          <input
-            id={`img-upload-${sessionId}`}
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={handleFileSelect}
-            style={{ display: 'none' }}
-          />
-          {imagePreview ? (
+        {/* Image preview — above input, left-aligned */}
+        <input
+          id={`img-upload-${sessionId}`}
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          onChange={handleFileSelect}
+          style={{ display: 'none' }}
+        />
+        {imagePreview && (
+          <div className="mb-1.5 flex">
             <div className="relative shrink-0">
               <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
                 <img src={imagePreview} alt="Preview" className="h-14 w-14 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
@@ -236,7 +236,12 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
                 <X className="h-3 w-3 text-text-muted" />
               </button>
             </div>
-          ) : (
+          </div>
+        )}
+
+        {/* Mode switcher — above input, right-aligned */}
+        <div className="relative mb-1.5 flex items-center justify-end gap-1.5">
+          {!imagePreview && (
             <label
               htmlFor={`img-upload-${sessionId}`}
               aria-label="Attach image"
