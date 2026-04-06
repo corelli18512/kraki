@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { X, Image as ImageIcon } from 'lucide-react';
+import { X, Image as ImageIcon, Square } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 
 const MAX_INPUT_HEIGHT = 160;
@@ -22,6 +22,8 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
   const setDraft = useStore((s) => s.setDraft);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss') as typeof MODES[number];
+  const session = useStore((s) => s.sessions.get(sessionId));
+  const isIdle = !session || session.state !== 'active';
   const modeContainerRef = useRef<HTMLDivElement>(null);
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
@@ -102,13 +104,11 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(img, 0, 0, width, height);
 
-    // Try original format first, fall back to JPEG with compression
     let dataUrl = canvas.toDataURL(file.type || 'image/jpeg', 0.8);
     const base64 = dataUrl.split(',')[1];
     const byteSize = Math.ceil(base64.length * 3 / 4);
 
     if (byteSize > MAX_IMAGE_SIZE) {
-      // Compress harder
       dataUrl = canvas.toDataURL('image/jpeg', 0.6);
       const retryBase64 = dataUrl.split(',')[1];
       const retrySize = Math.ceil(retryBase64.length * 3 / 4);
@@ -163,23 +163,20 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     }
   }, [imageAttachment, compressAndAttach]);
 
-  // Auto-focus on mount (when navigating into a session)
+  // Auto-focus on mount
   useEffect(() => {
     if (!shouldAutoFocus) return;
     textareaRef.current?.focus();
   }, [sessionId, shouldAutoFocus]);
 
-  // Auto-focus on keypress when no other input is focused
+  // Auto-focus on keypress
   useEffect(() => {
     if (!shouldAutoFocus) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.activeElement === textareaRef.current) return;
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
-      if (e.key.length === 1) {
-        textareaRef.current?.focus();
-      }
+      if (e.key.length === 1) textareaRef.current?.focus();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -195,16 +192,14 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   }, [text]);
 
   const handleSend = () => {
+    if (!isIdle) return;
     const trimmed = text.trim();
     if (!trimmed && !imageAttachment) return;
     const attachments = imageAttachment ? [imageAttachment] : undefined;
     wsClient.sendInput(sessionId, trimmed || '[image]', attachments);
     setDraft(sessionId, '');
     clearImage();
-    // On mobile, blur to dismiss the keyboard after sending
-    if (!shouldAutoFocus) {
-      textareaRef.current?.blur();
-    }
+    if (!shouldAutoFocus) textareaRef.current?.blur();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -214,38 +209,12 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     }
   };
 
-  const quickSend = (msg: string) => {
-    wsClient.sendInput(sessionId, msg);
-  };
-
-  const quickReplies: Array<{ label: string; style: string }> = [
-    { label: 'Yes', style: 'border-emerald-400/20 text-emerald-500/70 hover:bg-emerald-500/5 dark:text-emerald-200 dark:border-emerald-300/40 dark:hover:bg-emerald-500/15' },
-    { label: 'No', style: 'border-red-400/20 text-red-400/70 hover:bg-red-500/5 dark:text-red-200 dark:border-red-300/40 dark:hover:bg-red-500/15' },
-    { label: 'Continue', style: 'border-blue-400/20 text-blue-500/70 hover:bg-blue-500/5 dark:text-blue-200 dark:border-blue-300/40 dark:hover:bg-blue-500/15' },
-  ];
-
   return (
     <div className="relative shrink-0 bg-surface-primary px-3 pb-3 pt-1.5 sm:px-4 sm:pb-4 sm:pt-2">
       <div className="pointer-events-none absolute inset-x-0 -top-4 h-4 bg-gradient-to-t from-surface-primary to-transparent" />
       <div className="mx-auto max-w-3xl">
-        <div className="mb-1.5 flex items-center gap-1.5">
-          {quickReplies.map(({ label, style }) => (
-            <button
-              key={label}
-              onClick={() => quickSend(label)}
-              className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors active:scale-95 ${style}`}
-            >
-              {label}
-            </button>
-          ))}
-          <div className="mx-0.5 self-stretch border-l border-border-primary" />
-          <button
-            onClick={() => wsClient.abortSession(sessionId)}
-            className="rounded-lg border border-border-primary px-2.5 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-tertiary active:scale-95 dark:text-text-primary dark:hover:bg-surface-secondary"
-          >
-            Cancel
-          </button>
-          <div className="flex-1" />
+        {/* Mode switcher row */}
+        <div className="relative mb-1.5 flex items-center justify-end gap-1.5">
           {/* Desktop: always show all modes */}
           <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
             <div
@@ -273,9 +242,9 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               {sessionMode.charAt(0).toUpperCase() + sessionMode.slice(1)}
             </button>
           )}
-          {/* Mobile expanded: all modes with slide animation */}
+          {/* Mobile expanded: all modes — positioned within this row */}
           {mobileExpanded && (
-            <div className={`absolute inset-0 z-10 flex items-center justify-end bg-gradient-to-l from-surface-primary via-surface-primary to-transparent pl-12 pr-3 sm:hidden ${mobileClosing ? 'animate-slide-out-right' : 'animate-slide-in-right'}`}>
+            <div className={`absolute inset-0 z-10 flex items-center justify-end bg-gradient-to-l from-surface-primary via-surface-primary to-transparent pl-4 pr-0 sm:hidden ${mobileClosing ? 'animate-slide-out-right' : 'animate-slide-in-right'}`}>
               <div ref={mobileContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
                 {mobilePill && (
                   <div
@@ -298,63 +267,87 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             </div>
           )}
         </div>
+
+        {/* Input row */}
         <div className="relative flex gap-2">
-        <input
-          id={`img-upload-${sessionId}`}
-          ref={fileInputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={handleFileSelect}
-          style={{ display: 'none' }}
-        />
-        {imagePreview ? (
-          <div className="relative shrink-0 self-center">
-            <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
-              <img src={imagePreview} alt="Preview" className="h-10 w-10 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
-            </label>
-            <button
-              onClick={clearImage}
-              aria-label="Remove image"
-              className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
+          <input
+            id={`img-upload-${sessionId}`}
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleFileSelect}
+            style={{ display: 'none' }}
+          />
+          {imagePreview ? (
+            <div className="relative shrink-0 self-center">
+              <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
+                <img src={imagePreview} alt="Preview" className="h-10 w-10 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
+              </label>
+              <button
+                onClick={clearImage}
+                aria-label="Remove image"
+                className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
+              >
+                <X className="h-2.5 w-2.5 text-text-muted" />
+              </button>
+            </div>
+          ) : (
+            <label
+              htmlFor={`img-upload-${sessionId}`}
+              aria-label="Attach image"
+              className={`flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center self-center rounded-xl text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''}`}
             >
-              <X className="h-2.5 w-2.5 text-text-muted" />
+              <ImageIcon className="h-5 w-5" />
+            </label>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setDraft(sessionId, e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            rows={1}
+            disabled={!isIdle}
+            placeholder={isIdle ? 'Send a message…' : 'Agent is working…'}
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            enterKeyHint="send"
+            className="min-w-0 flex-1 cursor-text resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 pt-[7px] pb-[9px] pr-9 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
+          />
+          {isIdle && text && (
+            <button
+              onClick={() => { setDraft(sessionId, ''); textareaRef.current?.focus(); }}
+              aria-label="Clear input"
+              className="absolute right-[3.75rem] top-1/2 -translate-y-1/2 rounded-full p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+            >
+              <X className="h-4 w-4" />
             </button>
-          </div>
-        ) : (
-          <label
-            htmlFor={`img-upload-${sessionId}`}
-            aria-label="Attach image"
-            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center self-center rounded-xl text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95"
-          >
-            <ImageIcon className="h-5 w-5" />
-          </label>
-        )}
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setDraft(sessionId, e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          rows={1}
-          placeholder="Send a message…"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          enterKeyHint="send"
-          className="min-w-0 flex-1 cursor-text resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 pt-[7px] pb-[9px] text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
-        />
-        <button
-          onClick={handleSend}
-          disabled={!text.trim() && !imageAttachment}
-          aria-label="Send message"
-          className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-kraki-500 text-white transition-all hover:bg-kraki-600 active:scale-95 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-        </button>
+          )}
+          {isIdle ? (
+            <button
+              onClick={handleSend}
+              disabled={!text.trim() && !imageAttachment}
+              aria-label="Send message"
+              className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-kraki-500 text-white transition-all hover:bg-kraki-600 active:scale-95 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={() => wsClient.abortSession(sessionId)}
+              aria-label="Stop"
+              className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-red-500 text-white transition-all hover:bg-red-600 active:scale-95 active:bg-red-700"
+            >
+              <Square className="h-4 w-4 fill-current" />
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Image replace confirmation */}
       {pendingReplaceFile && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={cancelReplace}>
           <div className="mx-4 rounded-xl bg-surface-primary p-4 shadow-xl border border-border-primary" onClick={(e) => e.stopPropagation()}>

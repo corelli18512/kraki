@@ -395,16 +395,19 @@ describe('MessageInput', () => {
     expect(screen.getByLabelText('Send message')).toBeDisabled();
   });
 
-  it('renders cancel button that calls abortSession', async () => {
+  it('renders stop button when session is active', async () => {
     const user = userEvent.setup();
+    // Set session to active state
+    const { useStore } = await import('../hooks/useStore');
+    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'copilot', state: 'active', messageCount: 0 });
     render(
       <MemoryRouter>
         <MessageInput sessionId="sess-1" />
       </MemoryRouter>,
     );
-    const cancelBtn = screen.getByText('Cancel');
-    expect(cancelBtn).toBeInTheDocument();
-    await user.click(cancelBtn);
+    const stopBtn = screen.getByLabelText('Stop');
+    expect(stopBtn).toBeInTheDocument();
+    await user.click(stopBtn);
     expect(wsClient.abortSession).toHaveBeenCalledWith('sess-1');
   });
 });
