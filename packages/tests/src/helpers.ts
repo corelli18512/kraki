@@ -75,6 +75,8 @@ export function createRelayClient(
 export interface MockApp {
   ws: WebSocket;
   messages: Record<string, unknown>[];
+  /** Raw envelopes before decryption (broadcast/unicast with blob, keys, pushPreview) */
+  rawEnvelopes: Record<string, unknown>[];
   authOk: Record<string, unknown>;
   deviceId: string;
   keyPair: KeyPair;
@@ -101,6 +103,7 @@ export async function connectApp(
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   const messages: Record<string, unknown>[] = [];
+  const rawEnvelopes: Record<string, unknown>[] = [];
   const listeners: Array<(msg: Record<string, unknown>) => void> = [];
 
   await new Promise<void>((resolve, reject) => {
@@ -112,6 +115,7 @@ export async function connectApp(
     const raw = JSON.parse(data.toString());
     let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
+      rawEnvelopes.push(raw);
       try {
         const decrypted = decryptFromBlob(
           { blob: raw.blob, keys: raw.keys },
@@ -190,7 +194,7 @@ export async function connectApp(
   }
 
   return {
-    ws, messages, authOk, deviceId, keyPair: kp,
+    ws, messages, rawEnvelopes, authOk, deviceId, keyPair: kp,
     waitFor: waitForType,
     waitForN,
     sendUnicast,
@@ -213,6 +217,7 @@ export async function connectAppWithCrypto(
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   const messages: Record<string, unknown>[] = [];
+  const rawEnvelopes: Record<string, unknown>[] = [];
   const listeners: Array<(msg: Record<string, unknown>) => void> = [];
 
   await new Promise<void>((resolve, reject) => {
@@ -224,6 +229,7 @@ export async function connectAppWithCrypto(
     const raw = JSON.parse(data.toString());
     let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
+      rawEnvelopes.push(raw);
       try {
         const decrypted = decryptFromBlob(
           { blob: raw.blob, keys: raw.keys },
@@ -328,7 +334,7 @@ export async function connectAppWithCrypto(
   }
 
   return {
-    ws, messages, authOk, deviceId, keyPair: kp,
+    ws, messages, rawEnvelopes, authOk, deviceId, keyPair: kp,
     waitFor: waitForType,
     waitForN,
     sendUnicast,

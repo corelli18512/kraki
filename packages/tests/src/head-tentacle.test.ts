@@ -83,6 +83,7 @@ class MockAdapter {
     }));
   }
   async listModels(): Promise<string[]> { return ["mock-model"]; }
+  getSessionUsage(_sessionId: string) { return undefined; }
   setSessionMode(_sid: string, _mode: "ask" | "auto"): void {}
   updateAllowList(_tools: Set<string>): void {}
 
@@ -1037,6 +1038,142 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const perm = await app.waitFor("permission");
     expect(perm.type).toBe("permission");
     expect((perm.payload as Record<string, unknown>).id).toBe("perm-1");
+
+    app.close();
+  });
+
+  // --- Push preview envelope tests ---
+
+  it("permission broadcast includes pushPreview with decryptable summary", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    adapter.onPermissionRequest?.(sessionId, {
+      id: "perm-preview",
+      toolArgs: { type: "shell", command: "npm test" },
+      description: "Run shell command: npm test",
+    });
+
+    await app.waitFor("permission");
+
+    // Find the broadcast envelope that has pushPreview
+    const envelope = app.rawEnvelopes.find(
+      (e) => e.type === "broadcast" && e.pushPreview,
+    );
+    expect(envelope).toBeDefined();
+
+    // Decrypt the pushPreview
+    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
+    const decrypted = decryptFromBlob(
+      { blob: preview.blob, keys: preview.keys },
+      app.deviceId,
+      app.keyPair.privateKey,
+    );
+    const parsed = JSON.parse(decrypted);
+    expect(parsed.type).toBe("permission");
+    expect(parsed.summary).toBe("Run shell command: npm test");
+
+    app.close();
+  });
+
+  it("idle broadcast includes pushPreview with last agent message content", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    // Send an agent message first
+    adapter.onMessage?.(sessionId, { content: "I fixed the bug in auth module" });
+    await app.waitFor("agent_message");
+
+    // Then idle
+    adapter.onIdle?.(sessionId);
+    await app.waitFor("idle");
+
+    const envelope = app.rawEnvelopes.find(
+      (e) => e.type === "broadcast" && e.pushPreview
+        && (() => {
+          try {
+            const d = decryptFromBlob(
+              { blob: (e.pushPreview as Record<string, unknown>).blob as string, keys: (e.pushPreview as Record<string, unknown>).keys as Record<string, string> },
+              app.deviceId, app.keyPair.privateKey,
+            );
+            return JSON.parse(d).type === "idle";
+          } catch { return false; }
+        })(),
+    );
+    expect(envelope).toBeDefined();
+
+    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
+    const parsed = JSON.parse(decryptFromBlob(
+      { blob: preview.blob, keys: preview.keys },
+      app.deviceId, app.keyPair.privateKey,
+    ));
+    expect(parsed.type).toBe("idle");
+    expect(parsed.summary).toBe("I fixed the bug in auth module");
+
+    app.close();
+  });
+
+  it("regular agent_message broadcast does NOT include pushPreview", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    adapter.onMessage?.(sessionId, { content: "hello world" });
+    await app.waitFor("agent_message");
+
+    // Find the envelope for this agent_message — it should NOT have pushPreview
+    const agentEnvelopes = app.rawEnvelopes.filter((e) => {
+      if (e.type !== "broadcast") return false;
+      try {
+        const d = decryptFromBlob(
+          { blob: e.blob as string, keys: e.keys as Record<string, string> },
+          app.deviceId, app.keyPair.privateKey,
+        );
+        return JSON.parse(d).type === "agent_message";
+      } catch { return false; }
+    });
+    expect(agentEnvelopes.length).toBeGreaterThan(0);
+    for (const env of agentEnvelopes) {
+      expect(env.pushPreview).toBeUndefined();
+    }
+
+    app.close();
+  });
+
+  it("pushPreview summary is truncated to 50 chars", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    const longDescription = "This is a very long permission description that should definitely be truncated to fit the lock screen";
+    adapter.onPermissionRequest?.(sessionId, {
+      id: "perm-long",
+      toolArgs: { type: "shell", command: "echo hello" },
+      description: longDescription,
+    });
+
+    await app.waitFor("permission");
+
+    const envelope = app.rawEnvelopes.find(
+      (e) => e.type === "broadcast" && e.pushPreview,
+    );
+    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
+    const parsed = JSON.parse(decryptFromBlob(
+      { blob: preview.blob, keys: preview.keys },
+      app.deviceId, app.keyPair.privateKey,
+    ));
+    expect(parsed.summary.length).toBe(50);
+    expect(parsed.summary).toBe(longDescription.slice(0, 50));
 
     app.close();
   });

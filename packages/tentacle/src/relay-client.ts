@@ -79,6 +79,10 @@ export class RelayClient {
   /** Sessions currently generating a title (prevent concurrent generation) */
   private titleGenerationInFlight = new Set<string>();
 
+  // ── Push preview state ─────────────────────────────
+  /** Last agent message content per session (for idle push preview) */
+  private lastAgentContent = new Map<string, string>();
+
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -422,6 +426,7 @@ export class RelayClient {
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
             .finally(() => {
               this.sessionManager.deleteSession(sessionId);
+              this.lastAgentContent.delete(sessionId);
               this.send({ type: 'session_deleted', sessionId, payload: {} });
             });
           break;
@@ -717,6 +722,7 @@ export class RelayClient {
       this.sessionManager.endSession(sessionId, event.reason);
       this.turnCounts.delete(sessionId);
       this.titleGenerationInFlight.delete(sessionId);
+      this.lastAgentContent.delete(sessionId);
       this.send({
         type: 'session_ended',
         sessionId,
@@ -938,11 +944,24 @@ export class RelayClient {
         keys,
       };
 
-      if (msg.type === 'permission' || msg.type === 'question') {
-        const summary = msg.type === 'permission'
-          ? `Permission: ${(msg.payload as Record<string, unknown>).description ?? msg.type}`
-          : `Question: ${(msg.payload as Record<string, unknown>).question ?? msg.type}`;
-        const preview = JSON.stringify({ type: msg.type, summary: summary.slice(0, 100) });
+      // Track last agent message for idle push preview
+      if (msg.type === 'agent_message' && msg.sessionId) {
+        const content = (msg.payload as Record<string, unknown>).content as string;
+        if (content) this.lastAgentContent.set(msg.sessionId as string, content);
+      }
+
+      // Build encrypted push preview for notification-worthy messages
+      let previewSummary: string | undefined;
+      if (msg.type === 'permission') {
+        previewSummary = (msg.payload as Record<string, unknown>).description as string;
+      } else if (msg.type === 'question') {
+        previewSummary = (msg.payload as Record<string, unknown>).question as string;
+      } else if (msg.type === 'idle') {
+        previewSummary = this.lastAgentContent.get(msg.sessionId as string);
+      }
+
+      if (previewSummary) {
+        const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50) });
         const previewBlob = encryptToBlob(preview, recipients);
         envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
       }
