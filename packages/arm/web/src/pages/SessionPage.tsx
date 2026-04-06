@@ -73,7 +73,7 @@ export function SessionPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="sticky top-0 z-10 flex h-11 shrink-0 items-center gap-2 border-b border-border-primary bg-surface-primary px-4">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-primary bg-surface-primary px-4">
         <button
           onClick={() => navigate('/')}
           className="relative mr-1 text-text-secondary hover:text-text-primary md:hidden"
