@@ -23,7 +23,8 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const setDraft = useStore((s) => s.setDraft);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss') as typeof MODES[number];
   const session = useStore((s) => s.sessions.get(sessionId));
-  const isIdle = !session || session.state !== 'active';
+  const hasPendingInput = useStore((s) => (s.messages.get(sessionId) ?? []).some((m) => m.type === 'pending_input'));
+  const isIdle = (!session || session.state !== 'active') && !hasPendingInput;
   const modeContainerRef = useRef<HTMLDivElement>(null);
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
@@ -347,7 +348,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               aria-label="Stop"
               className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-red-500/70 text-white transition-all hover:bg-red-500 active:scale-95"
             >
-              <Square className="h-4 w-4 fill-current" />
+              <Square className="h-3.5 w-3.5 fill-current" />
             </button>
           )}
         </div>
