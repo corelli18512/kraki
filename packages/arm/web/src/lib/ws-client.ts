@@ -161,6 +161,15 @@ export class KrakiWSClient {
     }
   }
 
+  markUnread(sessionId: string): void {
+    getStore().incrementUnread(sessionId);
+    this.sendEncrypted({
+      type: 'mark_unread',
+      sessionId,
+      payload: {},
+    });
+  }
+
   private getLastSeq(sessionId: string): number {
     const msgs = getStore().messages.get(sessionId);
     if (!msgs || msgs.length === 0) return 0;

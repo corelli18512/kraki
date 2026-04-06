@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
 import { agentInfo } from '../lib/format';
 import { AgentAvatar } from '../components/common/AgentAvatar';
+import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -23,6 +24,10 @@ export function SessionPage() {
     return count;
   });
   const navigate = useNavigate();
+  const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
+  const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
+  const deviceModels = useStore((s) => session ? s.deviceModels.get(session.deviceId) : undefined);
+  const deviceModelDetails = useStore((s) => session ? s.deviceModelDetails.get(session.deviceId) : undefined);
 
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
@@ -112,9 +117,12 @@ export function SessionPage() {
             )}
           </div>
         </div>
-        {/* More button — navigates to session settings in device page */}
+        {/* More button — slide-over on mobile, navigate on desktop */}
         <button
-          onClick={() => navigate(`/devices?device=${session.deviceId}&session=${sessionId}`)}
+          onClick={() => {
+            if (window.innerWidth < 768) { setMobileInfoOpen(true); }
+            else { navigate(`/devices?device=${session.deviceId}&session=${sessionId}`); }
+          }}
           className="rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
           title="Session settings"
         >
@@ -125,6 +133,22 @@ export function SessionPage() {
       </div>
 
       <ChatView />
+
+      {/* Mobile session info slide-over */}
+      {mobileInfoOpen && session && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileInfoOpen(false)} />
+          <div className="absolute inset-y-0 right-0 w-full max-w-sm animate-slide-in-right bg-surface-primary shadow-xl">
+            <SessionInfoPanel
+              session={session}
+              usage={sessionUsage}
+              models={deviceModels}
+              modelDetails={deviceModelDetails}
+              onClose={() => setMobileInfoOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

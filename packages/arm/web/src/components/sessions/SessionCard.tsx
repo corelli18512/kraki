@@ -6,7 +6,7 @@ import { useStore } from '../../hooks/useStore';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { wsClient } from '../../lib/ws-client';
 import { SwipeableCard } from './SwipeableCard';
-import { Pin, PinOff, Trash2, GitFork } from 'lucide-react';
+import { Pin, PinOff, Trash2, GitFork, BellOff, BellRing } from 'lucide-react';
 
 const PREVIEW_MAX_LENGTH = 50;
 
@@ -51,12 +51,24 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
     window.addEventListener('click', close);
   }, []);
 
+  const isUnread = unreadCount > 0;
+
   const swipeActions = [
     {
       icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />,
       label: pinned ? 'Unpin' : 'Pin',
       bgClass: 'bg-teal-400 dark:bg-teal-800',
       onClick: () => { handleTogglePin(); setOpenSwipeId?.(null); },
+    },
+    {
+      icon: isUnread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />,
+      label: isUnread ? 'Read' : 'Unread',
+      bgClass: 'bg-blue-400 dark:bg-blue-800',
+      onClick: () => {
+        if (isUnread) { wsClient.markRead(session.id); }
+        else { wsClient.markUnread(session.id); }
+        setOpenSwipeId?.(null);
+      },
     },
     {
       icon: <GitFork className="h-4 w-4" />,
@@ -158,6 +170,16 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
             className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-tertiary"
           >
             {pinned ? <><PinOff className="h-3.5 w-3.5" /> Unpin</> : <><Pin className="h-3.5 w-3.5" /> Pin to top</>}
+          </button>
+          <button
+            onClick={() => {
+              if (isUnread) { wsClient.markRead(session.id); }
+              else { wsClient.markUnread(session.id); }
+              setMenuPos(null);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-primary hover:bg-surface-tertiary"
+          >
+            {isUnread ? <><BellOff className="h-3.5 w-3.5" /> Mark read</> : <><BellRing className="h-3.5 w-3.5" /> Mark unread</>}
           </button>
           <button
             onClick={() => { wsClient.forkSession(session.id); setMenuPos(null); }}
