@@ -238,7 +238,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           >
             {imagePreview ? (
               <div className="relative">
-                <img src={imagePreview} alt="Preview" className="h-8 w-8 rounded-lg border border-border-primary object-cover transition-opacity hover:opacity-80" />
+                <img src={imagePreview} alt="Preview" className="h-8 max-w-16 rounded-lg border border-border-primary object-contain transition-opacity hover:opacity-80" />
                 <button
                   onClick={(e) => { e.preventDefault(); clearImage(); }}
                   aria-label="Remove image"
