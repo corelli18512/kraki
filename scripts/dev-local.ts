@@ -170,21 +170,18 @@ function killOrphanDevDaemons(): void {
     } catch { /* dir not readable — skip */ }
   }
 
-  // Also kill any daemon-worker processes connected to our local relay port,
-  // regardless of PID file state (catches orphans from crashed dev sessions).
+  // Find all dev daemon-workers (tsx-based) and terminate them.
+  // Dev daemons use `--import tsx` while the global binary does not.
+  // This runs before the relay starts, so port-based detection won't work.
   try {
-    const pids = execSync(`lsof -i :${RELAY_PORT} -t 2>/dev/null`, { encoding: 'utf8' }).trim();
-    for (const pidStr of pids.split('\n')) {
-      const pid = parseInt(pidStr, 10);
+    const lines = execSync('ps -ww -eo pid,command', { encoding: 'utf8' }).split('\n');
+    for (const line of lines) {
+      if (!line.includes('tsx') || !line.includes('__daemon-worker')) continue;
+      const pid = parseInt(line.trim(), 10);
       if (!pid || pid === process.pid) continue;
-      try {
-        const cmd = execSync(`ps -ww -p ${pid} -o command=`, { encoding: 'utf8' });
-        if (cmd.includes('__daemon-worker')) {
-          process.kill(pid, 'SIGTERM');
-        }
-      } catch { /* process gone */ }
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
     }
-  } catch { /* lsof unavailable or no results */ }
+  } catch { /* ps failed */ }
 }
 
 async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {

@@ -340,6 +340,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         resolveQuestionMessage(sid, qId, qAnswer);
       }
       store.appendMessage(sid, msg);
+      if (typeof qAnswer === 'string' && qAnswer) {
+        updatePreview(sid, { text: truncPreview(qAnswer), type: 'answer', timestamp: msg.timestamp }, false);
+      }
       break;
     }
 
