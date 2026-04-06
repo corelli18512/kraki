@@ -54,6 +54,18 @@ export interface BlobPayload {
 }
 
 // ============================================================
+// Attachment types (shared between producer and consumer)
+// ============================================================
+
+export interface ImageAttachment {
+  type: 'image';
+  mimeType: string;
+  data: string; // base64-encoded image data
+}
+
+export type Attachment = ImageAttachment;
+
+// ============================================================
 // Inner message base (inside encrypted blob, invisible to relay)
 // ============================================================
 
@@ -98,7 +110,7 @@ export interface AgentMessage extends BaseEnvelope {
   type: 'agent_message';
   payload: {
     content: string;
-    attachments?: string[];
+    attachments?: Attachment[];
   };
 }
 
@@ -140,6 +152,7 @@ export interface ToolCompleteMessage extends BaseEnvelope {
     result: string;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
+    attachments?: Attachment[];
   };
 }
 
@@ -303,7 +316,7 @@ export interface SendInputMessage extends BaseEnvelope {
   type: 'send_input';
   payload: {
     text: string;
-    attachments?: string[];
+    attachments?: Attachment[];
   };
 }
 

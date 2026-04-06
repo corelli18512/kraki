@@ -78,8 +78,8 @@ export class KrakiWSClient {
     this.encryption.encryptOutbound(msg, (m) => this.transport.send(m), { broadcast: true });
   }
 
-  sendInput(sessionId: string, text: string) {
-    commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg));
+  sendInput(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]) {
+    commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg), attachments);
   }
 
   approve(permissionId: string, sessionId: string) {

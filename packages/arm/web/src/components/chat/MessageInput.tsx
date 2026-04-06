@@ -1,10 +1,13 @@
-import { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { X } from 'lucide-react';
+import { X, Image as ImageIcon } from 'lucide-react';
+import type { Attachment } from '@kraki/protocol';
 
 const MAX_INPUT_HEIGHT = 160;
+const MAX_IMAGE_SIZE = 3 * 1024 * 1024; // 3MB (SDK limit)
+const MAX_IMAGE_DIMENSION = 1024;
 
 const MODES = ['safe', 'discuss', 'execute', 'delegate'] as const;
 
@@ -73,7 +76,78 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   }, [sessionId, activeIdx]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldAutoFocus = shouldAutoFocusTextInput();
+  const [imageAttachment, setImageAttachment] = useState<Attachment | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  const compressAndAttach = useCallback(async (file: File) => {
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.src = url;
+    await new Promise((resolve) => { img.onload = resolve; });
+    URL.revokeObjectURL(url);
+
+    let { width, height } = img;
+    if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+      const scale = MAX_IMAGE_DIMENSION / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, width, height);
+
+    // Try original format first, fall back to JPEG with compression
+    let dataUrl = canvas.toDataURL(file.type || 'image/jpeg', 0.8);
+    const base64 = dataUrl.split(',')[1];
+    const byteSize = Math.ceil(base64.length * 3 / 4);
+
+    if (byteSize > MAX_IMAGE_SIZE) {
+      // Compress harder
+      dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      const retryBase64 = dataUrl.split(',')[1];
+      const retrySize = Math.ceil(retryBase64.length * 3 / 4);
+      if (retrySize > MAX_IMAGE_SIZE) {
+        alert('Image is too large (max 3MB after compression)');
+        return;
+      }
+      setImageAttachment({ type: 'image', mimeType: 'image/jpeg', data: retryBase64 });
+      setImagePreview(dataUrl);
+      return;
+    }
+
+    const mimeType = dataUrl.substring(5, dataUrl.indexOf(';'));
+    setImageAttachment({ type: 'image', mimeType, data: base64 });
+    setImagePreview(dataUrl);
+  }, []);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) compressAndAttach(file);
+    e.target.value = '';
+  }, [compressAndAttach]);
+
+  const clearImage = useCallback(() => {
+    setImageAttachment(null);
+    setImagePreview(null);
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) compressAndAttach(file);
+        return;
+      }
+    }
+  }, [compressAndAttach]);
 
   // Auto-focus on mount (when navigating into a session)
   useEffect(() => {
@@ -108,9 +182,11 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
 
   const handleSend = () => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    wsClient.sendInput(sessionId, trimmed);
+    if (!trimmed && !imageAttachment) return;
+    const attachments = imageAttachment ? [imageAttachment] : undefined;
+    wsClient.sendInput(sessionId, trimmed || '[image]', attachments);
     setDraft(sessionId, '');
+    clearImage();
     // On mobile, blur to dismiss the keyboard after sending
     if (!shouldAutoFocus) {
       textareaRef.current?.blur();
@@ -209,31 +285,53 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           )}
         </div>
         <div className="relative flex gap-2">
+        <input
+          id={`img-upload-${sessionId}`}
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          onChange={handleFileSelect}
+          style={{ display: 'none' }}
+        />
+        {imagePreview ? (
+          <div className="relative shrink-0 self-center">
+            <label htmlFor={`img-upload-${sessionId}`} className="cursor-pointer" aria-label="Replace image">
+              <img src={imagePreview} alt="Preview" className="h-10 w-10 rounded-xl border border-border-primary object-cover transition-opacity hover:opacity-80" />
+            </label>
+            <button
+              onClick={clearImage}
+              aria-label="Remove image"
+              className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
+            >
+              <X className="h-2.5 w-2.5 text-text-muted" />
+            </button>
+          </div>
+        ) : (
+          <label
+            htmlFor={`img-upload-${sessionId}`}
+            aria-label="Attach image"
+            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center self-center rounded-xl text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95"
+          >
+            <ImageIcon className="h-5 w-5" />
+          </label>
+        )}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setDraft(sessionId, e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           rows={1}
           placeholder="Send a message…"
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
           enterKeyHint="send"
-          className="min-w-0 flex-1 cursor-text resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 pt-[7px] pb-[9px] pr-9 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
+          className="min-w-0 flex-1 cursor-text resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 pt-[7px] pb-[9px] text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 sm:text-sm"
         />
-        {text && (
-          <button
-            onClick={() => { setDraft(sessionId, ''); textareaRef.current?.focus(); }}
-            aria-label="Clear input"
-            className="absolute right-[3.75rem] top-1/2 -translate-y-1/2 rounded-full p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
         <button
           onClick={handleSend}
-          disabled={!text.trim()}
+          disabled={!text.trim() && !imageAttachment}
           aria-label="Send message"
           className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-kraki-500 text-white transition-all hover:bg-kraki-600 active:scale-95 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100"
         >

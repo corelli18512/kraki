@@ -177,7 +177,10 @@ export const useStore = create<Store>()(persist((set) => ({
               deviceId: '',
               seq: seq ?? 0,
               timestamp: m.timestamp,
-              payload: { content: m.text },
+              payload: {
+                content: m.text,
+                ...(m.attachments?.length && { attachments: m.attachments }),
+              },
             }
           : m,
       );

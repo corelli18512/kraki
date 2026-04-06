@@ -382,7 +382,10 @@ export class RelayClient {
           this.send({
             type: 'user_message',
             sessionId,
-            payload: { content: msg.payload.text },
+            payload: {
+              content: msg.payload.text,
+              ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
+            },
           });
           this.sessionManager.markActive(sessionId);
           this.send({ type: 'active', sessionId, payload: {} });
@@ -694,7 +697,11 @@ export class RelayClient {
       this.send({
         type: 'tool_complete',
         sessionId,
-        payload: { toolName: event.toolName, args: {}, result: event.result, toolCallId: event.toolCallId },
+        payload: {
+          toolName: event.toolName, args: {}, result: event.result,
+          toolCallId: event.toolCallId,
+          ...(event.attachments?.length && { attachments: event.attachments }),
+        },
       });
     };
 

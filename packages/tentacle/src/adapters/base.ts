@@ -50,6 +50,7 @@ export interface ToolCompleteEvent {
   toolName: string;
   result: string;
   toolCallId?: string;
+  attachments?: import('@kraki/protocol').Attachment[];
 }
 
 export interface SessionEndedEvent {
@@ -133,7 +134,7 @@ export abstract class AgentAdapter {
   abstract resumeSession(sessionId: string, context?: SessionContext): Promise<{ sessionId: string }>;
 
   /** Send a user message to a session. */
-  abstract sendMessage(sessionId: string, text: string, attachments?: string[]): Promise<void>;
+  abstract sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void>;
 
   /** Respond to a pending permission request. */
   abstract respondToPermission(

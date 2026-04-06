@@ -1,14 +1,16 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest } from '@kraki/protocol';
+import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { Lock, Check, X, LockOpen, CircleStop } from 'lucide-react';
+import { useState } from 'react';
 
 const ID_DISPLAY_LENGTH = 8;
+const IMAGE_PLACEHOLDER = '[image]';
 
 const markdownComponents = {
   a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
@@ -21,23 +23,28 @@ const markdownComponents = {
   ),
 };
 
-export function MessageBubble({ message, agent, forceExpanded }: { message: ChatMessage; agent?: string; forceExpanded?: boolean }) {
+export function MessageBubble({ message, agent, forceExpanded, turnImages }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[] }) {
   switch (message.type) {
-    case 'user_message':
+    case 'user_message': {
+      const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
       return (
         <div className="flex justify-end">
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            <div className="markdown-content text-sm leading-relaxed">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                {message.payload.content}
-              </Markdown>
-            </div>
+            {showUserText && (
+              <div className="markdown-content text-sm leading-relaxed">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {message.payload.content}
+                </Markdown>
+              </div>
+            )}
+            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
             <p className="mt-1 text-right text-[10px] text-white/60">
               {formatTime(message.timestamp)}
             </p>
           </div>
         </div>
       );
+    }
 
     case 'agent_message':
       return (
@@ -51,6 +58,8 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
                 {message.payload.content}
               </Markdown>
             </div>
+            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+            {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} />}
             <p className="mt-1 text-[10px] text-text-muted">
               {formatTime(message.timestamp)}
             </p>
@@ -86,13 +95,16 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
 
     case 'tool_complete':
       return (
-        <ToolActivity
-          type="complete"
-          toolName={message.payload.toolName}
-          args={message.payload.args as Record<string, unknown>}
-          result={message.payload.result}
-          forceExpanded={forceExpanded}
-        />
+        <>
+          <ToolActivity
+            type="complete"
+            toolName={message.payload.toolName}
+            args={message.payload.args as Record<string, unknown>}
+            result={message.payload.result}
+            forceExpanded={forceExpanded}
+          />
+          <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+        </>
       );
 
     case 'error':
@@ -107,7 +119,8 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
       return (
         <div className="flex justify-end">
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            <p className="text-sm">{message.payload.text}</p>
+            {message.payload.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.payload.text}</p>}
+            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
             <p className="mt-1 text-right text-[10px] text-white/60">
               {formatTime(message.timestamp)}
             </p>
@@ -228,7 +241,8 @@ export function MessageBubble({ message, agent, forceExpanded }: { message: Chat
       return (
         <div className="flex justify-end">
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500/70 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            <p className="text-sm">{message.text}</p>
+            {message.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.text}</p>}
+            <ImageAttachments attachments={message.attachments as Attachment[] | undefined} />
             <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-white/60">
               <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/90" />
               Sending…
@@ -258,4 +272,44 @@ function getPermissionArgsSummary(toolName: string, args: Record<string, unknown
   if (typeof args.command === 'string' && args.command) return args.command;
   if (typeof args.path === 'string' && args.path) return args.path;
   return '';
+}
+
+function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const images = attachments?.filter((a): a is Attachment & { type: 'image' } => a.type === 'image');
+  if (!images?.length) return null;
+
+  return (
+    <>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {images.map((img, i) => (
+          <button
+            key={i}
+            type="button"
+            className="overflow-hidden rounded-lg border border-border-primary/20"
+            onClick={() => setExpanded(`data:${img.mimeType};base64,${img.data}`)}
+          >
+            <img
+              src={`data:${img.mimeType};base64,${img.data}`}
+              alt="Attachment"
+              className="max-h-48 max-w-full object-contain"
+              loading="lazy"
+            />
+          </button>
+        ))}
+      </div>
+      {expanded && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setExpanded(null)}
+          onKeyDown={(e) => e.key === 'Escape' && setExpanded(null)}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+        >
+          <img src={expanded} alt="Full size" className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain" />
+        </div>
+      )}
+    </>
+  );
 }

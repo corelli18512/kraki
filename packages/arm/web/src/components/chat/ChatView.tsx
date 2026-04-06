@@ -10,10 +10,24 @@ import { useTurns } from '../../hooks/useTurns';
 import { GapMarker } from './GapMarker';
 import { createLogger } from '../../lib/logger';
 import type { ChatMessage } from '../../types/store';
+import type { Attachment } from '@kraki/protocol';
 
 const logger = createLogger('chat-view');
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+
+/** Collect image attachments from tool_complete messages in a turn's thinking. */
+function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
+  const images: Attachment[] = [];
+  for (const m of thinkingMessages) {
+    if (m.type === 'tool_complete' && Array.isArray(m.payload?.attachments)) {
+      for (const att of m.payload.attachments) {
+        if (att.type === 'image') images.push(att as Attachment);
+      }
+    }
+  }
+  return images;
+}
 
 /** Extract seq from a message, returning 0 for non-sequenced messages. */
 function getSeq(m: ChatMessage): number {
@@ -294,7 +308,7 @@ export function ChatView() {
                     />
                   )}
                   {turn.finalMessage && !hasStreaming && (
-                    <MessageBubble message={turn.finalMessage} agent={session.agent} />
+                    <MessageBubble message={turn.finalMessage} agent={session.agent} turnImages={collectTurnImages(turn.thinkingMessages)} />
                   )}
                 </div>
               );
