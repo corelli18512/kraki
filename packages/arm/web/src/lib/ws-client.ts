@@ -224,6 +224,15 @@ export class KrakiWSClient {
         pinnedFromTentacle.add(ts.id);
       }
 
+      // Reconstruct unread badge from readSeq vs lastSeq (binary: 0 or 1)
+      if (ts.lastSeq > (ts.readSeq ?? 0)) {
+        if (!store.unreadCount.get(ts.id)) {
+          store.incrementUnread(ts.id);
+        }
+      } else {
+        store.clearUnread(ts.id);
+      }
+
       // Store tentacle info and request latest messages via provider
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
       messageProvider.requestLatest(ts.id);
