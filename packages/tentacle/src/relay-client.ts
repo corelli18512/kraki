@@ -441,6 +441,19 @@ export class RelayClient {
             payload: { seq: msg.payload.seq },
           });
           break;
+        case 'mark_unread': {
+          const meta = this.sessionManager.getMeta(sessionId);
+          if (meta && meta.lastSeq > 0) {
+            const rolledBack = Math.max(0, meta.lastSeq - 1);
+            this.sessionManager.markRead(sessionId, rolledBack);
+            this.send({
+              type: 'session_read',
+              sessionId,
+              payload: { seq: rolledBack },
+            });
+          }
+          break;
+        }
         case 'set_session_mode': {
           const mode = msg.payload.mode;
           this.adapter.setSessionMode(sessionId, mode);

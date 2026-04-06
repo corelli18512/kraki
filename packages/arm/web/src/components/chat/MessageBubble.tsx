@@ -6,8 +6,8 @@ import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop } from 'lucide-react';
-import { useState } from 'react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
@@ -28,43 +28,47 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages }: { m
     case 'user_message': {
       const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
       return (
-        <div className="flex justify-end">
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            {showUserText && (
-              <div className="markdown-content text-sm leading-relaxed">
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                  {message.payload.content}
-                </Markdown>
-              </div>
-            )}
-            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
-            <p className="mt-1 text-right text-[10px] text-white/60">
-              {formatTime(message.timestamp)}
-            </p>
+        <CopyableBubble text={message.payload.content}>
+          <div className="flex justify-end">
+            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+              {showUserText && (
+                <div className="markdown-content text-sm leading-relaxed">
+                  <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                    {message.payload.content}
+                  </Markdown>
+                </div>
+              )}
+              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+              <p className="mt-1 text-right text-[10px] text-white/60">
+                {formatTime(message.timestamp)}
+              </p>
+            </div>
           </div>
-        </div>
+        </CopyableBubble>
       );
     }
 
     case 'agent_message':
       return (
-        <div className="flex gap-2">
-          <div className="mt-0.5 shrink-0">
-            <AgentAvatar agent={agent ?? ''} size="sm" />
-          </div>
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
-            <div className="markdown-content text-sm leading-relaxed text-text-primary">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                {message.payload.content}
-              </Markdown>
+        <CopyableBubble text={message.payload.content}>
+          <div className="flex gap-2">
+            <div className="mt-0.5 shrink-0">
+              <AgentAvatar agent={agent ?? ''} size="sm" />
             </div>
-            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
-            {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} />}
-            <p className="mt-1 text-[10px] text-text-muted">
-              {formatTime(message.timestamp)}
-            </p>
+            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+              <div className="markdown-content text-sm leading-relaxed text-text-primary">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {message.payload.content}
+                </Markdown>
+              </div>
+              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+              {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} />}
+              <p className="mt-1 text-[10px] text-text-muted">
+                {formatTime(message.timestamp)}
+              </p>
+            </div>
           </div>
-        </div>
+        </CopyableBubble>
       );
 
     case 'session_created': {
@@ -272,6 +276,70 @@ function getPermissionArgsSummary(toolName: string, args: Record<string, unknown
   if (typeof args.command === 'string' && args.command) return args.command;
   if (typeof args.path === 'string' && args.path) return args.path;
   return '';
+}
+
+const LONG_PRESS_MS = 500;
+
+function CopyableBubble({ text, children }: { text: string; children: React.ReactNode }) {
+  const [showCopy, setShowCopy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => { setCopied(false); setShowCopy(false); }, 1000);
+    }).catch(() => {});
+  }, [text]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setShowCopy(true);
+  }, []);
+
+  const handleTouchStart = useCallback(() => {
+    timerRef.current = setTimeout(() => { setShowCopy(true); }, LONG_PRESS_MS);
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+  }, []);
+
+  // Dismiss on outside click
+  useEffect(() => {
+    if (!showCopy) return;
+    const dismiss = (e: MouseEvent | TouchEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowCopy(false);
+      }
+    };
+    document.addEventListener('mousedown', dismiss);
+    document.addEventListener('touchstart', dismiss);
+    return () => { document.removeEventListener('mousedown', dismiss); document.removeEventListener('touchstart', dismiss); };
+  }, [showCopy]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative"
+      onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+    >
+      {children}
+      {showCopy && (
+        <button
+          onClick={handleCopy}
+          className="absolute -top-8 left-1/2 z-50 flex -translate-x-1/2 items-center gap-1 rounded-lg bg-surface-primary px-2.5 py-1 text-xs font-medium text-text-primary shadow-lg border border-border-primary transition-all active:scale-95"
+        >
+          <Copy className="h-3 w-3" />
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {

@@ -446,6 +446,12 @@ export interface PinSessionMessage extends BaseEnvelope {
   };
 }
 
+/** Mark a session as unread. Tentacle rolls back readSeq. */
+export interface MarkUnreadMessage extends BaseEnvelope {
+  type: 'mark_unread';
+  payload: Record<string, never>;
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -460,6 +466,7 @@ export type ConsumerMessage =
   | SetSessionModelMessage
   | DeleteSessionMessage
   | MarkReadMessage
+  | MarkUnreadMessage
   | RequestSessionReplayMessage
   | RenameSessionMessage
   | PinSessionMessage;
