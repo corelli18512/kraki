@@ -769,6 +769,7 @@ export class RelayClient {
   private async resumeDisconnectedSessions(): Promise<void> {
     const resumable = this.sessionManager.getResumableSessions();
     for (const meta of resumable) {
+      const originalState = meta.state;
       const result = this.sessionManager.resumeSession(meta.id);
       if (result) {
         try {
@@ -780,6 +781,11 @@ export class RelayClient {
           // Restore persisted usage totals so accumulation continues
           if (meta.usage) {
             this.adapter.setSessionUsage(meta.id, meta.usage);
+          }
+          // Restore idle state — resumeSession sets active, but SDK won't
+          // fire session.idle for an already-idle session
+          if (originalState === 'idle') {
+            this.sessionManager.markIdle(meta.id);
           }
         } catch (err) {
           logger.warn({ err, sessionId: meta.id }, 'Session resume failed after restart');
