@@ -47,6 +47,7 @@ The relay maintains two database tables:
 
 - **users** — user identity and auth records
 - **devices** — registered devices and their public keys
+- **push_tokens** — push notification tokens for offline delivery (device token and provider type)
 
 The relay does not store messages, sessions, message history, or any content. Message buffering and replay are handled by `tentacle`.
 
@@ -115,6 +116,16 @@ That behavior is a normal consequence of per-device encryption.
 | Do endpoints see plaintext? | Yes |
 | Does the relay store messages? | No — only user and device tables |
 | Is self-hosting still useful? | Yes, for operational control and latency |
+
+## Push notifications and E2E
+
+Push notifications use the same E2E encryption model. When an agent event requires attention and the browser is offline:
+
+1. The tentacle encrypts a small preview (`pushPreview`) with the offline device's public key — the same RSA-OAEP wrapping used for WebSocket messages.
+2. The relay forwards the opaque encrypted preview through the push service (APNs or Web Push/VAPID).
+3. The device's service worker decrypts the preview locally and shows the notification content.
+
+The relay sees the encrypted blob size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
 
 ## Open source and verification
 

@@ -50,7 +50,7 @@ Kraki is a little sea creature with a job: the `head` stays in the middle, the `
 
 - Relay server (`head`) — thin encrypted forwarder
 - CLI bridge for agent machines (`tentacle`)
-- Web receiver / PWA (`arm/web`)
+- Web receiver / PWA (`arm/web`) with push notifications
 - Shared protocol and crypto packages
 - Current adapter work centered on Copilot-based flows
 
@@ -72,7 +72,7 @@ On first run, Kraki will:
 2. connect to the hosted relay by default
 3. show a QR code / pairing flow for your browser or phone
 
-> 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications (shipping), full-screen mode, and instant access without opening a browser.
+> 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications, full-screen mode, and instant access without opening a browser.
 
 Package names and executables are different on purpose:
 
@@ -110,6 +110,27 @@ kraki-relay --auth github
 ```
 
 The web app will automatically show a "Sign in with GitHub" button when the relay has OAuth configured. QR pairing continues to work alongside GitHub login.
+
+### Enable push notifications
+
+The relay can send push notifications to offline browsers when agents need attention (permissions, questions, turn completions). Notifications are end-to-end encrypted — the relay forwards an opaque blob, and the browser's service worker decrypts it locally.
+
+1. Generate VAPID keys (one-time):
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+2. Set the environment variables on your relay server:
+
+```bash
+VAPID_PUBLIC_KEY=your_public_key \
+VAPID_PRIVATE_KEY=your_private_key \
+VAPID_EMAIL=mailto:you@example.com \
+kraki-relay --push web_push
+```
+
+The web app will automatically show a "Push notifications" toggle in Settings when the relay has VAPID configured.
 
 For local web development, put browser-only overrides like `VITE_WS_URL=ws://localhost:4000` in `packages/arm/web/.env.development.local`, not `packages/arm/web/.env`. Vite loads `.env` during production builds too, so using the dev-only filename avoids accidentally baking localhost into a deploy.
 

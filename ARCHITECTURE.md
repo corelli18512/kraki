@@ -92,6 +92,7 @@ Its job is to:
 - send user actions back to the correct session
 - maintain UI state: read tracking, unread counts, active session, session deletion
 - send periodic pings for WebSocket proxy keepalive
+- register push notification tokens and display notifications via service worker
 
 ## Message flows
 
@@ -127,6 +128,15 @@ Its job is to:
 1. When a device connects, `head` sends `device_joined` to the user's other devices.
 2. When a device disconnects, `head` sends `device_left`.
 3. Devices use these signals to maintain an up-to-date presence view.
+
+### 6. Push notifications (offline devices)
+
+1. An agent event occurs (permission, question, or turn completion) while a device is offline.
+2. `tentacle` creates a small encrypted preview (`pushPreview`) alongside the full broadcast blob.
+3. `head` detects `pushPreview` on the broadcast, queries `push_tokens` for offline devices.
+4. For each offline device with a registered token, `head` sends the preview blob via the appropriate push service (APNs, FCM, or Web Push/VAPID).
+5. The device's service worker (or Notification Service Extension on iOS) receives the push, decrypts the preview using the device's private key, and shows a notification with the actual content.
+6. The relay never sees the notification content — it forwards the same opaque encrypted blob through the push service as it does through WebSocket.
 
 ## Trust boundaries
 
