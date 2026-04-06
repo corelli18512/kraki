@@ -20,10 +20,15 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const setDraft = useStore((s) => s.setDraft);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss') as typeof MODES[number];
   const modeContainerRef = useRef<HTMLDivElement>(null);
+  const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
+  const [mobilePill, setMobilePill] = useState<{ left: number; width: number } | null>(null);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const [mobileClosing, setMobileClosing] = useState(false);
   const activeIdx = MODES.indexOf(sessionMode);
   const colors = MODE_COLORS[sessionMode];
 
+  // Desktop pill position
   useLayoutEffect(() => {
     const container = modeContainerRef.current;
     if (!container) return;
@@ -32,6 +37,27 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
       setPill({ left: btn.offsetLeft, width: btn.offsetWidth });
     }
   }, [activeIdx]);
+
+  // Mobile expanded pill position
+  useLayoutEffect(() => {
+    if (!mobileExpanded) { setMobilePill(null); return; }
+    const container = mobileContainerRef.current;
+    if (!container) return;
+    const btn = container.querySelectorAll('button')[activeIdx] as HTMLElement;
+    if (btn) {
+      setMobilePill({ left: btn.offsetLeft, width: btn.offsetWidth });
+    }
+  }, [activeIdx, mobileExpanded]);
+
+  const closeMobile = () => {
+    setMobileClosing(true);
+    setTimeout(() => { setMobileExpanded(false); setMobileClosing(false); }, 200);
+  };
+
+  const handleMobileSelect = (mode: typeof MODES[number]) => {
+    wsClient.setSessionMode(sessionId, mode);
+    closeMobile();
+  };
 
   // Shift+Tab rotates permission mode
   useEffect(() => {
@@ -130,8 +156,8 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             Cancel
           </button>
           <div className="flex-1" />
-          {/* Mode selector with sliding pill */}
-          <div ref={modeContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
+          {/* Desktop: always show all modes */}
+          <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">
             <div
               className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
               style={{ left: pill.left, width: pill.width }}
@@ -148,6 +174,39 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               </button>
             ))}
           </div>
+          {/* Mobile collapsed: show current mode only */}
+          {!mobileExpanded && (
+            <button
+              onClick={() => setMobileExpanded(true)}
+              className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:hidden ${colors.pill} ${colors.text}`}
+            >
+              {sessionMode.charAt(0).toUpperCase() + sessionMode.slice(1)}
+            </button>
+          )}
+          {/* Mobile expanded: all modes with slide animation */}
+          {mobileExpanded && (
+            <div className={`absolute inset-0 z-10 flex items-center justify-end bg-gradient-to-l from-surface-primary via-surface-primary to-transparent pl-12 pr-3 sm:hidden ${mobileClosing ? 'animate-slide-out-right' : 'animate-slide-in-right'}`}>
+              <div ref={mobileContainerRef} className="relative flex items-center rounded-full bg-surface-secondary p-0.5">
+                {mobilePill && (
+                  <div
+                    className={`absolute top-0.5 h-[calc(100%-4px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${colors.pill}`}
+                    style={{ left: mobilePill.left, width: mobilePill.width }}
+                  />
+                )}
+                {MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => handleMobileSelect(mode)}
+                    className={`relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors duration-200 ${
+                      sessionMode === mode ? colors.text : 'text-text-muted hover:text-text-secondary'
+                    }`}
+                  >
+                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div className="relative flex gap-2">
         <textarea
