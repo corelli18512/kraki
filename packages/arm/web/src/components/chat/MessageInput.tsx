@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { X, Image as ImageIcon, Square } from 'lucide-react';
+import { X, ImagePlus, Square } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 
 const MAX_INPUT_HEIGHT = 160;
@@ -242,7 +242,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               aria-label="Attach image"
               className={`flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''}`}
             >
-              <ImageIcon className="h-4.5 w-4.5" />
+              <ImagePlus className="h-4.5 w-4.5" />
             </label>
           )}
           <div className="flex-1" />
@@ -340,7 +340,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             <button
               onClick={() => wsClient.abortSession(sessionId)}
               aria-label="Stop"
-              className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-red-500 text-white transition-all hover:bg-red-600 active:scale-95 active:bg-red-700"
+              className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl bg-red-500/70 text-white transition-all hover:bg-red-500 active:scale-95"
             >
               <Square className="h-4 w-4 fill-current" />
             </button>
