@@ -191,7 +191,7 @@ export default function SetupWindow() {
       {/* ── Auth step (matches web login) ─────────────── */}
       {(step === 'auth' || step === 'creating') && !deviceCode && (
         <>
-          <div className="text-6xl mb-4">🦑</div>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <h2 className="text-lg font-semibold text-gray-900">Welcome to Kraki</h2>
           <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
             Sign in to connect to your coding agent sessions.
@@ -218,7 +218,7 @@ export default function SetupWindow() {
       {/* ── Auth step: device code shown ──────────────── */}
       {step === 'auth' && deviceCode && (
         <>
-          <div className="text-6xl mb-4">🦑</div>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <h2 className="text-lg font-semibold text-gray-900">Enter code on GitHub</h2>
           <div className="mt-4 font-mono text-2xl font-bold tracking-widest text-gray-900 bg-gray-50 px-6 py-3 rounded-lg border border-gray-200">
             {deviceCode.user_code}
@@ -244,7 +244,7 @@ export default function SetupWindow() {
       {/* ── Device name step ──────────────────────────── */}
       {step === 'device-name' && (
         <>
-          <div className="text-6xl mb-4">🦑</div>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           {githubUser && (
             <p className="text-sm text-green-600 mb-2">
               ✓ Signed in as <span className="font-medium">{githubUser}</span>
@@ -321,7 +321,7 @@ export default function SetupWindow() {
       {/* ── Done ──────────────────────────────────────── */}
       {step === 'done' && (
         <>
-          <div className="text-6xl mb-4">🦑</div>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <p className="text-sm text-green-600 font-medium">✓ Setup complete</p>
           <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
             Kraki is running in your menu bar. Use the tray icon to pair devices later.
