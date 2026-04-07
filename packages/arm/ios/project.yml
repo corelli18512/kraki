@@ -19,6 +19,8 @@ targets:
       - path: Kraki
         excludes:
           - "**/.DS_Store"
+    resources:
+      - path: Kraki/Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cloud.corelli.kraki
