@@ -235,7 +235,7 @@ export class KrakiWSClient {
 
       // Reconstruct unread badge from readSeq vs lastSeq (binary: 0 or 1)
       if (ts.lastSeq > (ts.readSeq ?? 0)) {
-        if (!store.unreadCount.get(ts.id)) {
+        if (store.unreadCount.get(ts.id) === undefined) {
           store.incrementUnread(ts.id);
         }
       } else {
