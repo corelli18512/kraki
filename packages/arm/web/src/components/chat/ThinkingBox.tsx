@@ -76,7 +76,7 @@ export function ThinkingBox({ messages, isActive, aborted, agent, streamingText 
         onClick={() => setOpen(true)}
         className="group my-1 flex w-full items-start gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
-        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : aborted ? 'bg-orange-600' : 'bg-emerald-500'}`} />
+        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : aborted ? 'bg-text-muted' : 'bg-emerald-500'}`} />
 
         <span className={`markdown-content min-w-0 text-xs font-medium text-text-secondary [&_p]:!m-0 [&_code]:text-[11px]${!isActive ? ' line-clamp-3' : ''}`}>
           <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
