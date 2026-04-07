@@ -1,4 +1,5 @@
 import { stringToHue } from '../../lib/color';
+import { ShieldQuestion, MessageCircleQuestion, MessageCircleMore } from 'lucide-react';
 
 interface AgentAvatarProps {
   agent: string;
@@ -25,8 +26,17 @@ function CopilotIcon({ className }: { className?: string }) {
 export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: AgentAvatarProps) {
   const s = sizeMap[size];
   const hue = stringToHue(sessionId ?? agent);
-  const badgeSize = size === 'sm' ? 'text-[9px]' : 'text-[11px]';
-  const badgeEmoji = badge === 'permission' ? '🔑' : badge === 'question' ? '❓' : status === 'idle' ? '☕' : null;
+
+  const BadgeIcon = badge === 'permission' ? ShieldQuestion
+    : badge === 'question' ? MessageCircleQuestion
+    : status === 'active' ? MessageCircleMore
+    : null;
+
+  const badgeColor = badge === 'permission' ? 'text-amber-500'
+    : badge === 'question' ? 'text-ocean-500'
+    : 'text-ocean-500';
+
+  const badgeIconSize = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5';
 
   return (
     <div className="relative inline-flex shrink-0">
@@ -36,9 +46,9 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: Ag
       >
         <CopilotIcon className={s.icon} />
       </div>
-      {badgeEmoji && (
-        <span className={`absolute -bottom-0.5 -right-1 leading-none ${badgeSize}`}>
-          {badgeEmoji}
+      {BadgeIcon && (
+        <span className={`absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] ${badgeColor}`}>
+          <BadgeIcon className={`${badgeIconSize} ${status === 'active' ? 'animate-pulse' : ''}`} />
         </span>
       )}
     </div>
