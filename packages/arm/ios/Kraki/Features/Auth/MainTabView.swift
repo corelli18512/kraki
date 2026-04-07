@@ -13,7 +13,11 @@ struct MainTabView: View {
                 SessionListView()
             }
             .tabItem {
-                Label("Agents", systemImage: "bubble.left.and.bubble.right")
+                Label {
+                    Text("Agents")
+                } icon: {
+                    LucideIconType.botMessageSquare.tabImage()
+                }
             }
             .badge(appState.sessionStore.totalUnread)
 
@@ -21,14 +25,22 @@ struct MainTabView: View {
                 DeviceListView()
             }
             .tabItem {
-                Label("Devices", systemImage: "display")
+                Label {
+                    Text("Devices")
+                } icon: {
+                    LucideIconType.monitorCloud.tabImage()
+                }
             }
 
             NavigationStack {
                 SettingsView()
             }
             .tabItem {
-                Label("Settings", systemImage: "gear")
+                Label {
+                    Text("Settings")
+                } icon: {
+                    LucideIconType.userCog.tabImage()
+                }
             }
         }
     }

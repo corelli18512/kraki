@@ -87,9 +87,12 @@ struct SessionListView: View {
                         sessionRow(session)
                     }
                 } header: {
-                    Label("Pinned", systemImage: "pin.fill")
-                        .font(.caption)
-                        .textCase(.uppercase)
+                    HStack(spacing: 4) {
+                        LucideIcon(.pin, size: 12, color: .secondary)
+                        Text("Pinned")
+                            .font(.caption)
+                            .textCase(.uppercase)
+                    }
                 }
             }
 
@@ -166,8 +169,11 @@ struct SessionListView: View {
         VStack(spacing: 12) {
             Spacer()
 
-            Text("🦑")
-                .font(.system(size: 48))
+            Image("KrakiLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
 
             Text("No sessions yet")
                 .font(.subheadline)

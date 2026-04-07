@@ -79,9 +79,7 @@ struct ToolActivityView: View {
             ProgressView()
                 .controlSize(.mini)
         } else {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.green)
+            LucideIcon(.check, size: 12, color: .green)
         }
     }
 
@@ -91,17 +89,17 @@ struct ToolActivityView: View {
     private var toolIcon: some View {
         switch toolName {
         case "shell", "bash":
-            Image(systemName: "terminal")
+            LucideIcon(.terminal, size: 12, color: .secondary)
         case "read_file", "view":
-            Image(systemName: "doc.text")
+            LucideIcon(.fileText, size: 12, color: .secondary)
         case "write_file", "create_file", "create":
-            Image(systemName: "doc.badge.plus")
+            LucideIcon(.fileEdit, size: 12, color: .secondary)
         case "edit_file", "edit":
-            Image(systemName: "pencil")
+            LucideIcon(.pencil, size: 12, color: .secondary)
         case "grep", "search":
-            Image(systemName: "magnifyingglass")
+            LucideIcon(.search, size: 12, color: .secondary)
         case "glob":
-            Image(systemName: "folder.badge.magnifyingglass" )
+            LucideIcon(.folderSearch, size: 12, color: .secondary)
         case "mcp":
             Image(systemName: "server.rack")
         default:

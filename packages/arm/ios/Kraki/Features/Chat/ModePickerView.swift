@@ -121,12 +121,7 @@ struct ModePickerView: View {
     // MARK: - Colors
 
     private func modeColor(_ mode: SessionMode) -> Color {
-        switch mode {
-        case .safe:     return .green
-        case .discuss:  return .blue
-        case .execute:  return .orange
-        case .delegate: return .purple
-        }
+        Color.modeColor(mode)
     }
 
     private func modeTextColor(_ mode: SessionMode) -> Color {

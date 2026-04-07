@@ -70,10 +70,15 @@ struct SessionCardView: View {
 
     private var avatarView: some View {
         ZStack(alignment: .topTrailing) {
-            agentAvatar
-                .overlay(alignment: .bottomTrailing) {
-                    badgeOverlay
-                }
+            AgentAvatar(
+                agent: session.agent,
+                size: .md,
+                status: session.state,
+                badge: avatarBadge
+            )
+            .overlay(alignment: .bottomTrailing) {
+                statusDot
+            }
 
             if isUnread {
                 Circle()
@@ -84,19 +89,10 @@ struct SessionCardView: View {
         }
     }
 
-    private var agentAvatar: some View {
-        let info = AgentInfo.from(session.agent)
-        return ZStack {
-            Circle()
-                .fill(info.color.opacity(0.15))
-                .frame(width: 32, height: 32)
-
-            Text(info.emoji)
-                .font(.system(size: 14))
-        }
-        .overlay(alignment: .bottomTrailing) {
-            statusDot
-        }
+    private var avatarBadge: AvatarBadge? {
+        if let preview, preview.type == "permission" { return .permission }
+        if let preview, preview.type == "question" { return .question }
+        return nil
     }
 
     @ViewBuilder
@@ -109,23 +105,6 @@ struct SessionCardView: View {
                     Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5)
                 )
                 .offset(x: 2, y: 2)
-        }
-    }
-
-    @ViewBuilder
-    private var badgeOverlay: some View {
-        if let preview, preview.type == "permission" {
-            Text("🔑")
-                .font(.system(size: 10))
-                .padding(2)
-                .background(.ultraThinMaterial, in: Circle())
-                .offset(x: 6, y: 4)
-        } else if let preview, preview.type == "question" {
-            Text("❓")
-                .font(.system(size: 10))
-                .padding(2)
-                .background(.ultraThinMaterial, in: Circle())
-                .offset(x: 6, y: 4)
         }
     }
 
@@ -219,23 +198,6 @@ struct SessionCardView: View {
             Text(SessionTimeFormatter.format(preview.timestamp))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-        }
-    }
-}
-
-// MARK: - Agent Info
-
-struct AgentInfo {
-    let label: String
-    let emoji: String
-    let color: Color
-
-    static func from(_ agent: String) -> AgentInfo {
-        switch agent.lowercased() {
-        case "copilot": return AgentInfo(label: "Copilot", emoji: "🤖", color: .blue)
-        case "claude":  return AgentInfo(label: "Claude", emoji: "🧠", color: .orange)
-        case "codex":   return AgentInfo(label: "Codex", emoji: "⚡", color: .green)
-        default:        return AgentInfo(label: agent.capitalized, emoji: "🔮", color: .purple)
         }
     }
 }
