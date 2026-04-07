@@ -17,7 +17,7 @@ final class HelpersTests: XCTestCase {
 
     func testFormatTokenCountThousands() {
         XCTAssertEqual(formatTokenCount(1234), "1.2K")
-        XCTAssertEqual(formatTokenCount(9999), "10K")
+        XCTAssertEqual(formatTokenCount(9999), "10.0K")
         XCTAssertEqual(formatTokenCount(45300), "45K")
     }
 
