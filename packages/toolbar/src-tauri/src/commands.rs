@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 
 /// Invoke `kraki start` via the bundled sidecar.
@@ -66,6 +66,12 @@ pub async fn run_headless_setup(
     }
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run_sidecar_stdout(&app, &arg_refs).await
+}
+
+/// Tauri command: query relay capabilities via sidecar.
+#[tauri::command]
+pub async fn run_relay_info(app: AppHandle, url: String) -> Result<String, String> {
+    run_sidecar_stdout(&app, &["relay-info", &url]).await
 }
 
 /// Tauri command: run doctor and return JSON.

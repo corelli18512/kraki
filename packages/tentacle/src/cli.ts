@@ -425,6 +425,58 @@ async function cmdDoctor(): Promise<void> {
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
+// ── kraki relay-info — query relay capabilities ─────────
+
+async function cmdRelayInfo(args: string[]): Promise<void> {
+  const url = args[1];
+  if (!url) {
+    process.stderr.write('error: relay URL is required\nusage: kraki relay-info <url>\n');
+    process.exit(1);
+    return;
+  }
+  if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
+    process.stderr.write('error: URL must start with wss:// or ws://\n');
+    process.exit(1);
+    return;
+  }
+
+  const { WebSocket } = await import('ws');
+
+  const result = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error('Connection timed out'));
+    }, 5000);
+
+    const ws = new WebSocket(url);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'auth_info' }));
+    });
+    ws.on('message', (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'auth_info_response') {
+          clearTimeout(timer);
+          ws.close();
+          resolve(JSON.stringify({
+            ok: true,
+            methods: msg.methods ?? ['open'],
+            githubClientId: msg.githubClientId ?? null,
+          }));
+        }
+      } catch { /* ignore non-JSON */ }
+    });
+    ws.on('error', (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  }).catch((err) => {
+    return JSON.stringify({ ok: false, error: (err as Error).message });
+  });
+
+  process.stdout.write(result + '\n');
+}
+
 // ── kraki auth — headless GitHub device flow ────────────
 
 async function cmdAuth(args: string[]): Promise<void> {
@@ -565,6 +617,11 @@ async function main(): Promise<void> {
 
   if (cmd === 'doctor') {
     await cmdDoctor();
+    return;
+  }
+
+  if (cmd === 'relay-info') {
+    await cmdRelayInfo(args);
     return;
   }
 

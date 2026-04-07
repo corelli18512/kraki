@@ -37,6 +37,7 @@ pub fn run() {
             commands::check_for_updates,
             commands::run_headless_setup,
             commands::run_doctor,
+            commands::run_relay_info,
             commands::is_configured,
             commands::start_github_auth,
         ])

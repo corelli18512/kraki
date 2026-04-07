@@ -5,14 +5,20 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import QRCode from 'qrcode';
 
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
-// TODO(phase-2): Get client ID from relay auth_info instead of hardcoding
-const GITHUB_CLIENT_ID = 'Ov23liUYbFrJfBWR0uRo';
 
 // TODO(phase-2): Replace device flow with OAuth redirect flow.
 // Register kraki:// deep link, add redirect URI to GitHub OAuth app,
 // relay already handles code exchange via github_oauth auth method.
+// TODO(phase-2): Add "Advanced" option to enter custom relay URL for self-hosters.
 
-type Step = 'checking' | 'auth' | 'auth-polling' | 'device-name' | 'creating' | 'pairing' | 'done';
+type Step = 'checking' | 'relay-error' | 'auth' | 'auth-polling' | 'device-name' | 'creating' | 'pairing' | 'done';
+
+interface RelayInfo {
+  ok: boolean;
+  methods?: string[];
+  githubClientId?: string | null;
+  error?: string;
+}
 
 function GitHubMark({ className }: { className?: string }) {
   return (
@@ -25,6 +31,9 @@ function GitHubMark({ className }: { className?: string }) {
 export default function SetupWindow() {
   const [step, setStep] = useState<Step>('checking');
   const [error, setError] = useState<string | null>(null);
+
+  // Relay state
+  const [relayInfo, setRelayInfo] = useState<RelayInfo | null>(null);
 
   // Auth state
   const [userCode, setUserCode] = useState<string | null>(null);
@@ -46,10 +55,27 @@ export default function SetupWindow() {
     setDeviceName(name);
   }, []);
 
-  // ── Auto-detect auth on mount ───────────────────────────
+  // ── Startup: test relay, check auth ─────────────────────
 
   useEffect(() => {
     (async () => {
+      // 1. Test relay connection and get auth methods
+      try {
+        const raw = await invoke<string>('run_relay_info', { url: OFFICIAL_RELAY });
+        const info = JSON.parse(raw) as RelayInfo;
+        if (!info.ok) {
+          setError(info.error ?? 'Cannot reach relay');
+          setStep('relay-error');
+          return;
+        }
+        setRelayInfo(info);
+      } catch (err) {
+        setError(`Cannot reach relay: ${err}`);
+        setStep('relay-error');
+        return;
+      }
+
+      // 2. Check if gh CLI is already authenticated (same as CLI routine)
       try {
         const result = await invoke<string>('run_doctor');
         const doctor = JSON.parse(result) as { ghAuth: boolean; ghUser: string | null };
@@ -59,6 +85,7 @@ export default function SetupWindow() {
           return;
         }
       } catch { /* doctor failed — continue to manual auth */ }
+
       setStep('auth');
     })();
   }, []);
@@ -83,10 +110,13 @@ export default function SetupWindow() {
 
   const startGitHubAuth = useCallback(async () => {
     setError(null);
+    const clientId = relayInfo?.githubClientId;
+    if (!clientId) {
+      setError('Relay does not support GitHub login');
+      return;
+    }
     try {
-      // start_github_auth blocks until the user approves or it times out.
-      // The sidecar emits "auth-update" events with the device code first.
-      const result = await invoke<string>('start_github_auth', { clientId: GITHUB_CLIENT_ID });
+      const result = await invoke<string>('start_github_auth', { clientId });
       const data = JSON.parse(result) as { phase: string; username?: string; token?: string };
       if (data.phase === 'authenticated' && data.token) {
         setGithubToken(data.token);
@@ -96,6 +126,27 @@ export default function SetupWindow() {
     } catch (err) {
       setError(`GitHub login failed: ${err}`);
       setStep('auth');
+    }
+  }, [relayInfo]);
+
+  // ── Retry relay connection ──────────────────────────────
+
+  const retryRelay = useCallback(async () => {
+    setError(null);
+    setStep('checking');
+    try {
+      const raw = await invoke<string>('run_relay_info', { url: OFFICIAL_RELAY });
+      const info = JSON.parse(raw) as RelayInfo;
+      if (!info.ok) {
+        setError(info.error ?? 'Cannot reach relay');
+        setStep('relay-error');
+        return;
+      }
+      setRelayInfo(info);
+      setStep('auth');
+    } catch (err) {
+      setError(`Cannot reach relay: ${err}`);
+      setStep('relay-error');
     }
   }, []);
 
@@ -164,8 +215,25 @@ export default function SetupWindow() {
           <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <div className="flex items-center gap-2">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
-            <p className="text-sm text-gray-500">Checking…</p>
+            <p className="text-sm text-gray-500">Connecting to relay…</p>
           </div>
+        </>
+      )}
+
+      {/* ── Relay error ───────────────────────────────── */}
+      {step === 'relay-error' && (
+        <>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
+          <h2 className="text-lg font-semibold text-gray-900">Cannot reach relay</h2>
+          {error && (
+            <p className="mt-2 text-xs text-red-500 text-center max-w-xs">{error}</p>
+          )}
+          <button
+            onClick={retryRelay}
+            className="mt-5 py-2.5 px-6 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer"
+          >
+            Retry
+          </button>
         </>
       )}
 
