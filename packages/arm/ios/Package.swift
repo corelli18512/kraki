@@ -5,10 +5,15 @@ let package = Package(
     name: "Kraki",
     platforms: [.iOS(.v17), .macOS(.v14)],
     targets: [
-        .executableTarget(
+        .target(
             name: "Kraki",
             path: "Kraki",
             exclude: []
+        ),
+        .testTarget(
+            name: "KrakiTests",
+            dependencies: ["Kraki"],
+            path: "KrakiTests"
         ),
     ]
 )
