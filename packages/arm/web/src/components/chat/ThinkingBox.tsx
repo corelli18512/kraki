@@ -14,10 +14,11 @@ interface ThinkingBoxProps {
   isActive: boolean;
   aborted?: boolean;
   agent?: string;
+  sessionId?: string;
   streamingText?: string;
 }
 
-export function ThinkingBox({ messages, isActive, aborted, agent, streamingText }: ThinkingBoxProps) {
+export function ThinkingBox({ messages, isActive, aborted, agent, sessionId, streamingText }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
   const [allExpanded, setAllExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);

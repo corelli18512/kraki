@@ -45,10 +45,10 @@ describe('MessageBubble', () => {
       expect(bold.tagName).toBe('STRONG');
     });
 
-    it('renders agent emoji icon', () => {
+    it('renders agent avatar', () => {
       const { container } = renderMsg(makeMsg('agent_message', { content: 'test' }));
-      // agentInfo('') returns fallback emoji 🔮
-      expect(container.textContent).toContain('🔮');
+      // AgentAvatar renders an SVG icon instead of emoji
+      expect(container.querySelector('svg')).toBeTruthy();
     });
   });
 

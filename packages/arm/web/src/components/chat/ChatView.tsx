@@ -246,6 +246,7 @@ export function ChatView() {
                     <MessageBubble
                       message={msg}
                       agent={session.agent}
+                      sessionId={sessionId}
                     />
                   </div>
                 );
@@ -264,11 +265,12 @@ export function ChatView() {
                       isActive={isActive}
                       aborted={turn.aborted}
                       agent={session.agent}
+                      sessionId={sessionId}
                       streamingText={hasStreaming ? streaming : undefined}
                     />
                   )}
                   {turn.finalMessage && !hasStreaming && (
-                    <MessageBubble message={turn.finalMessage} agent={session.agent} turnImages={collectTurnImages(turn.thinkingMessages)} />
+                    <MessageBubble message={turn.finalMessage} agent={session.agent} sessionId={sessionId} turnImages={collectTurnImages(turn.thinkingMessages)} />
                   )}
                 </div>
               );

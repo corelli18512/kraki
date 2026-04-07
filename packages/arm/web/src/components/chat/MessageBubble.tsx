@@ -23,7 +23,7 @@ const markdownComponents = {
   ),
 };
 
-export function MessageBubble({ message, agent, forceExpanded, turnImages, cancelled }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; cancelled?: boolean }) {
+export function MessageBubble({ message, agent, forceExpanded, turnImages, cancelled, sessionId }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; cancelled?: boolean; sessionId?: string }) {
   switch (message.type) {
     case 'user_message': {
       const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
@@ -53,7 +53,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
         <CopyableBubble text={message.payload.content}>
           <div className="flex gap-2">
             <div className="mt-0.5 shrink-0">
-              <AgentAvatar agent={agent ?? ''} size="sm" />
+              <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
             </div>
             <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
               <div className="markdown-content text-sm leading-relaxed text-text-primary">
@@ -201,7 +201,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
         <>
           <div className="flex gap-2">
             <div className="mt-0.5 shrink-0">
-              <AgentAvatar agent={agent ?? ''} size="sm" />
+              <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
             </div>
             <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
               <p className="text-sm leading-relaxed text-text-primary">{message.payload.question}</p>

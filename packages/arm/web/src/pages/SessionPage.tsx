@@ -88,7 +88,7 @@ export function SessionPage() {
           )}
         </button>
         <div className="relative">
-          <AgentAvatar agent={session.agent} size="sm" status={session.state as 'active' | 'idle'} />
+          <AgentAvatar agent={session.agent} sessionId={sessionId} size="sm" status={session.state as 'active' | 'idle'} />
           {isReconnecting && (
             <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
               <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-400 border-t-transparent" />
