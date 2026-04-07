@@ -805,6 +805,7 @@ export class CopilotAdapter extends AgentAdapter {
         toolName: data.toolName as string,
         result,
         toolCallId: data.toolCallId as string | undefined,
+        success: data.success as boolean | undefined,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
     });

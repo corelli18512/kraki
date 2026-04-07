@@ -23,7 +23,7 @@ const markdownComponents = {
   ),
 };
 
-export function MessageBubble({ message, agent, forceExpanded, turnImages }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[] }) {
+export function MessageBubble({ message, agent, forceExpanded, turnImages, cancelled }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; cancelled?: boolean }) {
   switch (message.type) {
     case 'user_message': {
       const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
@@ -95,7 +95,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages }: { m
       );
 
     case 'tool_start':
-      return <ToolActivity type="start" toolName={message.payload.toolName} args={message.payload.args as Record<string, unknown>} forceExpanded={forceExpanded} />;
+      return <ToolActivity type="start" toolName={message.payload.toolName} args={message.payload.args as Record<string, unknown>} cancelled={cancelled} forceExpanded={forceExpanded} />;
 
     case 'tool_complete':
       return (
@@ -105,6 +105,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages }: { m
             toolName={message.payload.toolName}
             args={message.payload.args as Record<string, unknown>}
             result={message.payload.result}
+            success={message.payload.success}
             forceExpanded={forceExpanded}
           />
           <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />

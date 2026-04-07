@@ -50,6 +50,7 @@ export interface ToolCompleteEvent {
   toolName: string;
   result: string;
   toolCallId?: string;
+  success?: boolean;
   attachments?: import('@kraki/protocol').Attachment[];
 }
 

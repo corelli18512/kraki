@@ -7,8 +7,10 @@ const logger = createLogger('useTurns');
 export interface Turn {
   /** Messages that form the "thinking" process (tool calls, intermediate agent messages, permissions, etc.) */
   thinkingMessages: ChatMessage[];
-  /** The final agent_message in this turn (null if turn is still in progress) */
+  /** The final agent_message in this turn (null if turn is still in progress or aborted) */
   finalMessage: ChatMessage | null;
+  /** Whether this turn was aborted by the user */
+  aborted?: boolean;
 }
 
 interface StandaloneGroup {
@@ -72,7 +74,7 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
   // Track whether to skip the next tool_complete (from a question tool)
   let skipNextToolComplete = false;
 
-  const flushTurn = (turnComplete: boolean) => {
+  const flushTurn = (turnComplete: boolean, aborted?: boolean) => {
     if (currentThinking.length === 0) return;
 
     // Log unmerged tool_starts (tool_start without matching tool_complete)
@@ -92,6 +94,9 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
     if (!turnComplete) {
       // Turn still in progress — everything stays in thinking
       result.push({ type: 'turn', turn: { thinkingMessages: currentThinking, finalMessage: null } });
+    } else if (aborted) {
+      // Turn was aborted — keep everything in thinking, no final message pop-out
+      result.push({ type: 'turn', turn: { thinkingMessages: currentThinking, finalMessage: null, aborted: true } });
     } else {
       // Turn is complete — find the last agent_message as the final output
       let lastAgentIdx = -1;
@@ -120,7 +125,8 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
       flushTurn(true);
       result.push({ type: 'standalone', message: msg });
     } else if (TURN_COMPLETE_TYPES.has(msg.type)) {
-      flushTurn(true);
+      const isAborted = msg.type === 'idle' && (msg as { payload?: { reason?: string } }).payload?.reason === 'aborted';
+      flushTurn(true, isAborted);
     } else if (THINKING_TYPES.has(msg.type)) {
       // Questions are always shown as standalone chat bubbles,
       // splitting the turn so subsequent messages start a new thinking box.

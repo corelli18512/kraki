@@ -431,7 +431,7 @@ export class RelayClient {
           this.adapter.abortSession(sessionId)
             .then(() => {
               this.sessionManager.markIdle(sessionId);
-              this.send({ type: 'idle', sessionId, payload: {} });
+              this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
             })
             .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
           break;
@@ -724,6 +724,7 @@ export class RelayClient {
         payload: {
           toolName: event.toolName, args: {}, result: event.result,
           toolCallId: event.toolCallId,
+          ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
       });

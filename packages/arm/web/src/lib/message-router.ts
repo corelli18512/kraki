@@ -196,21 +196,25 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
       // Extract usage from idle payload
-      const idleUsage = (msg as IdleMessage).payload?.usage;
+      const idlePayload = (msg as IdleMessage).payload;
+      const idleUsage = idlePayload?.usage;
       if (idleUsage) store.setSessionUsage(sid, idleUsage);
-      // Set preview from last agent_message in this turn
-      const sessionMsgs = store.messages.get(sid);
-      if (sessionMsgs) {
-        for (let i = sessionMsgs.length - 1; i >= 0; i--) {
-          const m = sessionMsgs[i];
-          if (m.type === 'agent_message' && 'payload' in m) {
-            const content = (m.payload as Record<string, unknown>).content;
-            if (typeof content === 'string') {
-              updatePreview(sid, { text: truncPreview(content), type: 'agent', timestamp: msg.timestamp }, !replaying);
+      const idleReason = idlePayload?.reason;
+      // Don't update preview for aborted turns — the agent text is incomplete
+      if (idleReason !== 'aborted') {
+        const sessionMsgs = store.messages.get(sid);
+        if (sessionMsgs) {
+          for (let i = sessionMsgs.length - 1; i >= 0; i--) {
+            const m = sessionMsgs[i];
+            if (m.type === 'agent_message' && 'payload' in m) {
+              const content = (m.payload as Record<string, unknown>).content;
+              if (typeof content === 'string') {
+                updatePreview(sid, { text: truncPreview(content), type: 'agent', timestamp: msg.timestamp }, !replaying);
+              }
+              break;
             }
-            break;
+            if (m.type === 'user_message' || m.type === 'idle') break;
           }
-          if (m.type === 'user_message' || m.type === 'idle') break;
         }
       }
       if (!replaying && isViewingSession(sid) && document.hasFocus()) {

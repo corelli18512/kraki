@@ -12,11 +12,12 @@ const logger = createLogger('thinking-box');
 interface ThinkingBoxProps {
   messages: ChatMessage[];
   isActive: boolean;
+  aborted?: boolean;
   agent?: string;
   streamingText?: string;
 }
 
-export function ThinkingBox({ messages, isActive, agent, streamingText }: ThinkingBoxProps) {
+export function ThinkingBox({ messages, isActive, aborted, agent, streamingText }: ThinkingBoxProps) {
   const [open, setOpen] = useState(false);
   const [allExpanded, setAllExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -75,7 +76,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
         onClick={() => setOpen(true)}
         className="group my-1 flex w-full items-start gap-2 rounded-lg px-3 py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
-        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : 'bg-emerald-500'}`} />
+        <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : aborted ? 'bg-orange-600' : 'bg-emerald-500'}`} />
 
         <span className={`markdown-content min-w-0 text-xs font-medium text-text-secondary [&_p]:!m-0 [&_code]:text-[11px]${!isActive ? ' line-clamp-3' : ''}`}>
           <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
@@ -124,6 +125,7 @@ export function ThinkingBox({ messages, isActive, agent, streamingText }: Thinki
                       message={msg}
                       agent={agent}
                       forceExpanded={allExpanded || undefined}
+                      cancelled={aborted && msg.type === 'tool_start'}
                     />
                   );
                 })}

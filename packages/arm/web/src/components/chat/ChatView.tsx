@@ -262,6 +262,7 @@ export function ChatView() {
                     <ThinkingBox
                       messages={turn.thinkingMessages}
                       isActive={isActive}
+                      aborted={turn.aborted}
                       agent={session.agent}
                       streamingText={hasStreaming ? streaming : undefined}
                     />

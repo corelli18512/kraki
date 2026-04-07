@@ -152,6 +152,8 @@ export interface ToolCompleteMessage extends BaseEnvelope {
     result: string;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
+    /** Whether the tool execution succeeded (default true if absent) */
+    success?: boolean;
     attachments?: Attachment[];
   };
 }
@@ -161,6 +163,8 @@ export interface IdleMessage extends BaseEnvelope {
   payload: {
     /** Cumulative session token usage (present when tracked by adapter) */
     usage?: import('./sessions.js').SessionUsage;
+    /** Why the session went idle */
+    reason?: 'completed' | 'aborted';
   };
 }
 

@@ -1,5 +1,5 @@
 import { useState, lazy, Suspense } from 'react';
-import { Loader2, CheckCircle2, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
 
 const ReactDiffViewer = lazy(() => import('react-diff-viewer-continued'));
 
@@ -8,10 +8,12 @@ interface ToolActivityProps {
   toolName: string;
   args: Record<string, unknown> | object;
   result?: string;
+  success?: boolean;
+  cancelled?: boolean;
   forceExpanded?: boolean;
 }
 
-export function ToolActivity({ type, toolName, args, result, forceExpanded }: ToolActivityProps) {
+export function ToolActivity({ type, toolName, args, result, success, cancelled, forceExpanded }: ToolActivityProps) {
   const [expanded, setExpanded] = useState(false);
   const isExpanded = forceExpanded ?? expanded;
   const isStart = type === 'start';
@@ -32,8 +34,12 @@ export function ToolActivity({ type, toolName, args, result, forceExpanded }: To
         className="group flex w-full items-center gap-1 rounded-lg py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
         {isStart
-          ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />
-          : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+          ? (cancelled
+            ? <XCircle className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+            : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />)
+          : (success === false
+            ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+            : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />)
         }
         <span className="shrink-0 text-xs font-medium text-text-secondary">
           {isStart && 'Running '}
