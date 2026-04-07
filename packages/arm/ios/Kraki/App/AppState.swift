@@ -20,7 +20,11 @@ final class AppState {
     var connectionStatus: ConnectionStatus = .awaitingLogin
     var deviceId: String?
     var user: UserInfo?
+    #if DEBUG
+    var relayURL: String = "ws://localhost:4000"
+    #else
     var relayURL: String = "wss://kraki.corelli.cloud"
+    #endif
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
@@ -62,6 +66,17 @@ final class AppState {
     func connect() {
         connectionStatus = .connecting
         wsClient?.connect()
+    }
+
+    /// Connect to local relay with open auth — DEBUG only.
+    /// Bypasses pairing and OAuth for fast dev iteration.
+    func devConnect() {
+        #if DEBUG
+        // Clear any stored credentials so we get a fresh open auth
+        authManager?.pairingToken = nil
+        connectionStatus = .connecting
+        wsClient?.connect()
+        #endif
     }
 
     func disconnect() {

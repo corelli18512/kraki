@@ -147,9 +147,27 @@ struct LoginView: View {
                     .background(Color(.secondarySystemBackground))
                     .cornerRadius(8)
                     .padding(.top, 24)
-                    .padding(.bottom, 16)
                     .opacity(showInstructions ? 1 : 0)
                     .offset(y: showInstructions ? 0 : 8)
+
+                #if DEBUG
+                // Dev bypass — connect to local relay with open auth
+                Button {
+                    appState.devConnect()
+                } label: {
+                    Label("Dev Login (localhost)", systemImage: "hammer.fill")
+                        .font(.system(size: 13))
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+                .controlSize(.small)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+                .opacity(showInstructions ? 1 : 0)
+                .offset(y: showInstructions ? 0 : 8)
+                #else
+                Spacer().frame(height: 16)
+                #endif
             }
             .padding(.horizontal, 32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
