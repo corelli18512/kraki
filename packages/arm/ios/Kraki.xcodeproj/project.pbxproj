@@ -27,6 +27,7 @@
 		41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
 		4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A625A24B0C13AF8010778069 /* Theme.swift */; };
 		45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A429810ED3F81077317149B3 /* DeviceStoreTests.swift */; };
+		4BCD8832B17517464C140526 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 69B9A691EAC2476B0D3210AC /* Assets.xcassets */; };
 		4BEB0FA2DCF6DEBF5298311D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */; };
 		4C76927D9A5EFC2F80E881CD /* ThinkingBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F0A966720CC92C38AAA486E /* ThinkingBoxView.swift */; };
 		50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
@@ -119,6 +120,7 @@
 		64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpersTests.swift; sourceTree = "<group>"; };
 		654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRouter.swift; sourceTree = "<group>"; };
 		6685F600391FC66B987E12ED /* Kraki.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraki.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		69B9A691EAC2476B0D3210AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiApp.swift; sourceTree = "<group>"; };
 		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -242,6 +244,14 @@
 			path = Features;
 			sourceTree = "<group>";
 		};
+		7F490224A28B969EB4F4BEE3 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				69B9A691EAC2476B0D3210AC /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		8DF3DD32B2C3E1FB471E63B1 /* KrakiNotification */ = {
 			isa = PBXGroup;
 			children = (
@@ -259,6 +269,7 @@
 				E685974EC7D62085D8F8A91A /* App */,
 				678A6E1C826CEDF5BD7565DB /* Core */,
 				71615332CDDC89839E753D87 /* Features */,
+				7F490224A28B969EB4F4BEE3 /* Resources */,
 				BBE447C3AF7E371DFE169DCA /* Shared */,
 			);
 			path = Kraki;
@@ -400,6 +411,7 @@
 			buildConfigurationList = 75C1BD6ECBBFBE6E17751B01 /* Build configuration list for PBXNativeTarget "Kraki" */;
 			buildPhases = (
 				76878512F80269C5E6C02AA1 /* Sources */,
+				91754CF4F3CAE716C90DCCE5 /* Resources */,
 				834918619DC3D7DB6C56EF43 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -451,6 +463,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		91754CF4F3CAE716C90DCCE5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCD8832B17517464C140526 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4DB0A897A13746DA3B4B1172 /* Sources */ = {
