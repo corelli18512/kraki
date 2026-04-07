@@ -164,7 +164,11 @@ export function ChatView() {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
     const prevHeight = prevScrollHeightRef.current;
-    if (prevHeight > 0 && el.scrollHeight > prevHeight && !isAtBottomRef.current) {
+    const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
+    // Only adjust if height grew AND we're NOT near the bottom (prepend case).
+    // Direct DOM check avoids stale ref issues.
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (heightGrew && !atBottom) {
       el.scrollTop += el.scrollHeight - prevHeight;
     }
     prevScrollHeightRef.current = el.scrollHeight;
@@ -186,19 +190,21 @@ export function ChatView() {
     }
     const isNewAtEnd = curLastSeq > prevLastSeqRef.current;
 
-    if (isAtBottomRef.current) {
+    // Check if the latest message is from the user — always scroll for user sends
+    const lastGroup = curLen > 0 ? grouped[curLen - 1] : null;
+    const isFromUser = lastGroup?.type === 'standalone' && (
+      lastGroup.message.type === 'user_message' ||
+      lastGroup.message.type === 'pending_input' ||
+      lastGroup.message.type === 'answer' ||
+      lastGroup.message.type === 'send_input'
+    );
+
+    if (isAtBottomRef.current || isFromUser) {
       scrollToBottom();
     } else if (isNewAtEnd) {
       // Only count as unread if new messages were appended at the end
       const prevLen = prevMsgLenRef.current;
       if (curLen > prevLen) {
-        const lastGroup = grouped[curLen - 1];
-        const isFromUser = lastGroup?.type === 'standalone' && (
-          lastGroup.message.type === 'user_message' ||
-          lastGroup.message.type === 'pending_input' ||
-          lastGroup.message.type === 'answer' ||
-          lastGroup.message.type === 'send_input'
-        );
         if (!isFromUser) {
           setUnreadCount((c) => c + (curLen - prevLen));
           setShowScrollBtn(true);
