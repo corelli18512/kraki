@@ -38,7 +38,7 @@ struct SessionListView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
+            ToolbarItem(placement: .topBarLeading) {
                 brandHeader
             }
             ToolbarItem(placement: .primaryAction) {
@@ -46,11 +46,10 @@ struct SessionListView: View {
                     showNewSession = true
                 } label: {
                     Image(systemName: "plus")
+                        .imageScale(.medium)
                 }
-                .tint(.krakiPrimary)
             }
         }
-        .tint(.krakiPrimary)
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
@@ -195,27 +194,18 @@ struct SessionListView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Image("KrakiLogo")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 120, height: 120)
-
             Text("No sessions")
                 .font(.title3)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.secondary)
 
             if hasTentacle {
                 Button {
                     showNewSession = true
                 } label: {
                     Label("New Session", systemImage: "plus")
-                        .font(.system(size: 15, weight: .medium))
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
+                        .font(.system(size: 14, weight: .medium))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.krakiPrimary)
+                .buttonStyle(.bordered)
                 .padding(.top, 4)
             } else {
                 Text("npx @kraki/tentacle")
