@@ -1,7 +1,6 @@
 #if os(iOS)
 import SwiftUI
 
-@main
 struct KrakiApp: App {
     @State private var appState = AppState()
 
@@ -16,7 +15,6 @@ struct KrakiApp: App {
 #elseif os(macOS)
 import SwiftUI
 
-@main
 struct KrakiApp: App {
     var body: some Scene {
         WindowGroup {
