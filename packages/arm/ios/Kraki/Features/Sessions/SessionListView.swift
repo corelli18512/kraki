@@ -1,13 +1,7 @@
 #if os(iOS)
 /// SessionListView — The main sessions list screen.
 ///
-/// Mirrors SessionList.tsx:
-/// - Two sections: Pinned (if any) and Recent
-/// - Swipe actions: pin/unpin, read/unread, fork, delete
-/// - Empty state with "New Session" button
-/// - "+" toolbar button → NewSessionSheet
-/// - Pull to refresh
-/// - NavigationLink to SessionDetailView
+/// Mirrors SessionList.tsx + Sidebar brand header.
 
 import SwiftUI
 
@@ -42,16 +36,21 @@ struct SessionListView: View {
                 sessionList
             }
         }
-        .navigationTitle("Sessions")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                brandHeader
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showNewSession = true
                 } label: {
                     Image(systemName: "plus")
                 }
+                .tint(.krakiPrimary)
             }
         }
+        .tint(.krakiPrimary)
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
@@ -74,6 +73,35 @@ struct SessionListView: View {
         }
         .navigationDestination(for: String.self) { sessionId in
             SessionDetailView(sessionId: sessionId)
+        }
+    }
+
+    // MARK: - Brand Header (matches web Sidebar header)
+
+    private var brandHeader: some View {
+        HStack(spacing: 6) {
+            Image("KrakiLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 22, height: 22)
+
+            // Colored KRAKI text matching web
+            HStack(spacing: 0.5) {
+                Text("K").foregroundStyle(Color(hex: 0x00c9a7))
+                Text("R").foregroundStyle(Color(hex: 0x00b4d8))
+                Text("A").foregroundStyle(Color(hex: 0x06b6d4))
+                Text("K").foregroundStyle(Color(hex: 0xea6046))
+                Text("I").foregroundStyle(Color(hex: 0x0891b2))
+            }
+            .font(.system(size: 15, weight: .heavy, design: .monospaced))
+            .tracking(2)
+
+            Text("Preview")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.krakiPrimary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
         }
     }
 
@@ -110,8 +138,6 @@ struct SessionListView: View {
         }
         .listStyle(.insetGrouped)
         .refreshable {
-            // WebSocket pushes updates automatically. Pull-to-refresh provides
-            // tactile feedback; the brief delay satisfies the refreshable contract.
             try? await Task.sleep(for: .milliseconds(300))
         }
     }
@@ -166,51 +192,55 @@ struct SessionListView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             Spacer()
 
             Image("KrakiLogo")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 48, height: 48)
-                .clipShape(Circle())
+                .frame(width: 120, height: 120)
 
-            Text("No sessions yet")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Text("No sessions")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
 
             if hasTentacle {
-                Text("Start a coding agent on your connected device")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-
                 Button {
                     showNewSession = true
                 } label: {
                     Label("New Session", systemImage: "plus")
+                        .font(.system(size: 15, weight: .medium))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .tint(.krakiPrimary)
                 .padding(.top, 4)
             } else {
-                Text("Connect an agent via tentacle to get started")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-
                 Text("npx @kraki/tentacle")
-                    .font(.caption2)
-                    .monospaced()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                    .padding(.top, 4)
+                    .font(.system(size: 13, design: .monospaced))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
             }
 
             Spacer()
         }
         .padding(.horizontal, 32)
+    }
+}
+
+// MARK: - Color hex helper
+
+extension Color {
+    init(hex: UInt, opacity: Double = 1) {
+        self.init(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255,
+            opacity: opacity
+        )
     }
 }
 
