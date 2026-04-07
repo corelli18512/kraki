@@ -425,6 +425,85 @@ async function cmdDoctor(): Promise<void> {
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
+// ── kraki auth — headless GitHub device flow ────────────
+
+async function cmdAuth(args: string[]): Promise<void> {
+  const clientId = getArgValue(args, '--client-id');
+  if (!clientId) {
+    process.stderr.write('error: --client-id is required\n');
+    process.exit(1);
+    return;
+  }
+
+  // Step 1: Request device code
+  const res = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+  });
+  if (!res.ok) {
+    process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
+    process.exit(1);
+    return;
+  }
+  const data = await res.json() as { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
+
+  // Print device code so the caller can display it
+  process.stdout.write(JSON.stringify({ phase: 'device_code', user_code: data.user_code, verification_uri: data.verification_uri, expires_in: data.expires_in }) + '\n');
+
+  // Step 2: Poll for token
+  const interval = (data.interval ?? 5) * 1000;
+  const deadline = Date.now() + data.expires_in * 1000;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval));
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: data.device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      }),
+    });
+    const tokenData = await tokenRes.json() as Record<string, string>;
+
+    if (tokenData.access_token) {
+      let username = 'unknown';
+      try {
+        const userRes = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}`, 'User-Agent': 'kraki-tentacle' },
+        });
+        const userData = await userRes.json() as Record<string, unknown>;
+        username = String(userData.login ?? 'unknown');
+      } catch { /* ignore */ }
+
+      const { saveGitHubToken } = await import('./config.js');
+      saveGitHubToken(tokenData.access_token);
+
+      process.stdout.write(JSON.stringify({ phase: 'authenticated', username, token: tokenData.access_token }) + '\n');
+      return;
+    }
+
+    if (tokenData.error === 'expired_token') {
+      process.stderr.write('error: device code expired\n');
+      process.exit(1);
+      return;
+    }
+    if (tokenData.error === 'access_denied') {
+      process.stderr.write('error: authorization denied\n');
+      process.exit(1);
+      return;
+    }
+    if (tokenData.error === 'slow_down') {
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+
+  process.stderr.write('error: authorization timed out\n');
+  process.exit(1);
+}
+
 // ── Arg parsing ─────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -486,6 +565,11 @@ async function main(): Promise<void> {
 
   if (cmd === 'doctor') {
     await cmdDoctor();
+    return;
+  }
+
+  if (cmd === 'auth') {
+    await cmdAuth(args);
     return;
   }
 

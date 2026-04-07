@@ -119,6 +119,51 @@ pub async fn check_for_updates(app: AppHandle) -> Option<String> {
     }
 }
 
+// TODO(phase-2): Replace device flow with OAuth redirect flow.
+// Register kraki:// deep link, add redirect URI to GitHub OAuth app,
+// relay already handles code exchange via github_oauth auth method.
+
+/// Tauri command: start GitHub device auth flow via sidecar.
+/// Emits "auth-update" events as JSON lines arrive from `kraki auth`.
+/// Returns the final authenticated result or an error.
+#[tauri::command]
+pub async fn start_github_auth(app: AppHandle, client_id: String) -> Result<String, String> {
+    let (mut rx, _child) = app
+        .shell()
+        .sidecar("kraki")
+        .map_err(|e| e.to_string())?
+        .args(["auth", "--client-id", &client_id])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    use tauri_plugin_shell::process::CommandEvent;
+    let mut last_line = String::new();
+    let mut stderr = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).to_string();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        let _ = app.emit("auth-update", line);
+                        last_line = line.to_string();
+                    }
+                }
+            }
+            CommandEvent::Stderr(bytes) => stderr.push_str(&String::from_utf8_lossy(&bytes)),
+            CommandEvent::Terminated(_) => break,
+            _ => {}
+        }
+    }
+
+    if last_line.is_empty() {
+        let stderr = stderr.trim().to_string();
+        return Err(if stderr.is_empty() { "Auth process produced no output".to_string() } else { stderr });
+    }
+    Ok(last_line)
+}
+
 /// Run a sidecar command and capture stdout.
 async fn run_sidecar_stdout(app: &AppHandle, args: &[&str]) -> Result<String, String> {
     let (mut rx, _child) = app

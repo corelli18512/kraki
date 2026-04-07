@@ -1,22 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import QRCode from 'qrcode';
 
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
-
-// GitHub OAuth device flow constants
+// TODO(phase-2): Get client ID from relay auth_info instead of hardcoding
 const GITHUB_CLIENT_ID = 'Ov23liUYbFrJfBWR0uRo';
 
-type Step = 'auth' | 'device-name' | 'creating' | 'pairing' | 'done';
+// TODO(phase-2): Replace device flow with OAuth redirect flow.
+// Register kraki:// deep link, add redirect URI to GitHub OAuth app,
+// relay already handles code exchange via github_oauth auth method.
 
-interface DeviceCodeData {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
+type Step = 'checking' | 'auth' | 'auth-polling' | 'device-name' | 'creating' | 'pairing' | 'done';
 
 function GitHubMark({ className }: { className?: string }) {
   return (
@@ -27,12 +23,12 @@ function GitHubMark({ className }: { className?: string }) {
 }
 
 export default function SetupWindow() {
-  const [step, setStep] = useState<Step>('auth');
+  const [step, setStep] = useState<Step>('checking');
   const [error, setError] = useState<string | null>(null);
 
   // Auth state
-  const [deviceCode, setDeviceCode] = useState<DeviceCodeData | null>(null);
-  const [authPolling, setAuthPolling] = useState(false);
+  const [userCode, setUserCode] = useState<string | null>(null);
+  const [verificationUri, setVerificationUri] = useState<string | null>(null);
   const [githubToken, setGithubToken] = useState<string | null>(null);
   const [githubUser, setGithubUser] = useState<string | null>(null);
 
@@ -44,100 +40,78 @@ export default function SetupWindow() {
   const [pairingUrl, setPairingUrl] = useState<string | null>(null);
   const [pairingSecondsLeft, setPairingSecondsLeft] = useState(300);
 
-  // Pre-fill device name from hostname
+  // Pre-fill device name
   useEffect(() => {
     const name = navigator.userAgent.includes('Mac') ? 'Mac' : 'Desktop';
     setDeviceName(name);
   }, []);
 
-  // ── Step 1: GitHub Device Flow ──────────────────────────
+  // ── Auto-detect auth on mount ───────────────────────────
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await invoke<string>('run_doctor');
+        const doctor = JSON.parse(result) as { ghAuth: boolean; ghUser: string | null };
+        if (doctor.ghAuth) {
+          setGithubUser(doctor.ghUser);
+          setStep('device-name');
+          return;
+        }
+      } catch { /* doctor failed — continue to manual auth */ }
+      setStep('auth');
+    })();
+  }, []);
+
+  // ── Listen for auth-update events from sidecar ──────────
+
+  useEffect(() => {
+    const unlisten = listen<string>('auth-update', (event) => {
+      try {
+        const data = JSON.parse(event.payload) as Record<string, string>;
+        if (data.phase === 'device_code') {
+          setUserCode(data.user_code);
+          setVerificationUri(data.verification_uri);
+          setStep('auth-polling');
+        }
+      } catch { /* ignore malformed */ }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  // ── Start auth via sidecar ──────────────────────────────
 
   const startGitHubAuth = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch('https://github.com/login/device/code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }),
-      });
-      if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-      const data = (await res.json()) as DeviceCodeData;
-      setDeviceCode(data);
-      setAuthPolling(true);
+      // start_github_auth blocks until the user approves or it times out.
+      // The sidecar emits "auth-update" events with the device code first.
+      const result = await invoke<string>('start_github_auth', { clientId: GITHUB_CLIENT_ID });
+      const data = JSON.parse(result) as { phase: string; username?: string; token?: string };
+      if (data.phase === 'authenticated' && data.token) {
+        setGithubToken(data.token);
+        setGithubUser(data.username ?? null);
+        setStep('device-name');
+      }
     } catch (err) {
-      setError(`Failed to start GitHub login: ${(err as Error).message}`);
+      setError(`GitHub login failed: ${err}`);
+      setStep('auth');
     }
   }, []);
 
-  // Poll for token approval
-  useEffect(() => {
-    if (!authPolling || !deviceCode) return;
-
-    const interval = (deviceCode.interval ?? 5) * 1000;
-    const deadline = Date.now() + deviceCode.expires_in * 1000;
-
-    const timer = setInterval(async () => {
-      if (Date.now() > deadline) {
-        clearInterval(timer);
-        setAuthPolling(false);
-        setError('Authorization timed out. Please try again.');
-        return;
-      }
-
-      try {
-        const res = await fetch('https://github.com/login/oauth/access_token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            client_id: GITHUB_CLIENT_ID,
-            device_code: deviceCode.device_code,
-            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-          }),
-        });
-        const data = (await res.json()) as Record<string, string>;
-
-        if (data.access_token) {
-          clearInterval(timer);
-          setAuthPolling(false);
-          setGithubToken(data.access_token);
-
-          try {
-            const userRes = await fetch('https://api.github.com/user', {
-              headers: { Authorization: `Bearer ${data.access_token}`, 'User-Agent': 'kraki-toolbar' },
-            });
-            const userData = (await userRes.json()) as Record<string, unknown>;
-            setGithubUser(String(userData.login ?? 'unknown'));
-          } catch { /* ignore */ }
-
-          setStep('device-name');
-        } else if (data.error === 'expired_token') {
-          clearInterval(timer);
-          setAuthPolling(false);
-          setError('Code expired. Please try again.');
-        } else if (data.error === 'access_denied') {
-          clearInterval(timer);
-          setAuthPolling(false);
-          setError('Authorization denied.');
-        }
-      } catch { /* network error — keep trying */ }
-    }, interval);
-
-    return () => clearInterval(timer);
-  }, [authPolling, deviceCode]);
-
-  // ── Step 2: Create config + start daemon ────────────────
+  // ── Finish setup ────────────────────────────────────────
 
   const finishSetup = useCallback(async () => {
     setStep('creating');
     setError(null);
     try {
-      await invoke('run_headless_setup', {
+      const setupArgs: Record<string, unknown> = {
         relay: OFFICIAL_RELAY,
         authMethod: 'github_token',
         deviceName: deviceName.trim() || 'Desktop',
-        githubToken,
-      });
-
+      };
+      if (githubToken) setupArgs.githubToken = githubToken;
+      await invoke('run_headless_setup', setupArgs);
       await invoke('start_daemon');
       await new Promise((r) => setTimeout(r, 3000));
 
@@ -145,8 +119,7 @@ export default function SetupWindow() {
         const url = await invoke<string>('get_pairing_url');
         setPairingUrl(url);
         const dataUrl = await QRCode.toDataURL(url, {
-          width: 200,
-          margin: 2,
+          width: 200, margin: 2,
           color: { dark: '#1a1a1a', light: '#ffffff' },
         });
         setQrDataUrl(dataUrl);
@@ -164,10 +137,7 @@ export default function SetupWindow() {
 
   useEffect(() => {
     if (step !== 'pairing') return;
-    if (pairingSecondsLeft <= 0) {
-      setStep('done');
-      return;
-    }
+    if (pairingSecondsLeft <= 0) { setStep('done'); return; }
     const id = setTimeout(() => setPairingSecondsLeft((s) => s - 1), 1000);
     return () => clearTimeout(id);
   }, [step, pairingSecondsLeft]);
@@ -178,7 +148,7 @@ export default function SetupWindow() {
 
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-white px-8 select-none">
-      {/* Authenticating overlay */}
+      {/* Creating overlay */}
       {step === 'creating' && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80">
           <div className="flex flex-col items-center gap-3">
@@ -188,8 +158,19 @@ export default function SetupWindow() {
         </div>
       )}
 
-      {/* ── Auth step (matches web login) ─────────────── */}
-      {(step === 'auth' || step === 'creating') && !deviceCode && (
+      {/* ── Checking ──────────────────────────────────── */}
+      {step === 'checking' && (
+        <>
+          <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
+          <div className="flex items-center gap-2">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+            <p className="text-sm text-gray-500">Checking…</p>
+          </div>
+        </>
+      )}
+
+      {/* ── Auth: sign in button ──────────────────────── */}
+      {step === 'auth' && (
         <>
           <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <h2 className="text-lg font-semibold text-gray-900">Welcome to Kraki</h2>
@@ -208,40 +189,35 @@ export default function SetupWindow() {
             <GitHubMark className="h-5 w-5" />
             Sign in with GitHub
           </button>
-
-          <p className="mt-8 rounded-lg bg-gray-50 px-4 py-2 font-mono text-xs text-gray-400">
-            {OFFICIAL_RELAY}
-          </p>
         </>
       )}
 
-      {/* ── Auth step: device code shown ──────────────── */}
-      {step === 'auth' && deviceCode && (
+      {/* ── Auth: device code shown ───────────────────── */}
+      {step === 'auth-polling' && (
         <>
           <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
           <h2 className="text-lg font-semibold text-gray-900">Enter code on GitHub</h2>
-          <div className="mt-4 font-mono text-2xl font-bold tracking-widest text-gray-900 bg-gray-50 px-6 py-3 rounded-lg border border-gray-200">
-            {deviceCode.user_code}
-          </div>
-          <a
-            href={deviceCode.verification_uri}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f]"
-          >
-            <GitHubMark className="h-5 w-5" />
-            Open GitHub
-          </a>
-          {authPolling && (
-            <p className="mt-4 text-xs text-gray-400 animate-pulse">Waiting for authorization…</p>
+          {userCode && (
+            <div className="mt-4 font-mono text-2xl font-bold tracking-widest text-gray-900 bg-gray-50 px-6 py-3 rounded-lg border border-gray-200">
+              {userCode}
+            </div>
           )}
-          {error && (
-            <p className="mt-4 text-xs text-red-500 text-center max-w-xs">{error}</p>
+          {verificationUri && (
+            <a
+              href={verificationUri}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f]"
+            >
+              <GitHubMark className="h-5 w-5" />
+              Open GitHub
+            </a>
           )}
+          <p className="mt-4 text-xs text-gray-400 animate-pulse">Waiting for authorization…</p>
         </>
       )}
 
-      {/* ── Device name step ──────────────────────────── */}
+      {/* ── Device name ───────────────────────────────── */}
       {step === 'device-name' && (
         <>
           <img src="/logo.png" alt="Kraki" className="h-28 w-28 object-contain mb-4" />
@@ -266,9 +242,7 @@ export default function SetupWindow() {
             placeholder="e.g. MacBook Pro"
             className="mt-5 w-64 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#ea6046]/50 focus:border-[#ea6046]"
             autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') finishSetup();
-            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') finishSetup(); }}
           />
           <button
             onClick={finishSetup}
@@ -279,7 +253,7 @@ export default function SetupWindow() {
         </>
       )}
 
-      {/* ── QR Pairing step ───────────────────────────── */}
+      {/* ── QR Pairing ────────────────────────────────── */}
       {step === 'pairing' && (
         <>
           <p className="text-sm text-green-600 font-medium mb-2">✓ Kraki is running</p>
@@ -288,31 +262,18 @@ export default function SetupWindow() {
             Scan this code to open the Kraki web app on your phone.
           </p>
           {qrDataUrl && (
-            <img
-              src={qrDataUrl}
-              alt="Pairing QR code"
-              width={200}
-              height={200}
-              className="mt-4 rounded-lg border border-gray-100"
-            />
+            <img src={qrDataUrl} alt="Pairing QR code" width={200} height={200}
+              className="mt-4 rounded-lg border border-gray-100" />
           )}
           <p className="mt-3 text-xs text-gray-400">
             Expires in {Math.floor(pairingSecondsLeft / 60)}:{(pairingSecondsLeft % 60).toString().padStart(2, '0')}
           </p>
           {pairingUrl && (
-            <a
-              href={pairingUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 text-xs text-blue-500 hover:underline"
-            >
-              Open in browser
-            </a>
+            <a href={pairingUrl} target="_blank" rel="noopener noreferrer"
+              className="mt-1 text-xs text-blue-500 hover:underline">Open in browser</a>
           )}
-          <button
-            onClick={closeSelf}
-            className="mt-5 text-sm text-gray-400 hover:text-gray-600 cursor-pointer"
-          >
+          <button onClick={closeSelf}
+            className="mt-5 text-sm text-gray-400 hover:text-gray-600 cursor-pointer">
             Skip — I'll pair later
           </button>
         </>
@@ -326,10 +287,8 @@ export default function SetupWindow() {
           <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
             Kraki is running in your menu bar. Use the tray icon to pair devices later.
           </p>
-          <button
-            onClick={closeSelf}
-            className="mt-6 py-2.5 px-8 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer"
-          >
+          <button onClick={closeSelf}
+            className="mt-6 py-2.5 px-8 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer">
             Done
           </button>
         </>

@@ -38,6 +38,7 @@ pub fn run() {
             commands::run_headless_setup,
             commands::run_doctor,
             commands::is_configured,
+            commands::start_github_auth,
         ])
         .run(tauri::generate_context!())
         .expect("error running kraki toolbar");
