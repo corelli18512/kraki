@@ -59,7 +59,7 @@ export interface AppState {
   nextReconnectDelayMs: number | null;
 
   // Authenticated user
-  user: { id: string; login: string; provider: string; email?: string } | null;
+  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown> } | null;
 
   // Data
   sessions: Map<string, SessionSummary>;

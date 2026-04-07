@@ -315,7 +315,23 @@ export class HeadServer {
         const prefs = msg.preferences as Record<string, unknown> | undefined;
         if (prefs && typeof prefs === 'object') {
           this.storage.updatePreferences(state.userId, prefs);
-          ws.send(JSON.stringify({ type: 'preferences_updated', preferences: prefs }));
+          // Read back the full merged preferences
+          const fullUser = this.storage.getUser(state.userId);
+          const merged = fullUser?.preferences ?? prefs;
+          const confirmation = JSON.stringify({ type: 'preferences_updated', preferences: merged });
+          // Send confirmation to sender
+          ws.send(confirmation);
+          // Broadcast to all other devices of the same user
+          const userDevices = (() => {
+            try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
+          })();
+          for (const d of userDevices) {
+            if (d.id === state.deviceId) continue;
+            const other = this.connections.get(d.id);
+            if (other && other.readyState === WebSocket.OPEN) {
+              try { other.send(confirmation); } catch { /* best effort */ }
+            }
+          }
         }
       }
       return;

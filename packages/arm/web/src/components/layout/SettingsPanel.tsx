@@ -10,11 +10,19 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
   const vapidPublicKey = useStore((s) => s.vapidPublicKey);
+  const userPrefs = useStore((s) => s.user?.preferences);
   const [debugLog, setDebugLog] = useState(isDebugLoggingEnabled);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const pushSupported = isPushSupported();
   const pushDenied = getPushPermission() === 'denied';
+
+  // Sync debug log state from relay preferences
+  useEffect(() => {
+    if (userPrefs && typeof userPrefs.debugLogging === 'boolean') {
+      setDebugLog(userPrefs.debugLogging);
+    }
+  }, [userPrefs]);
 
   // Check current push subscription state on mount
   useEffect(() => {
@@ -46,7 +54,11 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
             <p className="text-[11px] text-text-muted">Toggle light and dark theme</p>
           </div>
           <button
-            onClick={toggleDark}
+            onClick={() => {
+              const next = !isDark;
+              toggleDark();
+              wsClient.updatePreferences({ theme: next ? 'dark' : 'light' });
+            }}
             className={`relative h-6 w-11 rounded-full transition-colors ${
               isDark ? 'bg-kraki-500' : 'bg-slate-300'
             }`}
@@ -133,7 +145,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
             <p className="text-[11px] text-text-muted">Ship client logs to tentacle for remote debugging</p>
           </div>
           <button
-            onClick={() => { const next = !debugLog; setDebugLog(next); setDebugLogging(next); }}
+            onClick={() => { const next = !debugLog; setDebugLog(next); setDebugLogging(next); wsClient.updatePreferences({ debugLogging: next }); }}
             className={`relative h-6 w-11 rounded-full transition-colors ${
               debugLog ? 'bg-kraki-500' : 'bg-slate-300'
             }`}

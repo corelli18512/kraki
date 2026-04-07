@@ -1,9 +1,10 @@
 import type { AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
-import { createLogger } from './logger';
+import { createLogger, setDebugLogging } from './logger';
 import { getStore } from './store-adapter';
 import { saveStoredDevice, STORAGE_KEY } from './transport';
 import { supportsOAuthLogin } from './oauth';
+import { setTheme } from '../hooks/useTheme';
 
 const logger = createLogger('auth');
 
@@ -96,6 +97,8 @@ export function processAuthOk(
   store.setReconnectState(0, null);
   store.setAuth(msg.deviceId);
   store.setUser(msg.user ?? null);
+  // Apply global preferences from relay
+  applyPreferences(msg.user?.preferences);
   if (msg.githubClientId) {
     store.setGithubClientId(msg.githubClientId);
   }
@@ -146,5 +149,16 @@ export function processAuthError(
         : 'Authentication failed. Scan a pairing QR code.',
     );
     store.setStatus('awaiting_login');
+  }
+}
+
+/** Apply user preferences to local state. Called on auth_ok and preferences_updated. */
+export function applyPreferences(prefs: Record<string, unknown> | undefined): void {
+  if (!prefs) return;
+  if (typeof prefs.debugLogging === 'boolean') {
+    setDebugLogging(prefs.debugLogging);
+  }
+  if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
+    setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
 }

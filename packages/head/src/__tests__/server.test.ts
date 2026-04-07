@@ -697,4 +697,52 @@ describe('HeadServer (thin relay)', () => {
       tentacle3.close();
     });
   });
+
+  describe('preferences', () => {
+    it('broadcasts preferences_updated to other devices of the same user', async () => {
+      head = await createHead();
+
+      // Connect two devices for the same user (open auth → same user)
+      const { ws: ws1 } = await authConnect(head.port, 'App1', 'app', { deviceId: 'app-1' });
+      const { ws: ws2 } = await authConnect(head.port, 'App2', 'app', { deviceId: 'app-2' });
+      // Drain device_joined that ws1 receives when ws2 connects
+      await waitForMessageOfType(ws1, 'device_joined');
+
+      // ws1 sends update_preferences
+      const prefPromise = waitForMessageOfType(ws2, 'preferences_updated');
+      ws1.send(JSON.stringify({ type: 'update_preferences', preferences: { debugLogging: true, theme: 'dark' } }));
+
+      // ws1 should get confirmation
+      const confirmation = await waitForMessageOfType(ws1, 'preferences_updated');
+      expect(confirmation.preferences).toEqual(expect.objectContaining({ debugLogging: true, theme: 'dark' }));
+
+      // ws2 should also get the broadcast
+      const broadcast = await prefPromise;
+      expect(broadcast.preferences).toEqual(expect.objectContaining({ debugLogging: true, theme: 'dark' }));
+
+      ws1.close();
+      ws2.close();
+    });
+
+    it('returns merged preferences in auth_ok', async () => {
+      head = await createHead();
+
+      // Connect and set preferences
+      const { ws: ws1, authOk: authOk1 } = await authConnect(head.port, 'App1', 'app', { deviceId: 'app-a' });
+      // Initial preferences should be undefined
+      const user1 = authOk1.user as Record<string, unknown>;
+      expect(user1.preferences).toBeUndefined();
+
+      // Set a preference
+      ws1.send(JSON.stringify({ type: 'update_preferences', preferences: { debugLogging: true } }));
+      await waitForMessageOfType(ws1, 'preferences_updated');
+      ws1.close();
+
+      // Reconnect — preferences should be in auth_ok
+      const { ws: ws2, authOk: authOk2 } = await authConnect(head.port, 'App2', 'app', { deviceId: 'app-b' });
+      const user2 = authOk2.user as Record<string, unknown>;
+      expect(user2.preferences).toEqual(expect.objectContaining({ debugLogging: true }));
+      ws2.close();
+    });
+  });
 });

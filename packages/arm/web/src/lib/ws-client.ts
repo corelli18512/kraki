@@ -3,7 +3,7 @@ import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
-import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError } from './auth';
+import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
 import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
@@ -168,6 +168,11 @@ export class KrakiWSClient {
       sessionId,
       payload: {},
     });
+  }
+
+  /** Send a preferences update to the relay (unencrypted control message). */
+  updatePreferences(prefs: Record<string, unknown>): void {
+    this.transport.send({ type: 'update_preferences', preferences: prefs });
   }
 
   private getLastSeq(sessionId: string): number {
@@ -394,6 +399,19 @@ export class KrakiWSClient {
         if (removed.deviceId) {
           getStore().setDeviceModels(removed.deviceId, []);
           getStore().removeDevice(removed.deviceId);
+        }
+        break;
+      }
+
+      case 'preferences_updated': {
+        const prefsMsg = msg as { preferences?: Record<string, unknown> };
+        if (prefsMsg.preferences) {
+          const store = getStore();
+          const currentUser = store.user;
+          if (currentUser) {
+            store.setUser({ ...currentUser, preferences: { ...currentUser.preferences, ...prefsMsg.preferences } });
+          }
+          applyPreferences(prefsMsg.preferences);
         }
         break;
       }
