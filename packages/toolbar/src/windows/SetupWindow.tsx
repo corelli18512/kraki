@@ -7,7 +7,6 @@ const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
 
 // GitHub OAuth device flow constants
 const GITHUB_CLIENT_ID = 'Ov23liUYbFrJfBWR0uRo';
-const POLL_INTERVAL_MS = 5000;
 
 type Step = 'auth' | 'device-name' | 'creating' | 'pairing' | 'done';
 
@@ -17,6 +16,14 @@ interface DeviceCodeData {
   verification_uri: string;
   expires_in: number;
   interval: number;
+}
+
+function GitHubMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
 }
 
 export default function SetupWindow() {
@@ -94,7 +101,6 @@ export default function SetupWindow() {
           setAuthPolling(false);
           setGithubToken(data.access_token);
 
-          // Fetch username
           try {
             const userRes = await fetch('https://api.github.com/user', {
               headers: { Authorization: `Bearer ${data.access_token}`, 'User-Agent': 'kraki-toolbar' },
@@ -113,7 +119,6 @@ export default function SetupWindow() {
           setAuthPolling(false);
           setError('Authorization denied.');
         }
-        // 'authorization_pending' — keep polling
       } catch { /* network error — keep trying */ }
     }, interval);
 
@@ -133,13 +138,9 @@ export default function SetupWindow() {
         githubToken,
       });
 
-      // Start daemon
       await invoke('start_daemon');
-
-      // Wait for daemon to start and connect
       await new Promise((r) => setTimeout(r, 3000));
 
-      // Get pairing URL
       try {
         const url = await invoke<string>('get_pairing_url');
         setPairingUrl(url);
@@ -151,7 +152,6 @@ export default function SetupWindow() {
         setQrDataUrl(dataUrl);
         setStep('pairing');
       } catch {
-        // Pairing failed but setup succeeded — close
         setStep('done');
       }
     } catch (err) {
@@ -177,85 +177,94 @@ export default function SetupWindow() {
   // ── Render ──────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col items-center min-h-screen bg-white px-8 py-10 select-none">
-      {/* Logo */}
-      <div className="text-3xl mb-1">🦑</div>
-      <h1 className="text-lg font-bold text-gray-900 mb-1">Set up Kraki</h1>
-
-      {/* Step indicator */}
-      <div className="flex gap-2 mb-6">
-        {(['auth', 'device-name', 'pairing'] as const).map((s, i) => (
-          <div
-            key={s}
-            className={`w-2 h-2 rounded-full ${
-              step === s || (step === 'creating' && s === 'device-name')
-                ? 'bg-orange-500'
-                : step === 'done' || i < ['auth', 'device-name', 'pairing'].indexOf(step)
-                  ? 'bg-green-400'
-                  : 'bg-gray-200'
-            }`}
-          />
-        ))}
-      </div>
-
-      {error && (
-        <p className="text-xs text-red-500 text-center mb-4 max-w-xs">{error}</p>
-      )}
-
-      {/* ── Step 1: GitHub Auth ───────────────────────────── */}
-      {step === 'auth' && !deviceCode && (
-        <div className="flex flex-col items-center gap-4 w-full max-w-xs">
-          <p className="text-sm text-gray-600 text-center">
-            Sign in with GitHub to connect your agent sessions.
-          </p>
-          <button
-            onClick={startGitHubAuth}
-            className="w-full py-2.5 px-4 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            Sign in with GitHub
-          </button>
+    <div className="relative flex flex-col items-center justify-center min-h-screen bg-white px-8 select-none">
+      {/* Authenticating overlay */}
+      {step === 'creating' && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#ea6046] border-t-transparent" />
+            <p className="text-sm text-gray-500">Setting up Kraki…</p>
+          </div>
         </div>
       )}
 
-      {step === 'auth' && deviceCode && (
-        <div className="flex flex-col items-center gap-3 w-full max-w-xs">
-          <p className="text-sm text-gray-600 text-center">
-            Enter this code on GitHub:
+      {/* ── Auth step (matches web login) ─────────────── */}
+      {(step === 'auth' || step === 'creating') && !deviceCode && (
+        <>
+          <div className="text-6xl mb-4">🦑</div>
+          <h2 className="text-lg font-semibold text-gray-900">Welcome to Kraki</h2>
+          <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
+            Sign in to connect to your coding agent sessions.
           </p>
-          <div className="font-mono text-2xl font-bold tracking-widest text-gray-900 bg-gray-50 px-6 py-3 rounded-lg border">
+
+          {error && (
+            <p className="mt-4 text-xs text-red-500 text-center max-w-xs">{error}</p>
+          )}
+
+          <button
+            onClick={startGitHubAuth}
+            className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f]"
+          >
+            <GitHubMark className="h-5 w-5" />
+            Sign in with GitHub
+          </button>
+
+          <p className="mt-8 rounded-lg bg-gray-50 px-4 py-2 font-mono text-xs text-gray-400">
+            {OFFICIAL_RELAY}
+          </p>
+        </>
+      )}
+
+      {/* ── Auth step: device code shown ──────────────── */}
+      {step === 'auth' && deviceCode && (
+        <>
+          <div className="text-6xl mb-4">🦑</div>
+          <h2 className="text-lg font-semibold text-gray-900">Enter code on GitHub</h2>
+          <div className="mt-4 font-mono text-2xl font-bold tracking-widest text-gray-900 bg-gray-50 px-6 py-3 rounded-lg border border-gray-200">
             {deviceCode.user_code}
           </div>
           <a
             href={deviceCode.verification_uri}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-500 hover:underline"
+            className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f]"
           >
-            Open GitHub →
+            <GitHubMark className="h-5 w-5" />
+            Open GitHub
           </a>
           {authPolling && (
-            <p className="text-xs text-gray-400 animate-pulse">Waiting for authorization…</p>
+            <p className="mt-4 text-xs text-gray-400 animate-pulse">Waiting for authorization…</p>
           )}
-        </div>
+          {error && (
+            <p className="mt-4 text-xs text-red-500 text-center max-w-xs">{error}</p>
+          )}
+        </>
       )}
 
-      {/* ── Step 2: Device Name ───────────────────────────── */}
+      {/* ── Device name step ──────────────────────────── */}
       {step === 'device-name' && (
-        <div className="flex flex-col items-center gap-4 w-full max-w-xs">
+        <>
+          <div className="text-6xl mb-4">🦑</div>
           {githubUser && (
-            <p className="text-sm text-green-600">
+            <p className="text-sm text-green-600 mb-2">
               ✓ Signed in as <span className="font-medium">{githubUser}</span>
             </p>
           )}
-          <p className="text-sm text-gray-600 text-center">
-            Name this machine so you can identify it later.
+          <h2 className="text-lg font-semibold text-gray-900">Name this machine</h2>
+          <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
+            This helps you identify it when multiple machines are connected.
           </p>
+
+          {error && (
+            <p className="mt-3 text-xs text-red-500 text-center max-w-xs">{error}</p>
+          )}
+
           <input
             type="text"
             value={deviceName}
             onChange={(e) => setDeviceName(e.target.value)}
             placeholder="e.g. MacBook Pro"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+            className="mt-5 w-64 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#ea6046]/50 focus:border-[#ea6046]"
             autoFocus
             onKeyDown={(e) => {
               if (e.key === 'Enter') finishSetup();
@@ -263,27 +272,20 @@ export default function SetupWindow() {
           />
           <button
             onClick={finishSetup}
-            className="w-full py-2.5 px-4 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 transition-colors"
+            className="mt-4 w-64 py-2.5 px-4 bg-[#ea6046] text-white text-sm font-medium rounded-lg hover:bg-[#d9533a] transition-colors cursor-pointer"
           >
             Continue
           </button>
-        </div>
+        </>
       )}
 
-      {/* ── Step 3: Creating ─────────────────────────────── */}
-      {step === 'creating' && (
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">Setting up Kraki…</p>
-        </div>
-      )}
-
-      {/* ── Step 4: QR Pairing ───────────────────────────── */}
+      {/* ── QR Pairing step ───────────────────────────── */}
       {step === 'pairing' && (
-        <div className="flex flex-col items-center gap-3 w-full max-w-xs">
-          <p className="text-sm text-green-600 font-medium">✓ Kraki is running</p>
-          <p className="text-sm text-gray-600 text-center">
-            Scan with your phone to connect the web app.
+        <>
+          <p className="text-sm text-green-600 font-medium mb-2">✓ Kraki is running</p>
+          <h2 className="text-lg font-semibold text-gray-900">Connect your phone</h2>
+          <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
+            Scan this code to open the Kraki web app on your phone.
           </p>
           {qrDataUrl && (
             <img
@@ -291,10 +293,10 @@ export default function SetupWindow() {
               alt="Pairing QR code"
               width={200}
               height={200}
-              className="rounded-lg border border-gray-100"
+              className="mt-4 rounded-lg border border-gray-100"
             />
           )}
-          <p className="text-xs text-gray-400">
+          <p className="mt-3 text-xs text-gray-400">
             Expires in {Math.floor(pairingSecondsLeft / 60)}:{(pairingSecondsLeft % 60).toString().padStart(2, '0')}
           </p>
           {pairingUrl && (
@@ -302,34 +304,35 @@ export default function SetupWindow() {
               href={pairingUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-blue-500 hover:underline"
+              className="mt-1 text-xs text-blue-500 hover:underline"
             >
               Open in browser
             </a>
           )}
           <button
             onClick={closeSelf}
-            className="mt-2 text-sm text-gray-400 hover:text-gray-600"
+            className="mt-5 text-sm text-gray-400 hover:text-gray-600 cursor-pointer"
           >
             Skip — I'll pair later
           </button>
-        </div>
+        </>
       )}
 
-      {/* ── Done ─────────────────────────────────────────── */}
+      {/* ── Done ──────────────────────────────────────── */}
       {step === 'done' && (
-        <div className="flex flex-col items-center gap-3">
+        <>
+          <div className="text-6xl mb-4">🦑</div>
           <p className="text-sm text-green-600 font-medium">✓ Setup complete</p>
-          <p className="text-sm text-gray-500 text-center">
+          <p className="mt-2 max-w-xs text-sm text-gray-500 text-center">
             Kraki is running in your menu bar. Use the tray icon to pair devices later.
           </p>
           <button
             onClick={closeSelf}
-            className="mt-2 py-2 px-6 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+            className="mt-6 py-2.5 px-8 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer"
           >
             Done
           </button>
-        </div>
+        </>
       )}
     </div>
   );

@@ -14,10 +14,11 @@
     "windows": [
       {
         "label": "qr",
-        "title": "Pair device — Kraki",
+        "title": "Kraki",
         "width": 300,
         "height": 420,
         "resizable": false,
+        "maximizable": false,
         "visible": false,
         "decorations": true,
         "alwaysOnTop": true,
@@ -25,10 +26,11 @@
       },
       {
         "label": "setup",
-        "title": "Set up Kraki",
+        "title": "Kraki",
         "width": 480,
         "height": 580,
         "resizable": false,
+        "maximizable": false,
         "visible": false,
         "decorations": true,
         "center": true
