@@ -34,30 +34,6 @@ function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
 }
 
-/**
- * Detect gaps in a sorted message array.
- * Returns beforeSeq values — the seq of the first message after each gap.
- * For the implicit top gap, beforeSeq is the first message's seq.
- */
-function detectGaps(messages: ChatMessage[]): number[] {
-  const gaps: number[] = [];
-  const seqs = messages.map(getSeq).filter(s => s > 0);
-  if (seqs.length === 0) return gaps;
-
-  // Implicit gap at top: messages don't start at seq 1
-  if (seqs[0] > 1) {
-    gaps.push(seqs[0]);
-  }
-
-  // Interior gaps: beforeSeq is the seq after the gap
-  for (let i = 0; i < seqs.length - 1; i++) {
-    if (seqs[i + 1] - seqs[i] > 1) {
-      gaps.push(seqs[i + 1]);
-    }
-  }
-  return gaps;
-}
-
 export function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const messagesMap = useStore((s) => s.messages);
@@ -94,9 +70,6 @@ export function ChatView() {
     }),
     [messages, pendingPermIds],
   );
-
-  // Detect gaps in the message sequence
-  const gaps = useMemo(() => sessionId ? detectGaps(filteredMessages) : [], [filteredMessages, sessionId]);
 
   // Show spinner at top if there are older messages not yet loaded
   const firstSeq = useMemo(() => {
@@ -241,9 +214,6 @@ export function ChatView() {
     }
   };
 
-  // Build a set of beforeSeq values for inserting gap markers
-  const gapSet = useMemo(() => new Set(gaps), [gaps]);
-
   if (!sessionId || !session) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -271,15 +241,8 @@ export function ChatView() {
             {grouped.map((item, idx) => {
               if (item.type === 'standalone') {
                 const msg = item.message;
-                const seq = getSeq(msg);
                 return (
                   <div key={`g-${idx}`}>
-                    {/* Interior gap marker */}
-                    {sessionId && seq > 0 && gapSet.has(seq) && seq !== firstSeq && (
-                      <div className="mb-3">
-                        <GapMarker sessionId={sessionId} beforeSeq={seq} scrollRef={scrollRef} />
-                      </div>
-                    )}
                     <MessageBubble
                       message={msg}
                       agent={session.agent}
@@ -293,18 +256,8 @@ export function ChatView() {
               const hasStreaming = isLastTurn && !!streaming;
               const isActive = isLastTurn && !sessionIdle && (!turn.finalMessage || hasStreaming);
 
-              // Get the first seq in this turn for gap detection
-              const turnMessages = [...turn.thinkingMessages, ...(turn.finalMessage ? [turn.finalMessage] : [])];
-              const firstTurnSeq = turnMessages.length > 0 ? Math.min(...turnMessages.map(getSeq).filter(s => s > 0)) : 0;
-
               return (
                 <div key={`turn-${idx}`}>
-                  {/* Interior gap marker */}
-                  {sessionId && firstTurnSeq > 0 && gapSet.has(firstTurnSeq) && firstTurnSeq !== firstSeq && (
-                    <div className="mb-3">
-                      <GapMarker sessionId={sessionId} beforeSeq={firstTurnSeq} scrollRef={scrollRef} />
-                    </div>
-                  )}
                   {(turn.thinkingMessages.length > 0 || hasStreaming) && (
                     <ThinkingBox
                       messages={turn.thinkingMessages}
