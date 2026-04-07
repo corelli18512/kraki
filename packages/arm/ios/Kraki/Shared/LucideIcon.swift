@@ -251,6 +251,7 @@ enum LucideIconType {
             return [
                 .path("M12 6V2H8"),
                 .path("M15 11v2"),
+                .path("M9 11v2"),
                 .path("M2 12h2"),
                 .path("M20 12h2"),
                 .path("M20 16a2 2 0 0 1-2 2H8.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 4 20.286V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z"),
@@ -264,15 +265,16 @@ enum LucideIconType {
             ]
         case .userCog:
             return [
+                .circle(cx: 9, cy: 7, r: 4),
                 .path("M10 15H6a4 4 0 0 0-4 4v2"),
-                .path("M14.305 16.53L15.228 16.148"),
-                .path("M15.228 13.852L14.305 13.469"),
-                .path("M16.852 12.228L16.469 11.305"),
-                .path("M16.852 17.772L16.469 18.696"),
-                .path("M19.148 12.228L19.531 11.305"),
-                .path("M19.53 18.696L19.148 17.772"),
-                .path("M20.772 13.852L21.696 13.469"),
-                .path("M20.772 16.148L21.696 16.531"),
+                .path("m14.305 16.53.923-.382"),
+                .path("m15.228 13.852-.923-.383"),
+                .path("m16.852 12.228-.383-.923"),
+                .path("m16.852 17.772-.383.924"),
+                .path("m19.148 12.228.383-.923"),
+                .path("m19.53 18.696-.382-.924"),
+                .path("m20.772 13.852.924-.383"),
+                .path("m20.772 16.148.924.383"),
                 .circle(cx: 18, cy: 15, r: 3),
             ]
         case .circleSlash:
@@ -339,11 +341,18 @@ func parseSVGPath(_ d: String) -> Path {
             } while hasMoreNumbers()
 
         case "m":
+            var first = true
             repeat {
                 let dx = num(); let dy = num()
                 currentX += dx; currentY += dy
-                path.move(to: CGPoint(x: currentX, y: currentY))
-                startX = currentX; startY = currentY
+                if first {
+                    path.move(to: CGPoint(x: currentX, y: currentY))
+                    startX = currentX; startY = currentY
+                    first = false
+                } else {
+                    // Implicit relative line-to after first move
+                    path.addLine(to: CGPoint(x: currentX, y: currentY))
+                }
                 lastCommand = "m"
             } while hasMoreNumbers()
 
