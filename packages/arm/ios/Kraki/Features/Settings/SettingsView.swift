@@ -99,6 +99,7 @@ struct SettingsView: View {
                 Text("Light").tag(AppColorScheme.light)
                 Text("Dark").tag(AppColorScheme.dark)
             }
+            .pickerStyle(.segmented)
         }
     }
 
