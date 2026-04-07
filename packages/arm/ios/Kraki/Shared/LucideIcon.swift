@@ -113,6 +113,7 @@ enum LucideIconType {
     case botMessageSquare
     case monitorCloud
     case userCog
+    case circleSlash
 
     var elements: [SVGElement] {
         switch self {
@@ -273,6 +274,11 @@ enum LucideIconType {
                 .path("M20.772 13.852L21.696 13.469"),
                 .path("M20.772 16.148L21.696 16.531"),
                 .circle(cx: 18, cy: 15, r: 3),
+            ]
+        case .circleSlash:
+            return [
+                .circle(cx: 12, cy: 12, r: 10),
+                .path("M9 15L15 9"),
             ]
         }
     }

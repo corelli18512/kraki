@@ -11,6 +11,8 @@ struct ToolActivityView: View {
     let toolName: String
     let args: [String: AnyCodable]?
     let result: String?
+    var success: Bool? = nil
+    var cancelled: Bool = false
     var forceExpanded: Bool = false
 
     @State private var expanded = false
@@ -76,10 +78,18 @@ struct ToolActivityView: View {
     @ViewBuilder
     private var statusIcon: some View {
         if type == .start {
-            ProgressView()
-                .controlSize(.mini)
+            if cancelled {
+                LucideIcon(.circleSlash, size: 14, color: .orange)
+            } else {
+                ProgressView()
+                    .controlSize(.mini)
+            }
         } else {
-            LucideIcon(.check, size: 12, color: .green)
+            if success == false {
+                LucideIcon(.x, size: 12, color: .red)
+            } else {
+                LucideIcon(.check, size: 12, color: .green)
+            }
         }
     }
 
