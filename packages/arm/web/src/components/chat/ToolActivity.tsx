@@ -1,5 +1,5 @@
 import { useState, lazy, Suspense } from 'react';
-import { Loader2, CheckCircle2, XCircle, CircleMinus, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, CircleSlash, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
 
 const ReactDiffViewer = lazy(() => import('react-diff-viewer-continued'));
 
@@ -35,7 +35,7 @@ export function ToolActivity({ type, toolName, args, result, success, cancelled,
       >
         {isStart
           ? (cancelled
-            ? <CircleMinus className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+            ? <CircleSlash className="h-3.5 w-3.5 shrink-0 text-amber-500" />
             : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />)
           : (success === false
             ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
