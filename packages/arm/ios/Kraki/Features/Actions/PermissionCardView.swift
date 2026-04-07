@@ -29,9 +29,7 @@ struct PermissionCardView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Header
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lock.fill")
-                    .foregroundStyle(.orange)
-                    .font(.subheadline)
+                LucideIcon(.lock, size: 18, color: .orange)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(isWriteInDiscuss ? "Write Approval — Discuss Mode" : "Permission Request")

@@ -181,16 +181,7 @@ struct MessageBubbleView: View {
     // MARK: - Agent Avatar
 
     private var agentAvatar: some View {
-        let initial = agent.isEmpty ? "K" : String(agent.prefix(1)).uppercased()
-        return Circle()
-            .fill(.tertiary)
-            .frame(width: 28, height: 28)
-            .overlay {
-                Text(initial)
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-            }
+        AgentAvatar(agent: agent, size: .sm)
     }
 
     // MARK: - Session Created
@@ -293,16 +284,15 @@ struct MessageBubbleView: View {
                 : resolution == "always_allowed" ? "Allowed for session"
                 : resolution == "cancelled" ? "Cancelled"
                 : "Denied"
-            let icon = resolution == "always_allowed" ? "lock.open"
-                : isCancelled ? "stop.circle"
-                : isApproved ? "checkmark" : "xmark"
+            let resolvedIcon: LucideIconType = resolution == "always_allowed" ? .lockOpen
+                : isCancelled ? .circleStop
+                : isApproved ? .check : .x
 
             HStack {
                 Spacer(minLength: UIScreen.main.bounds.width * 0.15)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
-                        Image(systemName: icon)
-                            .font(.caption)
+                        LucideIcon(resolvedIcon, size: 12, color: isApproved ? .green : isCancelled ? .secondary : .red)
                         Text(label)
                             .font(.caption)
                             .fontWeight(.medium)
@@ -325,9 +315,7 @@ struct MessageBubbleView: View {
         } else {
             // Pending permission (normally hidden behind blocking card)
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                LucideIcon(.lock, size: 14, color: .orange)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
@@ -447,15 +435,11 @@ struct MessageBubbleView: View {
     }
 
     private func agentEmoji(_ agent: String) -> String {
-        switch agent.lowercased() {
-        case "claude": return "🤖"
-        case "gpt", "openai": return "🧠"
-        default: return "🐙"
-        }
+        AgentInfo.from(agent).emoji
     }
 
     private func agentLabel(_ agent: String) -> String {
-        agent.isEmpty ? "Agent" : agent.capitalized
+        AgentInfo.from(agent).label
     }
 
     private func permissionDescription(toolName: String, args: [String: AnyCodable]?, desc: String?) -> String {

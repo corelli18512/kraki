@@ -94,16 +94,12 @@ struct SessionDetailView: View {
         return HStack(spacing: 8) {
             // Avatar
             ZStack {
-                Circle()
-                    .fill(info.color.opacity(0.15))
-                    .frame(width: 24, height: 24)
-                Text(info.emoji)
-                    .font(.system(size: 11))
+                AgentAvatar(agent: session.agent, size: .sm)
 
                 if isReconnecting {
-                    Circle()
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(.black.opacity(0.3))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 28, height: 28)
                     ProgressView()
                         .scaleEffect(0.5)
                         .tint(.orange)

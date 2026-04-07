@@ -56,9 +56,7 @@ struct MessageInputView: View {
                             .offset(x: 4, y: -4)
                         }
                     } else {
-                        Image(systemName: "photo.badge.plus")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.secondary)
+                        LucideIcon(.imagePlus, size: 18, color: .secondary)
                             .frame(width: 32, height: 32)
                     }
                 }
