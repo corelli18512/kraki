@@ -32,10 +32,6 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: Ag
     : status === 'active' ? MessageCircleMore
     : null;
 
-  const badgeColor = badge === 'permission' ? 'text-amber-500'
-    : badge === 'question' ? 'text-ocean-500'
-    : 'text-ocean-500';
-
   const badgeIconSize = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5';
 
   return (
@@ -47,8 +43,8 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: Ag
         <CopilotIcon className={s.icon} />
       </div>
       {BadgeIcon && (
-        <span className={`absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] ${badgeColor}`}>
-          <BadgeIcon className={`${badgeIconSize} ${status === 'active' ? 'animate-pulse' : ''}`} />
+        <span className="absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px]" style={{ color: `hsl(${hue}, 60%, 40%)` }}>
+          <BadgeIcon className={badgeIconSize} />
         </span>
       )}
     </div>
