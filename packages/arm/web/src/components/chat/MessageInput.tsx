@@ -225,7 +225,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   };
 
   return (
-    <div className="relative shrink-0 bg-surface-primary px-3 pb-3 pt-1.5 sm:px-4 sm:pb-4 sm:pt-2">
+    <div className="relative shrink-0 bg-surface-primary px-3 pb-3 pt-1.5 sm:px-4 sm:pb-4 sm:pt-2" style={{ paddingBottom: `max(0.75rem, env(safe-area-inset-bottom))` }}>
       <div className="pointer-events-none absolute inset-x-0 -top-4 h-4 bg-gradient-to-t from-surface-primary to-transparent" />
       <div className="mx-auto max-w-3xl">
         {/* Image upload + Mode switcher row */}

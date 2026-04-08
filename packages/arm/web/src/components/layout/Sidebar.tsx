@@ -81,7 +81,7 @@ export function Sidebar() {
         </div>
 
         {/* Mobile bottom tab bar */}
-        <nav className="flex shrink-0 border-t border-border-primary md:hidden">
+        <nav className="flex shrink-0 border-t border-border-primary pb-[env(safe-area-inset-bottom)] md:hidden">
           <button
             onClick={() => setMobileTab('agents')}
             className={`flex flex-1 flex-col items-center gap-0.5 py-2 ${
