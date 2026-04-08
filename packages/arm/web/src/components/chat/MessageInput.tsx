@@ -324,8 +324,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             rows={1}
-            disabled={!isIdle}
-            placeholder={isIdle ? 'Send a message…' : 'Agent is working…'}
+            placeholder="Send a message…"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
