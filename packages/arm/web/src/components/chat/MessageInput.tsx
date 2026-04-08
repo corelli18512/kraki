@@ -75,7 +75,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
 
   const handleMobileSelect = (mode: typeof MODES[number]) => {
     wsClient.setSessionMode(sessionId, mode);
-    closeMobile();
+    setTimeout(closeMobile, 500);
   };
 
   // Shift+Tab rotates permission mode
