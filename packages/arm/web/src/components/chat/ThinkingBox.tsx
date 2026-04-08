@@ -57,7 +57,7 @@ export function ThinkingBox({ messages, isActive, aborted, agent, sessionId, str
   if (visibleMessages.length === 0 && !streamingText) return null;
 
   const summary = streamingText
-    ? streamingText.trim()
+    ? streamingText.trim().split('\n').slice(-3).join('\n')
     : visibleMessages.length > 0
       ? getMessageSummary(visibleMessages[visibleMessages.length - 1])
       : 'Processing…';
@@ -79,7 +79,7 @@ export function ThinkingBox({ messages, isActive, aborted, agent, sessionId, str
       >
         <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${isActive ? 'animate-pulse bg-ocean-500' : aborted ? 'bg-text-muted' : 'bg-emerald-500'}`} />
 
-        <span className={`markdown-content min-w-0 text-xs font-medium text-text-secondary [&_p]:!m-0 [&_code]:text-[11px]${!isActive ? ' line-clamp-3' : ''}`}>
+        <span className="markdown-content min-w-0 text-xs font-medium text-text-secondary line-clamp-3 [&_p]:!m-0 [&_code]:text-[11px]">
           <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
             {summary}
           </Markdown>
