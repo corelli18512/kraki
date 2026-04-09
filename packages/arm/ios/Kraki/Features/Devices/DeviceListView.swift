@@ -1,31 +1,25 @@
 #if os(iOS)
-/// DeviceListView — NavigationStack list of devices grouped by online status.
+/// DeviceListView — Matches web DeviceGrid.tsx mobile column.
 ///
-/// Mirrors the mobile column of DeviceGrid.tsx. Shows tentacle devices
-/// with status indicators, "You" badge, and links to DeviceDetailView.
+/// Shows tentacle devices as rounded bordered buttons with status dots,
+/// navigating to DeviceDetailView on tap.
 
 import SwiftUI
 
 struct DeviceListView: View {
     @Environment(AppState.self) private var appState
 
-    private var devices: [DeviceSummary] {
+    @State private var selectedDeviceId: String?
+
+    private var tentacles: [DeviceSummary] {
         appState.deviceStore.devices.values
             .filter { $0.role == .tentacle }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
-    private var onlineDevices: [DeviceSummary] {
-        devices.filter(\.online)
-    }
-
-    private var offlineDevices: [DeviceSummary] {
-        devices.filter { !$0.online }
-    }
-
     var body: some View {
         Group {
-            if devices.isEmpty {
+            if tentacles.isEmpty {
                 emptyState
             } else {
                 deviceList
@@ -34,40 +28,6 @@ struct DeviceListView: View {
         .navigationTitle("Devices")
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
-    }
-
-    // MARK: - Device List
-
-    private var deviceList: some View {
-        List {
-            if !onlineDevices.isEmpty {
-                Section("Online") {
-                    ForEach(onlineDevices) { device in
-                        NavigationLink(value: device.id) {
-                            DeviceRow(
-                                device: device,
-                                isCurrentDevice: device.id == appState.deviceId,
-                                hasGreeting: appState.deviceStore.deviceModels[device.id] != nil
-                            )
-                        }
-                    }
-                }
-            }
-
-            if !offlineDevices.isEmpty {
-                Section("Offline") {
-                    ForEach(offlineDevices) { device in
-                        NavigationLink(value: device.id) {
-                            DeviceRow(
-                                device: device,
-                                isCurrentDevice: device.id == appState.deviceId,
-                                hasGreeting: false
-                            )
-                        }
-                    }
-                }
-            }
-        }
         .navigationDestination(for: String.self) { deviceId in
             if let device = appState.deviceStore.devices[deviceId] {
                 DeviceDetailView(device: device)
@@ -75,59 +35,112 @@ struct DeviceListView: View {
         }
     }
 
+    // MARK: - Device List
+
+    private var deviceList: some View {
+        ScrollView {
+            VStack(spacing: 6) {
+                ForEach(tentacles) { device in
+                    NavigationLink(value: device.id) {
+                        DeviceButton(
+                            device: device,
+                            hasGreeting: appState.deviceStore.deviceModels[device.id] != nil,
+                            isSelected: selectedDeviceId == device.id,
+                            isSelf: device.id == appState.deviceId
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Devices", systemImage: "antenna.radiowaves.left.and.right")
-        } description: {
-            Text("Run **kraki connect** in your terminal to pair a new device.")
+        VStack(spacing: 16) {
+            Spacer()
+
+            Text("📡")
+                .font(.system(size: 40))
+
+            Text("No devices connected")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+
+            Text("Run ")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            + Text("kraki connect")
+                .font(.caption)
+                .monospaced()
+                .foregroundStyle(.secondary)
+            + Text(" in your terminal to pair a new device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
         }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 32)
     }
 }
 
-// MARK: - Device Row
+// MARK: - Device Button (matches web DeviceButton)
 
-private struct DeviceRow: View {
+private struct DeviceButton: View {
     let device: DeviceSummary
-    let isCurrentDevice: Bool
     let hasGreeting: Bool
+    let isSelected: Bool
+    let isSelf: Bool
 
     private var dotColor: Color {
-        if device.online && hasGreeting { return .green }
-        if device.online { return .orange }
-        return .gray
+        if device.online && hasGreeting { return Color(hex: 0x34D399) } // emerald-400
+        if device.online { return Color(hex: 0xFBBF24) }               // amber-400
+        return Color(hex: 0x94A3B8)                                      // slate-400
+    }
+
+    private var dotPulses: Bool {
+        device.online && !hasGreeting
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(dotColor)
                 .frame(width: 8, height: 8)
+                .opacity(dotPulses ? 0.8 : 1)
+                .animation(dotPulses ? .easeInOut(duration: 1).repeatForever(autoreverses: true) : .default, value: dotPulses)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(device.name)
-                    .font(.body)
-
-                if device.role == .tentacle {
-                    Text("tentacle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(device.name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer()
 
-            if isCurrentDevice {
+            if isSelf {
                 Text("You")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.krakiPrimary)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Color.blue.opacity(0.12))
-                    .clipShape(Capsule())
+                    .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.surfaceTertiary : Color.surfaceSecondary)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.borderPrimary, lineWidth: 1)
+        )
     }
 }
 
