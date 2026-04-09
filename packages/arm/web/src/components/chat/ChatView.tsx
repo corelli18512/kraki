@@ -231,6 +231,7 @@ export function ChatView() {
         <div
           ref={scrollRef}
           onScroll={handleScroll}
+          data-chat-scroll
           className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
         >
           <div className="mx-auto max-w-3xl space-y-3">

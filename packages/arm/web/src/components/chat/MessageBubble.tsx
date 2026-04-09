@@ -362,7 +362,16 @@ function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {
               src={`data:${img.mimeType};base64,${img.data}`}
               alt="Attachment"
               className="max-h-48 max-w-full object-contain"
-              loading="lazy"
+              onLoad={(e) => {
+                // After image renders, re-check scroll so auto-scroll accounts for image height
+                const scrollable = (e.target as HTMLElement).closest('[data-chat-scroll]');
+                if (scrollable) {
+                  const { scrollTop, scrollHeight, clientHeight } = scrollable;
+                  if (scrollHeight - scrollTop - clientHeight < 80) {
+                    scrollable.scrollTop = scrollHeight;
+                  }
+                }
+              }}
             />
           </button>
         ))}
