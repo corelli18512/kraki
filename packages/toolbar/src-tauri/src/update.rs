@@ -70,7 +70,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 /// then every CHECK_INTERVAL_SECS. Updates PENDING_UPDATE and rebuilds the tray menu.
 /// Skips checking in dev builds (version contains "dev").
 pub fn start_checker(app: tauri::AppHandle) {
-    let current = env!("CARGO_PKG_VERSION").to_string();
+    let current = crate::tray::effective_version().to_string();
 
     // Don't check for updates in dev builds — version is a placeholder
     if current.contains("dev") {

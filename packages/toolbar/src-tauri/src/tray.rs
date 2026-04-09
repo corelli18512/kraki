@@ -11,6 +11,17 @@ const ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected.png");
 const ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
 
+/// Return the display version. In dev builds, use the tentacle version
+/// injected by build.rs; in release builds, use CARGO_PKG_VERSION.
+pub fn effective_version() -> &'static str {
+    let v = env!("CARGO_PKG_VERSION");
+    if v.contains("dev") {
+        option_env!("KRAKI_DEV_VERSION").unwrap_or(v)
+    } else {
+        v
+    }
+}
+
 pub fn setup_tray(app: &mut App) -> tauri::Result<()> {
     let handle = app.handle();
     let menu = build_menu(handle, &DaemonStatus::default(), None)?;
@@ -32,7 +43,7 @@ fn build_menu(
     status: &DaemonStatus,
     pending_update: Option<&str>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = effective_version();
     let relay_label = status_label(status);
     let toggle_label = if status.daemon_running && status.relay_state == "connected" {
         "Disconnect"
@@ -121,7 +132,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let app = app.clone();
             std::thread::spawn(move || {
                 if is_check {
-                    let current = env!("CARGO_PKG_VERSION");
+                    let current = effective_version();
                     if let Some(latest) = crate::update::fetch_latest_version() {
                         if crate::update::is_newer(&latest, current) {
                             let mut pending = crate::update::PENDING_UPDATE.lock().unwrap();

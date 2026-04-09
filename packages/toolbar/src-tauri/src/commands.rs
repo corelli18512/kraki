@@ -118,7 +118,7 @@ pub fn open_setup_window(app: &AppHandle) {
 /// Returns None in dev builds (version contains "dev").
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Option<String> {
-    let current = env!("CARGO_PKG_VERSION");
+    let current = crate::tray::effective_version();
     if current.contains("dev") {
         return None;
     }
