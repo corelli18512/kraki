@@ -132,6 +132,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let app = app.clone();
             std::thread::spawn(move || {
                 if is_check {
+                    // Silent check — just update the tray menu if newer version found
                     let current = effective_version();
                     if let Some(latest) = crate::update::fetch_latest_version() {
                         if crate::update::is_newer(&latest, current) {
@@ -142,8 +143,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                             update_tray(&app, &status);
                         }
                     }
+                } else {
+                    // "Update available" banner clicked — open releases page
+                    crate::update::open_releases_page();
                 }
-                crate::update::open_releases_page();
             });
         }
         _ => {}
