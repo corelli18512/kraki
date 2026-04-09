@@ -117,12 +117,8 @@ pub fn open_setup_window(app: &AppHandle) {
 
 /// Tauri command: trigger an on-demand update check.
 /// Returns the latest version string if an update is available, otherwise None.
-/// Returns None in dev builds (CARGO_PKG_VERSION contains "dev").
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Option<String> {
-    if env!("CARGO_PKG_VERSION").contains("dev") {
-        return None;
-    }
     let current = crate::tray::effective_version();
     let latest = crate::update::fetch_latest_version()?;
     if crate::update::is_newer(&latest, current) {

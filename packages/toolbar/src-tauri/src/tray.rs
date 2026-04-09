@@ -130,21 +130,24 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "do_update" | "check_updates" => {
             let is_check = id == "check_updates";
             let app = app.clone();
+            if is_check {
+                // Immediately show "Checking…" in the menu for next open
+                set_check_updates_label(&app, "Checking for updates…");
+            }
             std::thread::spawn(move || {
                 if is_check {
-                    // Silent check — just update the tray menu if newer version found
                     let current = effective_version();
                     if let Some(latest) = crate::update::fetch_latest_version() {
                         if crate::update::is_newer(&latest, current) {
                             let mut pending = crate::update::PENDING_UPDATE.lock().unwrap();
                             *pending = Some(latest);
                             drop(pending);
-                            let status = crate::status::read_status();
-                            update_tray(&app, &status);
                         }
                     }
+                    // Rebuild menu (shows update banner or resets to "Check for updates…")
+                    let status = crate::status::read_status();
+                    update_tray(&app, &status);
                 } else {
-                    // "Update available" banner clicked — open releases page
                     crate::update::open_releases_page();
                 }
             });
@@ -157,6 +160,36 @@ fn open_qr_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("qr") {
         let _ = win.show();
         let _ = win.set_focus();
+    }
+}
+
+fn set_check_updates_label(app: &AppHandle, label: &str) {
+    let Some(tray) = app.tray_by_id("kraki-tray") else { return; };
+    let status = crate::status::read_status();
+    let version = effective_version();
+    let relay_label = status_label(&status);
+    let toggle_label = if status.daemon_running && status.relay_state == "connected" {
+        "Disconnect"
+    } else {
+        "Connect"
+    };
+
+    // Rebuild menu with custom check_updates label (disabled)
+    if let Ok(menu) = Menu::with_items(
+        app,
+        &[
+            &MenuItem::with_id(app, "header", format!("Kraki v{version}"), false, None::<&str>).unwrap(),
+            &MenuItem::with_id(app, "status", relay_label, false, None::<&str>).unwrap(),
+            &PredefinedMenuItem::separator(app).unwrap(),
+            &MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>).unwrap(),
+            &MenuItem::with_id(app, "pair", "Pair new device\u{2026}", true, None::<&str>).unwrap(),
+            &PredefinedMenuItem::separator(app).unwrap(),
+            &MenuItem::with_id(app, "check_updates", label, false, None::<&str>).unwrap(),
+            &PredefinedMenuItem::separator(app).unwrap(),
+            &PredefinedMenuItem::quit(app, Some("Quit Kraki")).unwrap(),
+        ],
+    ) {
+        let _ = tray.set_menu(Some(menu));
     }
 }
 

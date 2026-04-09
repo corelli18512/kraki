@@ -11,8 +11,8 @@ const INITIAL_DELAY_SECS: u64 = 5;
 /// The version string of a pending update, if any. Set by the background checker.
 pub static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
 
-/// Fetches the latest release tag from the GitHub API via curl subprocess.
-/// Considers releases tagged with "v" prefix (e.g. v0.8.0).
+/// Fetches the latest release that contains binary assets (kraki-macos, kraki-linux, etc).
+/// Skips web-only releases that have no binary artifacts.
 pub fn fetch_latest_version() -> Option<String> {
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases");
 
@@ -32,29 +32,57 @@ pub fn fetch_latest_version() -> Option<String> {
     }
 
     let body = String::from_utf8(output.stdout).ok()?;
-    // Find the first tag_name matching "v..."
-    for tag in extract_tag_names(&body) {
-        if let Some(ver) = tag.strip_prefix('v') {
-            return Some(ver.to_string());
-        }
-    }
-    None
+    // Find the first v* release that has a binary asset (e.g. "kraki-macos")
+    find_latest_binary_release(&body)
 }
 
-/// Extract all "tag_name" values from a JSON array of releases.
-fn extract_tag_names(json: &str) -> Vec<String> {
-    let key = "\"tag_name\":";
-    let mut tags = Vec::new();
+/// Scan releases JSON for the first v* tag that has a "kraki-" asset name.
+fn find_latest_binary_release(json: &str) -> Option<String> {
+    // Walk through release objects looking for tag_name + assets containing "kraki-"
+    let tag_key = "\"tag_name\":";
+    let assets_key = "\"assets\":";
+    let name_key = "\"name\":";
+
     let mut pos = 0;
-    while let Some(idx) = json[pos..].find(key) {
-        let start = pos + idx + key.len();
-        let rest = json[start..].trim_start_matches([' ', '"']);
-        if let Some(end) = rest.find('"') {
-            tags.push(rest[..end].to_string());
+    while let Some(tag_idx) = json[pos..].find(tag_key) {
+        let tag_start = pos + tag_idx + tag_key.len();
+        let rest = json[tag_start..].trim_start_matches([' ', '"']);
+        let tag = if let Some(end) = rest.find('"') {
+            &rest[..end]
+        } else {
+            pos = tag_start;
+            continue;
+        };
+
+        let version = match tag.strip_prefix('v') {
+            Some(v) => v.to_string(),
+            None => { pos = tag_start; continue; }
+        };
+
+        // Find the assets array for this release (before the next tag_name)
+        let next_tag = json[tag_start..].find(tag_key).map(|i| tag_start + i).unwrap_or(json.len());
+        let assets_region = &json[tag_start..next_tag];
+
+        if let Some(assets_idx) = assets_region.find(assets_key) {
+            let assets_str = &assets_region[assets_idx..];
+            // Check if any asset name contains "kraki-" (binary artifacts)
+            let mut apos = 0;
+            while let Some(name_idx) = assets_str[apos..].find(name_key) {
+                let nstart = apos + name_idx + name_key.len();
+                let nrest = assets_str[nstart..].trim_start_matches([' ', '"']);
+                if let Some(nend) = nrest.find('"') {
+                    let asset_name = &nrest[..nend];
+                    if asset_name.starts_with("kraki-") {
+                        return Some(version);
+                    }
+                }
+                apos = nstart;
+            }
         }
-        pos = start;
+
+        pos = tag_start;
     }
-    tags
+    None
 }
 
 /// Returns true if `latest` is strictly newer than `current` (semver comparison).
@@ -68,12 +96,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 
 /// Start the background update checker. Checks after INITIAL_DELAY_SECS on startup,
 /// then every CHECK_INTERVAL_SECS. Updates PENDING_UPDATE and rebuilds the tray menu.
-/// Skips checking in dev builds (CARGO_PKG_VERSION contains "dev").
 pub fn start_checker(app: tauri::AppHandle) {
-    // Skip in dev builds — version is a placeholder, checking would always show an update
-    if env!("CARGO_PKG_VERSION").contains("dev") {
-        return;
-    }
     let current = crate::tray::effective_version().to_string();
 
     thread::spawn(move || {
@@ -121,9 +144,21 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_tag_names() {
-        let json = r#"[{"tag_name":"v0.8.0"},{"tag_name":"v0.7.2"}]"#;
-        let tags = extract_tag_names(json);
-        assert_eq!(tags, vec!["v0.8.0", "v0.7.2"]);
+    fn test_find_latest_binary_release() {
+        let json = r#"[
+            {"tag_name":"v0.9.2","assets":[]},
+            {"tag_name":"v0.9.1","assets":[{"name":"kraki-macos-arm64"},{"name":"SHA256SUMS.txt"}]},
+            {"tag_name":"v0.9.0","assets":[{"name":"kraki-linux-x64"}]}
+        ]"#;
+        assert_eq!(find_latest_binary_release(json), Some("0.9.1".to_string()));
+    }
+
+    #[test]
+    fn test_skips_web_only_releases() {
+        let json = r#"[
+            {"tag_name":"v0.9.2","assets":[{"name":"web-dist.tar.gz"}]},
+            {"tag_name":"v0.9.1","assets":[]}
+        ]"#;
+        assert_eq!(find_latest_binary_release(json), None);
     }
 }
