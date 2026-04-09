@@ -38,6 +38,7 @@ pub fn run() {
             commands::run_headless_setup,
             commands::run_doctor,
             commands::run_relay_info,
+            commands::get_relay_url,
             commands::is_configured,
             commands::start_github_auth,
         ])

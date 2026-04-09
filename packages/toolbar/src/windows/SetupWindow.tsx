@@ -5,8 +5,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import QRCode from 'qrcode';
 
-const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
-
 // TODO(phase-2): Replace device flow with OAuth redirect flow.
 // Register kraki:// deep link, add redirect URI to GitHub OAuth app,
 // relay already handles code exchange via github_oauth auth method.
@@ -34,6 +32,7 @@ export default function SetupWindow() {
   const [error, setError] = useState<string | null>(null);
 
   // Relay state
+  const [relayUrl, setRelayUrl] = useState<string>('');
   const [relayInfo, setRelayInfo] = useState<RelayInfo | null>(null);
 
   // Auth state
@@ -60,9 +59,18 @@ export default function SetupWindow() {
 
   useEffect(() => {
     (async () => {
+      // 0. Get relay URL (from env or default)
+      let relay: string;
+      try {
+        relay = await invoke<string>('get_relay_url');
+      } catch {
+        relay = 'wss://kraki.corelli.cloud';
+      }
+      setRelayUrl(relay);
+
       // 1. Test relay connection and get auth methods
       try {
-        const raw = await invoke<string>('run_relay_info', { url: OFFICIAL_RELAY });
+        const raw = await invoke<string>('run_relay_info', { url: relay });
         const info = JSON.parse(raw) as RelayInfo;
         if (!info.ok) {
           setError(info.error ?? 'Cannot reach relay');
@@ -136,7 +144,7 @@ export default function SetupWindow() {
     setError(null);
     setStep('checking');
     try {
-      const raw = await invoke<string>('run_relay_info', { url: OFFICIAL_RELAY });
+      const raw = await invoke<string>('run_relay_info', { url: relayUrl });
       const info = JSON.parse(raw) as RelayInfo;
       if (!info.ok) {
         setError(info.error ?? 'Cannot reach relay');
@@ -149,7 +157,7 @@ export default function SetupWindow() {
       setError(`Cannot reach relay: ${err}`);
       setStep('relay-error');
     }
-  }, []);
+  }, [relayUrl]);
 
   // ── Finish setup ────────────────────────────────────────
 
@@ -158,7 +166,7 @@ export default function SetupWindow() {
     setError(null);
     try {
       const setupArgs: Record<string, unknown> = {
-        relay: OFFICIAL_RELAY,
+        relay: relayUrl,
         authMethod: 'github_token',
         deviceName: deviceName.trim() || 'Desktop',
       };
