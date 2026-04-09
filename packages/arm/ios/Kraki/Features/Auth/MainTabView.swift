@@ -14,7 +14,7 @@ struct MainTabView: View {
             }
             .tabItem {
                 Label {
-                    Text("Agents")
+                    Text("Sessions")
                 } icon: {
                     LucideIconType.botMessageSquare.tabImage()
                 }
