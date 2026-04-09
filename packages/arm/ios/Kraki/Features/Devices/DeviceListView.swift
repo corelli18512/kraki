@@ -30,7 +30,6 @@ struct DeviceListView: View {
         }
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
-        .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
         .navigationDestination(for: String.self) { deviceId in
             if let device = appState.deviceStore.devices[deviceId] {
@@ -72,6 +71,7 @@ struct DeviceListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: - Empty State
