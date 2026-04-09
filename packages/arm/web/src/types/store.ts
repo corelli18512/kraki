@@ -111,6 +111,9 @@ export interface AppState {
 
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
+
+  // Sessions currently loading initial messages
+  loadingSessions: Set<string>;
 }
 
 export interface AppActions {
@@ -153,6 +156,7 @@ export interface AppActions {
   setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
   setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
+  setSessionLoading: (sessionId: string, loading: boolean) => void;
   clearTransientState: () => void;
   reset: () => void;
 

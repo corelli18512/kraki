@@ -66,6 +66,7 @@ const initialState = {
   deviceVersions: new Map<string, string>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
+  loadingSessions: new Set<string>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -348,6 +349,17 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionUsage: next };
     }),
 
+  setSessionLoading: (sessionId, loading) =>
+    set((state) => {
+      const next = new Set(state.loadingSessions);
+      if (loading) {
+        next.add(sessionId);
+      } else {
+        next.delete(sessionId);
+      }
+      return { loadingSessions: next };
+    }),
+
   prependMessages: (sessionId, older) => {
     // Write to IndexedDB (idempotent by [sessionId, seq] key)
     import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
@@ -381,6 +393,7 @@ export const useStore = create<Store>()(persist((set) => ({
     sessionUsage: new Map(),
     pendingPermissions: new Map(),
     pendingQuestions: new Map(),
+    loadingSessions: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until rebuildPreview refreshes.
     // messages are NOT touched — they're managed by IndexedDB hydration.
@@ -413,6 +426,7 @@ export const useStore = create<Store>()(persist((set) => ({
     deviceVersions: new Map(),
     sessionUsage: new Map(),
     sessionPreviews: new Map(),
+    loadingSessions: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
   }),

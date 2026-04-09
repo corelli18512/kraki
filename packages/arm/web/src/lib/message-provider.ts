@@ -215,6 +215,9 @@ class MessageProvider {
 
     logger.info('requestLatest', { sessionId, totalLastSeq });
 
+    // Signal loading start
+    getStore().setSessionLoading(sessionId, true);
+
     // Check IndexedDB first
     let dbLastSeq = 0;
     try {
@@ -241,8 +244,12 @@ class MessageProvider {
       const afterSeq = Math.max(dbLastSeq, totalLastSeq - LATEST_SIZE);
       if (afterSeq < totalLastSeq) {
         this.requestFromTentacle(sessionId, afterSeq);
+        return; // loading cleared when batch arrives
       }
     }
+
+    // No tentacle request needed — clear loading now
+    getStore().setSessionLoading(sessionId, false);
   }
 
   /**
@@ -337,6 +344,7 @@ class MessageProvider {
         this.loading.delete(key);
       }
     }
+    getStore().setSessionLoading(sessionId, false);
     logger.info('handleBatch done', { sessionId });
   }
 

@@ -16,6 +16,9 @@ export function SessionPage() {
   const status = useStore((s) => s.status);
   const reconnectAttempts = useStore((s) => s.reconnectAttempts);
   const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
+  const isLoadingMessages = useStore((s) => sessionId ? s.loadingSessions.has(sessionId) : false);
+  const hasMessages = useStore((s) => sessionId ? (s.messages.get(sessionId)?.length ?? 0) > 0 : false);
+  const showLoadingSpinner = isLoadingMessages && !hasMessages;
   const totalOtherUnread = useStore((s) => {
     let count = 0;
     for (const [sid, n] of s.unreadCount) {
@@ -92,6 +95,11 @@ export function SessionPage() {
           {isReconnecting && (
             <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
               <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-400 border-t-transparent" />
+            </div>
+          )}
+          {showLoadingSpinner && !isReconnecting && (
+            <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
+              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-kraki-400 border-t-transparent" />
             </div>
           )}
         </div>
