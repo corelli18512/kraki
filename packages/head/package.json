@@ -1,6 +1,6 @@
 {
   "name": "@kraki/head",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Kraki relay server — the brain that routes messages between tentacles and apps",
   "repository": {
     "type": "git",
