@@ -193,7 +193,7 @@ export default function SetupWindow() {
       setError(`Setup failed: ${err}`);
       setStep('device-name');
     }
-  }, [deviceName, githubToken]);
+  }, [deviceName, githubToken, relayUrl]);
 
   // ── Pairing countdown ───────────────────────────────────
 
@@ -353,7 +353,7 @@ export default function SetupWindow() {
             Expires in {Math.floor(pairingSecondsLeft / 60)}:{(pairingSecondsLeft % 60).toString().padStart(2, '0')}
           </p>
           {pairingUrl && (
-            <button onClick={() => openExternal(pairingUrl)}
+            <button onClick={() => { openExternal(pairingUrl); closeSelf(); }}
               className="mt-1 text-xs text-blue-500 hover:underline cursor-pointer bg-transparent border-none">Open in browser</button>
           )}
           <button onClick={closeSelf}
