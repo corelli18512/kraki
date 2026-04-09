@@ -85,7 +85,23 @@ struct SessionListView: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 22, height: 22)
 
-            // Colored KRAKI text — use foregroundColor to bypass liquid glass vibrancy
+            // Pre-render colored KRAKI text as Image to survive liquid glass
+            brandTextImage
+                .frame(height: 16)
+
+            Text("Preview")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(Color.krakiPrimary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
+        }
+    }
+
+    /// Renders the colored KRAKI wordmark as a UIImage so it's immune to toolbar vibrancy.
+    @MainActor
+    private var brandTextImage: some View {
+        let renderer = ImageRenderer(content:
             HStack(spacing: 0.5) {
                 Text("K").foregroundColor(Color(hex: 0x00c9a7))
                 Text("R").foregroundColor(Color(hex: 0x00b4d8))
@@ -95,15 +111,16 @@ struct SessionListView: View {
             }
             .font(.system(size: 15, weight: .heavy, design: .monospaced))
             .tracking(2)
+        )
+        renderer.scale = UIScreen.main.scale
 
-            Text("Preview")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(Color.krakiPrimary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
+        if let uiImage = renderer.uiImage {
+            return AnyView(
+                Image(uiImage: uiImage)
+                    .renderingMode(.original)
+            )
         }
-        .drawingGroup() // Flatten to bitmap to resist glass material overrides
+        return AnyView(EmptyView())
     }
 
     // MARK: - Session List

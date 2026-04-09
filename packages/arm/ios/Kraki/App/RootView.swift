@@ -4,9 +4,14 @@ import SwiftUI
 /// Root coordinator: shows login or main tab bar depending on connection state.
 struct RootView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
+            // Background matching web: white in light, slate-950 (#020617) in dark
+            Color.surfacePrimary
+                .ignoresSafeArea()
+
             switch appState.connectionStatus {
             case .connected:
                 MainTabView()
