@@ -68,8 +68,14 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 
 /// Start the background update checker. Checks after INITIAL_DELAY_SECS on startup,
 /// then every CHECK_INTERVAL_SECS. Updates PENDING_UPDATE and rebuilds the tray menu.
+/// Skips checking in dev builds (version contains "dev").
 pub fn start_checker(app: tauri::AppHandle) {
     let current = env!("CARGO_PKG_VERSION").to_string();
+
+    // Don't check for updates in dev builds — version is a placeholder
+    if current.contains("dev") {
+        return;
+    }
 
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(INITIAL_DELAY_SECS));
