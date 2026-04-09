@@ -99,7 +99,9 @@ struct SessionListView: View {
                 Image(systemName: "plus")
                     .imageScale(.medium)
                     .foregroundColor(.krakiPrimary)
+                    .padding(6)
             }
+            .if_available_glass()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -250,6 +252,19 @@ extension Color {
             blue: Double(hex & 0xFF) / 255,
             opacity: opacity
         )
+    }
+}
+
+// MARK: - Glass button helper
+
+extension View {
+    @ViewBuilder
+    func if_available_glass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.buttonStyle(.glass)
+        } else {
+            self.buttonStyle(.bordered)
+        }
     }
 }
 
