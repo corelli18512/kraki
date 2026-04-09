@@ -37,6 +37,7 @@ struct SessionListView: View {
             }
         }
         .navigationBarHidden(true)
+        .background(Color.surfacePrimary)
         .safeAreaInset(edge: .top) {
             brandHeader
         }
