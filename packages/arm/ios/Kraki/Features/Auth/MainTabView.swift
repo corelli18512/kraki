@@ -43,6 +43,7 @@ struct MainTabView: View {
                 }
             }
         }
+        .tint(.krakiPrimary)
     }
 }
 

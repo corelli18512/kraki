@@ -37,6 +37,8 @@ struct SessionListView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        .toolbarBackground(Color.surfacePrimary, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 brandHeader
@@ -155,6 +157,8 @@ struct SessionListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.surfacePrimary)
         .refreshable {
             try? await Task.sleep(for: .milliseconds(300))
         }
@@ -218,15 +222,27 @@ struct SessionListView: View {
                 .foregroundStyle(.secondary)
 
             if hasTentacle {
-                Button {
-                    showNewSession = true
-                } label: {
-                    Label("New Session", systemImage: "plus")
-                        .font(.system(size: 14, weight: .medium))
+                if #available(iOS 26.0, *) {
+                    Button {
+                        showNewSession = true
+                    } label: {
+                        Label("New Session", systemImage: "plus")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .buttonStyle(.glass)
+                    .tint(.krakiPrimary)
+                    .padding(.top, 4)
+                } else {
+                    Button {
+                        showNewSession = true
+                    } label: {
+                        Label("New Session", systemImage: "plus")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.krakiPrimary)
+                    .padding(.top, 4)
                 }
-                .buttonStyle(.bordered)
-                .tint(.krakiPrimary)
-                .padding(.top, 4)
             } else {
                 Text("npx @kraki/tentacle")
                     .font(.system(size: 13, design: .monospaced))
@@ -238,6 +254,8 @@ struct SessionListView: View {
             Spacer()
         }
         .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.surfacePrimary)
     }
 }
 
