@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import QRCode from 'qrcode';
 
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
@@ -193,7 +194,14 @@ export default function SetupWindow() {
     return () => clearTimeout(id);
   }, [step, pairingSecondsLeft]);
 
-  const closeSelf = () => getCurrentWindow().close();
+  const closeSelf = () => {
+    const win = getCurrentWindow();
+    win.hide().catch(() => win.close().catch(() => {}));
+  };
+
+  const openExternal = (url: string) => {
+    shellOpen(url).catch(() => { /* ignore */ });
+  };
 
   // ── Render ──────────────────────────────────────────────
 
@@ -271,15 +279,13 @@ export default function SetupWindow() {
             </div>
           )}
           {verificationUri && (
-            <a
-              href={verificationUri}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => openExternal(verificationUri)}
               className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f]"
             >
               <GitHubMark className="h-5 w-5" />
               Open GitHub
-            </a>
+            </button>
           )}
           <p className="mt-4 text-xs text-gray-400 animate-pulse">Waiting for authorization…</p>
         </>
@@ -337,8 +343,8 @@ export default function SetupWindow() {
             Expires in {Math.floor(pairingSecondsLeft / 60)}:{(pairingSecondsLeft % 60).toString().padStart(2, '0')}
           </p>
           {pairingUrl && (
-            <a href={pairingUrl} target="_blank" rel="noopener noreferrer"
-              className="mt-1 text-xs text-blue-500 hover:underline">Open in browser</a>
+            <button onClick={() => openExternal(pairingUrl)}
+              className="mt-1 text-xs text-blue-500 hover:underline cursor-pointer bg-transparent border-none">Open in browser</button>
           )}
           <button onClick={closeSelf}
             className="mt-5 py-2.5 px-8 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer">

@@ -1,10 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
-  "description": "Capability for the QR window",
-  "windows": ["qr"],
+  "description": "Capability for all toolbar windows",
+  "windows": ["qr", "setup"],
   "permissions": [
     "core:default",
-    "shell:default"
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-hide",
+    "shell:default",
+    "shell:allow-open"
   ]
 }
