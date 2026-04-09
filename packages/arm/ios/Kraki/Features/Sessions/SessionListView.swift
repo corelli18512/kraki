@@ -93,15 +93,17 @@ struct SessionListView: View {
 
             Spacer()
 
-            Button {
-                showNewSession = true
-            } label: {
-                Image(systemName: "plus")
-                    .imageScale(.medium)
-                    .foregroundColor(.krakiPrimary)
-                    .padding(6)
+            if !sorted.isEmpty {
+                Button {
+                    showNewSession = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13))
+                        .foregroundColor(.krakiPrimary)
+                        .padding(4)
+                }
+                .if_available_glass()
             }
-            .if_available_glass()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
