@@ -189,8 +189,8 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     }
   }, [imageAttachment, compressAndAttach]);
 
-  // Auto-focus on mount
-  useEffect(() => {
+  // Auto-focus on mount and session switch
+  useLayoutEffect(() => {
     if (!shouldAutoFocus) return;
     textareaRef.current?.focus();
   }, [sessionId, shouldAutoFocus]);
@@ -226,7 +226,12 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     setDraft(sessionId, '');
     clearImage();
     setAwaitingActive(true);
-    if (!shouldAutoFocus) textareaRef.current?.blur();
+    if (shouldAutoFocus) {
+      // Keep focus on desktop so user can type follow-up immediately
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } else {
+      textareaRef.current?.blur();
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
