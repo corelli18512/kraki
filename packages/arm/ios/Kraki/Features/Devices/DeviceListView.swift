@@ -25,7 +25,7 @@ struct DeviceListView: View {
                 deviceList
             }
         }
-        .navigationTitle("Devices")
+        .navigationBarHidden(true)
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
         .navigationDestination(for: String.self) { deviceId in
@@ -115,7 +115,7 @@ private struct DeviceButton: View {
                 .animation(dotPulses ? .easeInOut(duration: 1).repeatForever(autoreverses: true) : .default, value: dotPulses)
 
             Text(device.name)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -131,14 +131,14 @@ private struct DeviceButton: View {
                     .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 12)
                 .fill(isSelected ? Color.surfaceTertiary : Color.surfaceSecondary)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.borderPrimary, lineWidth: 1)
         )
     }
