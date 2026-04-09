@@ -36,22 +36,9 @@ struct SessionListView: View {
                 sessionList
             }
         }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackgroundVisibility(.visible, for: .navigationBar)
-        .toolbarBackground(Color.surfacePrimary, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                brandHeader
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showNewSession = true
-                } label: {
-                    Image(systemName: "plus")
-                        .imageScale(.medium)
-                }
-                .tint(.krakiPrimary)
-            }
+        .navigationBarHidden(true)
+        .safeAreaInset(edge: .top) {
+            brandHeader
         }
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
@@ -78,7 +65,7 @@ struct SessionListView: View {
         }
     }
 
-    // MARK: - Brand Header (matches web Sidebar header)
+    // MARK: - Brand Header (custom, not toolbar)
 
     private var brandHeader: some View {
         HStack(spacing: 6) {
@@ -87,7 +74,6 @@ struct SessionListView: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 22, height: 22)
 
-            // Colored KRAKI text — opaque toolbar means no vibrancy override
             HStack(spacing: 0.5) {
                 Text("K").foregroundColor(Color(hex: 0x00c9a7))
                 Text("R").foregroundColor(Color(hex: 0x00b4d8))
@@ -104,7 +90,20 @@ struct SessionListView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
+
+            Spacer()
+
+            Button {
+                showNewSession = true
+            } label: {
+                Image(systemName: "plus")
+                    .imageScale(.medium)
+                    .foregroundColor(.krakiPrimary)
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.surfacePrimary)
     }
 
     // MARK: - Session List
