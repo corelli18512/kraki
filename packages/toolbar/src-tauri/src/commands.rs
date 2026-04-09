@@ -71,7 +71,9 @@ pub async fn run_headless_setup(
 /// Tauri command: get the relay URL (from env or default).
 #[tauri::command]
 pub fn get_relay_url() -> String {
-    std::env::var("KRAKI_RELAY_URL").unwrap_or_else(|_| "wss://kraki.corelli.cloud".to_string())
+    let url = std::env::var("KRAKI_RELAY_URL").unwrap_or_else(|_| "wss://kraki.corelli.cloud".to_string());
+    eprintln!("[toolbar] relay URL: {url}");
+    url
 }
 
 /// Tauri command: query relay capabilities via sidecar.

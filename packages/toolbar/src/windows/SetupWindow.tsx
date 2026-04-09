@@ -67,6 +67,7 @@ export default function SetupWindow() {
         relay = 'wss://kraki.corelli.cloud';
       }
       setRelayUrl(relay);
+      console.log(`[setup] relay: ${relay}`);
 
       // 1. Test relay connection and get auth methods
       try {
@@ -78,6 +79,7 @@ export default function SetupWindow() {
           return;
         }
         setRelayInfo(info);
+        console.log(`[setup] relay ok — methods: ${info.methods?.join(', ')}, clientId: ${info.githubClientId ?? 'none'}`);
       } catch (err) {
         setError(`Cannot reach relay: ${err}`);
         setStep('relay-error');

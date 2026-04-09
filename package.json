@@ -21,7 +21,7 @@
     "build:tentacle": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/tentacle build",
     "build:tentacle:binary": "pnpm --filter @kraki/tentacle run build:binary:local",
     "build:web": "pnpm --filter @kraki/arm-web build",
-    "dev:toolbar": "pnpm --filter @kraki/toolbar dev",
+    "dev:toolbar": "rm -rf .tmp/kraki-toolbar && KRAKI_HOME=.tmp/kraki-toolbar KRAKI_RELAY_URL=ws://localhost:4000 pnpm --filter @kraki/toolbar dev",
     "build:toolbar": "pnpm --filter @kraki/toolbar build",
     "test": "pnpm --filter @kraki/crypto test && pnpm --filter @kraki/head test && pnpm --filter @kraki/tentacle test && pnpm --filter @kraki/tests test",
     "test:live": "pnpm --filter @kraki/tests test:live",
