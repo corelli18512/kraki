@@ -341,8 +341,8 @@ export default function SetupWindow() {
               className="mt-1 text-xs text-blue-500 hover:underline">Open in browser</a>
           )}
           <button onClick={closeSelf}
-            className="mt-5 text-sm text-gray-400 hover:text-gray-600 cursor-pointer">
-            Skip — I'll pair later
+            className="mt-5 py-2.5 px-8 bg-[#24292f] text-white text-sm font-medium rounded-lg hover:bg-[#32383f] transition-colors cursor-pointer">
+            Done
           </button>
         </>
       )}
