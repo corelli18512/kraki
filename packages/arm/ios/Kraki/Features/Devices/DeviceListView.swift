@@ -32,6 +32,8 @@ struct DeviceListView: View {
             }
         }
         .navigationTitle("Devices")
+        .scrollContentBackground(.hidden)
+        .background(Color.surfacePrimary)
     }
 
     // MARK: - Device List

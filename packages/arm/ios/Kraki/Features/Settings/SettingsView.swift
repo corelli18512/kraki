@@ -20,6 +20,8 @@ struct SettingsView: View {
             dangerSection
         }
         .navigationTitle("Settings")
+        .scrollContentBackground(.hidden)
+        .background(Color.surfacePrimary)
         .alert("Sign Out", isPresented: $showSignOutConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
