@@ -1,20 +1,23 @@
 #if os(iOS)
-/// DeviceListView — Matches web DeviceGrid.tsx mobile column.
-///
-/// Shows tentacle devices as rounded bordered buttons with status dots,
-/// navigating to DeviceDetailView on tap.
+/// DeviceListView — Native iOS device list with small inline title.
 
 import SwiftUI
 
 struct DeviceListView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var selectedDeviceId: String?
-
     private var tentacles: [DeviceSummary] {
         appState.deviceStore.devices.values
             .filter { $0.role == .tentacle }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    private var onlineDevices: [DeviceSummary] {
+        tentacles.filter(\.online)
+    }
+
+    private var offlineDevices: [DeviceSummary] {
+        tentacles.filter { !$0.online }
     }
 
     var body: some View {
@@ -25,7 +28,8 @@ struct DeviceListView: View {
                 deviceList
             }
         }
-        .navigationBarHidden(true)
+        .navigationTitle("Devices")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
         .navigationDestination(for: String.self) { deviceId in
@@ -38,22 +42,36 @@ struct DeviceListView: View {
     // MARK: - Device List
 
     private var deviceList: some View {
-        ScrollView {
-            VStack(spacing: 6) {
-                ForEach(tentacles) { device in
-                    NavigationLink(value: device.id) {
-                        DeviceButton(
-                            device: device,
-                            hasGreeting: appState.deviceStore.deviceModels[device.id] != nil,
-                            isSelected: selectedDeviceId == device.id,
-                            isSelf: device.id == appState.deviceId
-                        )
+        List {
+            if !onlineDevices.isEmpty {
+                Section("Online") {
+                    ForEach(onlineDevices) { device in
+                        NavigationLink(value: device.id) {
+                            DeviceRow(
+                                device: device,
+                                isSelf: device.id == appState.deviceId,
+                                hasGreeting: appState.deviceStore.deviceModels[device.id] != nil
+                            )
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding(12)
+
+            if !offlineDevices.isEmpty {
+                Section("Offline") {
+                    ForEach(offlineDevices) { device in
+                        NavigationLink(value: device.id) {
+                            DeviceRow(
+                                device: device,
+                                isSelf: device.id == appState.deviceId,
+                                hasGreeting: false
+                            )
+                        }
+                    }
+                }
+            }
         }
+        .listStyle(.insetGrouped)
     }
 
     // MARK: - Empty State
@@ -67,80 +85,52 @@ struct DeviceListView: View {
 
             Text("No devices connected")
                 .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.secondary)
 
-            Text("Run ")
+            (Text("Run ") + Text("kraki connect").monospaced() + Text(" to pair a device."))
                 .font(.caption)
-                .foregroundStyle(.secondary)
-            + Text("kraki connect")
-                .font(.caption)
-                .monospaced()
-                .foregroundStyle(.secondary)
-            + Text(" in your terminal to pair a new device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
 
             Spacer()
         }
-        .multilineTextAlignment(.center)
         .padding(.horizontal, 32)
     }
 }
 
-// MARK: - Device Button (matches web DeviceButton)
+// MARK: - Device Row
 
-private struct DeviceButton: View {
+private struct DeviceRow: View {
     let device: DeviceSummary
-    let hasGreeting: Bool
-    let isSelected: Bool
     let isSelf: Bool
+    let hasGreeting: Bool
 
     private var dotColor: Color {
-        if device.online && hasGreeting { return Color(hex: 0x34D399) } // emerald-400
-        if device.online { return Color(hex: 0xFBBF24) }               // amber-400
-        return Color(hex: 0x94A3B8)                                      // slate-400
-    }
-
-    private var dotPulses: Bool {
-        device.online && !hasGreeting
+        if device.online && hasGreeting { return Color(hex: 0x34D399) }
+        if device.online { return Color(hex: 0xFBBF24) }
+        return Color(hex: 0x94A3B8)
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Circle()
                 .fill(dotColor)
                 .frame(width: 8, height: 8)
-                .opacity(dotPulses ? 0.8 : 1)
-                .animation(dotPulses ? .easeInOut(duration: 1).repeatForever(autoreverses: true) : .default, value: dotPulses)
 
             Text(device.name)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .font(.body)
 
             Spacer()
 
             if isSelf {
                 Text("You")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.krakiPrimary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.surfaceTertiary : Color.surfaceSecondary)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.borderPrimary, lineWidth: 1)
-        )
     }
 }
 
