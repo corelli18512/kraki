@@ -48,6 +48,7 @@ struct SessionListView: View {
                     Image(systemName: "plus")
                         .imageScale(.medium)
                 }
+                .tint(.krakiPrimary)
             }
         }
         .sheet(isPresented: $showNewSession) {
@@ -84,24 +85,25 @@ struct SessionListView: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 22, height: 22)
 
-            // Colored KRAKI text matching web
+            // Colored KRAKI text — use foregroundColor to bypass liquid glass vibrancy
             HStack(spacing: 0.5) {
-                Text("K").foregroundStyle(Color(hex: 0x00c9a7))
-                Text("R").foregroundStyle(Color(hex: 0x00b4d8))
-                Text("A").foregroundStyle(Color(hex: 0x06b6d4))
-                Text("K").foregroundStyle(Color(hex: 0xea6046))
-                Text("I").foregroundStyle(Color(hex: 0x0891b2))
+                Text("K").foregroundColor(Color(hex: 0x00c9a7))
+                Text("R").foregroundColor(Color(hex: 0x00b4d8))
+                Text("A").foregroundColor(Color(hex: 0x06b6d4))
+                Text("K").foregroundColor(Color(hex: 0xea6046))
+                Text("I").foregroundColor(Color(hex: 0x0891b2))
             }
             .font(.system(size: 15, weight: .heavy, design: .monospaced))
             .tracking(2)
 
             Text("Preview")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.krakiPrimary)
+                .foregroundColor(Color.krakiPrimary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
         }
+        .drawingGroup() // Flatten to bitmap to resist glass material overrides
     }
 
     // MARK: - Session List
@@ -206,6 +208,7 @@ struct SessionListView: View {
                         .font(.system(size: 14, weight: .medium))
                 }
                 .buttonStyle(.bordered)
+                .tint(.krakiPrimary)
                 .padding(.top, 4)
             } else {
                 Text("npx @kraki/tentacle")
