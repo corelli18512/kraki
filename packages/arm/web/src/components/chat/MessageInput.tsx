@@ -91,6 +91,18 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     return () => window.removeEventListener('keydown', handler);
   }, [sessionId, activeIdx]);
 
+  // Escape key aborts active session (global, works even when textarea not focused)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isIdle) {
+        e.preventDefault();
+        wsClient.abortSession(sessionId);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [sessionId, isIdle]);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldAutoFocus = shouldAutoFocusTextInput();
@@ -221,6 +233,10 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       handleSend();
+    }
+    if (e.key === 'Escape' && !isIdle) {
+      e.preventDefault();
+      wsClient.abortSession(sessionId);
     }
   };
 
