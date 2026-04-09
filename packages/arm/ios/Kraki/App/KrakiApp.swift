@@ -11,6 +11,14 @@ struct KrakiApp: App {
             RootView()
                 .environment(appState)
                 .preferredColorScheme(selectedScheme.colorScheme)
+                #if DEBUG
+                .onAppear {
+                    // Auto-connect to local relay for dev
+                    if appState.connectionStatus == .awaitingLogin {
+                        appState.devConnect()
+                    }
+                }
+                #endif
         }
     }
 }
