@@ -33,19 +33,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      should_run: ${{ steps.scope.outputs.should_run }}
       checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
       publish_mode: ${{ steps.meta.outputs.publish_mode }}
       release_sha: ${{ steps.meta.outputs.release_sha }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
-      version_match: ${{ steps.version-check.outputs.match }}
 
     steps:
+      - name: Check release scope
+        id: scope
+        env:
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_RELEASE_TAG:-${INPUT_TAG}}"
+          if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "$tag" ]; then
+            case "$tag" in
+              tentacle-v*)
+                echo "Tag '$tag' matches tentacle scope ✅"
+                echo "should_run=true" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "Tag '$tag' is not a tentacle release — skipping binary build."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          else
+            echo "Non-release trigger (workflow_dispatch) — proceeding."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out repository
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Resolve target ref
+        if: steps.scope.outputs.should_run == 'true'
         id: meta
         env:
           INPUT_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
@@ -87,7 +113,21 @@ jobs:
             echo "release_tag=${release_tag}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify tag matches tentacle version
+        if: steps.scope.outputs.should_run == 'true' && steps.meta.outputs.release_tag != ''
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.release_tag }}"
+          tentacle_version="$(node -p "require('./packages/tentacle/package.json').version")"
+          tag_version="${tag#tentacle-v}"
+          if [ "$tag_version" != "$tentacle_version" ]; then
+            echo "::error::Tag ${tag} (${tag_version}) does not match tentacle package.json version (${tentacle_version})"
+            exit 1
+          fi
+          echo "Tag matches tentacle version: ${tentacle_version} ✅"
+
       - name: Ensure release source is main
+        if: steps.scope.outputs.should_run == 'true'
         run: |
           set -euo pipefail
           git fetch origin main --depth=1
@@ -96,28 +136,8 @@ jobs:
             exit 1
           }
 
-      - name: Verify tag matches tentacle version
-        id: version-check
-        run: |
-          set -euo pipefail
-          tag="${{ steps.meta.outputs.release_tag }}"
-          if [ -z "$tag" ]; then
-            echo "No release tag (dry-run) — skipping version check."
-            echo "match=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tentacle_version="$(node -p "require('./packages/tentacle/package.json').version")"
-          # Strip leading 'v' from tag for comparison
-          tag_version="${tag#v}"
-          if [ "$tag_version" != "$tentacle_version" ]; then
-            echo "Tag ${tag} (${tag_version}) does not match tentacle version ${tentacle_version}. Skipping binary release."
-            echo "match=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Tag matches tentacle version: ${tentacle_version} ✅"
-            echo "match=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Ensure CI passed for this commit
+        if: steps.scope.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
@@ -151,7 +171,7 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: prepare
-    if: needs.prepare.outputs.version_match == 'true'
+    if: needs.prepare.outputs.should_run == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -214,7 +234,7 @@ jobs:
     needs:
       - prepare
       - build
-    if: needs.prepare.outputs.version_match == 'true'
+    if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

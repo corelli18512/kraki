@@ -64,11 +64,34 @@ function fetchJson(url: string): Promise<GitHubRelease> {
   });
 }
 
+function fetchJsonArray(url: string): Promise<GitHubRelease[]> {
+  return new Promise((resolve, reject) => {
+    httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return fetchJsonArray(res.headers.location!).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
 export async function fetchLatestVersion(): Promise<string | null> {
   try {
-    const data = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
-    const tag = data.tag_name as string;
-    return tag.startsWith('v') ? tag.slice(1) : tag;
+    const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`);
+    for (const r of releases) {
+      const tag = r.tag_name;
+      if (tag.startsWith('tentacle-v')) {
+        return tag.slice('tentacle-v'.length);
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -215,7 +238,7 @@ function getPlatformAssetName(): string {
 
 async function updateViaBinary(version: string): Promise<void> {
   const assetName = getPlatformAssetName();
-  const releaseUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${version}`;
+  const releaseUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/tentacle-v${version}`;
 
   const release = await fetchJson(releaseUrl);
   const asset = release.assets?.find((a) => a.name === assetName);

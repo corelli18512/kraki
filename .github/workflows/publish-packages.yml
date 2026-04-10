@@ -34,12 +34,37 @@ jobs:
       ARTIFACT_DIR: ${{ github.workspace }}/artifacts
 
     steps:
+      - name: Check release scope
+        id: scope
+        env:
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_RELEASE_TAG}"
+          if [ "${GITHUB_EVENT_NAME}" = "release" ] && [ -n "$tag" ]; then
+            case "$tag" in
+              head-v*)
+                echo "Tag '$tag' matches head scope ✅"
+                echo "should_run=true" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "Tag '$tag' is not a head release — skipping npm publish."
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          else
+            echo "Non-release trigger (workflow_dispatch) — proceeding with all packages."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out repository
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Ensure publish source is main
+        if: steps.scope.outputs.should_run == 'true'
         run: |
           set -euo pipefail
           git fetch origin main --depth=1
@@ -53,6 +78,7 @@ jobs:
           fi
 
       - name: Ensure CI passed for this commit
+        if: steps.scope.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,11 +104,13 @@ jobs:
           exit 1
 
       - name: Set up pnpm
+        if: steps.scope.outputs.should_run == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10.29.2
 
       - name: Set up Node.js
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -91,15 +119,19 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Update npm CLI
+        if: steps.scope.outputs.should_run == 'true'
         run: npm install --global npm@latest
 
       - name: Install dependencies
+        if: steps.scope.outputs.should_run == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Validate repository
+        if: steps.scope.outputs.should_run == 'true'
         run: pnpm validate
 
       - name: Pack release tarballs
+        if: steps.scope.outputs.should_run == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$ARTIFACT_DIR"
@@ -108,7 +140,6 @@ jobs:
             "packages/protocol|@kraki/protocol"
             "packages/crypto|@kraki/crypto"
             "packages/head|@kraki/head"
-            "packages/tentacle|@kraki/tentacle"
           )
 
           for spec in "${specs[@]}"; do
@@ -122,13 +153,14 @@ jobs:
           ls -lh "$ARTIFACT_DIR"
 
       - name: Upload release tarballs
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: npm-packages-${{ github.sha }}
           path: ${{ env.ARTIFACT_DIR }}
 
       - name: Publish packages
-        if: github.event_name == 'release' || github.event.inputs.mode == 'publish'
+        if: steps.scope.outputs.should_run == 'true' && (github.event_name == 'release' || github.event.inputs.mode == 'publish')
         run: |
           set -euo pipefail
 
@@ -136,7 +168,6 @@ jobs:
             "packages/protocol|@kraki/protocol"
             "packages/crypto|@kraki/crypto"
             "packages/head|@kraki/head"
-            "packages/tentacle|@kraki/tentacle"
           )
 
           for spec in "${specs[@]}"; do
