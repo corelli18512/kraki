@@ -95,14 +95,15 @@ pub fn is_configured() -> bool {
 }
 
 /// Start the sidecar daemon on app launch, or open setup if not configured.
+/// Stops any stale daemon first to prevent orphan workers.
 pub fn start_or_setup(app: &AppHandle) -> tauri::Result<()> {
     if !crate::status::config_exists() {
         open_setup_window(app);
         return Ok(());
     }
-    let status = crate::status::read_status();
-    if !status.daemon_running {
-        let _ = tauri::async_runtime::block_on(start_daemon_inner(app));
+    // Stop any stale daemon before starting fresh
+    let _ = tauri::async_runtime::block_on(stop_daemon_inner(app));
+    let _ = tauri::async_runtime::block_on(start_daemon_inner(app));
     }
     Ok(())
 }

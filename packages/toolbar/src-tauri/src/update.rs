@@ -2,6 +2,8 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+use serde::Deserialize;
+
 use crate::tray;
 
 const GITHUB_REPO: &str = "corelli18512/kraki";
@@ -10,6 +12,18 @@ const INITIAL_DELAY_SECS: u64 = 5;
 
 /// The version string of a pending update, if any. Set by the background checker.
 pub static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
+
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    #[serde(default)]
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GitHubAsset {
+    name: String,
+}
 
 /// Fetches the latest release that contains binary assets (kraki-macos, kraki-linux, etc).
 /// Skips web-only releases that have no binary artifacts.
@@ -32,55 +46,18 @@ pub fn fetch_latest_version() -> Option<String> {
     }
 
     let body = String::from_utf8(output.stdout).ok()?;
-    // Find the first v* release that has a binary asset (e.g. "kraki-macos")
     find_latest_binary_release(&body)
 }
 
-/// Scan releases JSON for the first v* tag that has a "kraki-" asset name.
+/// Find the first v* release that has a "kraki-" binary asset.
 fn find_latest_binary_release(json: &str) -> Option<String> {
-    // Walk through release objects looking for tag_name + assets containing "kraki-"
-    let tag_key = "\"tag_name\":";
-    let assets_key = "\"assets\":";
-    let name_key = "\"name\":";
-
-    let mut pos = 0;
-    while let Some(tag_idx) = json[pos..].find(tag_key) {
-        let tag_start = pos + tag_idx + tag_key.len();
-        let rest = json[tag_start..].trim_start_matches([' ', '"']);
-        let tag = if let Some(end) = rest.find('"') {
-            &rest[..end]
-        } else {
-            pos = tag_start;
-            continue;
-        };
-
-        let version = match tag.strip_prefix('v') {
-            Some(v) => v.to_string(),
-            None => { pos = tag_start; continue; }
-        };
-
-        // Find the assets array for this release (before the next tag_name)
-        let next_tag = json[tag_start..].find(tag_key).map(|i| tag_start + i).unwrap_or(json.len());
-        let assets_region = &json[tag_start..next_tag];
-
-        if let Some(assets_idx) = assets_region.find(assets_key) {
-            let assets_str = &assets_region[assets_idx..];
-            // Check if any asset name contains "kraki-" (binary artifacts)
-            let mut apos = 0;
-            while let Some(name_idx) = assets_str[apos..].find(name_key) {
-                let nstart = apos + name_idx + name_key.len();
-                let nrest = assets_str[nstart..].trim_start_matches([' ', '"']);
-                if let Some(nend) = nrest.find('"') {
-                    let asset_name = &nrest[..nend];
-                    if asset_name.starts_with("kraki-") {
-                        return Some(version);
-                    }
-                }
-                apos = nstart;
-            }
+    let releases: Vec<GitHubRelease> = serde_json::from_str(json).ok()?;
+    for release in &releases {
+        let version = release.tag_name.strip_prefix('v')?;
+        let has_binary = release.assets.iter().any(|a| a.name.starts_with("kraki-"));
+        if has_binary {
+            return Some(version.to_string());
         }
-
-        pos = tag_start;
     }
     None
 }
