@@ -27,9 +27,13 @@ final class CommandSender {
     /// Send an encrypted message through the WebSocket.
     /// The actual encryption + routing is handled by AppState/networking layer.
     private func send(_ payload: [String: Any], sessionId: String? = nil) {
+        guard let appState else { return }
         var msg = payload
         if let sessionId { msg["sessionId"] = sessionId }
-        appState?.sendEncryptedMessage(msg)
+        msg["deviceId"] = appState.deviceId ?? ""
+        msg["seq"] = 0
+        msg["timestamp"] = ISO8601DateFormatter().string(from: Date())
+        appState.sendEncryptedMessage(msg)
     }
 
     // MARK: - Input
