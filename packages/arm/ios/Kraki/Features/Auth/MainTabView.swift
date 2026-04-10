@@ -11,6 +11,10 @@ struct MainTabView: View {
         TabView {
             NavigationStack {
                 SessionListView()
+                    .navigationDestination(for: String.self) { sessionId in
+                        SessionDetailView(sessionId: sessionId)
+                            .environment(appState)
+                    }
             }
             .tabItem {
                 Label {
