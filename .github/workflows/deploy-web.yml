@@ -143,3 +143,24 @@ jobs:
 
       - name: Verify live site
         run: curl --fail --silent --show-error "$WEBAPP_PUBLIC_URL" > /dev/null
+
+  status:
+    name: Deploy Web Status
+    needs: [detect-version-bump, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report outcome
+        run: |
+          if [ "${{ needs.deploy.result }}" = "success" ]; then
+            echo "✅ Deployed web v${{ needs.detect-version-bump.outputs.current_version }}"
+          elif [ "${{ needs.detect-version-bump.outputs.should_deploy }}" != "true" ]; then
+            echo "⏭️ Skipped — no web version bump (v${{ needs.detect-version-bump.outputs.current_version }})"
+            exit 1
+          elif [ "${{ needs.detect-version-bump.result }}" = "skipped" ]; then
+            echo "⏭️ Skipped — CI did not succeed"
+            exit 1
+          else
+            echo "❌ Deploy failed"
+            exit 1
+          fi
