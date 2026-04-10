@@ -37,6 +37,7 @@ jobs:
       publish_mode: ${{ steps.meta.outputs.publish_mode }}
       release_sha: ${{ steps.meta.outputs.release_sha }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
+      version_match: ${{ steps.version-check.outputs.match }}
 
     steps:
       - name: Check out repository
@@ -95,6 +96,27 @@ jobs:
             exit 1
           }
 
+      - name: Verify tag matches tentacle version
+        id: version-check
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.release_tag }}"
+          if [ -z "$tag" ]; then
+            echo "No release tag (dry-run) — skipping version check."
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tentacle_version="$(node -p "require('./packages/tentacle/package.json').version")"
+          # Strip leading 'v' from tag for comparison
+          tag_version="${tag#v}"
+          if [ "$tag_version" != "$tentacle_version" ]; then
+            echo "Tag ${tag} (${tag_version}) does not match tentacle version ${tentacle_version}. Skipping binary release."
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag matches tentacle version: ${tentacle_version} ✅"
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Ensure CI passed for this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,6 +151,7 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: prepare
+    if: needs.prepare.outputs.version_match == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -191,6 +214,7 @@ jobs:
     needs:
       - prepare
       - build
+    if: needs.prepare.outputs.version_match == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
