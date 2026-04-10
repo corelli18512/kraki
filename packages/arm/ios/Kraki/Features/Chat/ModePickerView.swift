@@ -44,9 +44,9 @@ struct ModePickerView: View {
                 .foregroundColor(modeTextColorDark(currentMode))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(modePillColor(currentMode), in: Capsule())
         }
-        .buttonStyle(.plain)
+        .if_available_glass()
+        .tint(modePillColor(currentMode))
     }
 
     // MARK: - Expanded
@@ -63,7 +63,7 @@ struct ModePickerView: View {
                         .background {
                             if mode == currentMode {
                                 Capsule()
-                                    .fill(modePillColor(mode))
+                                    .fill(.ultraThinMaterial)
                                     .matchedGeometryEffect(id: "modePill", in: modeNamespace)
                             }
                         }
@@ -73,7 +73,7 @@ struct ModePickerView: View {
             }
         }
         .padding(2)
-        .background(Color.surfaceSecondary, in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     // MARK: - Actions
