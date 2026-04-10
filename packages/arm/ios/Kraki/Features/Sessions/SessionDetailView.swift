@@ -92,9 +92,8 @@ struct SessionDetailView: View {
         let displayTitle = session.displayTitle
 
         return HStack(spacing: 8) {
-            // Avatar
             ZStack {
-                AgentAvatar(agent: session.agent, size: .sm)
+                AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm)
 
                 if isReconnecting {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)

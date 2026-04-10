@@ -114,6 +114,8 @@ enum LucideIconType {
     case monitorCloud
     case userCog
     case circleSlash
+    case shieldQuestion
+    case messageCircleQuestion
 
     var elements: [SVGElement] {
         switch self {
@@ -281,6 +283,18 @@ enum LucideIconType {
             return [
                 .circle(cx: 12, cy: 12, r: 10),
                 .path("M9 15L15 9"),
+            ]
+        case .shieldQuestion:
+            return [
+                .path("M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"),
+                .path("M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"),
+                .path("M12 17h.01"),
+            ]
+        case .messageCircleQuestion:
+            return [
+                .path("M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"),
+                .path("M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"),
+                .path("M12 17h.01"),
             ]
         }
     }
