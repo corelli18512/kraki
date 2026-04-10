@@ -99,9 +99,9 @@ struct SessionListView: View {
                     showNewSession = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.krakiPrimary)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 22, height: 22)
                 }
                 .clipShape(Circle())
                 .if_available_glass()
@@ -151,13 +151,14 @@ struct SessionListView: View {
     }
 
     private func sessionRow(_ session: SessionInfo) -> some View {
-        NavigationLink(value: session.id) {
-            SessionCardView(session: session)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
+        VStack(spacing: 0) {
+            NavigationLink(value: session.id) {
+                SessionCardView(session: session)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
             Button {
                 appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
             } label: {
@@ -188,6 +189,10 @@ struct SessionListView: View {
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+        }
+
+            Divider()
+                .padding(.leading, 72)
         }
     }
 
