@@ -73,7 +73,7 @@ struct SessionListView: View {
             Image("KrakiLogo")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 22, height: 22)
+                .frame(width: 28, height: 28)
 
             HStack(spacing: 0.5) {
                 Text("K").foregroundColor(Color(hex: 0x00c9a7))
@@ -82,8 +82,8 @@ struct SessionListView: View {
                 Text("K").foregroundColor(Color(hex: 0xea6046))
                 Text("I").foregroundColor(Color(hex: 0x0891b2))
             }
-            .font(.system(size: 15, weight: .heavy, design: .monospaced))
-            .tracking(2)
+            .font(.system(size: 18, weight: .heavy, design: .monospaced))
+            .tracking(2.5)
 
             Text("Preview")
                 .font(.system(size: 10, weight: .semibold))
