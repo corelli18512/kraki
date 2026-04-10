@@ -131,6 +131,7 @@ struct SessionListView: View {
                 }
             }
         }
+        .contentMargins(.top, 0)
         .background(Color.surfacePrimary)
     }
 
