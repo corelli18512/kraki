@@ -289,6 +289,11 @@ jobs:
           if [[ "${{ matrix.runner }}" == "macos-latest" ]]; then
             cp binary-staging/kraki-macos-arm64 packages/toolbar/src-tauri/sidecar/kraki-aarch64-apple-darwin
             cp binary-staging/kraki-macos-x64   packages/toolbar/src-tauri/sidecar/kraki-x86_64-apple-darwin
+            # Create universal binary for --target universal-apple-darwin
+            lipo -create \
+              binary-staging/kraki-macos-arm64 \
+              binary-staging/kraki-macos-x64 \
+              -output packages/toolbar/src-tauri/sidecar/kraki-universal-apple-darwin
             chmod +x packages/toolbar/src-tauri/sidecar/kraki-*
           else
             cp binary-staging/kraki-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
