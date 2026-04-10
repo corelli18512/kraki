@@ -155,9 +155,8 @@ export function processAuthError(
 /** Apply user preferences to local state. Called on auth_ok and preferences_updated. */
 export function applyPreferences(prefs: Record<string, unknown> | undefined): void {
   if (!prefs) return;
-  if (typeof prefs.debugLogging === 'boolean') {
-    setDebugLogging(prefs.debugLogging);
-  }
+  // Internal users get debug logging automatically
+  setDebugLogging(prefs.internal === true);
   if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
     setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
