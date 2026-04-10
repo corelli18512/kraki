@@ -392,26 +392,56 @@ final class MessageRouter {
     private func handleSessionList(_ dict: [String: Any]) {
         guard let appState else { return }
 
-        // sessions may be at dict["payload"]["sessions"] or dict["sessions"]
         let payload = dict["payload"] as? [String: Any]
         guard let sessions = (payload?["sessions"] ?? dict["sessions"]) as? [[String: Any]] else {
             KLog.d("⚠️ session_list: no sessions array found")
             return
         }
 
-        let deviceId = dict["deviceId"] as? String ?? ""
-        let device = appState.deviceStore.device(for: deviceId)
-        let deviceName = device?.name ?? deviceId
+        let tentacleDeviceId = dict["deviceId"] as? String ?? ""
+        let device = appState.deviceStore.device(for: tentacleDeviceId)
+        let deviceName = device?.name ?? tentacleDeviceId
 
         let parsed = sessions.compactMap { SessionDigest(json: $0) }
         KLog.d("📋 session_list: \(parsed.count) sessions from \(deviceName)")
 
-        for digest in parsed {
-            appState.sessionStore.upsertSession(digest, deviceId: deviceId, deviceName: deviceName)
+        // Remove sessions from this tentacle that are no longer in the list
+        let tentacleIds = Set(parsed.map(\.id))
+        for (sid, session) in appState.sessionStore.sessions {
+            if session.deviceId == tentacleDeviceId && !tentacleIds.contains(sid) {
+                appState.sessionStore.removeSession(sid)
+            }
         }
 
         for digest in parsed {
-            appState.messageProvider?.requestLatest(sessionId: digest.id)
+            appState.sessionStore.upsertSession(digest, deviceId: tentacleDeviceId, deviceName: deviceName)
+
+            // Sync mode
+            appState.sessionStore.setMode(digest.id, digest.mode)
+
+            // Sync usage
+            if let usage = digest.usage {
+                appState.sessionStore.setUsage(digest.id, usage)
+            }
+
+            // Sync pin
+            appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
+
+            // Reconstruct unread from readSeq vs lastSeq
+            if digest.lastSeq > digest.readSeq {
+                if appState.sessionStore.unreadCounts[digest.id] == nil {
+                    appState.sessionStore.unreadCounts[digest.id] = digest.lastSeq - digest.readSeq
+                }
+            } else {
+                appState.sessionStore.clearUnread(digest.id)
+            }
+
+            // Store tentacle info + fetch latest 50 messages
+            appState.messageProvider?.setTentacleInfo(sessionId: digest.id, lastSeq: digest.lastSeq, deviceId: tentacleDeviceId)
+            let fromSeq = max(1, digest.lastSeq - 49)
+            if fromSeq <= digest.lastSeq && digest.lastSeq > 0 {
+                appState.messageProvider?.requestLatest(sessionId: digest.id)
+            }
         }
     }
 

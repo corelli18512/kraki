@@ -120,12 +120,90 @@ final class AppState {
     }
 
     /// Send an encrypted message through the WebSocket.
-    /// Called by CommandSender — encryption and routing handled here.
+    /// Encrypts as a unicast to the target tentacle (looked up by sessionId),
+    /// or broadcasts to all tentacles if no sessionId.
     func sendEncryptedMessage(_ message: [String: Any]) {
-        // TODO: Encrypt via CryptoManager and send via wsClient
-        guard let data = try? JSONSerialization.data(withJSONObject: message),
-              let string = String(data: data, encoding: .utf8) else { return }
-        wsClient?.sendRaw(string)
+        guard let deviceId else {
+            KLog.d("⚠️ sendEncrypted: no deviceId")
+            return
+        }
+
+        // Serialize the inner message to JSON string
+        guard let innerData = try? JSONSerialization.data(withJSONObject: message),
+              let innerString = String(data: innerData, encoding: .utf8) else {
+            KLog.d("⚠️ sendEncrypted: failed to serialize message")
+            return
+        }
+
+        // Determine target tentacle device
+        let sessionId = message["sessionId"] as? String
+        let targetDeviceId: String?
+        if let sessionId, let session = sessionStore.sessions[sessionId] {
+            targetDeviceId = session.deviceId
+        } else {
+            targetDeviceId = nil
+        }
+
+        // Collect recipient encryption keys
+        var recipients: [RecipientKey] = []
+        let crypto = CryptoManager()
+
+        if let targetDeviceId, let device = deviceStore.devices[targetDeviceId],
+           let encKeyB64 = device.encryptionKey ?? device.publicKey {
+            do {
+                let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
+                recipients.append(RecipientKey(deviceId: targetDeviceId, publicKey: pubKey))
+            } catch {
+                KLog.d("❌ sendEncrypted: can't import key for \(targetDeviceId.prefix(12)): \(error)")
+            }
+        } else {
+            // Broadcast to all tentacle devices
+            for device in deviceStore.devices.values where device.role == .tentacle {
+                guard let encKeyB64 = device.encryptionKey ?? device.publicKey else { continue }
+                do {
+                    let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
+                    recipients.append(RecipientKey(deviceId: device.id, publicKey: pubKey))
+                } catch {
+                    KLog.d("⚠️ sendEncrypted: can't import key for \(device.id.prefix(12))")
+                }
+            }
+        }
+
+        guard !recipients.isEmpty else {
+            KLog.d("⚠️ sendEncrypted: no recipients found")
+            return
+        }
+
+        do {
+            let blob = try crypto.encryptToBlob(innerString, recipients: recipients)
+
+            if let targetDeviceId {
+                // Unicast
+                let envelope: [String: Any] = [
+                    "type": "unicast",
+                    "to": targetDeviceId,
+                    "blob": blob.blob,
+                    "keys": blob.keys,
+                ]
+                guard let envData = try? JSONSerialization.data(withJSONObject: envelope),
+                      let envString = String(data: envData, encoding: .utf8) else { return }
+                KLog.d("📤🔒 unicast → \(targetDeviceId.prefix(12))...")
+                wsClient?.sendRaw(envString)
+            } else {
+                // Broadcast
+                let envelope: [String: Any] = [
+                    "type": "broadcast",
+                    "blob": blob.blob,
+                    "keys": blob.keys,
+                ]
+                guard let envData = try? JSONSerialization.data(withJSONObject: envelope),
+                      let envString = String(data: envData, encoding: .utf8) else { return }
+                KLog.d("📤🔒 broadcast to \(recipients.count) devices")
+                wsClient?.sendRaw(envString)
+            }
+        } catch {
+            KLog.d("❌ sendEncrypted: encryption failed: \(error)")
+        }
     }
 }
 
