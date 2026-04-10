@@ -49,22 +49,27 @@ final class MessageProvider {
 
     /// Load latest messages for a session. Called for every session after session_list arrives.
     func requestLatest(sessionId: String) {
-        guard !isLoading(sessionId) else { return }
-        guard let totalLastSeq = tentacleLastSeq[sessionId], totalLastSeq > 0 else { return }
+        guard !isLoading(sessionId) else {
+            KLog.d("⏳ requestLatest(\(sessionId.prefix(12))): already loading")
+            return
+        }
+        guard let totalLastSeq = tentacleLastSeq[sessionId], totalLastSeq > 0 else {
+            KLog.d("⏭️ requestLatest(\(sessionId.prefix(12))): no tentacleLastSeq (keys: \(tentacleLastSeq.keys.map { String($0.prefix(12)) }))")
+            return
+        }
         guard let appState else { return }
 
-        // Check in-memory store first
         let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+        KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq)")
 
         if storeLastSeq > 0 {
-            // Already have some messages — rebuild preview from what we have
             rebuildPreview(sessionId: sessionId)
         }
 
-        // If tentacle has newer messages, request the gap
         if storeLastSeq < totalLastSeq {
             let afterSeq = max(storeLastSeq, totalLastSeq - Self.latestSize)
             if afterSeq < totalLastSeq {
+                KLog.d("📨 Requesting replay afterSeq=\(afterSeq) for \(sessionId.prefix(12))")
                 requestFromTentacle(sessionId: sessionId, afterSeq: afterSeq)
             }
         }
@@ -122,8 +127,11 @@ final class MessageProvider {
     ) {
         guard let appState else { return }
 
+        KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq)")
+
         if !messages.isEmpty {
             appState.messageStore.prependMessages(sessionId, messages)
+            KLog.d("📦 Store now has \(appState.messageStore.getMessages(sessionId).count) msgs for \(sessionId.prefix(12))")
             processReplayedActions(sessionId: sessionId, messages: messages)
             rebuildPreview(sessionId: sessionId)
         }
