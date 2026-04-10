@@ -2,15 +2,14 @@
 import SwiftUI
 
 /// Root tab bar — mirrors the web Sidebar's mobile navigation tabs.
-///
-/// Three tabs: Agents (sessions), Devices, and Settings.
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
+    @State private var sessionPath = NavigationPath()
 
     var body: some View {
         TabView {
-            NavigationStack {
-                SessionListView()
+            NavigationStack(path: $sessionPath) {
+                SessionListView(navigationPath: $sessionPath)
                     .navigationDestination(for: String.self) { sessionId in
                         SessionDetailView(sessionId: sessionId)
                             .environment(appState)
