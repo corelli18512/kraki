@@ -388,7 +388,7 @@ jobs:
 
       - name: Attest build provenance
         if: needs.prepare.outputs.publish_mode == 'publish'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'release-assets/*'
 
