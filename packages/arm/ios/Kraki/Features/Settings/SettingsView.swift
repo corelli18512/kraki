@@ -16,23 +16,19 @@ struct SettingsView: View {
             themeSection
             relaySection
         }
+        .formStyle(.grouped)
+        .contentMargins(.top, 0)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
-        .safeAreaInset(edge: .bottom) {
-            Text("Kraki \(appVersion)")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
-        }
+        .environment(\.defaultMinListHeaderHeight, 0)
     }
 
     // MARK: - Account
 
     private var accountSection: some View {
-        Section("Account") {
+        Section {
             if let user = appState.user {
                 HStack(spacing: 12) {
                     ZStack {
@@ -85,7 +81,7 @@ struct SettingsView: View {
     // MARK: - Relay
 
     private var relaySection: some View {
-        Section("Relay") {
+        Section {
             LabeledContent("URL") {
                 Text(appState.relayURL)
                     .font(.caption)
@@ -99,6 +95,12 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        } header: {
+            Text("Relay")
+        } footer: {
+            Text("Kraki for iOS \(appVersion)")
+                .frame(maxWidth: .infinity)
+                .padding(.top, 12)
         }
     }
 
