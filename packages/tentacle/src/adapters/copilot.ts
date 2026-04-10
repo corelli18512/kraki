@@ -253,6 +253,15 @@ export class CopilotAdapter extends AgentAdapter {
   private pendingModeSignals = new Map<string, string>();
   /** Per-session cumulative token usage */
   private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
+  /** Fallback idle timers — fire onIdle if SDK doesn't emit session.idle after turn_end */
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Grace period (ms) after assistant.turn_end before firing a fallback idle.
+   * The Copilot CLI has a known bug where session.idle is sometimes not emitted
+   * after abort-during-tool-execution (github/copilot-sdk#794, #558, #1057).
+   * Measured P99 turn_end→turn_start gap is <5ms; 500ms is a safe margin.
+   */
+  private static readonly IDLE_FALLBACK_MS = 500;
 
   constructor(options: { cliPath?: string } = {}) {
     super();
@@ -326,6 +335,8 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async stop(): Promise<void> {
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
     if (this.client) {
       await this.client.stop();
       this.client = null;
@@ -678,6 +689,15 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
+    this.clearIdleTimer(sessionId);
+  }
+
+  private clearIdleTimer(sessionId: string): void {
+    const timer = this.idleTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.idleTimers.delete(sessionId);
+    }
   }
 
   /** Resolve all pending permissions/questions and fire callbacks so relay-client broadcasts resolutions. */
@@ -811,7 +831,12 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.idle', () => {
+      this.clearIdleTimer(sessionId);
       this.onIdle?.(sessionId);
+    });
+
+    session.on('assistant.turn_start', () => {
+      this.clearIdleTimer(sessionId);
     });
 
     session.on('session.info', (event) => {
@@ -838,6 +863,15 @@ export class CopilotAdapter extends AgentAdapter {
           message: (data?.error as string) ?? 'Unknown agent error',
         });
       }
+      // Fallback: schedule idle in case the SDK doesn't emit session.idle
+      // (known CLI bug — github/copilot-sdk#794). Cancelled if turn_start
+      // or session.idle arrives first.
+      this.clearIdleTimer(sessionId);
+      this.idleTimers.set(sessionId, setTimeout(() => {
+        this.idleTimers.delete(sessionId);
+        logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
+        this.onIdle?.(sessionId);
+      }, CopilotAdapter.IDLE_FALLBACK_MS));
     });
 
     session.on('session.title_changed', (event) => {
