@@ -41,14 +41,17 @@ export function sendInput(
   attachments?: import('@kraki/protocol').Attachment[],
 ): void {
   const store = getStore();
+  const timestamp = new Date().toISOString();
   store.appendMessage(sessionId, {
     type: 'pending_input',
     id: `pending-${Date.now()}`,
     sessionId,
     text,
-    timestamp: new Date().toISOString(),
+    timestamp,
     attachments,
   });
+  // Update preview optimistically so session card reflects the sent message immediately
+  store.setSessionPreview(sessionId, { text: text.slice(0, 80), type: 'user', timestamp });
   send({
     type: 'send_input',
     sessionId,
