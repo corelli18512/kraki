@@ -187,17 +187,21 @@ final class EncryptionHandler {
     ///   (if present).
     func decryptInbound(_ envelope: Data) throws -> (message: Data, sessionId: String?) {
         guard let appState, let deviceId = appState.deviceId else {
+            KLog.d("❌ decrypt: not ready (deviceId: \(appState?.deviceId ?? "nil"))")
             throw EncryptionError.notReady
         }
 
         guard let json = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
               let blob = json["blob"] as? String,
               let keys = json["keys"] as? [String: String] else {
+            KLog.d("❌ decrypt: invalid envelope structure")
             throw EncryptionError.invalidEnvelope
         }
 
-        // Check that we are an intended recipient
+        KLog.d("🔐 Envelope keys: [\(keys.keys.map { String($0.prefix(12)) }.joined(separator: ", "))] — our deviceId: \(deviceId.prefix(12))...")
+
         guard keys[deviceId] != nil else {
+            KLog.d("📭 Not addressed to us")
             throw EncryptionError.notAddressedToUs
         }
 
@@ -208,6 +212,8 @@ final class EncryptionHandler {
             deviceId: deviceId,
             privateKey: encryptionKey.privateKey
         )
+
+        KLog.d("🔓 Decrypted: \(String(plaintext.prefix(100)))")
 
         guard let messageData = plaintext.data(using: .utf8) else {
             throw EncryptionError.decodingFailed
@@ -229,6 +235,7 @@ final class EncryptionHandler {
     /// Decrypt all queued envelopes and deliver them via `onDecrypted`.
     /// Called by `MessageRouter.drainQueue()` after auth succeeds.
     func drainQueue() {
+        KLog.d("🔄 Drain queue: \(encryptedQueue.count) items, ready: \(isReady)")
         guard isReady, !encryptedQueue.isEmpty else { return }
 
         let queued = encryptedQueue
@@ -239,7 +246,7 @@ final class EncryptionHandler {
                 let result = try decryptInbound(envelope)
                 onDecrypted?(result.message)
             } catch {
-                // Queued message could not be decrypted — discard it.
+                KLog.d("❌ Queued decrypt failed: \(error)")
             }
         }
     }

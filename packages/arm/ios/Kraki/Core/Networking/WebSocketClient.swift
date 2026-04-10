@@ -74,10 +74,12 @@ final class WebSocketClient: NSObject {
         intentionalClose = false
 
         guard let url = URL(string: relayURL) else {
+            KLog.d("❌ Invalid relay URL: \(relayURL)")
             state = .disconnected
             return
         }
 
+        KLog.d("🔌 Connecting to \(relayURL)...")
         state = .connecting
 
         let configuration = URLSessionConfiguration.default
@@ -116,7 +118,11 @@ final class WebSocketClient: NSObject {
 
     /// Send a raw JSON string without the auth gate (used for the auth handshake).
     func sendRaw(_ string: String) {
-        guard state == .connected else { return }
+        guard state == .connected else {
+            KLog.d("⚠️ sendRaw blocked — not connected")
+            return
+        }
+        KLog.d("📤 \(String(string.prefix(120)))")
         writeString(string)
     }
 
@@ -217,6 +223,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
+        KLog.d("✅ WebSocket opened")
         reconnectDelay = Self.reconnectBase
         reconnectAttempts = 0
         state = .connected
