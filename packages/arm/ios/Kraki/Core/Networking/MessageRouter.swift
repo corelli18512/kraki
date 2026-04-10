@@ -65,7 +65,12 @@ final class MessageRouter {
     /// Called by `WebSocketClient.onMessage` with the raw text-frame data.
     func handleRawMessage(_ data: Data) {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String else { return }
+              let type = json["type"] as? String else {
+            KLog.d("⚠️ Failed to parse incoming message")
+            return
+        }
+
+        KLog.d("📥 \(type)")
 
         switch type {
         // ── Auth ──────────────────────────────────────────────────────────
@@ -121,16 +126,18 @@ final class MessageRouter {
 
     private func handleEncryptedEnvelope(_ data: Data) {
         guard encryptionHandler.isReady else {
+            KLog.d("🔒 Encryption not ready — queuing envelope (deviceId: \(appState?.deviceId ?? "nil"), hasKeys: \(KeychainManager().hasKeys()))")
             encryptionHandler.enqueue(data)
             return
         }
         do {
             let result = try encryptionHandler.decryptInbound(data)
+            KLog.d("🔓 Decrypted → routing inner message")
             handleDataMessage(result.message)
         } catch EncryptionError.notAddressedToUs {
-            // Not for us — silently ignore.
+            KLog.d("📭 Envelope not addressed to us — skipping")
         } catch {
-            // Decryption failed.
+            KLog.d("❌ Decryption failed: \(error)")
         }
     }
 
@@ -140,7 +147,12 @@ final class MessageRouter {
     func handleDataMessage(_ json: Data) {
         guard let appState,
               let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let type = dict["type"] as? String else { return }
+              let type = dict["type"] as? String else {
+            KLog.d("⚠️ Failed to parse decrypted inner message")
+            return
+        }
+
+        KLog.d("📨 Inner message: \(type)")
 
         // ── Messages without a sessionId ─────────────────────────────────
 

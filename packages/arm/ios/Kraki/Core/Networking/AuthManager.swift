@@ -72,7 +72,6 @@ final class AuthManager {
     /// 2. Stored device ID (returning user — challenge-response)
     /// 3. Open auth (new user, no credentials)
     func authenticate() {
-        // Obtain public keys for the device descriptor
         var signingPublicKey: String?
         var encryptionPublicKey: String?
 
@@ -81,7 +80,9 @@ final class AuthManager {
             signingPublicKey = try crypto.exportPublicKeySPKI(signing.publicKey)
             let encryption = try keychain.getOrCreateEncryptionKey()
             encryptionPublicKey = try crypto.exportPublicKeySPKI(encryption.publicKey)
+            KLog.d("🔑 Keys ready — signing: \(signingPublicKey?.prefix(20) ?? "nil")... encryption: \(encryptionPublicKey?.prefix(20) ?? "nil")...")
         } catch {
+            KLog.d("⚠️ Key generation failed: \(error)")
             signingPublicKey = nil
             encryptionPublicKey = nil
         }
@@ -99,7 +100,7 @@ final class AuthManager {
         var message: [String: Any]
 
         if let token = pairingToken {
-            // Pairing — consume the token
+            KLog.d("🎫 Auth method: pairing")
             message = [
                 "type": "auth",
                 "auth": ["method": "pairing", "token": token],
@@ -107,14 +108,14 @@ final class AuthManager {
             ]
             pairingToken = nil
         } else if let deviceId = storedDeviceId {
-            // Challenge-response for a previously paired device
+            KLog.d("🔐 Auth method: challenge (deviceId: \(deviceId.prefix(12))...)")
             message = [
                 "type": "auth",
                 "auth": ["method": "challenge", "deviceId": deviceId],
                 "device": cleanDevice,
             ]
         } else {
-            // Open auth — server decides whether to allow unauthenticated access
+            KLog.d("🔓 Auth method: open")
             message = [
                 "type": "auth",
                 "auth": ["method": "open"],
@@ -149,6 +150,7 @@ final class AuthManager {
         guard let appState else { return }
 
         let deviceId = message["deviceId"] as? String ?? ""
+        KLog.d("✅ auth_ok — deviceId: \(deviceId.prefix(12))...")
 
         // Parse user info
         var user: UserInfo?
@@ -160,6 +162,7 @@ final class AuthManager {
                 login: login,
                 provider: userDict["provider"] as? String
             )
+            KLog.d("👤 User: \(login)")
         }
 
         // Parse device list
@@ -167,6 +170,7 @@ final class AuthManager {
         if let deviceArray = message["devices"] as? [[String: Any]] {
             devices = deviceArray.compactMap { DeviceSummary(json: $0) }
         }
+        KLog.d("📱 Devices: \(devices.count) (\(devices.map { "\($0.name)[\($0.role.rawValue)]" }.joined(separator: ", ")))")
 
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
