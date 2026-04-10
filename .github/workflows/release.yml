@@ -161,10 +161,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.29.2
+      - name: Enable corepack
+        run: corepack enable
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -262,10 +260,8 @@ jobs:
         with:
           workspaces: packages/toolbar/src-tauri
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.29.2
+      - name: Enable corepack
+        run: corepack enable
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

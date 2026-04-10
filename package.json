@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Kraki monorepo workspace",
+  "packageManager": "pnpm@10.29.2",
   "scripts": {
     "kraki": "pnpm exec tsx packages/tentacle/src/cli.ts",
     "dev:tentacle": "KRAKI_HOME=.tmp/kraki-local KRAKI_APP_URL=http://localhost:3000 KRAKI_RELAY_URL=ws://localhost:4000 pnpm exec tsx packages/tentacle/src/cli.ts",
