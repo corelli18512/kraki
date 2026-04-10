@@ -12,14 +12,21 @@ struct SettingsView: View {
     var body: some View {
         Form {
             accountSection
-            appSection
             notificationsSection
             themeSection
+            relaySection
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
+        .safeAreaInset(edge: .bottom) {
+            Text("Kraki \(appVersion)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
+        }
     }
 
     // MARK: - Account
@@ -47,34 +54,9 @@ struct SettingsView: View {
                         }
                     }
                 }
-
-                LabeledContent("Relay URL") {
-                    Text(appState.relayURL)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
             } else {
                 Text("Not signed in")
                     .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: - App
-
-    private var appSection: some View {
-        Section("App") {
-            LabeledContent("App Version") {
-                Text(appVersion)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let relayVersion = appState.relayVersion {
-                LabeledContent("Relay Version") {
-                    Text(relayVersion)
-                        .foregroundStyle(.secondary)
-                }
             }
         }
     }
@@ -97,6 +79,26 @@ struct SettingsView: View {
                 Text("Dark").tag(AppColorScheme.dark)
             }
             .pickerStyle(.segmented)
+        }
+    }
+
+    // MARK: - Relay
+
+    private var relaySection: some View {
+        Section("Relay") {
+            LabeledContent("URL") {
+                Text(appState.relayURL)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if let relayVersion = appState.relayVersion {
+                LabeledContent("Version") {
+                    Text(relayVersion)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
