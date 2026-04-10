@@ -39,6 +39,7 @@ struct SessionDetailView: View {
     }
 
     var body: some View {
+        let _ = KLog.d("🖥️ SessionDetailView: sessionId=\(sessionId.prefix(12)), session=\(session != nil ? "found" : "nil")")
         Group {
             if let session {
                 sessionContent(session)
@@ -67,6 +68,7 @@ struct SessionDetailView: View {
     private func sessionContent(_ session: SessionInfo) -> some View {
         ChatView(sessionId: sessionId)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarVisibility(.hidden, for: .tabBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     toolbarTitle(session)
