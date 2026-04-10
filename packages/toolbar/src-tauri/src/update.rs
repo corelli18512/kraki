@@ -53,7 +53,9 @@ pub fn fetch_latest_version() -> Option<String> {
 fn find_latest_binary_release(json: &str) -> Option<String> {
     let releases: Vec<GitHubRelease> = serde_json::from_str(json).ok()?;
     for release in &releases {
-        let version = release.tag_name.strip_prefix('v')?;
+        let Some(version) = release.tag_name.strip_prefix('v') else {
+            continue;
+        };
         let has_binary = release.assets.iter().any(|a| a.name.starts_with("kraki-"));
         if has_binary {
             return Some(version.to_string());

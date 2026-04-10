@@ -104,7 +104,6 @@ pub fn start_or_setup(app: &AppHandle) -> tauri::Result<()> {
     // Stop any stale daemon before starting fresh
     let _ = tauri::async_runtime::block_on(stop_daemon_inner(app));
     let _ = tauri::async_runtime::block_on(start_daemon_inner(app));
-    }
     Ok(())
 }
 
