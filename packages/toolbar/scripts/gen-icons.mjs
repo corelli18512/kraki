@@ -1,19 +1,17 @@
 /**
- * gen-icons.mjs — generate tray icon PNGs from the kraki silhouette SVG.
+ * gen-icons.mjs — generate tray icon PNGs.
  *
- * Produces:
- *   src-tauri/icons/tray-connected.png     (22x22 — macOS template, kraki logo)
- *   src-tauri/icons/tray-connecting.png    (22x22 — macOS template, kraki logo)
- *   src-tauri/icons/tray-disconnected.png  (22x22 — macOS template, kraki logo)
- *   src-tauri/icons/32x32.png              (app icon placeholder)
- *   src-tauri/icons/128x128.png
- *   src-tauri/icons/128x128@2x.png
+ * macOS: monochrome silhouette (template image, OS auto-tints for light/dark)
+ *   tray-connected.png, tray-connecting.png, tray-disconnected.png
  *
- * The tray icon uses the kraki octopus silhouette (potrace + manual eyes).
- * All three states use the same icon — macOS renders it as a template image.
+ * Windows: colored logo with status dot badge
+ *   tray-connected-color.png  (green dot)
+ *   tray-connecting-color.png (yellow dot)
+ *   tray-disconnected-color.png (red dot)
  *
- * Requires: @resvg/resvg-js (installed as dev dep, or falls back to sharp if available)
- * If neither is available, writes minimal 1x1 placeholder PNGs so the build doesn't fail.
+ * App icons: 32x32, 128x128, 128x128@2x
+ *
+ * Requires: @resvg/resvg-js
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -24,13 +22,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const iconsDir = join(__dirname, '../src-tauri/icons');
 mkdirSync(iconsDir, { recursive: true });
 
-// Load the kraki silhouette SVG (potrace-traced logo with manually added eyes)
+// ── macOS: monochrome silhouette ────────────────────────
 const trayIconSvg = readFileSync(join(__dirname, 'kraki-silhouette.svg'), 'utf8');
-// Disconnected variant: wrap in a group with reduced opacity
 const trayIconDisconnectedSvg = trayIconSvg.replace(
   '<g transform=',
   '<g opacity="0.25"><g transform=',
 ).replace('</svg>', '</g></svg>');
+
+// ── Windows: colored logo with status dot ───────────────
+const logoPng = readFileSync(join(__dirname, '../../..', 'logo.png'));
+const logoBase64 = logoPng.toString('base64');
+
+function windowsTrayIconSvg(dotColor) {
+  const size = 32;
+  const dotR = 5;
+  const dotCx = size - dotR - 1;
+  const dotCy = size - dotR - 1;
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <image href="data:image/png;base64,${logoBase64}" x="0" y="0" width="${size}" height="${size}"/>
+    <circle cx="${dotCx}" cy="${dotCy}" r="${dotR}" fill="${dotColor}" stroke="white" stroke-width="1.5"/>
+  </svg>`;
+}
 
 const appIconSvg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <rect width="${size}" height="${size}" rx="${size * 0.22}" fill="#ea6046"/>
@@ -64,17 +76,28 @@ async function svgToPng(svg, width, height) {
 async function main() {
   console.log('Generating icons…');
 
-  // Tray icons — connected/connecting use full opacity, disconnected is dimmed
-  const trayVariants = {
+  // macOS tray icons (monochrome template)
+  const macTray = {
     'tray-connected': trayIconSvg,
     'tray-connecting': trayIconSvg,
     'tray-disconnected': trayIconDisconnectedSvg,
   };
-  for (const [name, svg] of Object.entries(trayVariants)) {
-    const png = await svgToPng(svg, 44, 44); // 44px for @2x Retina
-    const out = join(iconsDir, `${name}.png`);
-    writeFileSync(out, png);
-    console.log(`  ✓ ${name}.png`);
+  for (const [name, svg] of Object.entries(macTray)) {
+    const png = await svgToPng(svg, 44, 44);
+    writeFileSync(join(iconsDir, `${name}.png`), png);
+    console.log(`  ✓ ${name}.png (macOS)`);
+  }
+
+  // Windows tray icons (colored logo + status dot)
+  const winTray = {
+    'tray-connected-color': windowsTrayIconSvg('#22c55e'),     // green
+    'tray-connecting-color': windowsTrayIconSvg('#eab308'),    // yellow
+    'tray-disconnected-color': windowsTrayIconSvg('#ef4444'),  // red
+  };
+  for (const [name, svg] of Object.entries(winTray)) {
+    const png = await svgToPng(svg, 32, 32);
+    writeFileSync(join(iconsDir, `${name}.png`), png);
+    console.log(`  ✓ ${name}.png (Windows)`);
   }
 
   for (const size of [32, 128, 256]) {
