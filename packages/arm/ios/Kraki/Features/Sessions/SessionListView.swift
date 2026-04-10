@@ -8,6 +8,7 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(AppState.self) private var appState
 
+    @Binding var navigationPath: NavigationPath
     @State private var showNewSession = false
     @State private var deleteCandidate: SessionInfo?
 
@@ -150,10 +151,13 @@ struct SessionListView: View {
 
     private func sessionRow(_ session: SessionInfo) -> some View {
         VStack(spacing: 0) {
-            NavigationLink(value: session.id) {
+            Button {
+                navigationPath.append(session.id)
+            } label: {
                 SessionCardView(session: session)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .contextMenu {
