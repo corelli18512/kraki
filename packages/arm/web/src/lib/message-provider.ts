@@ -1,11 +1,9 @@
 /**
- * Message Provider — unified interface for loading session messages.
+ * Message Provider — transparent cache layer for session messages.
  *
- * All message loading goes through this layer:
- * - requestLatest(sessionId, count): load latest N messages (called from session_list)
- * - requestBefore(sessionId, beforeSeq): load 100 older messages (called from GapMarker)
- *
- * Both check IndexedDB first, then fall back to tentacle.
+ * Exposes a single method: fetchRange(sessionId, fromSeq, toSeq).
+ * Checks IndexedDB first, falls back to tentacle for missing messages.
+ * Callers don't know or care about the source.
  */
 
 import { getStore } from './store-adapter';
@@ -15,9 +13,8 @@ import type { ChatMessage, PendingPermission, PendingQuestion, SessionPreview } 
 
 const logger = createLogger('msg-provider');
 
-const PAGE_SIZE = 100;
-const LATEST_SIZE = 50;
 const PREVIEW_MAX = 80;
+const BATCH_TIMEOUT_MS = 10_000;
 
 /** Strip common markdown syntax for clean preview display. */
 function stripMarkdown(text: string): string {
@@ -40,8 +37,6 @@ function stripMarkdown(text: string): string {
 
 /**
  * Rebuild session preview from the current messages in the store.
- * Scans backwards for the last meaningful message (agent answer after idle,
- * question, permission, error, user_message, or answer).
  */
 function rebuildPreview(sessionId: string): void {
   const store = getStore();
@@ -80,7 +75,6 @@ function rebuildPreview(sessionId: string): void {
     }
     if (m.type === 'agent_message' && payload) {
       const content = typeof payload.content === 'string' ? payload.content : '';
-      // Only use agent_message if it's the final answer (followed by idle or is the last message)
       const next = msgs[i + 1];
       if (!next || next.type === 'idle') {
         preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
@@ -95,15 +89,11 @@ function rebuildPreview(sessionId: string): void {
 }
 
 /**
- * Scan replayed messages for pending permissions/questions that didn't go
- * through handleDataMessage (the live path). Without this, permissions
- * arriving via batch replay are never added to pendingPermissions and end up
- * folded into the ThinkingBox with no actionable PermissionInput card.
+ * Scan replayed messages for pending permissions/questions.
  */
 function processReplayedActions(sessionId: string, messages: ChatMessage[]): void {
   const store = getStore();
 
-  // Collect IDs that have been resolved within this batch
   const resolvedPermIds = new Set<string>();
   const resolvedQuestionIds = new Set<string>();
   const permResolutions = new Map<string, 'approved' | 'denied' | 'always_allowed' | 'cancelled'>();
@@ -142,10 +132,8 @@ function processReplayedActions(sessionId: string, messages: ChatMessage[]): voi
     }
   }
 
-  // Add unresolved permissions to the store so ChatView can show PermissionInput
   for (const msg of messages) {
     if (msg.type === 'permission' && !resolvedPermIds.has(msg.payload?.id)) {
-      // Only add if not already tracked
       if (!store.pendingPermissions.has(msg.payload.id)) {
         const perm: PendingPermission = {
           id: msg.payload.id,
@@ -174,7 +162,6 @@ function processReplayedActions(sessionId: string, messages: ChatMessage[]): voi
     }
   }
 
-  // Stamp resolutions on permission messages so MessageBubble renders them correctly
   for (const [permId, resolution] of permResolutions) {
     resolvePermissionMessage(sessionId, permId, resolution);
     store.removePermission(permId);
@@ -185,219 +172,204 @@ function processReplayedActions(sessionId: string, messages: ChatMessage[]): voi
   }
 }
 
+interface PendingRequest {
+  sessionId: string;
+  resolve: (messages: ChatMessage[]) => void;
+}
+
 class MessageProvider {
-  /** In-flight requests keyed by `${sessionId}:${afterSeq}` */
-  private loading = new Set<string>();
   /** tentacle lastSeq per session (from session_list) */
   private tentacleLastSeq = new Map<string, number>();
   /** sessionId → tentacleDeviceId */
   private tentacleDeviceMap = new Map<string, string>();
   /** send function injected from ws-client */
   private sendFn: ((msg: Record<string, unknown>) => void) | null = null;
+  /** Pending tentacle requests awaiting handleBatch */
+  private pendingRequests = new Map<string, PendingRequest>();
+  /** Sessions currently loading */
+  private loadingSessions = new Set<string>();
 
-  /** Set the encrypted send function (called by ws-client on init). */
   setSend(fn: (msg: Record<string, unknown>) => void): void {
     this.sendFn = fn;
   }
 
-  /** Update tentacle metadata from session_list. */
   setTentacleInfo(sessionId: string, lastSeq: number, deviceId: string): void {
     this.tentacleLastSeq.set(sessionId, lastSeq);
     this.tentacleDeviceMap.set(sessionId, deviceId);
   }
 
-  /** Check if any request is in flight for a session. */
+  /** Check if a session has an in-flight request. */
   isLoading(sessionId: string): boolean {
-    for (const key of this.loading) {
-      if (key.startsWith(`${sessionId}:`)) return true;
-    }
-    return false;
-  }
-
-  /** Check if any session has in-flight initial load. */
-  get hasActiveLoads(): boolean {
-    return this.loading.size > 0;
+    return this.loadingSessions.has(sessionId);
   }
 
   /**
-   * Load latest N messages for a session.
-   * Called for every session after session_list arrives.
+   * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
+   * Puts the complete result into the store in one write.
    */
-  async requestLatest(sessionId: string): Promise<void> {
-    if (this.isLoading(sessionId)) {
-      logger.info('requestLatest skipped (loading)', { sessionId, loadingKeys: [...this.loading] });
+  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean }): Promise<void> {
+    if (this.loadingSessions.has(sessionId)) {
+      logger.info('fetchRange skipped (loading)', { sessionId, fromSeq, toSeq });
       return;
     }
 
-    const totalLastSeq = this.tentacleLastSeq.get(sessionId) ?? 0;
-    if (totalLastSeq === 0) return;
+    const clampedFrom = Math.max(1, fromSeq);
+    if (clampedFrom > toSeq) return;
 
-    logger.info('requestLatest', { sessionId, totalLastSeq });
+    logger.info('fetchRange', { sessionId, fromSeq: clampedFrom, toSeq, initial: options?.initial });
 
-    // Signal loading start
-    getStore().setSessionLoading(sessionId, true);
+    this.loadingSessions.add(sessionId);
+    if (options?.initial) {
+      getStore().setSessionLoading(sessionId, true);
+    }
 
-    // Check IndexedDB first
-    let dbLastSeq = 0;
     try {
-      const db = await import('./message-db');
-      const lastSeq = await db.getLastSeq(sessionId, totalLastSeq);
-      dbLastSeq = lastSeq;
+      // Step 1: Check IDB for the requested range
+      let idbMessages: ChatMessage[] = [];
+      try {
+        const db = await import('./message-db');
+        idbMessages = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
+        logger.info('IDB range query', { sessionId, fromSeq: clampedFrom, toSeq, found: idbMessages.length, expected: toSeq - clampedFrom + 1 });
+      } catch {
+        // IDB unavailable
+      }
 
-      if (lastSeq > 0) {
-        const allMsgs = await db.getMessages(sessionId);
-        const latestFromDb = allMsgs.slice(-LATEST_SIZE);
-        if (latestFromDb.length > 0) {
-          getStore().prependMessages(sessionId, latestFromDb);
-          processReplayedActions(sessionId, latestFromDb as ChatMessage[]);
-          rebuildPreview(sessionId);
-          logger.info('loaded from IndexedDB', { sessionId, count: latestFromDb.length, dbLastSeq: lastSeq });
+      // Step 2: Check if IDB covers the full range
+      const expectedCount = toSeq - clampedFrom + 1;
+      if (idbMessages.length >= expectedCount) {
+        // IDB has everything — put in store and done
+        this.deliverMessages(sessionId, idbMessages, options?.initial);
+        return;
+      }
+
+      // Step 3: IDB has partial or no data — request from tentacle
+      // Find the highest seq IDB has to request only the missing portion
+      const idbSeqs = new Set(idbMessages.map(m => {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        return typeof seq === 'number' ? seq : 0;
+      }));
+      let afterSeq = clampedFrom - 1;
+      if (idbMessages.length > 0) {
+        // Find the highest contiguous seq from IDB to minimize tentacle request
+        let highestIdb = clampedFrom - 1;
+        for (let s = clampedFrom; s <= toSeq; s++) {
+          if (idbSeqs.has(s)) highestIdb = s;
+          else break;
         }
+        afterSeq = highestIdb;
       }
-    } catch {
-      // IndexedDB unavailable
-    }
 
-    // If tentacle has newer messages, request the gap
-    if (dbLastSeq < totalLastSeq) {
-      const afterSeq = Math.max(dbLastSeq, totalLastSeq - LATEST_SIZE);
-      if (afterSeq < totalLastSeq) {
-        this.requestFromTentacle(sessionId, afterSeq);
-        return; // loading cleared when batch arrives
+      const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);
+      
+      // Merge IDB + tentacle, dedup by seq, sort
+      const allMessages = [...idbMessages, ...tentacleMessages];
+      const seen = new Set<number>();
+      const deduped = allMessages.filter(m => {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        if (typeof seq !== 'number' || seen.has(seq)) return false;
+        seen.add(seq);
+        return true;
+      });
+      deduped.sort((a, b) => {
+        const seqA = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
+        const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
+        return seqA - seqB;
+      });
+
+      // Store tentacle messages in IDB for future cache hits
+      if (tentacleMessages.length > 0) {
+        import('./message-db').then(db => db.putMessages(sessionId, tentacleMessages)).catch(() => {});
       }
-    }
 
-    // No tentacle request needed — clear loading now
-    getStore().setSessionLoading(sessionId, false);
+      this.deliverMessages(sessionId, deduped, options?.initial);
+    } catch (err) {
+      logger.error('fetchRange failed', { sessionId, error: (err as Error).message });
+    } finally {
+      this.loadingSessions.delete(sessionId);
+      getStore().setSessionLoading(sessionId, false);
+    }
   }
 
   /**
-   * Load 100 older messages before a given seq.
-   * Called when a GapMarker scrolls into view.
-   */
-  async requestBefore(sessionId: string, beforeSeq: number): Promise<void> {
-    if (this.isLoading(sessionId)) {
-      logger.info('requestBefore skipped (loading)', { sessionId, beforeSeq, loadingKeys: [...this.loading] });
-      return;
-    }
-
-    const loadKey = `${sessionId}:${beforeSeq}`;
-    this.loading.add(loadKey);
-    logger.info('requestBefore start', { sessionId, beforeSeq, loadKey });
-
-    // Check IndexedDB: take up to 100 messages immediately before beforeSeq
-    try {
-      const db = await import('./message-db');
-      const allMsgs = await db.getMessages(sessionId);
-      const older = allMsgs
-        .filter(m => {
-          const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-          return typeof seq === 'number' && seq > 0 && seq < beforeSeq;
-        })
-        .slice(-PAGE_SIZE);
-      if (older.length > 0) {
-        // Check if these messages are actually new (not already in store)
-        const storeMessages = getStore().messages.get(sessionId) ?? [];
-        const storeSeqs = new Set<number>();
-        for (const m of storeMessages) {
-          const s = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-          if (typeof s === 'number') storeSeqs.add(s);
-        }
-        const newMessages = older.filter(m => {
-          const s = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-          return typeof s === 'number' && !storeSeqs.has(s);
-        });
-        if (newMessages.length > 0) {
-          getStore().prependMessages(sessionId, older);
-          processReplayedActions(sessionId, older as ChatMessage[]);
-          logger.info('gap filled from IndexedDB', { sessionId, beforeSeq, count: older.length, newCount: newMessages.length });
-          this.loading.delete(loadKey);
-          return;
-        }
-        // All messages already in store — gap is real (not in IndexedDB), fall through to tentacle
-        logger.info('IndexedDB messages already in store, falling through to tentacle', { sessionId, beforeSeq });
-      }
-    } catch {
-      // IndexedDB unavailable
-    }
-
-    // Request from tentacle — keep loadKey active until batch arrives
-    const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
-    if (!tentacleDeviceId || !this.sendFn) {
-      this.loading.delete(loadKey);
-      return;
-    }
-
-    const afterSeq = Math.max(0, beforeSeq - PAGE_SIZE - 1);
-    const store = getStore();
-    this.sendFn({
-      type: 'request_session_replay',
-      deviceId: store.deviceId ?? '',
-      payload: { sessionId, afterSeq, limit: PAGE_SIZE, targetDeviceId: tentacleDeviceId },
-    });
-
-    logger.info('requested from tentacle', { sessionId, afterSeq, limit: PAGE_SIZE });
-
-    // Safety timeout
-    setTimeout(() => {
-      this.loading.delete(loadKey);
-    }, 10_000);
-  }
-
-  /**
-   * Handle a replay batch from tentacle — insert into store + clear loading.
+   * Handle a replay batch from tentacle — resolves the pending request.
    */
   handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
-    logger.info('handleBatch received', { sessionId, count: messages?.length ?? 0 });
-
+    logger.info('handleBatch received', { sessionId, count: (messages ?? []).length });
     const typed = (messages ?? []) as ChatMessage[];
-    if (typed.length > 0) {
-      getStore().prependMessages(sessionId, typed);
-      processReplayedActions(sessionId, typed);
-      rebuildPreview(sessionId);
-    }
-
-    // Clear internal loading keys for this session
-    for (const key of [...this.loading]) {
-      if (key.startsWith(`${sessionId}:`)) {
-        this.loading.delete(key);
+    const pending = this.pendingRequests.get(sessionId);
+    if (pending) {
+      this.pendingRequests.delete(sessionId);
+      pending.resolve(typed);
+    } else {
+      // No pending request — direct batch (e.g. from a concurrent path)
+      // Put directly in store as fallback
+      if (typed.length > 0) {
+        getStore().prependMessages(sessionId, typed);
+        processReplayedActions(sessionId, typed);
+        rebuildPreview(sessionId);
       }
+      this.loadingSessions.delete(sessionId);
+      getStore().setSessionLoading(sessionId, false);
     }
-    getStore().setSessionLoading(sessionId, false);
-    logger.info('handleBatch done', { sessionId });
   }
 
   /** Clear all tracking (on disconnect). */
   clear(): void {
-    this.loading.clear();
+    // Resolve any pending requests with empty results
+    for (const [, pending] of this.pendingRequests) {
+      pending.resolve([]);
+    }
+    this.pendingRequests.clear();
     this.tentacleLastSeq.clear();
     this.tentacleDeviceMap.clear();
+    this.loadingSessions.clear();
   }
 
-  private requestFromTentacle(sessionId: string, afterSeq: number, limit?: number): void {
+  /**
+   * Request messages from tentacle and await the batch response.
+   */
+  private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<ChatMessage[]> {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
     if (!tentacleDeviceId || !this.sendFn) {
       logger.warn('cannot request from tentacle', { sessionId, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId });
-      return;
+      return Promise.resolve([]);
     }
 
-    // Track in internal loading set (for isLoading check).
-    const loadKey = `${sessionId}:${afterSeq}`;
-    this.loading.add(loadKey);
+    return new Promise<ChatMessage[]>((resolve) => {
+      this.pendingRequests.set(sessionId, { sessionId, resolve });
 
-    const store = getStore();
-    this.sendFn({
-      type: 'request_session_replay',
-      deviceId: store.deviceId ?? '',
-      payload: { sessionId, afterSeq, ...(limit ? { limit } : {}), targetDeviceId: tentacleDeviceId },
+      const store = getStore();
+      this.sendFn!({
+        type: 'request_session_replay',
+        deviceId: store.deviceId ?? '',
+        payload: { sessionId, afterSeq, limit, targetDeviceId: tentacleDeviceId },
+      });
+
+      logger.info('requested from tentacle', { sessionId, afterSeq, limit });
+
+      // Safety timeout — resolve with empty if tentacle never responds
+      setTimeout(() => {
+        if (this.pendingRequests.has(sessionId)) {
+          logger.warn('tentacle request timed out', { sessionId, afterSeq });
+          this.pendingRequests.delete(sessionId);
+          resolve([]);
+        }
+      }, BATCH_TIMEOUT_MS);
     });
+  }
 
-    logger.info('requested from tentacle', { sessionId, afterSeq, limit });
-
-    // Safety timeout
-    setTimeout(() => {
-      this.loading.delete(loadKey);
-    }, 10_000);
+  /**
+   * Put complete message set into the store and run side effects.
+   */
+  private deliverMessages(sessionId: string, messages: ChatMessage[], initial?: boolean): void {
+    if (messages.length > 0) {
+      getStore().prependMessages(sessionId, messages);
+      processReplayedActions(sessionId, messages);
+      if (initial) {
+        rebuildPreview(sessionId);
+      }
+    }
+    logger.info('delivered', { sessionId, count: messages.length, initial });
   }
 }
 

@@ -249,9 +249,10 @@ export class KrakiWSClient {
         store.clearUnread(ts.id);
       }
 
-      // Store tentacle info and request latest messages via provider
+      // Store tentacle info and fetch latest messages via provider
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
-      messageProvider.requestLatest(ts.id);
+      const fromSeq = Math.max(1, ts.lastSeq - 49);
+      messageProvider.fetchRange(ts.id, fromSeq, ts.lastSeq, { initial: true });
     }
 
     // Apply pin state from tentacle (replaces local pins for this tentacle's sessions)

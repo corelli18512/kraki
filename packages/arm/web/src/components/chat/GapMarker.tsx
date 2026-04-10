@@ -21,8 +21,9 @@ export function GapMarker({ sessionId, beforeSeq, scrollRef }: GapMarkerProps) {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          logger.info('gap visible, requesting', { sessionId, beforeSeq });
-          messageProvider.requestBefore(sessionId, beforeSeq);
+          const fromSeq = Math.max(1, beforeSeq - 100);
+          logger.info('gap visible, requesting', { sessionId, fromSeq, toSeq: beforeSeq - 1 });
+          messageProvider.fetchRange(sessionId, fromSeq, beforeSeq - 1);
         }
       },
       { root, rootMargin: '200px', threshold: 0 },

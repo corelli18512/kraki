@@ -101,7 +101,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
       if (lastSeq && lastSeq > 0) {
-        messageProvider.requestLatest(sid);
+        const fromSeq = Math.max(1, lastSeq - 49);
+        messageProvider.fetchRange(sid, fromSeq, lastSeq, { initial: true });
       }
       const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;

@@ -114,6 +114,17 @@ export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<nu
 }
 
 /**
+ * Get messages for a session within a seq range [fromSeq, toSeq], ordered by seq.
+ */
+export async function getMessagesInRange(sessionId: string, fromSeq: number, toSeq: number): Promise<ChatMessage[]> {
+  const db = await getDB();
+  const range = IDBKeyRange.bound([sessionId, fromSeq], [sessionId, toSeq]);
+  const records = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(range) as StoredMessage[];
+  records.sort((a, b) => a.seq - b.seq);
+  return records.map(r => r.data);
+}
+
+/**
  * Delete all messages for a session.
  */
 export async function deleteSessionMessages(sessionId: string): Promise<void> {
