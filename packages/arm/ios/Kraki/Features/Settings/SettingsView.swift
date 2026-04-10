@@ -1,35 +1,25 @@
 #if os(iOS)
 /// SettingsView — App settings matching the web sidebar settings panel.
-///
-/// Shows account info, app version, theme picker, debug toggle, and sign-out.
 
 import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
 
-    @AppStorage("debugLogging") private var debugLogging = false
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
-    @State private var showSignOutConfirmation = false
+    @AppStorage("notificationsEnabled") private var notificationsEnabled = true
 
     var body: some View {
         Form {
             accountSection
             appSection
+            notificationsSection
             themeSection
-            dangerSection
         }
         .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
-        .alert("Sign Out", isPresented: $showSignOutConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Sign Out", role: .destructive) {
-                signOut()
-            }
-        } message: {
-            Text("This will clear your credentials and disconnect from the relay. You'll need to sign in again.")
-        }
     }
 
     // MARK: - Account
@@ -38,7 +28,6 @@ struct SettingsView: View {
         Section("Account") {
             if let user = appState.user {
                 HStack(spacing: 12) {
-                    // Avatar placeholder
                     ZStack {
                         Circle()
                             .fill(Color.krakiPrimary.opacity(0.15))
@@ -87,8 +76,14 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
 
-            Toggle("Debug Logging", isOn: $debugLogging)
+    // MARK: - Notifications
+
+    private var notificationsSection: some View {
+        Section("Notifications") {
+            Toggle("Push Notifications", isOn: $notificationsEnabled)
         }
     }
 
@@ -105,35 +100,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Danger Zone
-
-    private var dangerSection: some View {
-        Section("Danger Zone") {
-            Button(role: .destructive) {
-                showSignOutConfirmation = true
-            } label: {
-                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-            }
-        }
-    }
-
-    // MARK: - Actions
-
-    private func signOut() {
-        do {
-            try KeychainManager().deleteAllKeys()
-        } catch {
-            // Best-effort keychain cleanup
-        }
-
-        appState.disconnect()
-        appState.sessionStore.reset()
-        appState.deviceStore.reset()
-        appState.messageStore.reset()
-        appState.deviceId = nil
-        appState.user = nil
-        appState.connectionStatus = .awaitingLogin
-    }
+    // MARK: - Helpers
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
