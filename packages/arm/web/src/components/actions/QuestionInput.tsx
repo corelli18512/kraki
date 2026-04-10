@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import Markdown from 'react-markdown';
 import { wsClient } from '../../lib/ws-client';
 import type { PendingQuestion } from '../../types/store';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
@@ -33,7 +34,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
                 onClick={() => handleAnswer(choice)}
                 className="w-full rounded-lg border border-border-primary px-3 py-2 text-left text-sm text-text-primary transition-all hover:border-violet-500 hover:bg-violet-500/10 active:scale-[0.98]"
               >
-                {choice}
+                <Markdown components={{ p: ({ children }) => <>{children}</> }}>{choice}</Markdown>
               </button>
             ))}
           </div>

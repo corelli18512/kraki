@@ -116,7 +116,11 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
       return (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5">
           <p className="text-xs font-medium text-red-500">Error</p>
-          <p className="mt-0.5 text-sm text-red-400">{message.payload.message}</p>
+          <div className="mt-0.5 markdown-content text-sm text-red-400">
+            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+              {message.payload.message}
+            </Markdown>
+          </div>
         </div>
       );
 
@@ -204,7 +208,11 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
               <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
             </div>
             <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
-              <p className="text-sm leading-relaxed text-text-primary">{message.payload.question}</p>
+              <div className="markdown-content text-sm leading-relaxed text-text-primary">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {message.payload.question}
+                </Markdown>
+              </div>
               <p className="mt-1 text-[10px] text-text-muted">
                 {formatTime(message.timestamp)}
               </p>

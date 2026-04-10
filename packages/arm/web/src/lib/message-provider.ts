@@ -19,6 +19,25 @@ const PAGE_SIZE = 100;
 const LATEST_SIZE = 50;
 const PREVIEW_MAX = 80;
 
+/** Strip common markdown syntax for clean preview display. */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '') // fenced code blocks
+    .replace(/`([^`]+)`/g, '$1')    // inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')  // italic
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')    // headings
+    .replace(/^\s*[-*+]\s+/gm, '')  // list items
+    .replace(/^\s*\d+\.\s+/gm, '')  // ordered list items
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images
+    .replace(/\n+/g, ' ')           // newlines to spaces
+    .replace(/\s+/g, ' ')           // collapse whitespace
+    .trim();
+}
+
 /**
  * Rebuild session preview from the current messages in the store.
  * Scans backwards for the last meaningful message (agent answer after idle,
@@ -37,7 +56,7 @@ function rebuildPreview(sessionId: string): void {
 
     if (m.type === 'question' && payload) {
       const q = typeof payload.question === 'string' ? payload.question : '';
-      preview = { text: q.slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
+      preview = { text: stripMarkdown(q).slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
       break;
     }
     if (m.type === 'permission' && payload) {
@@ -47,24 +66,24 @@ function rebuildPreview(sessionId: string): void {
     }
     if (m.type === 'error' && payload) {
       const msg = typeof payload.message === 'string' ? payload.message : 'Error';
-      preview = { text: msg.slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
+      preview = { text: stripMarkdown(msg).slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
       break;
     }
     if (m.type === 'user_message' && payload) {
       const content = typeof payload.content === 'string' ? payload.content : '';
-      preview = { text: content.slice(0, PREVIEW_MAX), type: 'user', timestamp: ts };
+      preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'user', timestamp: ts };
       break;
     }
     if (m.type === 'answer' && payload) {
       const answer = typeof payload.answer === 'string' ? payload.answer : '';
-      if (answer) { preview = { text: answer.slice(0, PREVIEW_MAX), type: 'answer', timestamp: ts }; break; }
+      if (answer) { preview = { text: stripMarkdown(answer).slice(0, PREVIEW_MAX), type: 'answer', timestamp: ts }; break; }
     }
     if (m.type === 'agent_message' && payload) {
       const content = typeof payload.content === 'string' ? payload.content : '';
       // Only use agent_message if it's the final answer (followed by idle or is the last message)
       const next = msgs[i + 1];
       if (!next || next.type === 'idle') {
-        preview = { text: content.slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
+        preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
         break;
       }
     }
