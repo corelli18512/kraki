@@ -11,9 +11,7 @@ struct ModePickerView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
-    @Namespace private var modeNamespace
     @State private var expanded = false
-    @State private var closing = false
     @State private var collapseTask: Task<Void, Never>?
 
     private var currentMode: SessionMode {
@@ -52,28 +50,17 @@ struct ModePickerView: View {
     // MARK: - Expanded
 
     private var expandedPicker: some View {
-        HStack(spacing: 0) {
+        Picker("Mode", selection: Binding(
+            get: { currentMode },
+            set: { selectMode($0) }
+        )) {
             ForEach(Self.allModes, id: \.self) { mode in
-                Button { selectMode(mode) } label: {
-                    Text(mode.rawValue.capitalized)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(mode == currentMode ? modeTextColorDark(mode) : .secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background {
-                            if mode == currentMode {
-                                Capsule()
-                                    .fill(.ultraThinMaterial)
-                                    .matchedGeometryEffect(id: "modePill", in: modeNamespace)
-                            }
-                        }
-                        .animation(.easeInOut(duration: 0.5), value: currentMode)
-                }
-                .buttonStyle(.plain)
+                Text(mode.rawValue.capitalized).tag(mode)
             }
         }
-        .padding(2)
-        .background(.ultraThinMaterial, in: Capsule())
+        .pickerStyle(.segmented)
+        .tint(modePillColor(currentMode))
+        .frame(maxWidth: 280)
     }
 
     // MARK: - Actions
