@@ -16,7 +16,7 @@
     "start:head": "node packages/head/dist/cli.js",
     "start:tentacle": "node packages/tentacle/dist/daemon-worker.js",
     "start:web": "pnpm --filter @kraki/arm-web preview",
-    "build": "pnpm --filter @kraki/protocol build && pnpm -r build",
+    "build": "pnpm --filter @kraki/protocol build && pnpm -r --filter '!@kraki/toolbar' build",
     "build:head": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/head build",
     "build:tentacle": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/tentacle build",
     "build:tentacle:binary": "pnpm --filter @kraki/tentacle run build:binary:local",
