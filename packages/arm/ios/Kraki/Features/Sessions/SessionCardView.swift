@@ -69,24 +69,14 @@ struct SessionCardView: View {
     // MARK: - Avatar
 
     private var avatarView: some View {
-        ZStack(alignment: .topTrailing) {
-            AgentAvatar(
-                agent: session.agent,
-                size: .md,
-                status: session.state,
-                badge: avatarBadge
-            )
-            .overlay(alignment: .bottomTrailing) {
-                statusDot
-            }
-
-            if isUnread {
-                Circle()
-                    .fill(.blue)
-                    .frame(width: 8, height: 8)
-                    .offset(x: 2, y: -2)
-            }
-        }
+        AgentAvatar(
+            agent: session.agent,
+            sessionId: session.id,
+            size: .md,
+            status: session.state,
+            badge: avatarBadge,
+            unreadCount: unreadCount
+        )
     }
 
     private var avatarBadge: AvatarBadge? {

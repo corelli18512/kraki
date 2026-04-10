@@ -181,7 +181,7 @@ struct MessageBubbleView: View {
     // MARK: - Agent Avatar
 
     private var agentAvatar: some View {
-        AgentAvatar(agent: agent, size: .sm)
+        AgentAvatar(agent: agent, sessionId: message.sessionId, size: .sm)
     }
 
     // MARK: - Session Created
@@ -192,7 +192,7 @@ struct MessageBubbleView: View {
         let model = message.payload["model"]?.stringValue
         return HStack(spacing: 4) {
             Spacer()
-            Text(agentEmoji(agentName))
+            AgentAvatar(agent: agentName, sessionId: message.sessionId, size: .sm)
             Text("\(agentLabel(agentName)) session \(forked ? "forked" : "started")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -432,10 +432,6 @@ struct MessageBubbleView: View {
         (try? AttributedString(markdown: text, options: .init(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         ))) ?? AttributedString(text)
-    }
-
-    private func agentEmoji(_ agent: String) -> String {
-        AgentInfo.from(agent).emoji
     }
 
     private func agentLabel(_ agent: String) -> String {

@@ -1,16 +1,18 @@
 #if os(iOS)
-/// AgentAvatar — Unified avatar component for agent display throughout the app.
+/// AgentAvatar — Exact match of web AgentAvatar.tsx.
 ///
-/// Mirrors the web's AgentAvatar.tsx + agentInfo() with size variants,
-/// status indicators, and badge overlays.
+/// - Rounded rect (not circle) with per-session hue-based color
+/// - Copilot SVG icon (same for all agents, colored per session)
+/// - Badge: ShieldQuestion (permission) or MessageCircleQuestion (question) in Lucide
+/// - Unread dot: top-right coral dot with ring (separate from badge)
 
 import SwiftUI
 
 // MARK: - Avatar Size
 
 enum AvatarSize {
-    case sm  // 28pt
-    case md  // 36pt
+    case sm  // 28pt, rounded-md (6pt)
+    case md  // 36pt, rounded-lg (8pt)
 
     var dimension: CGFloat {
         switch self {
@@ -26,17 +28,17 @@ enum AvatarSize {
         }
     }
 
-    var emojiFont: CGFloat {
+    var iconSize: CGFloat {
         switch self {
-        case .sm: return 13
-        case .md: return 17
+        case .sm: return 16
+        case .md: return 20
         }
     }
 
-    var badgeFont: CGFloat {
+    var badgeIconSize: CGFloat {
         switch self {
-        case .sm: return 9
-        case .md: return 11
+        case .sm: return 12
+        case .md: return 14
         }
     }
 }
@@ -44,13 +46,13 @@ enum AvatarSize {
 // MARK: - Avatar Badge
 
 enum AvatarBadge {
-    case permission  // 🔑
-    case question    // ❓
+    case permission
+    case question
 
-    var emoji: String {
+    var icon: LucideIconType {
         switch self {
-        case .permission: return "🔑"
-        case .question:   return "❓"
+        case .permission: return .shieldQuestion
+        case .question: return .messageCircleQuestion
         }
     }
 }
@@ -59,82 +61,104 @@ enum AvatarBadge {
 
 struct AgentAvatar: View {
     let agent: String
+    var sessionId: String? = nil
     var size: AvatarSize = .md
     var status: SessionState? = nil
     var badge: AvatarBadge? = nil
+    var unreadCount: Int = 0
 
-    private var info: AgentInfo {
-        AgentInfo.from(agent)
+    /// Deterministic hue from sessionId (or agent name as fallback)
+    private var hue: Double {
+        stringToHue(sessionId ?? agent)
+    }
+
+    private var bgColor: Color {
+        Color(hue: hue / 360, saturation: 0.50, brightness: 0.90)
+    }
+
+    private var iconColor: Color {
+        Color(hue: hue / 360, saturation: 0.60, brightness: 0.40)
     }
 
     var body: some View {
         ZStack {
-            // Background
+            // Rounded rect background with session-hue color
             RoundedRectangle(cornerRadius: size.cornerRadius, style: .continuous)
-                .fill(info.bgColor)
+                .fill(bgColor)
                 .frame(width: size.dimension, height: size.dimension)
 
-            // Emoji
-            Text(info.emoji)
-                .font(.system(size: size.emojiFont))
+            // Copilot SVG icon (same for all agents)
+            CopilotIcon()
+                .fill(iconColor)
+                .frame(width: size.iconSize, height: size.iconSize)
         }
         .overlay(alignment: .bottomTrailing) {
-            badgeView
+            // Badge: Lucide icon with background ring
+            if let badge {
+                LucideIcon(badge.icon, size: size.badgeIconSize, color: .krakiPrimary)
+                    .padding(1)
+                    .background(Color.surfacePrimary, in: Circle())
+                    .offset(x: 6, y: 4)
+            }
         }
-    }
-
-    @ViewBuilder
-    private var badgeView: some View {
-        if let badge {
-            Text(badge.emoji)
-                .font(.system(size: size.badgeFont))
-                .offset(x: -2, y: -4)
-        } else if status == .idle {
-            Text("☕")
-                .font(.system(size: size.badgeFont))
-                .offset(x: -2, y: -4)
+        .overlay(alignment: .topTrailing) {
+            // Unread dot: coral with ring
+            if unreadCount > 0 {
+                Circle()
+                    .fill(Color.krakiPrimary)
+                    .frame(width: 10, height: 10)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.surfacePrimary, lineWidth: 2)
+                    )
+                    .offset(x: 2, y: -2)
+            }
         }
     }
 }
 
-// MARK: - Agent Info
+// MARK: - Copilot Icon (SVG Shape)
+
+/// The GitHub Copilot logo — used as the avatar icon for all agents.
+/// Exact SVG path from the web AgentAvatar.tsx CopilotIcon component.
+private struct CopilotIcon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let scale = min(rect.width, rect.height) / 24
+        var path = Path()
+
+        // Main body
+        path.addPath(parseSVGPath("M23.922 16.992c-.861 1.495-5.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.641 0 0 1 0 16.736v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093 2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.172 11h-.344a4.323 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-2.989-.359-3.782-1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0 1-.355-.508h-.016.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z").applying(.init(scaleX: scale, y: scale)))
+
+        // Eyes
+        path.addPath(parseSVGPath("M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z").applying(.init(scaleX: scale, y: scale)))
+
+        return path
+    }
+}
+
+// MARK: - String → Hue hash
+
+/// Deterministic hash of a string to a hue value (0-360).
+/// Mirrors web's `stringToHue()` from lib/color.ts.
+func stringToHue(_ str: String) -> Double {
+    var hash: Int32 = 0
+    for char in str.unicodeScalars {
+        hash = (hash &* 31) &+ Int32(char.value)
+    }
+    return Double(abs(hash) % 360)
+}
+
+// MARK: - Agent Info (for labels, kept for session cards)
 
 struct AgentInfo {
     let label: String
-    let emoji: String
-    let color: Color
-    let bgColor: Color
 
     static func from(_ agent: String) -> AgentInfo {
         switch agent.lowercased() {
-        case "copilot":
-            return AgentInfo(
-                label: "Copilot",
-                emoji: "🤖",
-                color: .kraki600,
-                bgColor: Color.kraki500.opacity(0.15)
-            )
-        case "claude":
-            return AgentInfo(
-                label: "Claude",
-                emoji: "🧠",
-                color: .orange,
-                bgColor: Color.orange.opacity(0.15)
-            )
-        case "codex":
-            return AgentInfo(
-                label: "Codex",
-                emoji: "⚡",
-                color: .ocean600,
-                bgColor: Color.ocean500.opacity(0.15)
-            )
-        default:
-            return AgentInfo(
-                label: agent.capitalized,
-                emoji: "🔮",
-                color: .gray,
-                bgColor: Color.gray.opacity(0.15)
-            )
+        case "copilot": return AgentInfo(label: "Copilot")
+        case "claude": return AgentInfo(label: "Claude")
+        case "codex": return AgentInfo(label: "Codex")
+        default: return AgentInfo(label: agent.capitalized)
         }
     }
 }
