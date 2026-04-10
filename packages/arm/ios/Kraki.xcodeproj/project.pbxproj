@@ -53,6 +53,7 @@
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
 		D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */; };
+		D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6783BD1527A13261E67330A /* ModePickerView.swift */; };
@@ -106,6 +107,7 @@
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
 		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypesTests.swift; sourceTree = "<group>"; };
+		2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiLogger.swift; sourceTree = "<group>"; };
 		2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandSender.swift; sourceTree = "<group>"; };
 		2DA25F949A584169D7628316 /* TurnGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouper.swift; sourceTree = "<group>"; };
 		33641605B16E960C6A553E38 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -284,6 +286,7 @@
 			children = (
 				427C7B2406F858D980E5DFBB /* AgentAvatar.swift */,
 				9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */,
+				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
 				924794751B4507709362A1AE /* LucideIcon.swift */,
 				39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */,
 				A625A24B0C13AF8010778069 /* Theme.swift */,
@@ -515,6 +518,7 @@
 				33284C120326EAC492164F6D /* Helpers.swift in Sources */,
 				41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */,
 				39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */,
+				D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */,
 				B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */,
 				418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */,
 				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
