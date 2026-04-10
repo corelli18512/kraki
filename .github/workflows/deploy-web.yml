@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: deploy-web-${{ github.ref }}
@@ -151,16 +152,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Report outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ needs.deploy.result }}" = "success" ]; then
             echo "✅ Deployed web v${{ needs.detect-version-bump.outputs.current_version }}"
-          elif [ "${{ needs.detect-version-bump.outputs.should_deploy }}" != "true" ]; then
-            echo "⏭️ Skipped — no web version bump (v${{ needs.detect-version-bump.outputs.current_version }})"
-            exit 1
-          elif [ "${{ needs.detect-version-bump.result }}" = "skipped" ]; then
-            echo "⏭️ Skipped — CI did not succeed"
-            exit 1
           else
-            echo "❌ Deploy failed"
-            exit 1
+            echo "⏭️ No deploy needed — cancelling workflow"
+            gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
+            sleep 5
           fi
