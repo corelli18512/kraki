@@ -61,9 +61,6 @@ struct SessionListView: View {
         } message: { _ in
             Text("This will permanently delete this session and all its messages. This cannot be undone.")
         }
-        .navigationDestination(for: String.self) { sessionId in
-            SessionDetailView(sessionId: sessionId)
-        }
     }
 
     // MARK: - Brand Header (custom, not toolbar)
