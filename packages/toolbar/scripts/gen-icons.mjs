@@ -26,6 +26,11 @@ mkdirSync(iconsDir, { recursive: true });
 
 // Load the kraki silhouette SVG (potrace-traced logo with manually added eyes)
 const trayIconSvg = readFileSync(join(__dirname, 'kraki-silhouette.svg'), 'utf8');
+// Disconnected variant: wrap in a group with reduced opacity
+const trayIconDisconnectedSvg = trayIconSvg.replace(
+  '<g transform=',
+  '<g opacity="0.25"><g transform=',
+).replace('</svg>', '</g></svg>');
 
 const appIconSvg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <rect width="${size}" height="${size}" rx="${size * 0.22}" fill="#ea6046"/>
@@ -59,9 +64,14 @@ async function svgToPng(svg, width, height) {
 async function main() {
   console.log('Generating icons…');
 
-  // All tray states use the same kraki silhouette — macOS template handles light/dark
-  for (const name of ['tray-connected', 'tray-connecting', 'tray-disconnected']) {
-    const png = await svgToPng(trayIconSvg, 44, 44); // 44px for @2x Retina
+  // Tray icons — connected/connecting use full opacity, disconnected is dimmed
+  const trayVariants = {
+    'tray-connected': trayIconSvg,
+    'tray-connecting': trayIconSvg,
+    'tray-disconnected': trayIconDisconnectedSvg,
+  };
+  for (const [name, svg] of Object.entries(trayVariants)) {
+    const png = await svgToPng(svg, 44, 44); // 44px for @2x Retina
     const out = join(iconsDir, `${name}.png`);
     writeFileSync(out, png);
     console.log(`  ✓ ${name}.png`);
