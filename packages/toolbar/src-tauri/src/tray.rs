@@ -7,9 +7,21 @@ use tauri::{
 
 use crate::status::DaemonStatus;
 
+// macOS: monochrome template images (OS auto-tints for light/dark menu bar)
+#[cfg(target_os = "macos")]
 const ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected.png");
+#[cfg(target_os = "macos")]
 const ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting.png");
+#[cfg(target_os = "macos")]
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png");
+
+// Windows: colored logo with status dot badge
+#[cfg(not(target_os = "macos"))]
+const ICON_CONNECTED: &[u8] = include_bytes!("../icons/tray-connected-color.png");
+#[cfg(not(target_os = "macos"))]
+const ICON_CONNECTING: &[u8] = include_bytes!("../icons/tray-connecting-color.png");
+#[cfg(not(target_os = "macos"))]
+const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected-color.png");
 
 /// Return the display version. In dev builds, use the tentacle version
 /// injected by build.rs; in release builds, use CARGO_PKG_VERSION.
