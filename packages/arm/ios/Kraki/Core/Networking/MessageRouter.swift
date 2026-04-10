@@ -390,14 +390,28 @@ final class MessageRouter {
     // MARK: - Specific Handlers
 
     private func handleSessionList(_ dict: [String: Any]) {
-        guard let appState,
-              let sessions = dict["sessions"] as? [[String: Any]] else { return }
+        guard let appState else { return }
+
+        // sessions may be at dict["payload"]["sessions"] or dict["sessions"]
+        let payload = dict["payload"] as? [String: Any]
+        guard let sessions = (payload?["sessions"] ?? dict["sessions"]) as? [[String: Any]] else {
+            KLog.d("⚠️ session_list: no sessions array found")
+            return
+        }
+
+        let deviceId = dict["deviceId"] as? String ?? ""
+        let device = appState.deviceStore.device(for: deviceId)
+        let deviceName = device?.name ?? deviceId
 
         let parsed = sessions.compactMap { SessionDigest(json: $0) }
-        appState.sessionStore.syncSessions(parsed)
+        KLog.d("📋 session_list: \(parsed.count) sessions from \(deviceName)")
 
-        for summary in parsed {
-            appState.messageProvider?.requestLatest(sessionId: summary.id)
+        for digest in parsed {
+            appState.sessionStore.upsertSession(digest, deviceId: deviceId, deviceName: deviceName)
+        }
+
+        for digest in parsed {
+            appState.messageProvider?.requestLatest(sessionId: digest.id)
         }
     }
 
@@ -473,10 +487,12 @@ final class MessageRouter {
 
     private func handleReplayBatch(_ dict: [String: Any]) {
         guard let appState else { return }
-        let sessionId = dict["sessionId"] as? String ?? ""
-        let messagesArray = dict["messages"] as? [[String: Any]] ?? []
-        let lastSeq = dict["lastSeq"] as? Int ?? 0
-        let totalLastSeq = dict["totalLastSeq"] as? Int ?? lastSeq
+        let payload = dict["payload"] as? [String: Any] ?? dict
+        let sessionId = payload["sessionId"] as? String ?? dict["sessionId"] as? String ?? ""
+        let messagesArray = payload["messages"] as? [[String: Any]] ?? []
+        let lastSeq = payload["lastSeq"] as? Int ?? 0
+        let totalLastSeq = payload["totalLastSeq"] as? Int ?? lastSeq
+        KLog.d("📦 replay_batch: \(messagesArray.count) messages for session \(sessionId.prefix(12)), lastSeq: \(lastSeq)")
         let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
         appState.messageProvider?.handleBatch(
             sessionId: sessionId,
