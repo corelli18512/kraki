@@ -1,8 +1,9 @@
 #if os(iOS)
-/// ModePickerView — Session mode selector pill, mirroring the mode switcher in MessageInput.tsx.
+/// ModePickerView — Exact match of web MessageInput.tsx mobile mode switcher.
 ///
-/// Collapsed: shows a small capsule with the current mode name and color dot.
-/// Expanded (on tap): shows all 4 mode buttons in a row; auto-collapses after 3 seconds.
+/// Collapsed: single colored pill with mode name, tap to expand.
+/// Expanded: slides in from right, all 4 modes with sliding capsule background
+/// using matchedGeometryEffect. Auto-collapses after 3s.
 
 import SwiftUI
 
@@ -10,7 +11,9 @@ struct ModePickerView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
+    @Namespace private var modeNamespace
     @State private var expanded = false
+    @State private var closing = false
     @State private var collapseTask: Task<Void, Never>?
 
     private var currentMode: SessionMode {
@@ -20,74 +23,57 @@ struct ModePickerView: View {
     private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
 
     var body: some View {
-        HStack {
-            Spacer()
-
+        ZStack(alignment: .trailing) {
             if expanded {
                 expandedPicker
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.8, anchor: .trailing).combined(with: .opacity),
-                        removal: .scale(scale: 0.8, anchor: .trailing).combined(with: .opacity)
-                    ))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 collapsedPill
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.8, anchor: .trailing).combined(with: .opacity),
-                        removal: .scale(scale: 0.8, anchor: .trailing).combined(with: .opacity)
-                    ))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: expanded)
+        .animation(.easeInOut(duration: 0.2), value: expanded)
     }
 
-    // MARK: - Collapsed Pill
+    // MARK: - Collapsed
 
     private var collapsedPill: some View {
-        Button {
-            expand()
-        } label: {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(modeColor(currentMode))
-                    .frame(width: 6, height: 6)
-                Text(currentMode.rawValue.capitalized)
-                    .font(.caption2)
-                    .fontWeight(.medium)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(modeColor(currentMode).opacity(0.15), in: Capsule())
-            .foregroundStyle(modeColor(currentMode))
+        Button { expand() } label: {
+            Text(currentMode.rawValue.capitalized)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(modeTextColorDark(currentMode))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(modePillColor(currentMode), in: Capsule())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Expanded Picker
+    // MARK: - Expanded
 
     private var expandedPicker: some View {
         HStack(spacing: 0) {
             ForEach(Self.allModes, id: \.self) { mode in
-                Button {
-                    selectMode(mode)
-                } label: {
+                Button { selectMode(mode) } label: {
                     Text(mode.rawValue.capitalized)
-                        .font(.caption2)
-                        .fontWeight(.medium)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(mode == currentMode ? modeTextColorDark(mode) : .secondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .foregroundStyle(mode == currentMode ? modeTextColor(mode) : .secondary)
                         .background {
                             if mode == currentMode {
                                 Capsule()
-                                    .fill(modeColor(mode).opacity(0.2))
+                                    .fill(modePillColor(mode))
+                                    .matchedGeometryEffect(id: "modePill", in: modeNamespace)
                             }
                         }
+                        .animation(.easeInOut(duration: 0.5), value: currentMode)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(3)
-        .background(.secondary.opacity(0.08), in: Capsule())
+        .padding(2)
+        .background(Color.surfaceSecondary, in: Capsule())
     }
 
     // MARK: - Actions
@@ -99,12 +85,12 @@ struct ModePickerView: View {
 
     private func selectMode(_ mode: SessionMode) {
         appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
-        collapse()
-    }
-
-    private func collapse() {
         collapseTask?.cancel()
-        withAnimation { expanded = false }
+        collapseTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { withAnimation { expanded = false } }
+        }
     }
 
     private func scheduleCollapse() {
@@ -112,20 +98,30 @@ struct ModePickerView: View {
         collapseTask = Task {
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                withAnimation { expanded = false }
-            }
+            await MainActor.run { withAnimation { expanded = false } }
         }
     }
 
     // MARK: - Colors
 
-    private func modeColor(_ mode: SessionMode) -> Color {
-        Color.modeColor(mode)
+    /// Pill background color (vibrant, 80% opacity) matching web
+    private func modePillColor(_ mode: SessionMode) -> Color {
+        switch mode {
+        case .safe:     return Color(hex: 0x34D399).opacity(0.8)  // emerald-400/80
+        case .discuss:  return Color.ocean400.opacity(0.8)
+        case .execute:  return Color(hex: 0xFBBF24).opacity(0.8)  // amber-400/80
+        case .delegate: return Color.kraki400.opacity(0.8)
+        }
     }
 
-    private func modeTextColor(_ mode: SessionMode) -> Color {
-        modeColor(mode)
+    /// Text color on the colored pill (dark variant for contrast)
+    private func modeTextColorDark(_ mode: SessionMode) -> Color {
+        switch mode {
+        case .safe:     return Color(hex: 0x064E3B) // emerald-900
+        case .discuss:  return Color.ocean900
+        case .execute:  return Color(hex: 0x78350F) // amber-900
+        case .delegate: return Color.kraki900
+        }
     }
 }
 

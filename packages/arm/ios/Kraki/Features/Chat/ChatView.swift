@@ -250,13 +250,7 @@ struct ChatView: View {
         } else if let question = questions.first {
             QuestionCardView(question: question)
         } else {
-            VStack(spacing: 6) {
-                if sessionIdle && !filteredMessages.isEmpty {
-                    QuickRepliesView(sessionId: sessionId)
-                        .padding(.horizontal, 16)
-                }
-                MessageInputView(sessionId: sessionId)
-            }
+            MessageInputView(sessionId: sessionId)
         }
     }
 
