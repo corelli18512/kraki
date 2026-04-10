@@ -23,5 +23,5 @@ AGENTS.md
 packages/toolbar/src-tauri/target/
 packages/toolbar/src-tauri/Cargo.lock
 packages/toolbar/src-tauri/gen/
-packages/toolbar/src-tauri/icons/
+packages/toolbar/src-tauri/icons/tray-*.png
 packages/toolbar/src-tauri/sidecar/
