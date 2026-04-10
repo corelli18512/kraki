@@ -38,7 +38,6 @@ export default function SetupWindow() {
   // Auth state
   const [userCode, setUserCode] = useState<string | null>(null);
   const [verificationUri, setVerificationUri] = useState<string | null>(null);
-  const [githubToken, setGithubToken] = useState<string | null>(null);
   const [githubUser, setGithubUser] = useState<string | null>(null);
 
   // Device name state
@@ -128,9 +127,8 @@ export default function SetupWindow() {
     }
     try {
       const result = await invoke<string>('start_github_auth', { clientId });
-      const data = JSON.parse(result) as { phase: string; username?: string; token?: string };
-      if (data.phase === 'authenticated' && data.token) {
-        setGithubToken(data.token);
+      const data = JSON.parse(result) as { phase: string; username?: string };
+      if (data.phase === 'authenticated') {
         setGithubUser(data.username ?? null);
         setStep('device-name');
       }
@@ -172,7 +170,7 @@ export default function SetupWindow() {
         authMethod: 'github_token',
         deviceName: deviceName.trim() || 'Desktop',
       };
-      if (githubToken) setupArgs.githubToken = githubToken;
+      // Token is read from ~/.kraki/github-token by the sidecar — not passed through the frontend
       await invoke('run_headless_setup', setupArgs);
       await invoke('start_daemon');
       await new Promise((r) => setTimeout(r, 3000));
@@ -193,7 +191,7 @@ export default function SetupWindow() {
       setError(`Setup failed: ${err}`);
       setStep('device-name');
     }
-  }, [deviceName, githubToken, relayUrl]);
+  }, [deviceName, relayUrl]);
 
   // ── Pairing countdown ───────────────────────────────────
 

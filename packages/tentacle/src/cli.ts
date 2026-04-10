@@ -533,7 +533,7 @@ async function cmdAuth(args: string[]): Promise<void> {
       const { saveGitHubToken } = await import('./config.js');
       saveGitHubToken(tokenData.access_token);
 
-      process.stdout.write(JSON.stringify({ phase: 'authenticated', username, token: tokenData.access_token }) + '\n');
+      process.stdout.write(JSON.stringify({ phase: 'authenticated', username }) + '\n');
       return;
     }
 
