@@ -137,7 +137,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} onKeyDown={(e) => e.key === 'Escape' && onClose()} role="dialog" aria-modal="true" tabIndex={-1}>
       <div
         className="mx-4 w-full max-w-md rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}

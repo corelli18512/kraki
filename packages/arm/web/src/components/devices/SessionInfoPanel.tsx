@@ -254,6 +254,10 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setConfirmDelete(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setConfirmDelete(false)}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
         >
           <div
             className="mx-4 w-full max-w-sm rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"

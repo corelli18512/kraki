@@ -90,6 +90,10 @@ export function ThinkingBox({ messages, isActive, aborted, agent, sessionId, str
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
           onClick={() => setOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
         >
           <div
             className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-primary bg-surface-primary shadow-2xl sm:max-w-3xl lg:max-w-6xl"

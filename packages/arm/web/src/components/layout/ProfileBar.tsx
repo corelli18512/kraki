@@ -70,7 +70,7 @@ export function ProfileBar() {
 
       {/* Sign-out confirmation dialog */}
       {confirming && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirming(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirming(false)} onKeyDown={(e) => e.key === 'Escape' && setConfirming(false)} role="dialog" aria-modal="true" tabIndex={-1}>
           <div className="mx-4 w-full max-w-sm rounded-xl bg-surface-primary p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-text-primary">Sign out?</h3>
             <p className="mt-2 text-sm text-text-secondary">

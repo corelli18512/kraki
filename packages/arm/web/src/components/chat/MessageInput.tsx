@@ -384,7 +384,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
 
       {/* Image replace confirmation */}
       {pendingReplaceFile && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={cancelReplace}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={cancelReplace} onKeyDown={(e) => e.key === 'Escape' && cancelReplace()} role="dialog" aria-modal="true" tabIndex={-1}>
           <div className="mx-4 rounded-xl bg-surface-primary p-4 shadow-xl border border-border-primary" onClick={(e) => e.stopPropagation()}>
             <p className="text-sm font-medium text-text-primary">Replace image?</p>
             <p className="mt-1 text-xs text-text-muted">The current image will be replaced with the new one.</p>
