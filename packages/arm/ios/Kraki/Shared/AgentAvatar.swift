@@ -95,7 +95,7 @@ struct AgentAvatar: View {
         .overlay(alignment: .bottomTrailing) {
             // Badge: Lucide icon with background ring
             if let badge {
-                LucideIcon(badge.icon, size: size.badgeIconSize, color: .krakiPrimary)
+                LucideIcon(badge.icon, size: size.badgeIconSize, strokeWidth: 1, color: .krakiPrimary)
                     .padding(1)
                     .background(Color.surfacePrimary, in: Circle())
                     .offset(x: 6, y: 4)
