@@ -44,46 +44,37 @@ fn build_menu(
     pending_update: Option<&str>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let version = effective_version();
-    let relay_label = status_label(status);
     let toggle_label = if status.daemon_running && status.relay_state == "connected" {
         "Disconnect"
     } else {
         "Connect"
     };
 
-    // Build item list dynamically — add update badge when available
-    let header = MenuItem::with_id(app, "header", format!("Kraki v{version}"), false, None::<&str>)?;
-    let status_item = MenuItem::with_id(app, "status", relay_label, false, None::<&str>)?;
-    let sep1 = PredefinedMenuItem::separator(app)?;
     let toggle = MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>)?;
     let pair = MenuItem::with_id(app, "pair", "Pair new device\u{2026}", true, None::<&str>)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let version_item = MenuItem::with_id(app, "header", format!("Kraki v{version}"), false, None::<&str>)?;
     let check_updates = MenuItem::with_id(app, "check_updates", "Check for updates\u{2026}", true, None::<&str>)?;
-    let sep3 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit Kraki"))?;
 
-    if let Some(version) = pending_update {
+    if let Some(ver) = pending_update {
         let update_item = MenuItem::with_id(
             app,
             "do_update",
-            format!("\u{2b06}  Update available: v{version}"),
+            format!("\u{2b06}  Update available: v{ver}"),
             true,
             None::<&str>,
         )?;
-        let sep_update = PredefinedMenuItem::separator(app)?;
         Menu::with_items(
             app,
             &[
-                &header,
-                &update_item,
-                &sep_update,
-                &status_item,
-                &sep1,
                 &toggle,
                 &pair,
+                &sep1,
+                &version_item,
+                &update_item,
                 &sep2,
-                &check_updates,
-                &sep3,
                 &quit,
             ],
         )
@@ -91,28 +82,15 @@ fn build_menu(
         Menu::with_items(
             app,
             &[
-                &header,
-                &status_item,
-                &sep1,
                 &toggle,
                 &pair,
-                &sep2,
+                &sep1,
+                &version_item,
                 &check_updates,
-                &sep3,
+                &sep2,
                 &quit,
             ],
         )
-    }
-}
-
-fn status_label(status: &DaemonStatus) -> String {
-    if !status.daemon_running {
-        return "\u{25cb}  Stopped".to_string();
-    }
-    match status.relay_state.as_str() {
-        "connected" => "\u{25cf}  Connected".to_string(),
-        "connecting" | "authenticating" => "\u{25cc}  Connecting\u{2026}".to_string(),
-        _ => "\u{25cb}  Disconnected".to_string(),
     }
 }
 
@@ -167,7 +145,6 @@ fn set_check_updates_label(app: &AppHandle, label: &str) {
     let Some(tray) = app.tray_by_id("kraki-tray") else { return; };
     let status = crate::status::read_status();
     let version = effective_version();
-    let relay_label = status_label(&status);
     let toggle_label = if status.daemon_running && status.relay_state == "connected" {
         "Disconnect"
     } else {
@@ -178,12 +155,10 @@ fn set_check_updates_label(app: &AppHandle, label: &str) {
     if let Ok(menu) = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(app, "header", format!("Kraki v{version}"), false, None::<&str>).unwrap(),
-            &MenuItem::with_id(app, "status", relay_label, false, None::<&str>).unwrap(),
-            &PredefinedMenuItem::separator(app).unwrap(),
             &MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>).unwrap(),
             &MenuItem::with_id(app, "pair", "Pair new device\u{2026}", true, None::<&str>).unwrap(),
             &PredefinedMenuItem::separator(app).unwrap(),
+            &MenuItem::with_id(app, "header", format!("Kraki v{version}"), false, None::<&str>).unwrap(),
             &MenuItem::with_id(app, "check_updates", label, false, None::<&str>).unwrap(),
             &PredefinedMenuItem::separator(app).unwrap(),
             &PredefinedMenuItem::quit(app, Some("Quit Kraki")).unwrap(),
