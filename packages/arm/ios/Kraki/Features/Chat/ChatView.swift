@@ -43,7 +43,7 @@ struct ChatView: View {
 
     /// Messages for this session, filtering out pending permission bubbles.
     private var filteredMessages: [ChatMessage] {
-        let messages = messageStore.getMessages(sessionId)
+        let messages = messageStore.messages[sessionId] ?? []
         return messages.filter { msg in
             if msg.type == "permission", let pid = msg.permissionId, pendingPermissionIds.contains(pid) {
                 return false
@@ -84,6 +84,7 @@ struct ChatView: View {
     }
 
     var body: some View {
+        let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
         VStack(spacing: 0) {
             // Messages area
             ZStack(alignment: .bottomTrailing) {
