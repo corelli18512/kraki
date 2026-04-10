@@ -1,0 +1,411 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release mode
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+      tag:
+        description: Existing release tag to upload assets to (required for publish)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  checks: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+# ─── Prepare ─────────────────────────────────────────────
+
+jobs:
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      publish_mode: ${{ steps.meta.outputs.publish_mode }}
+      release_sha: ${{ steps.meta.outputs.release_sha }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target ref
+        id: meta
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+
+          publish_mode="dry-run"
+          checkout_ref="${GITHUB_SHA}"
+          release_tag=""
+
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            publish_mode="publish"
+            release_tag="${EVENT_RELEASE_TAG}"
+            checkout_ref="${release_tag}"
+          elif [ "${INPUT_MODE}" = "publish" ]; then
+            publish_mode="publish"
+            release_tag="${INPUT_TAG}"
+            if [ -z "${release_tag}" ]; then
+              echo "workflow_dispatch publish requires inputs.tag"
+              exit 1
+            fi
+            checkout_ref="${release_tag}"
+          else
+            test "${GITHUB_REF_NAME}" = "main" || {
+              echo "Dry-run builds must run from main."
+              exit 1
+            }
+          fi
+
+          git checkout --detach "${checkout_ref}"
+          release_sha="$(git rev-parse HEAD)"
+
+          {
+            echo "checkout_ref=${checkout_ref}"
+            echo "publish_mode=${publish_mode}"
+            echo "release_sha=${release_sha}"
+            echo "release_tag=${release_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release source is main
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "${{ steps.meta.outputs.release_sha }}" origin/main || {
+            echo "Release target must point to a commit on main."
+            exit 1
+          }
+
+      - name: Ensure CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking CI status for ${RELEASE_SHA}..."
+
+          for i in $(seq 1 30); do
+            status=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs" \
+              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+
+            if [ "${status}" = "success" ]; then
+              echo "CI passed ✅"
+              exit 0
+            fi
+
+            case "${status}" in
+              failure|cancelled|timed_out|action_required)
+                echo "CI status is ${status}. Refusing to release."
+                exit 1
+                ;;
+            esac
+
+            echo "CI status: ${status:-pending}. Waiting 10s... (attempt ${i}/30)"
+            sleep 10
+          done
+
+          echo "CI did not complete within 5 minutes. Refusing to release."
+          exit 1
+
+  # ─── Build Tentacle Binary ───────────────────────────────
+
+  build-binary:
+    name: Build Binary (${{ matrix.label }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: Linux x64
+            asset_name: kraki-linux-x64
+          - runner: macos-15-intel
+            label: macOS x64
+            asset_name: kraki-macos-x64
+          - runner: macos-14
+            label: macOS arm64
+            asset_name: kraki-macos-arm64
+          - runner: windows-2022
+            label: Windows x64
+            asset_name: kraki-windows-x64.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install tentacle build dependencies
+        run: pnpm install --frozen-lockfile --filter @kraki/tentacle...
+
+      - name: Run tentacle binary tests
+        run: pnpm --filter @kraki/tentacle exec vitest run src/adapters/__tests__/copilot.test.ts src/__tests__/daemon.test.ts src/__tests__/cli.test.ts src/__tests__/logger.test.ts
+
+      - name: Build tentacle binary
+        run: pnpm --filter @kraki/tentacle run build:binary:local
+
+      - name: Import Apple certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Sign binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --options runtime \
+            --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            packages/tentacle/dist/sea/${{ matrix.asset_name }}
+
+      - name: Notarize binary (macOS)
+        if: runner.os == 'macOS' && needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          zip $RUNNER_TEMP/binary.zip packages/tentacle/dist/sea/${{ matrix.asset_name }}
+          xcrun notarytool submit $RUNNER_TEMP/binary.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+
+      - name: Smoke test tentacle binary
+        run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.asset_name }}
+          path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  # ─── Build Toolbar ──────────────────────────────────────
+
+  build-toolbar:
+    name: Build Toolbar (${{ matrix.label }})
+    needs:
+      - prepare
+      - build-binary
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            label: macOS
+            tauri_args: --target universal-apple-darwin
+          - runner: windows-latest
+            label: Windows
+            tauri_args: ''
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.runner == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: packages/toolbar/src-tauri
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: build-kraki-*
+          path: binary-staging
+          merge-multiple: true
+
+      - name: Stage sidecar binary
+        shell: bash
+        run: |
+          mkdir -p packages/toolbar/src-tauri/sidecar
+          ls -lh binary-staging/
+          if [[ "${{ matrix.runner }}" == "macos-latest" ]]; then
+            cp binary-staging/kraki-macos-arm64 packages/toolbar/src-tauri/sidecar/kraki-aarch64-apple-darwin
+            cp binary-staging/kraki-macos-x64   packages/toolbar/src-tauri/sidecar/kraki-x86_64-apple-darwin
+            chmod +x packages/toolbar/src-tauri/sidecar/kraki-*
+          else
+            cp binary-staging/kraki-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
+          fi
+
+      - name: Generate tray icons
+        run: pnpm --filter @kraki/toolbar build:icons
+
+      - name: Inject tentacle version into toolbar
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          echo "Injecting version $VERSION into toolbar"
+          sed -i.bak "s/^version = .*/version = \"$VERSION\"/" packages/toolbar/src-tauri/Cargo.toml
+          rm -f packages/toolbar/src-tauri/Cargo.toml.bak
+          node -e "
+            const fs = require('fs');
+            for (const f of ['packages/toolbar/src-tauri/tauri.conf.json', 'packages/toolbar/package.json']) {
+              const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+              j.version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+            }
+          "
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: packages/toolbar
+          tauriScript: pnpm tauri
+          args: ${{ matrix.tauri_args }}
+
+      - name: Upload toolbar artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolbar-${{ matrix.label }}
+          path: |
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.dmg
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.app.tar.gz
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.exe
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.msi
+          if-no-files-found: warn
+
+  # ─── Publish ────────────────────────────────────────────
+
+  publish:
+    name: Publish Release Assets
+    needs:
+      - prepare
+      - build-binary
+      - build-toolbar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: build-kraki-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download toolbar artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: toolbar-*
+          path: toolbar-staging
+          merge-multiple: true
+
+      - name: Stage toolbar assets
+        run: |
+          set -euo pipefail
+          # Flatten nested Tauri output into release-assets/
+          find toolbar-staging -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app.tar.gz' \) \
+            -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          (
+            cd release-assets
+            sha256sum * > SHA256SUMS.txt
+          )
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Attest build provenance
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release-assets/*'
+
+      - name: Upload release assets bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ needs.prepare.outputs.release_sha }}
+          path: release-assets
+          if-no-files-found: error
+
+      - name: Ensure GitHub Release exists
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "${{ needs.prepare.outputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null
+
+      - name: Upload assets to GitHub Release
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.prepare.outputs.release_tag }}" release-assets/* --clobber --repo "${{ github.repository }}"
