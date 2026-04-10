@@ -36,6 +36,11 @@ function printHelp(): void {
   kraki stop           Stop Kraki
   kraki update         Check for updates and install the latest version
   kraki connect        Generate QR code to connect a device
+  kraki connect --url-only
+                       Print pairing URL only (for toolbar / scripts)
+  kraki setup --headless
+                       Non-interactive setup (for toolbar / scripts)
+  kraki doctor         Print environment status as JSON
   kraki status         Show status and connection info
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
@@ -290,10 +295,15 @@ async function cmdConfigReset(): Promise<void> {
   await runSetup();
 }
 
-async function cmdConnect(): Promise<void> {
+async function cmdConnect(urlOnly = false): Promise<void> {
   let config = loadConfig();
 
   if (!isDaemonRunning()) {
+    if (urlOnly) {
+      process.stderr.write('error: daemon not running\n');
+      process.exit(1);
+      return;
+    }
     const { confirm } = await import('@inquirer/prompts');
     const start = await confirm({ message: 'Kraki is not running. Start now?', default: true });
     if (!start) return;
@@ -306,11 +316,18 @@ async function cmdConnect(): Promise<void> {
   }
 
   if (!config) {
+    if (urlOnly) {
+      process.stderr.write('error: no config found\n');
+      process.exit(1);
+      return;
+    }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
     return;
   }
 
-  console.log(chalk.dim('  Requesting pairing token from relay...'));
+  if (!urlOnly) {
+    console.log(chalk.dim('  Requesting pairing token from relay...'));
+  }
 
   try {
     let token: string | undefined;
@@ -329,11 +346,214 @@ async function cmdConnect(): Promise<void> {
 
     const info = await requestPairingToken(config.relay, token);
     const pairingUrl = buildPairingUrl(info);
+
+    if (urlOnly) {
+      // Machine-readable output for the desktop toolbar — just the URL, no decoration
+      process.stdout.write(pairingUrl + '\n');
+      return;
+    }
+
     const qr = await renderQrToTerminal(pairingUrl);
     console.log(qr);
   } catch (err) {
+    if (urlOnly) {
+      process.stderr.write(`error: ${(err as Error).message}\n`);
+      process.exit(1);
+      return;
+    }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
   }
+}
+
+// ── kraki setup --headless — non-interactive setup ──────
+
+function getArgValue(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+async function cmdSetupHeadless(args: string[]): Promise<void> {
+  const relay = getArgValue(args, '--relay');
+  const auth = getArgValue(args, '--auth') ?? 'github_token';
+  const deviceName = getArgValue(args, '--device-name');
+  const githubToken = getArgValue(args, '--github-token');
+
+  if (!relay) {
+    process.stderr.write('error: --relay is required\n');
+    process.exit(1);
+    return;
+  }
+
+  // Resolve GitHub token: explicit flag > gh CLI > saved token
+  if (auth === 'github_token' && githubToken) {
+    const { saveGitHubToken } = await import('./config.js');
+    saveGitHubToken(githubToken);
+  }
+
+  const { hostname } = await import('node:os');
+  const { getOrCreateDeviceId, DEFAULT_LOG_VERBOSITY } = await import('./config.js');
+  const deviceId = getOrCreateDeviceId();
+
+  const config: KrakiConfig = {
+    relay,
+    authMethod: auth as KrakiConfig['authMethod'],
+    device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
+    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
+  };
+
+  saveConfig(config);
+  process.stdout.write(JSON.stringify({ ok: true, configPath: getConfigPath() }) + '\n');
+}
+
+// ── kraki doctor — environment status as JSON ───────────
+
+async function cmdDoctor(): Promise<void> {
+  const { checkGhAuth, checkCopilotCli } = await import('./checks.js');
+  const config = loadConfig();
+  const ghAuth = checkGhAuth();
+  const copilot = checkCopilotCli();
+
+  const result = {
+    configExists: config !== null,
+    daemonRunning: isDaemonRunning(),
+    ghAuth: ghAuth.authenticated,
+    ghUser: ghAuth.username ?? null,
+    copilotCli: copilot.found,
+    copilotVersion: copilot.version ?? null,
+  };
+
+  process.stdout.write(JSON.stringify(result) + '\n');
+}
+
+// ── kraki relay-info — query relay capabilities ─────────
+
+async function cmdRelayInfo(args: string[]): Promise<void> {
+  const url = args[1];
+  if (!url) {
+    process.stderr.write('error: relay URL is required\nusage: kraki relay-info <url>\n');
+    process.exit(1);
+    return;
+  }
+  if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
+    process.stderr.write('error: URL must start with wss:// or ws://\n');
+    process.exit(1);
+    return;
+  }
+
+  const { WebSocket } = await import('ws');
+
+  const result = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error('Connection timed out'));
+    }, 5000);
+
+    const ws = new WebSocket(url);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'auth_info' }));
+    });
+    ws.on('message', (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'auth_info_response') {
+          clearTimeout(timer);
+          ws.close();
+          resolve(JSON.stringify({
+            ok: true,
+            methods: msg.methods ?? ['open'],
+            githubClientId: msg.githubClientId ?? null,
+          }));
+        }
+      } catch { /* ignore non-JSON */ }
+    });
+    ws.on('error', (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  }).catch((err) => {
+    return JSON.stringify({ ok: false, error: (err as Error).message });
+  });
+
+  process.stdout.write(result + '\n');
+}
+
+// ── kraki auth — headless GitHub device flow ────────────
+
+async function cmdAuth(args: string[]): Promise<void> {
+  const clientId = getArgValue(args, '--client-id');
+  if (!clientId) {
+    process.stderr.write('error: --client-id is required\n');
+    process.exit(1);
+    return;
+  }
+
+  // Step 1: Request device code
+  const res = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: clientId, scope: 'read:user' }),
+  });
+  if (!res.ok) {
+    process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
+    process.exit(1);
+    return;
+  }
+  const data = await res.json() as { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
+
+  // Print device code so the caller can display it
+  process.stdout.write(JSON.stringify({ phase: 'device_code', user_code: data.user_code, verification_uri: data.verification_uri, expires_in: data.expires_in }) + '\n');
+
+  // Step 2: Poll for token
+  const interval = (data.interval ?? 5) * 1000;
+  const deadline = Date.now() + data.expires_in * 1000;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval));
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: data.device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      }),
+    });
+    const tokenData = await tokenRes.json() as Record<string, string>;
+
+    if (tokenData.access_token) {
+      let username = 'unknown';
+      try {
+        const userRes = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}`, 'User-Agent': 'kraki-tentacle' },
+        });
+        const userData = await userRes.json() as Record<string, unknown>;
+        username = String(userData.login ?? 'unknown');
+      } catch { /* ignore */ }
+
+      const { saveGitHubToken } = await import('./config.js');
+      saveGitHubToken(tokenData.access_token);
+
+      process.stdout.write(JSON.stringify({ phase: 'authenticated', username }) + '\n');
+      return;
+    }
+
+    if (tokenData.error === 'expired_token') {
+      process.stderr.write('error: device code expired\n');
+      process.exit(1);
+      return;
+    }
+    if (tokenData.error === 'access_denied') {
+      process.stderr.write('error: authorization denied\n');
+      process.exit(1);
+      return;
+    }
+    if (tokenData.error === 'slow_down') {
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+
+  process.stderr.write('error: authorization timed out\n');
+  process.exit(1);
 }
 
 // ── Arg parsing ─────────────────────────────────────────
@@ -380,7 +600,33 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'connect') {
-    await cmdConnect();
+    const urlOnly = args.includes('--url-only');
+    await cmdConnect(urlOnly);
+    return;
+  }
+
+  if (cmd === 'setup') {
+    if (args.includes('--headless')) {
+      await cmdSetupHeadless(args);
+    } else {
+      const config = await runSetup();
+      await silentStart(config);
+    }
+    return;
+  }
+
+  if (cmd === 'doctor') {
+    await cmdDoctor();
+    return;
+  }
+
+  if (cmd === 'relay-info') {
+    await cmdRelayInfo(args);
+    return;
+  }
+
+  if (cmd === 'auth') {
+    await cmdAuth(args);
     return;
   }
 
