@@ -99,10 +99,11 @@ struct SessionListView: View {
                     showNewSession = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.krakiPrimary)
-                        .padding(4)
+                        .frame(width: 30, height: 30)
                 }
+                .clipShape(Circle())
                 .if_available_glass()
             }
         }
@@ -114,62 +115,64 @@ struct SessionListView: View {
     // MARK: - Session List
 
     private var sessionList: some View {
-        List {
-            if !pinnedList.isEmpty {
-                Section {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if !pinnedList.isEmpty {
+                    sectionHeader(icon: .pin, title: "Pinned")
                     ForEach(pinnedList) { session in
                         sessionRow(session)
                     }
-                } header: {
-                    HStack(spacing: 4) {
-                        LucideIcon(.pin, size: 12, color: .secondary)
-                        Text("Pinned")
-                            .font(.caption)
-                            .textCase(.uppercase)
+                    if !unpinnedList.isEmpty {
+                        sectionHeader(title: "Recent")
                     }
                 }
-            }
-
-            Section {
                 ForEach(unpinnedList) { session in
                     sessionRow(session)
                 }
-            } header: {
-                if !pinnedList.isEmpty {
-                    Text("Recent")
-                        .font(.caption)
-                        .textCase(.uppercase)
-                }
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
-        .refreshable {
-            try? await Task.sleep(for: .milliseconds(300))
+    }
+
+    private func sectionHeader(icon: LucideIconType? = nil, title: String) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                LucideIcon(icon, size: 10, color: .secondary)
+            }
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 6)
     }
 
     private func sessionRow(_ session: SessionInfo) -> some View {
         NavigationLink(value: session.id) {
             SessionCardView(session: session)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
         }
-        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+        .buttonStyle(.plain)
+        .contextMenu {
             Button {
                 appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
             } label: {
-                Label(
-                    session.pinned ? "Unpin" : "Pin",
-                    systemImage: session.pinned ? "pin.slash" : "pin"
-                )
+                Label(session.pinned ? "Unpin" : "Pin", systemImage: session.pinned ? "pin.slash" : "pin")
             }
-            .tint(.teal)
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                deleteCandidate = session
+
+            let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
+            Button {
+                if isUnread {
+                    appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
+                } else {
+                    appState.commandSender?.markUnread(sessionId: session.id)
+                }
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label(isUnread ? "Mark as Read" : "Mark as Unread", systemImage: isUnread ? "envelope.open" : "envelope.badge")
             }
 
             Button {
@@ -177,23 +180,14 @@ struct SessionListView: View {
             } label: {
                 Label("Fork", systemImage: "arrow.triangle.branch")
             }
-            .tint(.indigo)
 
-            Button {
-                let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
-                if isUnread {
-                    appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
-                } else {
-                    appState.commandSender?.markUnread(sessionId: session.id)
-                }
+            Divider()
+
+            Button(role: .destructive) {
+                deleteCandidate = session
             } label: {
-                let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
-                Label(
-                    isUnread ? "Read" : "Unread",
-                    systemImage: isUnread ? "envelope.open" : "envelope.badge"
-                )
+                Label("Delete", systemImage: "trash")
             }
-            .tint(.blue)
         }
     }
 
