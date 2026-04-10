@@ -1,19 +1,22 @@
 /**
- * gen-icons.mjs — generate tray icon PNGs from SVG circles.
+ * gen-icons.mjs — generate tray icon PNGs from the kraki silhouette SVG.
  *
  * Produces:
- *   src-tauri/icons/tray-connected.png     (22x22 — macOS template, solid)
- *   src-tauri/icons/tray-connecting.png    (22x22 — macOS template, ring)
- *   src-tauri/icons/tray-disconnected.png  (22x22 — macOS template, hollow)
+ *   src-tauri/icons/tray-connected.png     (22x22 — macOS template, kraki logo)
+ *   src-tauri/icons/tray-connecting.png    (22x22 — macOS template, kraki logo)
+ *   src-tauri/icons/tray-disconnected.png  (22x22 — macOS template, kraki logo)
  *   src-tauri/icons/32x32.png              (app icon placeholder)
  *   src-tauri/icons/128x128.png
  *   src-tauri/icons/128x128@2x.png
+ *
+ * The tray icon uses the kraki octopus silhouette (potrace + manual eyes).
+ * All three states use the same icon — macOS renders it as a template image.
  *
  * Requires: @resvg/resvg-js (installed as dev dep, or falls back to sharp if available)
  * If neither is available, writes minimal 1x1 placeholder PNGs so the build doesn't fail.
  */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,20 +24,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const iconsDir = join(__dirname, '../src-tauri/icons');
 mkdirSync(iconsDir, { recursive: true });
 
-// SVG templates — monochrome (black) so macOS can use as template images
-const svgs = {
-  'tray-connected': `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-    <circle cx="11" cy="11" r="7" fill="black"/>
-  </svg>`,
-
-  'tray-connecting': `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-    <circle cx="11" cy="11" r="7" fill="none" stroke="black" stroke-width="2.5" stroke-dasharray="4 3"/>
-  </svg>`,
-
-  'tray-disconnected': `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
-    <circle cx="11" cy="11" r="7" fill="none" stroke="black" stroke-width="2"/>
-  </svg>`,
-};
+// Load the kraki silhouette SVG (potrace-traced logo with manually added eyes)
+const trayIconSvg = readFileSync(join(__dirname, 'kraki-silhouette.svg'), 'utf8');
 
 const appIconSvg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <rect width="${size}" height="${size}" rx="${size * 0.22}" fill="#ea6046"/>
@@ -66,10 +57,11 @@ async function svgToPng(svg, width, height) {
 }
 
 async function main() {
-  console.log('Generating tray icons…');
+  console.log('Generating icons…');
 
-  for (const [name, svg] of Object.entries(svgs)) {
-    const png = await svgToPng(svg, 22, 22);
+  // All tray states use the same kraki silhouette — macOS template handles light/dark
+  for (const name of ['tray-connected', 'tray-connecting', 'tray-disconnected']) {
+    const png = await svgToPng(trayIconSvg, 44, 44); // 44px for @2x Retina
     const out = join(iconsDir, `${name}.png`);
     writeFileSync(out, png);
     console.log(`  ✓ ${name}.png`);
