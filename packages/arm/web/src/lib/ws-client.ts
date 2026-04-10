@@ -4,7 +4,7 @@ import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
-import { handleDataMessage } from './message-router';
+import { handleDataMessage, UNREAD_CANDIDATE_TYPES } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
@@ -238,10 +238,12 @@ export class KrakiWSClient {
         pinnedFromTentacle.add(ts.id);
       }
 
-      // Reconstruct unread badge from readSeq vs lastSeq (binary: 0 or 1)
+      // Reconstruct unread badge from readSeq vs lastSeq
+      // Only show badge if there are unread-worthy messages (not just transient state changes)
       if (ts.lastSeq > (ts.readSeq ?? 0)) {
         if (store.unreadCount.get(ts.id) === undefined) {
-          store.incrementUnread(ts.id);
+          // Check IDB for unread-worthy messages between readSeq and lastSeq
+          this.checkUnreadFromDb(ts.id, ts.readSeq ?? 0);
         }
       } else {
         store.clearUnread(ts.id);
@@ -267,6 +269,46 @@ export class KrakiWSClient {
   /** Clear all in-progress tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
     messageProvider.clear();
+  }
+
+  /**
+   * Check IndexedDB for unread-worthy messages after readSeq.
+   * Only increments unread if there are messages that would produce visible chat bubbles.
+   */
+  private async checkUnreadFromDb(sessionId: string, readSeq: number): Promise<void> {
+    try {
+      const db = await import('./message-db');
+      const allMsgs = await db.getMessages(sessionId);
+      const afterRead = allMsgs.filter(m => {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        return typeof seq === 'number' && seq > readSeq;
+      });
+
+      let hasUnreadContent = false;
+      for (let i = 0; i < afterRead.length; i++) {
+        const m = afterRead[i];
+        if (m.type === 'error' || m.type === 'permission' || m.type === 'question') {
+          hasUnreadContent = true;
+          break;
+        }
+        // idle is unread-worthy only if preceded by an agent_message (non-aborted turn)
+        if (m.type === 'idle') {
+          for (let j = i - 1; j >= 0; j--) {
+            const prev = afterRead[j];
+            if (prev.type === 'agent_message') { hasUnreadContent = true; break; }
+            if (prev.type === 'user_message' || prev.type === 'idle') break;
+          }
+          if (hasUnreadContent) break;
+        }
+      }
+
+      if (hasUnreadContent) {
+        getStore().incrementUnread(sessionId);
+      }
+    } catch {
+      // IDB unavailable — fall back to showing unread (better safe than silent)
+      getStore().incrementUnread(sessionId);
+    }
   }
 
   /**

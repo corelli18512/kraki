@@ -14,6 +14,12 @@ function truncPreview(s: string): string {
   return s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX) + '…' : s;
 }
 
+/**
+ * Message types that can trigger an unread badge.
+ * Used by the live message handler and the reconnect IDB scan.
+ */
+export const UNREAD_CANDIDATE_TYPES = new Set(['error', 'permission', 'question', 'idle']);
+
 /** Set session preview and optionally increment unread. */
 function updatePreview(sid: string, preview: SessionPreview, notify: boolean): void {
   const store = getStore();
