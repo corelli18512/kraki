@@ -89,7 +89,7 @@ export function Sidebar() {
             }`}
           >
             <BotMessageSquare className="h-5 w-5" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium">Agents</span>
+            <span className="text-[10px] font-medium">Sessions</span>
           </button>
           <button
             onClick={() => setMobileTab('devices')}
