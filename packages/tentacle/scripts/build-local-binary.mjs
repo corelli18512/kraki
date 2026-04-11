@@ -16,7 +16,7 @@ const seaDir = join(packageRoot, 'dist', 'sea');
 const bundlePath = join(seaDir, 'kraki.bundle.cjs');
 const blobPath = join(seaDir, 'sea-prep.blob');
 const configPath = join(seaDir, 'sea-config.json');
-const outputName = `kraki-${getPlatformLabel()}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
+const outputName = `kraki-cli-${getPlatformLabel()}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
 const outputPath = join(seaDir, outputName);
 
 function run(command, args, options = {}) {

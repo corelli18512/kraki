@@ -25,7 +25,7 @@ struct GitHubAsset {
     name: String,
 }
 
-/// Fetches the latest release that contains binary assets (kraki-macos, kraki-linux, etc).
+/// Fetches the latest release that contains CLI binary assets (kraki-cli-*).
 /// Skips web-only releases that have no binary artifacts.
 pub fn fetch_latest_version() -> Option<String> {
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases");
@@ -49,14 +49,14 @@ pub fn fetch_latest_version() -> Option<String> {
     find_latest_binary_release(&body)
 }
 
-/// Find the first v* release that has a "kraki-" binary asset.
+/// Find the first v* release that has a "kraki-cli-" binary asset.
 fn find_latest_binary_release(json: &str) -> Option<String> {
     let releases: Vec<GitHubRelease> = serde_json::from_str(json).ok()?;
     for release in &releases {
         let Some(version) = release.tag_name.strip_prefix('v') else {
             continue;
         };
-        let has_binary = release.assets.iter().any(|a| a.name.starts_with("kraki-"));
+        let has_binary = release.assets.iter().any(|a| a.name.starts_with("kraki-cli-"));
         if has_binary {
             return Some(version.to_string());
         }
@@ -126,8 +126,8 @@ mod tests {
     fn test_find_latest_binary_release() {
         let json = r#"[
             {"tag_name":"v0.9.2","assets":[]},
-            {"tag_name":"v0.9.1","assets":[{"name":"kraki-macos-arm64"},{"name":"SHA256SUMS.txt"}]},
-            {"tag_name":"v0.9.0","assets":[{"name":"kraki-linux-x64"}]}
+            {"tag_name":"v0.9.1","assets":[{"name":"kraki-cli-macos-arm64"},{"name":"SHA256SUMS.txt"}]},
+            {"tag_name":"v0.9.0","assets":[{"name":"kraki-cli-linux-x64"}]}
         ]"#;
         assert_eq!(find_latest_binary_release(json), Some("0.9.1".to_string()));
     }

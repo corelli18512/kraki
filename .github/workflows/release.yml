@@ -143,16 +143,16 @@ jobs:
         include:
           - runner: ubuntu-24.04
             label: Linux x64
-            asset_name: kraki-linux-x64
+            asset_name: kraki-cli-linux-x64
           - runner: macos-15-intel
             label: macOS x64
-            asset_name: kraki-macos-x64
+            asset_name: kraki-cli-macos-x64
           - runner: macos-14
             label: macOS arm64
-            asset_name: kraki-macos-arm64
+            asset_name: kraki-cli-macos-arm64
           - runner: windows-2022
             label: Windows x64
-            asset_name: kraki-windows-x64.exe
+            asset_name: kraki-cli-windows-x64.exe
 
     steps:
       - name: Check out repository
@@ -286,16 +286,16 @@ jobs:
           mkdir -p packages/toolbar/src-tauri/sidecar
           ls -lh binary-staging/
           if [[ "${{ matrix.runner }}" == "macos-latest" ]]; then
-            cp binary-staging/kraki-macos-arm64 packages/toolbar/src-tauri/sidecar/kraki-aarch64-apple-darwin
-            cp binary-staging/kraki-macos-x64   packages/toolbar/src-tauri/sidecar/kraki-x86_64-apple-darwin
+            cp binary-staging/kraki-cli-macos-arm64 packages/toolbar/src-tauri/sidecar/kraki-aarch64-apple-darwin
+            cp binary-staging/kraki-cli-macos-x64   packages/toolbar/src-tauri/sidecar/kraki-x86_64-apple-darwin
             # Create universal binary for --target universal-apple-darwin
             lipo -create \
-              binary-staging/kraki-macos-arm64 \
-              binary-staging/kraki-macos-x64 \
+              binary-staging/kraki-cli-macos-arm64 \
+              binary-staging/kraki-cli-macos-x64 \
               -output packages/toolbar/src-tauri/sidecar/kraki-universal-apple-darwin
             chmod +x packages/toolbar/src-tauri/sidecar/kraki-*
           else
-            cp binary-staging/kraki-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
+            cp binary-staging/kraki-cli-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
           fi
 
       - name: Generate tray icons
@@ -372,9 +372,16 @@ jobs:
       - name: Stage toolbar assets
         run: |
           set -euo pipefail
-          # Flatten nested Tauri output into release-assets/
-          find toolbar-staging -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app.tar.gz' \) \
-            -exec cp {} release-assets/ \;
+          # Rename Tauri outputs to clean names
+          for f in $(find toolbar-staging -name '*.dmg'); do
+            cp "$f" release-assets/Kraki-macos.dmg
+          done
+          for f in $(find toolbar-staging -name '*-setup.exe'); do
+            cp "$f" release-assets/Kraki-windows-setup.exe
+          done
+          for f in $(find toolbar-staging -name '*.msi'); do
+            cp "$f" release-assets/Kraki-windows.msi
+          done
           ls -lh release-assets/
 
       - name: Generate checksums
