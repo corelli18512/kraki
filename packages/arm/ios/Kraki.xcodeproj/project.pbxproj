@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
+		063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9656866F24E385A14F14E699 /* NavigationIDs.swift */; };
 		06E56E8528A16D9D6D294135 /* MessageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9B1FD19F5052C3B8BD91E4 /* MessageStoreTests.swift */; };
 		07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A6162027FE71CB62BA4255 /* DeviceListView.swift */; };
 		0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02010E839BEA2321FB4E19C7 /* MessageStore.swift */; };
@@ -137,6 +138,7 @@
 		91E943A85024601D5C97D75E /* TurnGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouperTests.swift; sourceTree = "<group>"; };
 		924794751B4507709362A1AE /* LucideIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LucideIcon.swift; sourceTree = "<group>"; };
 		96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		9656866F24E385A14F14E699 /* NavigationIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationIDs.swift; sourceTree = "<group>"; };
 		9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
 		A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoManager.swift; sourceTree = "<group>"; };
 		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
@@ -289,6 +291,7 @@
 				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
 				924794751B4507709362A1AE /* LucideIcon.swift */,
 				39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */,
+				9656866F24E385A14F14E699 /* NavigationIDs.swift */,
 				A625A24B0C13AF8010778069 /* Theme.swift */,
 			);
 			path = Shared;
@@ -530,6 +533,7 @@
 				0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */,
 				52884F019776B2D42A94782B /* Messages.swift in Sources */,
 				DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */,
+				063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */,
 				EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */,
 				866F819C7CE0F092B4A8CE57 /* OAuthView.swift in Sources */,
 				DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */,
