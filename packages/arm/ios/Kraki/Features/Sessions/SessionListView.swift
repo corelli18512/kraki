@@ -152,7 +152,7 @@ struct SessionListView: View {
     private func sessionRow(_ session: SessionInfo) -> some View {
         VStack(spacing: 0) {
             Button {
-                navigationPath.append(session.id)
+                navigationPath.append(SessionNavID(id: session.id))
             } label: {
                 SessionCardView(session: session)
                     .padding(.horizontal, 16)
