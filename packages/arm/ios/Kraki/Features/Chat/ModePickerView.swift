@@ -1,9 +1,11 @@
 #if os(iOS)
-/// ModePickerView — Exact match of web MessageInput.tsx mobile mode switcher.
+/// ModePickerView — Liquid glass mode selector with color-shifting tint.
 ///
-/// Collapsed: single colored pill with mode name, tap to expand.
-/// Expanded: slides in from right, all 4 modes with sliding capsule background
-/// using matchedGeometryEffect. Auto-collapses after 3s.
+/// Collapsed: glass button with mode name + mode-colored tint. Tap to expand.
+/// Expanded: GlassEffectContainer with 4 modes. Active mode gets a tinted
+/// glass pill that slides between positions via glassEffectID.
+/// Glass tint changes color as you switch modes (green→cyan→orange→coral).
+/// Auto-collapses after 3s.
 
 import SwiftUI
 
@@ -11,6 +13,7 @@ struct ModePickerView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
+    @Namespace private var glassNS
     @State private var expanded = false
     @State private var collapseTask: Task<Void, Never>?
 
@@ -30,37 +33,83 @@ struct ModePickerView: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: expanded)
+        .animation(.easeInOut(duration: 0.25), value: expanded)
     }
 
     // MARK: - Collapsed
 
+    @ViewBuilder
     private var collapsedPill: some View {
-        Button { expand() } label: {
-            Text(currentMode.rawValue.capitalized)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(modeTextColorDark(currentMode))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+        if #available(iOS 26.0, *) {
+            Button { expand() } label: {
+                Text(currentMode.rawValue.capitalized)
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.glass(.regular.tint(modeColor(currentMode))))
+        } else {
+            Button { expand() } label: {
+                Text(currentMode.rawValue.capitalized)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(modeTextColorDark(currentMode))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(modePillColor(currentMode), in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
-        .if_available_glass()
-        .tint(modePillColor(currentMode))
     }
 
     // MARK: - Expanded
 
+    @ViewBuilder
     private var expandedPicker: some View {
-        Picker("Mode", selection: Binding(
-            get: { currentMode },
-            set: { selectMode($0) }
-        )) {
-            ForEach(Self.allModes, id: \.self) { mode in
-                Text(mode.rawValue.capitalized).tag(mode)
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer {
+                HStack(spacing: 0) {
+                    ForEach(Self.allModes, id: \.self) { mode in
+                        Button { selectMode(mode) } label: {
+                            Text(mode.rawValue.capitalized)
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(
+                            mode == currentMode
+                                ? .regular.tint(modeColor(currentMode))
+                                : .regular.interactive(false),
+                            in: .capsule
+                        )
+                        .glassEffectID(mode, in: glassNS)
+                    }
+                }
+                .padding(3)
             }
+            .animation(.easeInOut(duration: 0.4), value: currentMode)
+        } else {
+            // Fallback: plain capsule picker
+            HStack(spacing: 0) {
+                ForEach(Self.allModes, id: \.self) { mode in
+                    Button { selectMode(mode) } label: {
+                        Text(mode.rawValue.capitalized)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(mode == currentMode ? modeTextColorDark(mode) : .secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background {
+                                if mode == currentMode {
+                                    Capsule().fill(modePillColor(mode))
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(2)
+            .background(Color.surfaceSecondary, in: Capsule())
         }
-        .pickerStyle(.segmented)
-        .tint(modePillColor(currentMode))
-        .frame(maxWidth: 280)
     }
 
     // MARK: - Actions
@@ -91,22 +140,27 @@ struct ModePickerView: View {
 
     // MARK: - Colors
 
-    /// Pill background color (vibrant, 80% opacity) matching web
-    private func modePillColor(_ mode: SessionMode) -> Color {
+    /// Glass tint color per mode (used on iOS 26 GlassEffect)
+    private func modeColor(_ mode: SessionMode) -> Color {
         switch mode {
-        case .safe:     return Color(hex: 0x34D399).opacity(0.8)  // emerald-400/80
-        case .discuss:  return Color.ocean400.opacity(0.8)
-        case .execute:  return Color(hex: 0xFBBF24).opacity(0.8)  // amber-400/80
-        case .delegate: return Color.kraki400.opacity(0.8)
+        case .safe:     return Color(hex: 0x34D399) // emerald
+        case .discuss:  return Color.ocean500
+        case .execute:  return Color(hex: 0xFBBF24) // amber
+        case .delegate: return Color.krakiPrimary    // coral
         }
     }
 
-    /// Text color on the colored pill (dark variant for contrast)
+    /// Solid pill color for pre-iOS 26 fallback
+    private func modePillColor(_ mode: SessionMode) -> Color {
+        modeColor(mode).opacity(0.8)
+    }
+
+    /// Dark text for pre-iOS 26 solid pill
     private func modeTextColorDark(_ mode: SessionMode) -> Color {
         switch mode {
-        case .safe:     return Color(hex: 0x064E3B) // emerald-900
+        case .safe:     return Color(hex: 0x064E3B)
         case .discuss:  return Color.ocean900
-        case .execute:  return Color(hex: 0x78350F) // amber-900
+        case .execute:  return Color(hex: 0x78350F)
         case .delegate: return Color.kraki900
         }
     }
