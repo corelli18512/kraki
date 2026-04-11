@@ -11,8 +11,9 @@ struct MainTabView: View {
             NavigationStack(path: $sessionPath) {
                 SessionListView(navigationPath: $sessionPath)
                     .navigationDestination(for: String.self) { sessionId in
-                        SessionDetailView(sessionId: sessionId)
-                            .environment(appState)
+                        let _ = print("🔴 NAV DESTINATION: \(sessionId)")
+                        Text("Session: \(sessionId)")
+                            .onAppear { print("🔴 TEXT APPEARED: \(sessionId)") }
                     }
             }
             .tabItem {
