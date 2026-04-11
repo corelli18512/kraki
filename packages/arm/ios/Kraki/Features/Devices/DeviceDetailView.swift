@@ -166,7 +166,7 @@ struct DeviceDetailView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(deviceSessions) { session in
-                    NavigationLink(value: session.id) {
+                    NavigationLink(value: SessionNavID(id: session.id)) {
                         HStack {
                             Text(session.displayTitle)
                                 .font(.subheadline)

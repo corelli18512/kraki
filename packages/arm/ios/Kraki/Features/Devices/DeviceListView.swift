@@ -31,8 +31,8 @@ struct DeviceListView: View {
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color.surfacePrimary)
-        .navigationDestination(for: String.self) { deviceId in
-            if let device = appState.deviceStore.devices[deviceId] {
+        .navigationDestination(for: DeviceNavID.self) { nav in
+            if let device = appState.deviceStore.devices[nav.id] {
                 DeviceDetailView(device: device)
             }
         }
@@ -45,7 +45,7 @@ struct DeviceListView: View {
             if !onlineDevices.isEmpty {
                 Section("Online") {
                     ForEach(onlineDevices) { device in
-                        NavigationLink(value: device.id) {
+                        NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
                                 device: device,
                                 isSelf: device.id == appState.deviceId,
@@ -59,7 +59,7 @@ struct DeviceListView: View {
             if !offlineDevices.isEmpty {
                 Section("Offline") {
                     ForEach(offlineDevices) { device in
-                        NavigationLink(value: device.id) {
+                        NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
                                 device: device,
                                 isSelf: device.id == appState.deviceId,
