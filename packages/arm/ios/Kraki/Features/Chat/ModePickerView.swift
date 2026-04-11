@@ -13,7 +13,6 @@ struct ModePickerView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
-    @Namespace private var glassNS
     @State private var expanded = false
     @State private var collapseTask: Task<Void, Never>?
 
@@ -65,51 +64,17 @@ struct ModePickerView: View {
 
     @ViewBuilder
     private var expandedPicker: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer {
-                HStack(spacing: 0) {
-                    ForEach(Self.allModes, id: \.self) { mode in
-                        Button { selectMode(mode) } label: {
-                            Text(mode.rawValue.capitalized)
-                                .font(.system(size: 12, weight: .medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(
-                            mode == currentMode
-                                ? .regular.tint(modeColor(currentMode))
-                                : .regular.interactive(false),
-                            in: .capsule
-                        )
-                        .glassEffectID(mode, in: glassNS)
-                    }
-                }
-                .padding(3)
+        Picker("Mode", selection: Binding(
+            get: { currentMode },
+            set: { selectMode($0) }
+        )) {
+            ForEach(Self.allModes, id: \.self) { mode in
+                Text(mode.rawValue.capitalized).tag(mode)
             }
-            .animation(.easeInOut(duration: 0.4), value: currentMode)
-        } else {
-            // Fallback: plain capsule picker
-            HStack(spacing: 0) {
-                ForEach(Self.allModes, id: \.self) { mode in
-                    Button { selectMode(mode) } label: {
-                        Text(mode.rawValue.capitalized)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(mode == currentMode ? modeTextColorDark(mode) : .secondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background {
-                                if mode == currentMode {
-                                    Capsule().fill(modePillColor(mode))
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(2)
-            .background(Color.surfaceSecondary, in: Capsule())
         }
+        .pickerStyle(.segmented)
+        .tint(modeColor(currentMode))
+        .frame(maxWidth: 300)
     }
 
     // MARK: - Actions

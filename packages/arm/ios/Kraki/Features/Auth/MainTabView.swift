@@ -10,10 +10,9 @@ struct MainTabView: View {
         TabView {
             NavigationStack(path: $sessionPath) {
                 SessionListView(navigationPath: $sessionPath)
-                    .navigationDestination(for: String.self) { sessionId in
-                        let _ = print("🔴 NAV DESTINATION: \(sessionId)")
-                        Text("Session: \(sessionId)")
-                            .onAppear { print("🔴 TEXT APPEARED: \(sessionId)") }
+                    .navigationDestination(for: SessionNavID.self) { nav in
+                        SessionDetailView(sessionId: nav.id)
+                            .environment(appState)
                     }
             }
             .tabItem {
