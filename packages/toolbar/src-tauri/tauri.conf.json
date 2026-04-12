@@ -33,6 +33,7 @@
         "maximizable": false,
         "visible": false,
         "decorations": true,
+        "alwaysOnTop": true,
         "center": true
       }
     ],
