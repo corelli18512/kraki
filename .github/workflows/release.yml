@@ -354,6 +354,24 @@ jobs:
           tauriScript: pnpm tauri
           args: ${{ matrix.tauri_args }}
 
+      - name: Create DMG with create-dmg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg
+          APP_PATH=$(find packages/toolbar/src-tauri/target -name 'Kraki.app' -type d | head -1)
+          echo "Found app at: $APP_PATH"
+          # Remove Tauri's DMG — we'll make our own
+          find packages/toolbar/src-tauri/target -name '*.dmg' -delete
+          create-dmg \
+            --volname "Kraki" \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --icon "Kraki.app" 180 170 \
+            --app-drop-link 480 170 \
+            --no-internet-enable \
+            "packages/toolbar/src-tauri/target/Kraki-macos.dmg" \
+            "$APP_PATH"
+
       - name: Upload toolbar artifacts
         uses: actions/upload-artifact@v7
         with:
