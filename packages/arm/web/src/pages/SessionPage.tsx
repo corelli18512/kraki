@@ -32,6 +32,11 @@ export function SessionPage() {
   const deviceModels = useStore((s) => session ? s.deviceModels.get(session.deviceId) : undefined);
   const deviceModelDetails = useStore((s) => session ? s.deviceModelDetails.get(session.deviceId) : undefined);
 
+  // Navigate home when session is deleted (removed from store while viewing)
+  useEffect(() => {
+    if (sessionId && !session) navigate('/', { replace: true });
+  }, [sessionId, session, navigate]);
+
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
     if (sessionId) setActiveSessionId(sessionId);
