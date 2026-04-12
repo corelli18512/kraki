@@ -365,6 +365,7 @@ jobs:
           create-dmg \
             --volname "Kraki" \
             --window-size 660 400 \
+            --background packages/toolbar/src-tauri/dmg-background/background.png \
             --icon-size 128 \
             --icon "Kraki.app" 180 170 \
             --app-drop-link 480 170 \
