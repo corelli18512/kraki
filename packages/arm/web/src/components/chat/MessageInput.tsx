@@ -251,7 +251,6 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
       <div className="mx-auto max-w-3xl">
         {/* Image upload + Mode switcher row */}
         <input
-          id={`img-upload-${sessionId}`}
           ref={fileInputRef}
           type="file"
           accept="image/jpeg,image/png,image/webp"
@@ -259,8 +258,9 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
           style={{ display: 'none' }}
         />
         <div className="relative mb-1.5 flex items-center gap-1.5">
-          <label
-            htmlFor={`img-upload-${sessionId}`}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
             aria-label={imagePreview ? 'Replace image' : 'Attach image'}
             className={`shrink-0 cursor-pointer rounded-lg transition-colors active:scale-95 ${!isIdle ? 'pointer-events-none opacity-40' : ''} ${imagePreview ? '' : 'flex h-8 w-8 items-center justify-center text-text-muted hover:bg-surface-tertiary hover:text-text-primary'}`}
           >
@@ -268,7 +268,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
               <div className="relative">
                 <img src={imagePreview} alt="Preview" className="h-8 max-w-16 rounded-lg border border-border-primary object-contain transition-opacity hover:opacity-80" />
                 <button
-                  onClick={(e) => { e.preventDefault(); clearImage(); }}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); clearImage(); }}
                   aria-label="Remove image"
                   className="absolute -right-1 -top-1 rounded-full bg-surface-primary p-0.5 shadow-sm border border-border-primary"
                 >
@@ -278,7 +278,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             ) : (
               <ImagePlus className="h-4.5 w-4.5" />
             )}
-          </label>
+          </button>
           <div className="flex-1" />
           {/* Desktop: always show all modes */}
           <div ref={modeContainerRef} className="relative hidden items-center rounded-full bg-surface-secondary p-0.5 sm:flex">

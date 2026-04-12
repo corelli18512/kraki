@@ -95,6 +95,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         state: 'active',
         messageCount: 0,
       });
+      // Set an initial preview so new sessions sort to the top of the list
+      updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
       const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
       store.appendMessage(sid, enriched);
