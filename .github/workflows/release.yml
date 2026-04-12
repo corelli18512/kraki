@@ -302,17 +302,20 @@ jobs:
           mkdir -p packages/toolbar/src-tauri/sidecar
           ls -lh binary-staging/
           if [[ "${{ matrix.runner }}" == "macos-latest" ]]; then
-            # Only stage the universal binary — Tauri universal build only uses this one
+            # Tauri universal build needs per-arch + universal sidecars
+            cp binary-staging/kraki-cli-macos-arm64 packages/toolbar/src-tauri/sidecar/kraki-aarch64-apple-darwin
+            cp binary-staging/kraki-cli-macos-x64   packages/toolbar/src-tauri/sidecar/kraki-x86_64-apple-darwin
             lipo -create \
               binary-staging/kraki-cli-macos-arm64 \
               binary-staging/kraki-cli-macos-x64 \
               -output packages/toolbar/src-tauri/sidecar/kraki-universal-apple-darwin
             chmod +x packages/toolbar/src-tauri/sidecar/kraki-*
-            # Sign sidecar with JIT entitlements
-            codesign --force --options runtime \
-              --entitlements packages/tentacle/entitlements.plist \
-              --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
-              packages/toolbar/src-tauri/sidecar/kraki-universal-apple-darwin
+            # Sign all sidecars with JIT entitlements
+            for bin in packages/toolbar/src-tauri/sidecar/kraki-*; do
+              codesign --force --options runtime \
+                --entitlements packages/tentacle/entitlements.plist \
+                --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$bin"
+            done
           else
             cp binary-staging/kraki-cli-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
           fi
