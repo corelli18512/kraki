@@ -62,19 +62,17 @@ struct ModePickerView: View {
 
     // MARK: - Expanded
 
-    @ViewBuilder
     private var expandedPicker: some View {
-        Picker("Mode", selection: Binding(
-            get: { currentMode },
-            set: { selectMode($0) }
-        )) {
-            ForEach(Self.allModes, id: \.self) { mode in
-                Text(mode.rawValue.capitalized).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .tint(modeColor(currentMode))
-        .frame(maxWidth: 300)
+        TintedSegmentedControl(
+            items: Self.allModes.map { $0.rawValue.capitalized },
+            selection: Binding(
+                get: { Self.allModes.firstIndex(of: currentMode) ?? 1 },
+                set: { selectMode(Self.allModes[$0]) }
+            ),
+            tintColor: UIColor(modeColor(currentMode))
+        )
+        .frame(maxWidth: 300, maxHeight: 32)
+        .animation(.easeInOut(duration: 0.3), value: currentMode)
     }
 
     // MARK: - Actions
@@ -127,6 +125,40 @@ struct ModePickerView: View {
         case .discuss:  return Color.ocean900
         case .execute:  return Color(hex: 0x78350F)
         case .delegate: return Color.kraki900
+        }
+    }
+}
+
+// MARK: - UIKit Segmented Control with dynamic tint
+
+private struct TintedSegmentedControl: UIViewRepresentable {
+    let items: [String]
+    @Binding var selection: Int
+    let tintColor: UIColor
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: items)
+        control.selectedSegmentIndex = selection
+        control.selectedSegmentTintColor = tintColor
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        control.selectedSegmentIndex = selection
+        UIView.animate(withDuration: 0.3) {
+            control.selectedSegmentTintColor = tintColor
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject {
+        let parent: TintedSegmentedControl
+        init(_ parent: TintedSegmentedControl) { self.parent = parent }
+
+        @objc func changed(_ control: UISegmentedControl) {
+            parent.selection = control.selectedSegmentIndex
         }
     }
 }
