@@ -199,6 +199,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           codesign --force --options runtime \
+            --entitlements packages/tentacle/entitlements.plist \
             --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
             packages/tentacle/dist/sea/${{ matrix.asset_name }}
 
@@ -280,6 +281,21 @@ jobs:
           path: binary-staging
           merge-multiple: true
 
+      - name: Import Apple certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
       - name: Stage sidecar binary
         shell: bash
         run: |
@@ -294,6 +310,12 @@ jobs:
               binary-staging/kraki-cli-macos-x64 \
               -output packages/toolbar/src-tauri/sidecar/kraki-universal-apple-darwin
             chmod +x packages/toolbar/src-tauri/sidecar/kraki-*
+            # Re-sign sidecar binaries with JIT entitlements (lipo strips signatures)
+            for bin in packages/toolbar/src-tauri/sidecar/kraki-*; do
+              codesign --force --options runtime \
+                --entitlements packages/tentacle/entitlements.plist \
+                --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$bin"
+            done
           else
             cp binary-staging/kraki-cli-windows-x64.exe packages/toolbar/src-tauri/sidecar/kraki-x86_64-pc-windows-msvc.exe
           fi
