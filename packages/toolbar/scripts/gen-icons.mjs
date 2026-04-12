@@ -100,10 +100,16 @@ async function main() {
     console.log(`  ✓ ${name}.png (Windows)`);
   }
 
-  for (const size of [32, 128, 256]) {
+  const appIconSizes = [
+    { size: 32,   name: '32x32' },
+    { size: 128,  name: '128x128' },
+    { size: 256,  name: '128x128@2x' },
+    { size: 512,  name: '512x512' },
+    { size: 1024, name: '512x512@2x' },
+  ];
+  for (const { size, name } of appIconSizes) {
     const svg = appIconSvg(size);
     const png = await svgToPng(svg, size, size);
-    const name = size === 256 ? '128x128@2x' : `${size}x${size}`;
     writeFileSync(join(iconsDir, `${name}.png`), png);
     console.log(`  ✓ ${name}.png`);
   }
