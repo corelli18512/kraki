@@ -116,10 +116,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         "pair" => open_qr_window(app),
         "do_update" => {
-            let app = app.clone();
-            std::thread::spawn(move || {
-                crate::update::open_releases_page();
-            });
+            crate::update::install_update(app.clone());
         }
         _ => {}
     }

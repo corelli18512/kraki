@@ -115,22 +115,20 @@ pub fn open_setup_window(app: &AppHandle) {
     }
 }
 
-/// Tauri command: trigger an on-demand update check.
+/// Tauri command: trigger an on-demand update check via the updater plugin.
 /// Returns the latest version string if an update is available, otherwise None.
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Option<String> {
-    let current = crate::tray::effective_version();
-    let latest = crate::update::fetch_latest_version()?;
-    if crate::update::is_newer(&latest, current) {
-        let mut pending = crate::update::PENDING_UPDATE.lock().unwrap();
-        *pending = Some(latest.clone());
-        drop(pending);
-        let status = crate::status::read_status();
-        crate::tray::update_tray(&app, &status);
-        Some(latest)
-    } else {
-        None
-    }
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater_builder().build().ok()?;
+    let update = updater.check().await.ok()??;
+    let version = update.version.clone();
+    let mut pending = crate::update::PENDING_UPDATE.lock().unwrap();
+    *pending = Some(version.clone());
+    drop(pending);
+    let status = crate::status::read_status();
+    crate::tray::update_tray(&app, &status);
+    Some(version)
 }
 
 // TODO(phase-2): Replace device flow with OAuth redirect flow.

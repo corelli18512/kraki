@@ -2,95 +2,38 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use serde::Deserialize;
+use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 
 use crate::tray;
 
-const GITHUB_REPO: &str = "corelli18512/kraki";
-const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const INITIAL_DELAY_SECS: u64 = 5;
+const CHECK_INTERVAL_SECS: u64 = 4 * 60 * 60; // 4 hours
 
-/// The version string of a pending update, if any. Set by the background checker.
+/// The version string of a pending update, if any.
 pub static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
 
-#[derive(Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    #[serde(default)]
-    assets: Vec<GitHubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GitHubAsset {
-    name: String,
-}
-
-/// Fetches the latest release that contains CLI binary assets (kraki-cli-*).
-/// Skips web-only releases that have no binary artifacts.
-pub fn fetch_latest_version() -> Option<String> {
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases");
-
-    let output = std::process::Command::new("curl")
-        .args([
-            "-sSf",
-            "--max-time", "10",
-            "-H", "User-Agent: kraki-toolbar-updater",
-            "-H", "Accept: application/vnd.github.v3+json",
-            &url,
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let body = String::from_utf8(output.stdout).ok()?;
-    find_latest_binary_release(&body)
-}
-
-/// Find the first v* release that has a "kraki-cli-" binary asset.
-fn find_latest_binary_release(json: &str) -> Option<String> {
-    let releases: Vec<GitHubRelease> = serde_json::from_str(json).ok()?;
-    for release in &releases {
-        let Some(version) = release.tag_name.strip_prefix('v') else {
-            continue;
-        };
-        let has_binary = release.assets.iter().any(|a| a.name.starts_with("kraki-cli-"));
-        if has_binary {
-            return Some(version.to_string());
-        }
-    }
-    None
-}
-
-/// Returns true if `latest` is strictly newer than `current` (semver comparison).
-pub fn is_newer(latest: &str, current: &str) -> bool {
-    let parse = |s: &str| -> [u64; 3] {
-        let mut parts = s.splitn(3, '.').map(|p| p.parse::<u64>().unwrap_or(0));
-        [parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0)]
-    };
-    parse(latest) > parse(current)
-}
-
-/// Start the background update checker. Checks after INITIAL_DELAY_SECS on startup,
-/// then every CHECK_INTERVAL_SECS. Updates PENDING_UPDATE and rebuilds the tray menu.
+/// Start the background update checker using tauri-plugin-updater.
+/// Checks shortly after startup, then every CHECK_INTERVAL_SECS.
 pub fn start_checker(app: tauri::AppHandle) {
-    let current = crate::tray::effective_version().to_string();
-
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(INITIAL_DELAY_SECS));
 
         loop {
-            if let Some(latest) = fetch_latest_version() {
-                if is_newer(&latest, &current) {
-                    let mut pending = PENDING_UPDATE.lock().unwrap();
-                    if pending.as_deref() != Some(&latest) {
-                        *pending = Some(latest);
-                        drop(pending);
-                        let status = crate::status::read_status();
-                        tray::update_tray(&app, &status);
-                    }
+            let app_clone = app.clone();
+            let result = tauri::async_runtime::block_on(async {
+                let updater = app_clone.updater_builder().build().ok()?;
+                updater.check().await.ok()?
+            });
+
+            if let Some(update) = result {
+                let version = update.version.clone();
+                let mut pending = PENDING_UPDATE.lock().unwrap();
+                if pending.as_deref() != Some(&version) {
+                    *pending = Some(version);
+                    drop(pending);
+                    let status = crate::status::read_status();
+                    tray::update_tray(&app, &status);
                 }
             }
 
@@ -99,45 +42,22 @@ pub fn start_checker(app: tauri::AppHandle) {
     });
 }
 
-/// Open the GitHub Releases page in the default browser.
-pub fn open_releases_page() {
-    let url = format!("https://github.com/{GITHUB_REPO}/releases/latest");
-    #[cfg(target_os = "macos")]
-    { let _ = std::process::Command::new("open").arg(&url).spawn(); }
-    #[cfg(target_os = "windows")]
-    { let _ = std::process::Command::new("cmd").args(["/c", "start", "", &url]).spawn(); }
-    #[cfg(target_os = "linux")]
-    { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
-}
+/// Download and install the pending update, then relaunch.
+pub fn install_update(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        let result = tauri::async_runtime::block_on(async {
+            let updater = app.updater_builder().build()?;
+            if let Some(update) = updater.check().await? {
+                update.download_and_install(|_, _| {}, || {}).await?;
+            }
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_newer() {
-        assert!(is_newer("0.2.0", "0.1.0"));
-        assert!(is_newer("1.0.0", "0.9.9"));
-        assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("0.0.9", "0.1.0"));
-    }
-
-    #[test]
-    fn test_find_latest_binary_release() {
-        let json = r#"[
-            {"tag_name":"v0.9.2","assets":[]},
-            {"tag_name":"v0.9.1","assets":[{"name":"kraki-cli-macos-arm64"},{"name":"SHA256SUMS.txt"}]},
-            {"tag_name":"v0.9.0","assets":[{"name":"kraki-cli-linux-x64"}]}
-        ]"#;
-        assert_eq!(find_latest_binary_release(json), Some("0.9.1".to_string()));
-    }
-
-    #[test]
-    fn test_skips_web_only_releases() {
-        let json = r#"[
-            {"tag_name":"v0.9.2","assets":[{"name":"web-dist.tar.gz"}]},
-            {"tag_name":"v0.9.1","assets":[]}
-        ]"#;
-        assert_eq!(find_latest_binary_release(json), None);
-    }
+        if let Err(e) = result {
+            eprintln!("Update failed: {e}");
+        } else {
+            // Relaunch after install
+            tauri::process::restart(&app.env());
+        }
+    });
 }

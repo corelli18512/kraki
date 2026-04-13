@@ -358,6 +358,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: packages/toolbar
           tauriScript: pnpm tauri
@@ -453,6 +455,10 @@ jobs:
             packages/toolbar/src-tauri/target/Kraki-macos.dmg
             packages/toolbar/src-tauri/target/**/release/bundle/**/*.exe
             packages/toolbar/src-tauri/target/**/release/bundle/**/*.msi
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.app.tar.gz
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.app.tar.gz.sig
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.exe.sig
+            packages/toolbar/src-tauri/target/**/release/bundle/**/*.msi.sig
           if-no-files-found: warn
 
   # ─── Publish ────────────────────────────────────────────
@@ -495,6 +501,56 @@ jobs:
             cp "$f" release-assets/Kraki-windows.msi
           done
           ls -lh release-assets/
+
+      - name: Generate latest.json for auto-updater
+        env:
+          VERSION: ${{ needs.prepare.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VER="${VERSION#v}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+          # Read signatures
+          MACOS_SIG=$(find toolbar-staging -name '*.app.tar.gz.sig' | head -1 | xargs cat 2>/dev/null || echo "")
+          WIN_SETUP_SIG=$(find toolbar-staging -name '*-setup.exe.sig' | head -1 | xargs cat 2>/dev/null || echo "")
+          WIN_MSI_SIG=$(find toolbar-staging -name '*.msi.sig' | head -1 | xargs cat 2>/dev/null || echo "")
+
+          # Stage updater bundles
+          for f in $(find toolbar-staging -name '*.app.tar.gz'); do
+            cp "$f" release-assets/Kraki-macos.app.tar.gz
+          done
+          for f in $(find toolbar-staging -name '*-setup.exe.sig'); do
+            cp "$f" release-assets/Kraki-windows-setup.exe.sig
+          done
+          for f in $(find toolbar-staging -name '*.app.tar.gz.sig'); do
+            cp "$f" release-assets/Kraki-macos.app.tar.gz.sig
+          done
+
+          # Use NSIS (setup.exe) as the Windows update target
+          cat > release-assets/latest.json << ENDJSON
+          {
+            "version": "${VER}",
+            "notes": "Update to v${VER}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${MACOS_SIG}",
+                "url": "${BASE_URL}/Kraki-macos.app.tar.gz"
+              },
+              "darwin-x86_64": {
+                "signature": "${MACOS_SIG}",
+                "url": "${BASE_URL}/Kraki-macos.app.tar.gz"
+              },
+              "windows-x86_64": {
+                "signature": "${WIN_SETUP_SIG}",
+                "url": "${BASE_URL}/Kraki-windows-setup.exe"
+              }
+            }
+          }
+          ENDJSON
+          echo "Generated latest.json:"
+          cat release-assets/latest.json
 
       - name: Generate checksums
         run: |
