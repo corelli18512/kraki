@@ -20,23 +20,7 @@ Right now the main supported agent flow is GitHub Copilot CLI.
 
 ## Install
 
-Download the binary for your platform from [GitHub Releases](https://github.com/corelli18512/kraki/releases/latest):
-
-| Platform | Binary |
-|----------|--------|
-| macOS (Apple Silicon) | `kraki-cli-macos-arm64` |
-| macOS (Intel) | `kraki-cli-macos-x64` |
-| Linux (x64) | `kraki-cli-linux-x64` |
-| Windows (x64) | `kraki-cli-windows-x64.exe` |
-
-```bash
-# macOS / Linux
-chmod +x kraki-cli-*
-./kraki-cli-macos-arm64   # or the binary for your platform
-
-# Windows
-kraki-cli-windows-x64.exe
-```
+Download the latest binary for your platform from [GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run it.
 
 ## Requirements
 
