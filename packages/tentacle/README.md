@@ -8,40 +8,44 @@
   <a href="https://github.com/corelli18512/kraki">GitHub repository</a>
 </p>
 
-# @kraki/tentacle
+# Kraki
 
 CLI bridge that connects your coding machine to Kraki.
 
-> Preview: `@kraki/tentacle` is still early-stage. Expect breaking changes while the core flows stabilize.
+> Preview: Kraki is still early-stage. Expect breaking changes while the core flows stabilize.
 
-`@kraki/tentacle` runs next to your coding agent, connects to a Kraki relay, and lets you watch and steer sessions from another browser or device.
+Kraki runs next to your coding agent, connects to a relay, and lets you watch and steer sessions from your phone or another device.
 
 Right now the main supported agent flow is GitHub Copilot CLI.
 
 ## Install
 
-Run it once with `npx`:
+Download the binary for your platform from [GitHub Releases](https://github.com/corelli18512/kraki/releases/latest):
+
+| Platform | Binary |
+|----------|--------|
+| macOS (Apple Silicon) | `kraki-cli-macos-arm64` |
+| macOS (Intel) | `kraki-cli-macos-x64` |
+| Linux (x64) | `kraki-cli-linux-x64` |
+| Windows (x64) | `kraki-cli-windows-x64.exe` |
 
 ```bash
-npx @kraki/tentacle
-```
+# macOS / Linux
+chmod +x kraki-cli-*
+./kraki-cli-macos-arm64   # or the binary for your platform
 
-Or install it globally:
-
-```bash
-npm i -g @kraki/tentacle
-kraki
+# Windows
+kraki-cli-windows-x64.exe
 ```
 
 ## Requirements
 
 - GitHub Copilot CLI installed on the coding machine
-- `gh auth login` completed
 - A browser or phone to connect to the Kraki web app
 
 ## Quick start
 
-1. Run `npx @kraki/tentacle` or `kraki`
+1. Download and run the binary
 2. Follow the setup prompts in the terminal
 3. By default it connects to the hosted relay
 4. Scan the QR code or open the web app to connect your browser or phone
@@ -84,11 +88,6 @@ kraki-relay
 ```
 
 Then point tentacle setup at your own relay URL instead of the hosted default.
-
-## Package naming
-
-- `@kraki/tentacle` installs the `kraki` CLI
-- `@kraki/head` installs the `kraki-relay` CLI
 
 ## Links
 
