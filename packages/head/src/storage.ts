@@ -328,6 +328,16 @@ export class Storage {
     };
   }
 
+  // --- Counts ---
+
+  getUserCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number }).cnt;
+  }
+
+  getDeviceCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) as cnt FROM devices').get() as { cnt: number }).cnt;
+  }
+
   // --- Cleanup ---
 
   close(): void {

@@ -745,4 +745,87 @@ describe('HeadServer (thin relay)', () => {
       ws2.close();
     });
   });
+
+  // ── Admin Stats ──────────────────────────────────────
+
+  describe('getStats()', () => {
+    it('should return zero counts with no connections', async () => {
+      head = await createHead();
+      const stats = head.server.getStats();
+      expect(stats.users.total).toBe(0);
+      expect(stats.users.online).toBe(0);
+      expect(stats.devices.total).toBe(0);
+      expect(stats.devices.online).toBe(0);
+      expect(stats.connections).toEqual([]);
+    });
+
+    it('should reflect connected devices', async () => {
+      head = await createHead();
+      const { ws: ws1 } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev-t1' });
+      const { ws: ws2 } = await authConnect(head.port, 'Phone', 'app', { deviceId: 'dev-a1' });
+
+      const stats = head.server.getStats();
+      expect(stats.users.total).toBe(1);
+      expect(stats.users.online).toBe(1);
+      expect(stats.devices.total).toBe(2);
+      expect(stats.devices.online).toBe(2);
+      expect(stats.connections).toHaveLength(2);
+
+      const roles = stats.connections.map(c => c.role).sort();
+      expect(roles).toEqual(['app', 'tentacle']);
+
+      ws1.close();
+      ws2.close();
+    });
+
+    it('should count multiple users separately', async () => {
+      const fetcher = mockGitHubFetcher({
+        'token-alice': { id: 1001, login: 'alice' },
+        'token-bob': { id: 1002, login: 'bob' },
+      });
+      head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher }) });
+
+      const { ws: ws1 } = await authConnect(head.port, 'Alice-Laptop', 'tentacle', { token: 'token-alice', deviceId: 'dev-alice' });
+      const { ws: ws2 } = await authConnect(head.port, 'Bob-Laptop', 'tentacle', { token: 'token-bob', deviceId: 'dev-bob' });
+
+      const stats = head.server.getStats();
+      expect(stats.users.online).toBe(2);
+      expect(stats.devices.online).toBe(2);
+      expect(stats.connections).toHaveLength(2);
+
+      const userNames = stats.connections.map(c => c.userName).sort();
+      expect(userNames).toEqual(['alice', 'bob']);
+
+      ws1.close();
+      ws2.close();
+    });
+
+    it('should update after disconnect', async () => {
+      head = await createHead();
+      const { ws: ws1 } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev-t1' });
+
+      expect(head.server.getStats().devices.online).toBe(1);
+
+      ws1.close();
+      await new Promise(r => setTimeout(r, 100));
+
+      const stats = head.server.getStats();
+      expect(stats.devices.online).toBe(0);
+      expect(stats.connections).toEqual([]);
+      expect(stats.devices.total).toBe(1); // still registered
+    });
+
+    it('should include connectedAt timestamp', async () => {
+      head = await createHead();
+      const { ws: ws1 } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev-t1' });
+
+      const stats = head.server.getStats();
+      expect(stats.connections[0].connectedAt).toBeTruthy();
+      const ts = new Date(stats.connections[0].connectedAt!).getTime();
+      expect(ts).toBeGreaterThan(Date.now() - 5000);
+      expect(ts).toBeLessThanOrEqual(Date.now());
+
+      ws1.close();
+    });
+  });
 });
