@@ -9,6 +9,15 @@ import { execSync } from 'node:child_process';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 
+const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
+const exit = (code: number): never => {
+  if (_isSEA && process.platform === 'win32') {
+    setTimeout(() => process.exit(code), 100);
+    throw Object.assign(new Error(), { __exitCode: code });
+  }
+  process.exit(code);
+};
+
 // ── Check results ───────────────────────────────────────
 
 export interface CliCheckResult {
@@ -90,12 +99,12 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
     if (failures >= 2) {
       console.log(chalk.red(`\n✖  Still not detected after ${failures} attempts.`));
       console.log(chalk.dim('   Try opening a new terminal window and running kraki again.'));
-      process.exit(1);
+      exit(1);
     }
 
     const retry = await confirm({ message: 'Retry?', default: true });
     if (!retry) {
-      process.exit(1);
+      exit(1);
     }
     spinner?.start();
   }
