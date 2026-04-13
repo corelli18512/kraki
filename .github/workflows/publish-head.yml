@@ -1,0 +1,68 @@
+name: Publish Head
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish @kraki/head
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: startsWith(github.event.release.tag_name, 'head-v')
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate
+        run: pnpm validate
+
+      - name: Verify tag matches package version
+        run: |
+          TAG_VERSION="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${TAG_VERSION#head-v}"
+          PKG_VERSION=$(node -p "require('./packages/head/package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version: $PKG_VERSION ✅"
+
+      - name: Build
+        run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/head build
+
+      - name: Publish @kraki/protocol
+        run: |
+          cd packages/protocol
+          npm publish --provenance --access public || echo "Already published (skipped)"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @kraki/head
+        run: |
+          cd packages/head
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
