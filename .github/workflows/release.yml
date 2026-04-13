@@ -229,6 +229,7 @@ jobs:
 
   build-toolbar:
     name: Build Toolbar (${{ matrix.label }})
+    if: false  # Toolbar build disabled — CLI-only releases for now
     needs:
       - prepare
       - build-binary

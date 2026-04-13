@@ -125,12 +125,18 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
   if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`);
   const data = await res.json() as DeviceCodeResponse;
 
-  // 2. Copy code to clipboard
+  // 2. Prompt to copy code and open browser
+  console.log(chalk.dim(`    Your device code: ${chalk.bold(data.user_code)}`));
+  await input({ message: 'Press Enter to copy code and open GitHub…', theme: promptTheme });
+
+  // Copy to clipboard
   try {
     const { execSync } = await import('node:child_process');
     const platform = (await import('node:os')).platform();
     if (platform === 'darwin') {
       execSync('pbcopy', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
+    } else if (platform === 'win32') {
+      execSync('clip', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
     } else {
       try {
         execSync('xclip -selection clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
@@ -138,20 +144,20 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
         execSync('xsel --clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
       }
     }
-    console.log(chalk.dim(`    Device code copied to clipboard: ${chalk.bold(data.user_code)}`));
-  } catch {
-    console.log(chalk.dim(`    Your device code: ${chalk.bold(data.user_code)}`));
-  }
+    console.log(chalk.dim(`    Code copied to clipboard ✓`));
+  } catch { /* clipboard not available */ }
 
-  // 3. Prompt to open browser
-  console.log(chalk.dim(`    Open ${chalk.underline(data.verification_uri)} and paste the code`));
-  await input({ message: 'Press Enter to open GitHub in your browser…', theme: promptTheme });
-
+  // Open browser
   try {
     const { spawnSync } = await import('node:child_process');
     const platform = (await import('node:os')).platform();
-    const openCmd = platform === 'darwin' ? 'open' : 'xdg-open';
-    spawnSync(openCmd, [data.verification_uri], { stdio: 'ignore' });
+    if (platform === 'darwin') {
+      spawnSync('open', [data.verification_uri], { stdio: 'ignore' });
+    } else if (platform === 'win32') {
+      spawnSync('cmd', ['/c', 'start', '', data.verification_uri], { stdio: 'ignore' });
+    } else {
+      spawnSync('xdg-open', [data.verification_uri], { stdio: 'ignore' });
+    }
   } catch { /* browser open failed — user can navigate manually */ }
 
   // 4. Poll for authorization
@@ -220,18 +226,18 @@ export async function runSetup(): Promise<KrakiConfig> {
   let relayInfo: RelayInfo = { methods: ['open'], pairing: true };
   let urlConfirmed = false;
   while (!urlConfirmed) {
-    console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay URL')}`);
-    relay = await input({
-      message: 'Relay URL:',
-      default: defaultRelay,
+    console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay')}`);
+    const relayHost = await input({
+      message: 'Relay:',
+      default: defaultRelay.replace(/^wss?:\/\//, ''),
       theme: promptTheme,
       validate: (v) => {
-        if (!v.startsWith('wss://') && !v.startsWith('ws://')) {
-          return 'URL must start with wss:// or ws://';
-        }
+        if (v.includes(' ')) return 'Invalid URL';
         return true;
       },
     });
+    // Add wss:// if no protocol given
+    relay = relayHost.startsWith('wss://') || relayHost.startsWith('ws://') ? relayHost : `wss://${relayHost}`;
 
     // Test relay connectivity and query auth info
     while (true) {
