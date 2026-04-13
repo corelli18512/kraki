@@ -180,6 +180,15 @@ jobs:
       - name: Build tentacle binary
         run: pnpm --filter @kraki/tentacle run build:binary:local
 
+      - name: Patch Windows binary to GUI subsystem
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Suppress console window when launched as sidecar
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $editbin = Join-Path $vsPath "VC\Tools\MSVC\*\bin\Hostx64\x64\editbin.exe" | Resolve-Path | Select-Object -First 1
+          & $editbin /subsystem:windows "packages\tentacle\dist\sea\${{ matrix.asset_name }}"
+
       - name: Import Apple certificate
         if: runner.os == 'macOS'
         env:

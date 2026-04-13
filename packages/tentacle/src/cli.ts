@@ -26,6 +26,13 @@ import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 
+// On Windows SEA, exit() can crash libuv if async handles are still
+// draining. Delay slightly so libuv can close handles before shutdown.
+const exit = (code: number): never => {
+  setTimeout(() => process.exit(code), 100);
+  throw Object.assign(new Error(), { __exitCode: code });
+};
+
 // ── Help ────────────────────────────────────────────────
 
 function printHelp(): void {
@@ -272,7 +279,7 @@ function cmdConfigLog(verbosity?: string): void {
   if (verbosity !== 'normal' && verbosity !== 'verbose') {
     console.log(chalk.red(`Invalid log verbosity: ${verbosity}`));
     console.log(chalk.dim('Use `kraki config log normal` or `kraki config log verbose`.'));
-    process.exit(1);
+    exit(1);
     return;
   }
 
@@ -301,7 +308,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   if (!isDaemonRunning()) {
     if (urlOnly) {
       process.stderr.write('error: daemon not running\n');
-      process.exit(1);
+      exit(1);
       return;
     }
     const { confirm } = await import('@inquirer/prompts');
@@ -318,7 +325,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   if (!config) {
     if (urlOnly) {
       process.stderr.write('error: no config found\n');
-      process.exit(1);
+      exit(1);
       return;
     }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
@@ -358,7 +365,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   } catch (err) {
     if (urlOnly) {
       process.stderr.write(`error: ${(err as Error).message}\n`);
-      process.exit(1);
+      exit(1);
       return;
     }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
@@ -380,7 +387,7 @@ async function cmdSetupHeadless(args: string[]): Promise<void> {
 
   if (!relay) {
     process.stderr.write('error: --relay is required\n');
-    process.exit(1);
+    exit(1);
     return;
   }
 
@@ -431,12 +438,12 @@ async function cmdRelayInfo(args: string[]): Promise<void> {
   const url = args[1];
   if (!url) {
     process.stderr.write('error: relay URL is required\nusage: kraki relay-info <url>\n');
-    process.exit(1);
+    exit(1);
     return;
   }
   if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
     process.stderr.write('error: URL must start with wss:// or ws://\n');
-    process.exit(1);
+    exit(1);
     return;
   }
 
@@ -483,7 +490,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   const clientId = getArgValue(args, '--client-id');
   if (!clientId) {
     process.stderr.write('error: --client-id is required\n');
-    process.exit(1);
+    exit(1);
     return;
   }
 
@@ -495,7 +502,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   });
   if (!res.ok) {
     process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
-    process.exit(1);
+    exit(1);
     return;
   }
   const data = await res.json() as { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
@@ -539,12 +546,12 @@ async function cmdAuth(args: string[]): Promise<void> {
 
     if (tokenData.error === 'expired_token') {
       process.stderr.write('error: device code expired\n');
-      process.exit(1);
+      exit(1);
       return;
     }
     if (tokenData.error === 'access_denied') {
       process.stderr.write('error: authorization denied\n');
-      process.exit(1);
+      exit(1);
       return;
     }
     if (tokenData.error === 'slow_down') {
@@ -553,7 +560,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   }
 
   process.stderr.write('error: authorization timed out\n');
-  process.exit(1);
+  exit(1);
 }
 
 // ── Arg parsing ─────────────────────────────────────────
@@ -657,15 +664,18 @@ async function main(): Promise<void> {
 
   console.log(chalk.red(`Unknown command: ${cmd}`));
   printHelp();
-  process.exit(1);
+  exit(1);
 }
 
 main().catch((err) => {
+  // Delayed exit throw — ignore
+  if (err?.__exitCode !== undefined) return;
   // User pressed Esc or Ctrl+C during a prompt — exit cleanly
   if (err?.name === 'ExitPromptError' || err?.message?.includes('User force closed')) {
     console.log(chalk.dim('\n  Cancelled.'));
-    process.exit(0);
+    exit(0);
+    return;
   }
   console.error(chalk.red('Fatal error:'), err);
-  process.exit(1);
+  exit(1);
 });
