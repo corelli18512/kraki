@@ -113,20 +113,26 @@ export function SessionPage() {
             {displayTitle ?? label}
           </span>
           <div className="flex items-center gap-1">
-            {displayTitle && (
+            {session.deviceName && (
               <>
-                <span className="text-[10px] text-text-muted">{label}</span>
-                {session.model && <span className="text-[10px] text-text-muted">· {session.model}</span>}
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    !isDeviceOnline ? 'bg-slate-400'
+                    : session.state === 'active' ? 'bg-blue-400 animate-pulse'
+                    : 'bg-emerald-400'
+                  }`}
+                />
+                <span className="text-[10px] text-text-muted">{session.deviceName}</span>
               </>
             )}
-            {!displayTitle && session.model && (
-              <span className="text-xs text-text-muted">{session.model}</span>
+            {displayTitle && (
+              <>
+                {session.deviceName && <span className="text-[10px] text-text-muted">·</span>}
+                <span className="text-[10px] text-text-muted">{label}</span>
+              </>
             )}
-            {!isDeviceOnline && (
-              <span className="rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-medium text-text-muted">offline</span>
-            )}
-            {session.deviceName && (
-              <span className="text-[10px] text-text-muted">· {session.deviceName}</span>
+            {session.model && (
+              <span className="text-[10px] text-text-muted">{session.model}</span>
             )}
           </div>
         </div>

@@ -110,7 +110,7 @@ describe('SessionPage', () => {
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
     expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.getByText('· MacBook')).toBeInTheDocument();
+    expect(screen.getByText('MacBook')).toBeInTheDocument();
   });
 
   it('shows message input for active session', () => {
@@ -189,12 +189,12 @@ describe('SessionPage', () => {
     expect(screen.queryByTitle('End session')).not.toBeInTheDocument();
   });
 
-  it('shows offline badge for offline session', () => {
+  it('shows device status for offline session', () => {
     useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 0 },
     ]);
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.getByText('Mac')).toBeInTheDocument();
   });
 
   it('hides message input for offline session', () => {
