@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm exec vite",
-    "beforeBuildCommand": "pnpm build:icons && pnpm build"
+    "beforeBuildCommand": "pnpm build:icons && pnpm exec vite build"
   },
   "app": {
     "withGlobalTauri": true,
