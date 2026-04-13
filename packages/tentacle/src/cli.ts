@@ -26,11 +26,15 @@ import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 
-// On Windows SEA, exit() can crash libuv if async handles are still
+// On Windows SEA, process.exit() can crash libuv if async handles are still
 // draining. Delay slightly so libuv can close handles before shutdown.
+const _isWindowsSEA = process.platform === 'win32' && !!(globalThis as Record<string, unknown>).__sea;
 const exit = (code: number): never => {
-  setTimeout(() => process.exit(code), 100);
-  throw Object.assign(new Error(), { __exitCode: code });
+  if (_isWindowsSEA) {
+    setTimeout(() => process.exit(code), 100);
+    throw Object.assign(new Error(), { __exitCode: code });
+  }
+  process.exit(code);
 };
 
 // ── Help ────────────────────────────────────────────────
