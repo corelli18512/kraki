@@ -23,6 +23,60 @@ import { checkGhAuth, checkCopilotCli, withRetry } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 
+/**
+ * Silently install the current binary as `kraki` in a PATH directory.
+ * Only runs when executing as a SEA binary. Skips on errors.
+ */
+function installToPath(): void {
+  if (!isSea()) return;
+
+  const { copyFileSync, existsSync, chmodSync } = require('node:fs');
+  const { execSync } = require('node:child_process');
+  const path = require('node:path');
+  const src = process.execPath;
+
+  try {
+    if (process.platform === 'win32') {
+      // Copy to %LOCALAPPDATA%\Kraki and add to user PATH
+      const appDir = path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'Kraki');
+      require('node:fs').mkdirSync(appDir, { recursive: true });
+      const dest = path.join(appDir, 'kraki.exe');
+      if (src !== dest) copyFileSync(src, dest);
+      // Add to user PATH if not already there
+      try {
+        const currentPath = execSync('reg query "HKCU\\Environment" /v Path', { encoding: 'utf8' });
+        if (!currentPath.toLowerCase().includes(appDir.toLowerCase())) {
+          const pathValue = currentPath.match(/REG_(?:EXPAND_)?SZ\s+(.*)/)?.[1]?.trim() ?? '';
+          const newPath = pathValue ? `${pathValue};${appDir}` : appDir;
+          execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`, { stdio: 'ignore' });
+          // Broadcast change so new terminals pick it up
+          execSync('setx KRAKI_PATH_SET 1', { stdio: 'ignore' });
+        }
+      } catch { /* PATH update failed — not critical */ }
+      console.log(chalk.dim(`  Installed to ${dest}`));
+    } else {
+      // macOS / Linux: copy to /usr/local/bin or ~/.local/bin
+      const dest1 = '/usr/local/bin/kraki';
+      const dest2 = path.join(require('node:os').homedir(), '.local', 'bin', 'kraki');
+
+      let dest = dest2;
+      try {
+        copyFileSync(src, dest1);
+        chmodSync(dest1, 0o755);
+        dest = dest1;
+      } catch {
+        // /usr/local/bin not writable — use ~/.local/bin
+        require('node:fs').mkdirSync(path.dirname(dest2), { recursive: true });
+        copyFileSync(src, dest2);
+        chmodSync(dest2, 0o755);
+      }
+      console.log(chalk.dim(`  Installed to ${dest}`));
+    }
+  } catch {
+    // Silent failure — not critical
+  }
+}
+
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
 
 function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
@@ -348,7 +402,10 @@ export async function runSetup(): Promise<KrakiConfig> {
   // 6. Save
   saveConfig(config);
 
-  // 7. Summary box
+  // 7. Install to PATH (silent — only for SEA binaries)
+  installToPath();
+
+  // 8. Summary box
   console.log('');
   printBox([
     `${chalk.green.bold('✔')} ${chalk.bold('Setup complete!')}`,
