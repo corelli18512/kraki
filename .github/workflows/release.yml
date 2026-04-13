@@ -365,6 +365,21 @@ jobs:
           tauriScript: pnpm tauri
           args: ${{ matrix.tauri_args }}
 
+      - name: Patch Info.plist (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find packages/toolbar/src-tauri/target -name 'Kraki.app' -type d | head -1)
+          PLIST="$APP_PATH/Contents/Info.plist"
+          echo "Patching $PLIST"
+          # Remove LSRequiresCarbon — breaks macOS 26+ ("not supported on this Mac")
+          plutil -remove LSRequiresCarbon "$PLIST" 2>/dev/null || true
+          # Re-sign after plist modification
+          codesign --force --deep --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            --options runtime --entitlements packages/toolbar/src-tauri/entitlements.plist \
+            "$APP_PATH"
+          echo "Patched and re-signed"
+
       - name: Create DMG (macOS)
         if: runner.os == 'macOS'
         run: |
