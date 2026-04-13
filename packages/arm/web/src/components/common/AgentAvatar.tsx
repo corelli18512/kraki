@@ -7,6 +7,7 @@ interface AgentAvatarProps {
   size?: 'sm' | 'md';
   status?: 'active' | 'idle';
   badge?: 'question' | 'permission';
+  pinned?: boolean;
 }
 
 const sizeMap = {
@@ -23,7 +24,7 @@ function CopilotIcon({ className }: { className?: string }) {
   );
 }
 
-export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: AgentAvatarProps) {
+export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinned }: AgentAvatarProps) {
   const s = sizeMap[size];
   const hue = stringToHue(sessionId ?? agent);
 
@@ -32,6 +33,7 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: Ag
     : null;
 
   const badgeIconSize = size === 'sm' ? 'h-3 w-3' : 'h-3.5 w-3.5';
+  const pinSize = size === 'sm' ? 'h-2.5 w-2.5' : 'h-3 w-3';
 
   return (
     <div className="relative inline-flex shrink-0">
@@ -44,6 +46,14 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge }: Ag
       {BadgeIcon && (
         <span className="absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] text-kraki-500">
           <BadgeIcon className={badgeIconSize} />
+        </span>
+      )}
+      {pinned && (
+        <span
+          className="absolute -top-1 -left-1 z-10 -rotate-45"
+          style={{ color: `hsl(${hue}, 60%, 40%)` }}
+        >
+          <svg className={pinSize} viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" /></svg>
         </span>
       )}
     </div>

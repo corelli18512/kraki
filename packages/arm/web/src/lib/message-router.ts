@@ -23,7 +23,7 @@ export const UNREAD_CANDIDATE_TYPES = new Set(['error', 'permission', 'question'
 /** Set session preview and optionally increment unread. */
 function updatePreview(sid: string, preview: SessionPreview, notify: boolean): void {
   const store = getStore();
-  const shouldIncrement = notify && !isViewingSession(sid);
+  const shouldIncrement = notify && (!isViewingSession(sid) || !document.hasFocus());
   store.setSessionPreview(sid, preview, shouldIncrement);
 }
 
