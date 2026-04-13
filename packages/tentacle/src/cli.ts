@@ -26,11 +26,13 @@ import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 
+// Detect Node.js SEA (Single Executable Application)
+const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
+
 // On Windows SEA, process.exit() can crash libuv if async handles are still
 // draining. Delay slightly so libuv can close handles before shutdown.
-const _isWindowsSEA = process.platform === 'win32' && !!(globalThis as Record<string, unknown>).__sea;
 const exit = (code: number): never => {
-  if (_isWindowsSEA) {
+  if (_isSEA && process.platform === 'win32') {
     setTimeout(() => process.exit(code), 100);
     throw Object.assign(new Error(), { __exitCode: code });
   }

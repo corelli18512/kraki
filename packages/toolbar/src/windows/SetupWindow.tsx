@@ -55,6 +55,8 @@ export default function SetupWindow() {
   }, []);
 
   // ── Startup: test relay, check auth ─────────────────────
+  // Skip gh auto-detect with ?skip-gh-auth in URL (for testing device flow)
+  const skipGhAuth = window.location.search.includes('skip-gh-auth');
 
   useEffect(() => {
     (async () => {
@@ -86,15 +88,17 @@ export default function SetupWindow() {
       }
 
       // 2. Check if gh CLI is already authenticated (same as CLI routine)
-      try {
-        const result = await invoke<string>('run_doctor');
-        const doctor = JSON.parse(result) as { ghAuth: boolean; ghUser: string | null };
-        if (doctor.ghAuth) {
-          setGithubUser(doctor.ghUser);
-          setStep('device-name');
-          return;
-        }
-      } catch { /* doctor failed — continue to manual auth */ }
+      if (!skipGhAuth) {
+        try {
+          const result = await invoke<string>('run_doctor');
+          const doctor = JSON.parse(result) as { ghAuth: boolean; ghUser: string | null };
+          if (doctor.ghAuth) {
+            setGithubUser(doctor.ghUser);
+            setStep('device-name');
+            return;
+          }
+        } catch { /* doctor failed — continue to manual auth */ }
+      }
 
       setStep('auth');
     })();
