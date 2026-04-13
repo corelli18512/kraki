@@ -180,15 +180,6 @@ jobs:
       - name: Build tentacle binary
         run: pnpm --filter @kraki/tentacle run build:binary:local
 
-      - name: Patch Windows binary to GUI subsystem
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Suppress console window when launched as sidecar
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $editbin = Join-Path $vsPath "VC\Tools\MSVC\*\bin\Hostx64\x64\editbin.exe" | Resolve-Path | Select-Object -First 1
-          & $editbin /subsystem:windows "packages\tentacle\dist\sea\${{ matrix.asset_name }}"
-
       - name: Import Apple certificate
         if: runner.os == 'macOS'
         env:
@@ -483,7 +474,6 @@ jobs:
     needs:
       - prepare
       - build-binary
-      - build-toolbar
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -497,14 +487,20 @@ jobs:
 
       - name: Download toolbar artifacts
         uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
           pattern: toolbar-*
           path: toolbar-staging
           merge-multiple: true
 
       - name: Stage toolbar assets
+        continue-on-error: true
         run: |
           set -euo pipefail
+          if [ ! -d toolbar-staging ] || [ -z "$(ls toolbar-staging 2>/dev/null)" ]; then
+            echo "No toolbar artifacts — CLI-only release"
+            exit 0
+          fi
           # Rename Tauri outputs to clean names
           for f in $(find toolbar-staging -name '*.dmg'); do
             cp "$f" release-assets/Kraki-macos.dmg
@@ -518,6 +514,8 @@ jobs:
           ls -lh release-assets/
 
       - name: Generate latest.json for auto-updater
+        continue-on-error: true
+        if: hashFiles('toolbar-staging/**') != ''
         env:
           VERSION: ${{ needs.prepare.outputs.release_tag }}
           REPO: ${{ github.repository }}
