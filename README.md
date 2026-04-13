@@ -9,10 +9,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
-  <a href="https://www.npmjs.com/package/@kraki/tentacle"><img src="https://img.shields.io/npm/v/@kraki/tentacle" alt="npm"></a>
   <img src="https://img.shields.io/badge/E2E-AES--256--GCM-green?logo=letsencrypt&logoColor=white" alt="E2E Encrypted">
   <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/TypeScript-5.7-blue?logo=typescript&logoColor=white" alt="TypeScript">
 </p>
 
 > 🐣 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
@@ -21,15 +19,9 @@ Kraki lets you watch agent sessions, respond to permission requests, answer ques
 
 Get started on your coding machine:
 
-- [Download the latest standalone binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest)
-- Or install from npm:
-```bash 
-npm i -g @kraki/tentacle
-# then
-kraki
-```
+- [Download the latest binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run it
 - Only supports GitHub Copilot CLI and GitHub account login for now
-- On macOS/Linux, if the downloaded binary is not executable yet, run `chmod +x ./kraki-<platform>-<arch>` once
+- On macOS/Linux, run `chmod +x ./kraki-cli-*` once if needed
 
 Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
 
@@ -51,41 +43,17 @@ Kraki is a little sea creature with a job: the `head` stays in the middle, the `
 - Relay server (`head`) — thin encrypted forwarder
 - CLI bridge for agent machines (`tentacle`)
 - Web receiver / PWA (`arm/web`) with push notifications
-- **Desktop toolbar** (`toolbar`) — macOS menu bar & Windows system tray for tentacle
+- **Desktop toolbar** (`toolbar`) — macOS menu bar & Windows system tray *(coming soon)*
 - Shared protocol and crypto packages
 - Current adapter work centered on Copilot-based flows
 
 Native iOS and additional agent adapters will be added later without changing the core message flow. Any feedback and contributions are welcome.
 
-## Desktop toolbar
-
-The toolbar is an optional companion to the `kraki` CLI that lives in your macOS menu bar or Windows system tray, giving you always-visible connection status and quick controls.
-
-**Features:**
-- Live relay connection status (connected / connecting / disconnected)
-- Active session name
-- Connect / Disconnect toggle
-- QR pairing window with countdown
-
-**Installation** (macOS / Windows):
-
-Download the latest `.dmg` (macOS) or `.exe` (Windows) from [Releases](https://github.com/corelli18512/kraki/releases) and install it. The toolbar auto-starts at login and manages the tentacle daemon for you — no separate `kraki` CLI install required.
-
-**Running from source:**
-
-```bash
-# Install Rust + Tauri CLI first: https://tauri.app/start/prerequisites/
-pnpm install
-pnpm dev:toolbar
-```
-
 ## Set up
 
-Install Kraki on the coding machine:
+[Download the latest binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run the matching `kraki-cli-*` asset for your platform.
 
-- Preferred: [Download the latest standalone binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run the matching `kraki-*` asset for your platform
-- Or install from npm: `npm i -g @kraki/tentacle`, then run `kraki`
-- On macOS/Linux, if the downloaded binary is not executable yet, run `chmod +x ./kraki-<platform>-<arch>` once
+On macOS/Linux, run `chmod +x ./kraki-cli-*` once if needed.
 
 > Note: macOS may show Gatekeeper and Windows may show SmartScreen on first launch. If you trust the release, use "Open Anyway" / "Run anyway".
 
@@ -96,11 +64,6 @@ On first run, Kraki will:
 3. show a QR code / pairing flow for your browser or phone
 
 > 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications, full-screen mode, and instant access without opening a browser.
-
-Package names and executables are different on purpose:
-
-- `@kraki/tentacle` installs the `kraki` CLI
-- `@kraki/head` installs the `kraki-relay` CLI
 
 ### Self-host your own relay
 
