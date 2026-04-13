@@ -354,24 +354,87 @@ jobs:
           tauriScript: pnpm tauri
           args: ${{ matrix.tauri_args }}
 
-      - name: Create DMG with create-dmg (macOS)
+      - name: Create DMG (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install create-dmg
+          set -euo pipefail
           APP_PATH=$(find packages/toolbar/src-tauri/target -name 'Kraki.app' -type d | head -1)
           echo "Found app at: $APP_PATH"
+          DMG_OUT="packages/toolbar/src-tauri/target/Kraki-macos.dmg"
+          BG="packages/toolbar/src-tauri/dmg-background/background.png"
+
           # Remove Tauri's DMG — we'll make our own
           find packages/toolbar/src-tauri/target -name '*.dmg' -delete
-          create-dmg \
-            --volname "Kraki" \
-            --window-size 660 400 \
-            --background packages/toolbar/src-tauri/dmg-background/background.png \
-            --icon-size 128 \
-            --icon "Kraki.app" 180 170 \
-            --app-drop-link 480 170 \
-            --no-internet-enable \
-            "packages/toolbar/src-tauri/target/Kraki-macos.dmg" \
-            "$APP_PATH"
+
+          # Create read-write DMG
+          APP_SIZE=$(du -sm "$APP_PATH" | awk '{print $1}')
+          DMG_SIZE=$(( APP_SIZE + 20 ))m
+          RW_DMG="$(mktemp /tmp/kraki-rw-XXXXXX.dmg)"
+          hdiutil create -size "$DMG_SIZE" -volname "Kraki" -fs HFS+ "$RW_DMG"
+
+          # Mount
+          MOUNT_OUT=$(hdiutil attach -readwrite -noverify -noautoopen "$RW_DMG")
+          DEV=$(echo "$MOUNT_OUT" | head -1 | awk '{print $1}')
+          MOUNT_DIR=$(echo "$MOUNT_OUT" | grep "/Volumes/" | sed 's/.*\/Volumes/\/Volumes/' | head -1 | xargs)
+          echo "Mounted at: $MOUNT_DIR"
+
+          # Copy app
+          cp -R "$APP_PATH" "$MOUNT_DIR/Kraki.app"
+
+          # Create Finder alias (not symlink) — carries the Applications folder icon
+          osascript -e "tell application \"Finder\" to make new alias file at (POSIX file \"$MOUNT_DIR\" as alias) to (POSIX file \"/Applications\" as alias)"
+
+          # Set custom icon on Applications alias
+          APP_ICON_PNG="$MOUNT_DIR/Kraki.app/Contents/Resources/icon.icns"
+          swift -e '
+            import Cocoa
+            let ws = NSWorkspace.shared
+            let icon = ws.icon(forFile: "/Applications")
+            let result = ws.setIcon(icon, forFile: CommandLine.arguments[1], options: [])
+            print("Set Applications icon: \(result)")
+          ' "$MOUNT_DIR/Applications"
+
+          # Background
+          if [ -f "$BG" ]; then
+            mkdir -p "$MOUNT_DIR/.background"
+            cp "$BG" "$MOUNT_DIR/.background/background.png"
+          fi
+
+          # Finder layout
+          osascript <<APPLESCRIPT
+          tell application "Finder"
+            tell disk "Kraki"
+              open
+              set current view of container window to icon view
+              set toolbar visible of container window to false
+              set statusbar visible of container window to false
+              set the bounds of container window to {200, 120, 860, 520}
+              set viewOptions to the icon view options of container window
+              set arrangement of viewOptions to not arranged
+              set icon size of viewOptions to 128
+              if exists file ".background:background.png" then
+                set background picture of viewOptions to file ".background:background.png"
+              end if
+              set position of item "Kraki.app" of container window to {180, 170}
+              set position of item "Applications" of container window to {480, 170}
+              close
+              open
+              update without registering applications
+              delay 2
+              close
+            end tell
+          end tell
+          APPLESCRIPT
+
+          # Cleanup
+          rm -rf "$MOUNT_DIR/.fseventsd" "$MOUNT_DIR/.Trashes"
+          sync; sleep 1
+
+          # Unmount and compress
+          hdiutil detach "$DEV"
+          hdiutil convert "$RW_DMG" -format UDZO -o "$DMG_OUT"
+          rm -f "$RW_DMG"
+          echo "DMG created: $(ls -lh "$DMG_OUT")"
 
       - name: Upload toolbar artifacts
         uses: actions/upload-artifact@v7
