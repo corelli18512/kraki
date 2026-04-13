@@ -33,7 +33,7 @@ const VERSION: string = pkg.version;
 import { createServer } from 'http';
 import { Storage } from './storage.js';
 import { HeadServer } from './server.js';
-import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider } from './auth.js';
+import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider, safeEqual } from './auth.js';
 import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
@@ -49,13 +49,14 @@ if (args.includes('--help') || args.includes('-h')) {
   Usage: kraki-relay [options]
 
   Options:
-    --port <n>      Server port (default: 4000, env: PORT)
-    --db <path>     SQLite database path (default: kraki-head.db, env: DB_PATH)
-    --auth <mode>   Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
-    --push <type>   Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
-    --log <level>   Log level: debug | info | warn | error (default: info)
-    --help, -h      Show this help
-    --version, -v   Show version
+    --port <n>        Server port (default: 4000, env: PORT)
+    --db <path>       SQLite database path (default: kraki-head.db, env: DB_PATH)
+    --auth <mode>     Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
+    --admin-key <key> Enable GET /admin/stats endpoint (env: ADMIN_KEY)
+    --push <type>     Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
+    --log <level>     Log level: debug | info | warn | error (default: info)
+    --help, -h        Show this help
+    --version, -v     Show version
 
   GitHub OAuth (env only, for web login):
     GITHUB_CLIENT_ID      GitHub OAuth App client ID
@@ -95,6 +96,7 @@ if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
 const DB_PATH = flag('db', process.env.DB_PATH || 'kraki-head.db');
 const AUTH_MODES = flag('auth', process.env.AUTH_MODE || 'open').split(',').map(s => s.trim());
 const API_KEY = process.env.API_KEY;
+const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const PAIRING = process.env.PAIRING_ENABLED !== 'false'; // default true
@@ -201,7 +203,46 @@ const head = new HeadServer(storage, {
   pushManager,
 });
 
+const startedAt = Date.now();
+
 const httpServer = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+  if (url.pathname === '/admin/stats') {
+    // CORS for cross-origin admin portal
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (!ADMIN_KEY) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+
+    const authHeader = req.headers.authorization ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token || !safeEqual(token, ADMIN_KEY)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+
+    const stats = head.getStats();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      version: VERSION,
+      uptime: Math.floor((Date.now() - startedAt) / 1000),
+      ...stats,
+    }));
+    return;
+  }
+
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ name: '@kraki/head', version: VERSION, status: 'ok' }));
 });

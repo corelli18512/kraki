@@ -6,7 +6,7 @@ import { timingSafeEqual } from 'crypto';
 import { getLogger } from './logger.js';
 
 /** Timing-safe string comparison to prevent timing attacks on secrets */
-function safeEqual(a: string, b: string): boolean {
+export function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }

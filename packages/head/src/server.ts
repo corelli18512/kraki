@@ -30,6 +30,7 @@ interface ClientState {
   authenticated: boolean;
   ip?: string;
   isAlive: boolean;
+  authenticatedAt?: number;
   pendingNonce?: string;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
@@ -604,6 +605,7 @@ export class HeadServer {
 
     // Register connection
     state.authenticated = true;
+    state.authenticatedAt = Date.now();
     state.deviceId = deviceId;
     state.userId = user.userId;
     this.connections.set(deviceId, ws);
@@ -655,6 +657,7 @@ export class HeadServer {
     }
 
     state.authenticated = true;
+    state.authenticatedAt = Date.now();
     state.deviceId = deviceId;
     state.userId = user.id;
     this.connections.set(deviceId, ws);
@@ -939,6 +942,62 @@ export class HeadServer {
     }
     logger.info('Flushed pending messages', { deviceId, count: envelopes.length });
     return envelopes;
+  }
+
+  getStats(): {
+    users: { total: number; online: number };
+    devices: { total: number; online: number };
+    connections: Array<{
+      deviceId: string;
+      userId: string;
+      userName?: string;
+      role?: string;
+      kind?: string;
+      connectedAt?: string;
+    }>;
+  } {
+    const onlineUserIds = new Set<string>();
+    const connectionList: Array<{
+      deviceId: string;
+      userId: string;
+      userName?: string;
+      role?: string;
+      kind?: string;
+      connectedAt?: string;
+    }> = [];
+
+    for (const [deviceId, ws] of this.connections) {
+      const state = this.clients.get(ws);
+      if (!state?.authenticated || !state.userId) continue;
+
+      onlineUserIds.add(state.userId);
+
+      const device = this.storage.getDevice(deviceId);
+      const user = this.storage.getUser(state.userId);
+
+      connectionList.push({
+        deviceId,
+        userId: state.userId,
+        userName: user?.username,
+        role: device?.role,
+        kind: device?.kind ?? undefined,
+        connectedAt: state.authenticatedAt
+          ? new Date(state.authenticatedAt).toISOString()
+          : undefined,
+      });
+    }
+
+    return {
+      users: {
+        total: this.storage.getUserCount(),
+        online: onlineUserIds.size,
+      },
+      devices: {
+        total: this.storage.getDeviceCount(),
+        online: this.connections.size,
+      },
+      connections: connectionList,
+    };
   }
 
   close(): void {

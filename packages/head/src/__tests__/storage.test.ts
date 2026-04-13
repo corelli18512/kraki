@@ -284,4 +284,24 @@ describe('Storage', () => {
       expect(bobTokens[0].token).toBe('bob_token');
     });
   });
+
+  // --- Counts ---
+
+  describe('counts', () => {
+    it('should return zero counts for empty database', () => {
+      expect(storage.getUserCount()).toBe(0);
+      expect(storage.getDeviceCount()).toBe(0);
+    });
+
+    it('should count users and devices', () => {
+      storage.upsertUser('u1', 'alice');
+      storage.upsertUser('u2', 'bob');
+      storage.upsertDevice('d1', 'u1', 'laptop', 'tentacle');
+      storage.upsertDevice('d2', 'u1', 'phone', 'app');
+      storage.upsertDevice('d3', 'u2', 'desktop', 'tentacle');
+
+      expect(storage.getUserCount()).toBe(2);
+      expect(storage.getDeviceCount()).toBe(3);
+    });
+  });
 });
