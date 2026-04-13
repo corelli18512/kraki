@@ -369,7 +369,7 @@ jobs:
           # Create read-write DMG
           APP_SIZE=$(du -sm "$APP_PATH" | awk '{print $1}')
           DMG_SIZE=$(( APP_SIZE + 20 ))m
-          RW_DMG="$(mktemp /tmp/kraki-rw-XXXXXX.dmg)"
+          RW_DMG="/tmp/kraki-rw-$$.dmg"
           hdiutil create -size "$DMG_SIZE" -volname "Kraki" -fs HFS+ "$RW_DMG"
 
           # Mount
