@@ -382,12 +382,12 @@ export async function runSetup(): Promise<KrakiConfig> {
     const copilotResult = await withRetry(
       checkCopilotCli,
       'Copilot CLI',
-      'Install: npm install -g @github/copilot  (or check your PATH)',
+      'Install from https://docs.github.com/copilot/how-tos/copilot-cli',
       spinner,
     );
     spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
 
-    // Check if Copilot has authentication (gh token, env var, or copilot login)
+    // Check Copilot authentication
     const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
     const hasGhToken = checkGhAuth().authenticated;
     const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
@@ -396,7 +396,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     } else {
       authSpinner.warn('Copilot not authenticated');
       console.log(chalk.dim('    Run "copilot login" or "gh auth login" in another terminal'));
-      await input({ message: 'Press Enter to continue…', theme: promptTheme });
+      await input({ message: 'Press Enter after authenticating…', theme: promptTheme });
     }
   } else {
     const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
