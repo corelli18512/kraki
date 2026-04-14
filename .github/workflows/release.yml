@@ -613,6 +613,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      ARTIFACT_DIR: ${{ github.workspace }}/npm-artifacts
 
     steps:
       - name: Check out repository
@@ -631,17 +633,39 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
+      - name: Update npm CLI
+        run: npm install --global npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
         run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm --filter @kraki/tentacle build
 
-      - name: Publish @kraki/protocol
-        run: cd packages/protocol && npm publish --provenance --access public || echo "Already published (skipped)"
+      - name: Pack and publish
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
 
-      - name: Publish @kraki/crypto
-        run: cd packages/crypto && npm publish --provenance --access public || echo "Already published (skipped)"
+          specs=(
+            "packages/protocol|@kraki/protocol"
+            "packages/crypto|@kraki/crypto"
+            "packages/tentacle|@kraki/tentacle"
+          )
 
-      - name: Publish @kraki/tentacle
-        run: cd packages/tentacle && npm publish --provenance --access public || echo "Already published (skipped)"
+          for spec in "${specs[@]}"; do
+            dir="${spec%%|*}"
+            pkg="${spec##*|}"
+            version="$(node -p "require('./${dir}/package.json').version")"
+
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${pkg}@${version}; already published."
+              continue
+            fi
+
+            echo "::group::Publishing ${pkg}@${version}"
+            pnpm --dir "$dir" pack --pack-destination "$ARTIFACT_DIR"
+            tarball_name="$(node -p "const p = require('./${dir}/package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")"
+            npm publish "$ARTIFACT_DIR/$tarball_name" --access public --provenance
+            echo "::endgroup::"
+          done
