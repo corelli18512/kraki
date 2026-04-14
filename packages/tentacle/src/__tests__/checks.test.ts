@@ -13,15 +13,15 @@ vi.mock('node:child_process', () => ({
 }));
 
 vi.mock('@inquirer/prompts', () => ({
-  confirm: vi.fn(),
+  input: vi.fn(),
 }));
 
 import { execSync } from 'node:child_process';
-import { confirm } from '@inquirer/prompts';
+import { input } from '@inquirer/prompts';
 import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
-const mockConfirm = confirm as unknown as ReturnType<typeof vi.fn>;
+const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -112,14 +112,6 @@ describe('checkCopilotCli()', () => {
 // ── withRetry ───────────────────────────────────────────
 
 describe('withRetry()', () => {
-  const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {
-    throw new Error('process.exit called');
-  }) as never);
-
-  beforeEach(() => {
-    mockExit.mockClear();
-  });
-
   it('returns immediately when check passes on first try', async () => {
     const check = vi.fn().mockReturnValue({ found: true, version: '1.0' });
     const result = await withRetry(check, 'Test', 'install hint');
@@ -127,35 +119,31 @@ describe('withRetry()', () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it('retries when user confirms, then succeeds', async () => {
+  it('retries on Enter, then succeeds', async () => {
     const check = vi.fn()
       .mockReturnValueOnce({ found: false })
       .mockReturnValueOnce({ found: true, version: '2.0' });
 
-    mockConfirm.mockResolvedValueOnce(true);
+    mockInput.mockResolvedValueOnce('');
 
     const result = await withRetry(check, 'Test', 'install hint');
     expect(result).toEqual({ found: true, version: '2.0' });
     expect(check).toHaveBeenCalledTimes(2);
   });
 
-  it('exits when user declines retry', async () => {
-    const check = vi.fn().mockReturnValue({ found: false });
-    mockConfirm.mockResolvedValueOnce(false);
+  it('keeps retrying until check passes', async () => {
+    const check = vi.fn()
+      .mockReturnValueOnce({ found: false })
+      .mockReturnValueOnce({ found: false })
+      .mockReturnValueOnce({ found: false })
+      .mockReturnValueOnce({ found: true, version: '3.0' });
 
-    await expect(withRetry(check, 'Test', 'install hint'))
-      .rejects.toThrow(/process\.exit/);
-    expect(mockExit).toHaveBeenCalledWith(1);
-  });
+    mockInput.mockResolvedValue('');
 
-  it('exits after 2 failures without asking again', async () => {
-    const check = vi.fn().mockReturnValue({ found: false });
-    mockConfirm.mockResolvedValueOnce(true); // retry after first failure
-
-    await expect(withRetry(check, 'Test', 'install hint'))
-      .rejects.toThrow(/process\.exit/);
-    expect(check).toHaveBeenCalledTimes(2);
-    expect(mockExit).toHaveBeenCalledWith(1);
+    const result = await withRetry(check, 'Test', 'install hint');
+    expect(result).toEqual({ found: true, version: '3.0' });
+    expect(check).toHaveBeenCalledTimes(4);
+    expect(mockInput).toHaveBeenCalledTimes(3);
   });
 
   it('works with authenticated-style results', async () => {
@@ -164,11 +152,15 @@ describe('withRetry()', () => {
     expect(result).toEqual({ authenticated: true, username: 'u' });
   });
 
-  it('treats authenticated=false as failure', async () => {
-    const check = vi.fn().mockReturnValue({ authenticated: false });
-    mockConfirm.mockResolvedValueOnce(false);
+  it('retries on authenticated=false', async () => {
+    const check = vi.fn()
+      .mockReturnValueOnce({ authenticated: false })
+      .mockReturnValueOnce({ authenticated: true, username: 'u' });
 
-    await expect(withRetry(check, 'Auth', 'login hint'))
-      .rejects.toThrow(/process\.exit/);
+    mockInput.mockResolvedValueOnce('');
+
+    const result = await withRetry(check, 'Auth', 'login hint');
+    expect(result).toEqual({ authenticated: true, username: 'u' });
+    expect(check).toHaveBeenCalledTimes(2);
   });
 });
