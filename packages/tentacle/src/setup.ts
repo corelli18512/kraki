@@ -386,6 +386,18 @@ export async function runSetup(): Promise<KrakiConfig> {
       spinner,
     );
     spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
+
+    // Check if Copilot has authentication (gh token, env var, or copilot login)
+    const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
+    const hasGhToken = checkGhAuth().authenticated;
+    const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
+    if (hasGhToken || hasEnvToken) {
+      authSpinner.succeed('Copilot authentication available');
+    } else {
+      authSpinner.warn('Copilot not authenticated');
+      console.log(chalk.dim('    Run "copilot login" or "gh auth login" in another terminal'));
+      await input({ message: 'Press Enter to continue…', theme: promptTheme });
+    }
   } else {
     const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
     spinner.succeed('Copilot SDK available');

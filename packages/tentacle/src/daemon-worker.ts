@@ -89,18 +89,26 @@ export async function startWorker(): Promise<WorkerResult> {
   if (token) {
     process.env.GITHUB_TOKEN = token;
   }
-  await adapter.start();
-  logger.info('Copilot adapter started');
+  let adapterReady = false;
+  try {
+    await adapter.start();
+    adapterReady = true;
+    logger.info('Copilot adapter started');
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'Copilot adapter failed to start — run "copilot login" to authenticate');
+  }
 
   // 5. Fetch available models for device capabilities
   let models: string[] = [];
   let modelDetails: import('@kraki/protocol').ModelDetail[] = [];
-  try {
-    modelDetails = await adapter.listModelDetails();
-    models = modelDetails.map(m => m.id);
-    logger.debug({ count: models.length }, 'Fetched available models');
-  } catch {
-    logger.warn('Could not fetch available models');
+  if (adapterReady) {
+    try {
+      modelDetails = await adapter.listModelDetails();
+      models = modelDetails.map(m => m.id);
+      logger.debug({ count: models.length }, 'Fetched available models');
+    } catch {
+      logger.warn('Could not fetch available models');
+    }
   }
 
   // 6. Connect to relay via RelayClient
