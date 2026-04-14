@@ -354,7 +354,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
     if (config.authMethod === 'github_token') {
       try {
         const { execSync } = await import('node:child_process');
-        token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
+        token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
       } catch { /* ignore */ }
       if (!token) {
         const { loadGitHubToken } = await import('./config.js');

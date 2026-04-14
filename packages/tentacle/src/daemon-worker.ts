@@ -60,7 +60,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   if (config.authMethod === 'github_token') {
     try {
-      token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
+      token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
       if (token) logger.debug('Resolved GitHub token from `gh auth token`');
     } catch {
       // gh CLI not available — try saved device flow token

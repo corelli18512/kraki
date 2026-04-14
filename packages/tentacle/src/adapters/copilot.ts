@@ -125,11 +125,11 @@ function getRuntimeUrl(): string {
 function resolveExecutableFromPath(commandName: string): string | undefined {
   const lookupCommand =
     process.platform === 'win32'
-      ? `where.exe ${commandName} 2>NUL`
-      : `command -v ${commandName} 2>/dev/null`;
+      ? `where.exe ${commandName}`
+      : `command -v ${commandName}`;
 
   try {
-    const output = execSync(lookupCommand, { encoding: 'utf8' }).trim();
+    const output = execSync(lookupCommand, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     return output
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -310,7 +310,7 @@ export class CopilotAdapter extends AgentAdapter {
     let githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
     if (!githubToken) {
       try {
-        githubToken = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
+        githubToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
         if (githubToken) logger.debug('Using GitHub token from `gh auth token`');
       } catch {
         // gh CLI unavailable — SDK will use its own auth chain
