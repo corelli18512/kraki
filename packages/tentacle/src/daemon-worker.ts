@@ -13,6 +13,16 @@
 import { execSync } from 'node:child_process';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
+
+// Prevent unhandled promise rejections from crashing the daemon
+process.on('unhandledRejection', (reason) => {
+  try {
+    const { logger } = require('./logger.js');
+    logger.warn({ reason: reason instanceof Error ? { code: (reason as any).code, message: reason.message } : reason }, 'Unhandled rejection (suppressed)');
+  } catch {
+    // Logger not available yet — ignore silently
+  }
+});
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
@@ -96,6 +106,8 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.info('Copilot adapter started');
   } catch (err) {
     logger.warn({ err: (err as Error).message }, 'Copilot adapter failed to start — run "copilot login" to authenticate');
+    // Clean up streams/promises from the failed adapter to prevent unhandled rejections
+    try { await adapter.stop(); } catch { /* already dead */ }
   }
 
   // 5. Fetch available models for device capabilities
