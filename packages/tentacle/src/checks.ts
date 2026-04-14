@@ -26,7 +26,7 @@ export interface AuthCheckResult {
 
 export function checkGhCli(): CliCheckResult {
   try {
-    const output = execSync('gh --version 2>/dev/null', { encoding: 'utf8' }).trim();
+    const output = execSync('gh --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     const match = output.match(/gh version ([\d.]+)/);
     return { found: true, version: match?.[1] ?? output.split('\n')[0] };
   } catch {
@@ -36,12 +36,12 @@ export function checkGhCli(): CliCheckResult {
 
 export function checkGhAuth(): AuthCheckResult {
   try {
-    const token = execSync('gh auth token 2>/dev/null', { encoding: 'utf8' }).trim();
+    const token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     if (!token) return { authenticated: false };
 
     let username: string | undefined;
     try {
-      username = execSync('gh api user --jq .login 2>/dev/null', { encoding: 'utf8' }).trim() || undefined;
+      username = execSync('gh api user --jq .login', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
     } catch {
       // Token exists but can't fetch username — still consider authenticated
     }
@@ -54,7 +54,7 @@ export function checkGhAuth(): AuthCheckResult {
 
 export function checkCopilotCli(): CliCheckResult {
   try {
-    const output = execSync('copilot --version 2>/dev/null', { encoding: 'utf8' }).trim();
+    const output = execSync('copilot --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     return { found: true, version: output.split('\n')[0] };
   } catch {
     return { found: false };
