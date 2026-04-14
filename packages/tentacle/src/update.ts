@@ -87,7 +87,16 @@ export async function fetchLatestVersion(): Promise<string | null> {
     const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`);
     for (const r of releases) {
       const tag = r.tag_name;
-      if (tag.startsWith('tentacle-v')) {
+      // Support both v* and tentacle-v* tag formats
+      if (tag.startsWith('v')) {
+        const version = tag.slice(1);
+        // Skip non-tentacle releases (e.g. head-v*, web-v*)
+        if (/^\d+\.\d+\.\d+/.test(version)) {
+          // Only consider releases with CLI binary assets
+          const hasBinary = r.assets?.some(a => a.name.startsWith('kraki-cli-'));
+          if (hasBinary) return version;
+        }
+      } else if (tag.startsWith('tentacle-v')) {
         return tag.slice('tentacle-v'.length);
       }
     }
@@ -233,12 +242,18 @@ function getPlatformAssetName(): string {
     : process.platform;
   const arch = process.arch;
   const ext = process.platform === 'win32' ? '.exe' : '';
-  return `kraki-${platform}-${arch}${ext}`;
+  return `kraki-cli-${platform}-${arch}${ext}`;
 }
 
 async function updateViaBinary(version: string): Promise<void> {
   const assetName = getPlatformAssetName();
-  const releaseUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/tentacle-v${version}`;
+  // Try v* tag first, fall back to tentacle-v*
+  let release: GitHubRelease;
+  try {
+    release = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${version}`);
+  } catch {
+    release = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/tags/tentacle-v${version}`);
+  }
 
   const release = await fetchJson(releaseUrl);
   const asset = release.assets?.find((a) => a.name === assetName);
