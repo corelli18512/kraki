@@ -106,8 +106,11 @@ main() {
   install
 
   echo ""
-  echo "  ✓ Kraki ${VERSION} installed — run 'kraki' to get started"
+  echo "  ✓ Kraki ${VERSION} installed"
   echo ""
+
+  # Auto-run kraki after install
+  exec "${INSTALL_DIR}/${BINARY_NAME}"
 }
 
 main
