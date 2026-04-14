@@ -14,14 +14,11 @@ import { execSync } from 'node:child_process';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 
-// Prevent unhandled promise rejections from crashing the daemon
-process.on('unhandledRejection', (reason) => {
-  try {
-    const { logger } = require('./logger.js');
-    logger.warn({ reason: reason instanceof Error ? { code: (reason as any).code, message: reason.message } : reason }, 'Unhandled rejection (suppressed)');
-  } catch {
-    // Logger not available yet — ignore silently
-  }
+// Prevent unhandled promise rejections from crashing the daemon.
+// Node v15+ exits on unhandled rejections by default; we want the daemon to survive.
+process.on('unhandledRejection', () => {
+  // Intentionally swallowed — the daemon must stay alive.
+  // Specific errors are already logged where they originate.
 });
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
