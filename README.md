@@ -28,6 +28,7 @@ irm https://kraki.corelli.cloud/install.ps1 | iex
 
 # or with npm
 npm i -g @kraki/tentacle
+kraki
 ```
 
 ## You need Kraki if
