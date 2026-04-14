@@ -4,7 +4,7 @@
 
 <h1 align="center">Kraki</h1>
 
-<p align="center"><strong>Remote control for coding agents from anywhere through an E2E encrypted relay</strong></p>
+<p align="center"><strong>Control your coding agents from your phone</strong></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
@@ -13,41 +13,18 @@
   <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-> 🐣 **Preview:** Kraki is still in early stage. Expect breaking changes, rough edges, and setup/docs updates while the core flows stabilize.
+> 🐣 **Preview:** Kraki is early-stage. Currently supports GitHub Copilot CLI only. Expect breaking changes.
 
-Kraki lets you watch agent sessions, respond to permission requests, answer questions, and send follow-up input from a phone or browser while the agent keeps running on another machine.
+Kraki bridges your coding agent to your phone or browser. Watch sessions in real time, approve tool calls, answer questions, and send follow-up instructions — from anywhere, on any device. All traffic is end-to-end encrypted.
 
-Get started on your coding machine:
+**[Download →](https://github.com/corelli18512/kraki/releases/latest)**
 
-- [Download the latest binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run it
-- Only supports GitHub Copilot CLI and GitHub account login for now
-- On macOS/Linux, run `chmod +x ./kraki-cli-*` once if needed
+## You need Kraki if
 
-Kraki is a little sea creature with a job: the `head` stays in the middle, the `tentacles` reach your agent machines, and the `arms` hold the devices you use to watch and steer the work:
-
-- `tentacle` runs next to the agent
-- `head` forwards encrypted messages
-- `arm` gives you a UI on another device
-
-
-## Why Kraki?
-
-- **End-to-end encrypted.** The relay forwards your sessions without being able to read message bodies. There is no unencrypted mode.
-- **Keep one view across multiple machines.** A single relay can aggregate sessions from several computers and forward them to several receiving devices.
-- **Use another device as your control surface.** Check progress, approve actions, and answer prompts -- same experience of interactive coding agents without sitting in front of the machine.
-- **Built to grow.** The protocol, crypto layer, and adapter boundary are designed so more agents and clients can be added over time.
-- **Self-host if you want control.** You can run your own relay easily — it is just auth and forward.
-
-## What ships today
-
-- Relay server (`head`) — thin encrypted forwarder
-- CLI bridge for agent machines (`tentacle`)
-- Web receiver / PWA (`arm/web`) with push notifications
-- **Desktop toolbar** (`toolbar`) — macOS menu bar & Windows system tray *(coming soon)*
-- Shared protocol and crypto packages
-- Current adapter work centered on Copilot-based flows
-
-Native iOS and additional agent adapters will be added later without changing the core message flow. Any feedback and contributions are welcome.
+- **You want to step away from the desk** but keep steering the agent. Approve tool calls, answer questions, and send follow-ups from your phone while the agent keeps working.
+- **Zero network setup.** No port forwarding, no VPN, no tunnels. The relay is end-to-end encrypted — it can't read your code — so you don't need to self-host to stay safe.
+- **You want more than a chat box.** A purpose-built interface for interactive coding agents — code diffs, tool approval flows, structured prompts, and session history.
+- **You work across multiple machines** and want one place to see all agent sessions from your phone or browser.
 
 ## Set up
 
