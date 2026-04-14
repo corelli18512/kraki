@@ -21,7 +21,15 @@ Right now the main supported agent flow is GitHub Copilot CLI.
 ## Install
 
 ```bash
+# macOS / Linux
 curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+
+# Windows (PowerShell)
+irm https://kraki.corelli.cloud/install.ps1 | iex
+
+# or with npm (all platforms)
+npm i -g @kraki/tentacle
+kraki
 ```
 
 Or [download the binary manually](https://github.com/corelli18512/kraki/releases/latest).
