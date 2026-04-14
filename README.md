@@ -17,8 +17,6 @@
 
 Kraki bridges your coding agent to your phone or browser. Watch sessions in real time, approve tool calls, answer questions, and send follow-up instructions — from anywhere, on any device. All traffic is end-to-end encrypted.
 
-**[Download →](https://github.com/corelli18512/kraki/releases/latest)**
-
 Install with one command:
 
 ```bash
