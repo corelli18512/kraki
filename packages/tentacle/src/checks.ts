@@ -6,17 +6,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { confirm } from '@inquirer/prompts';
+import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
-
-const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
-const exit = (code: number): never => {
-  if (_isSEA && process.platform === 'win32') {
-    setTimeout(() => process.exit(code), 100);
-    throw Object.assign(new Error(), { __exitCode: code });
-  }
-  process.exit(code);
-};
 
 // ── Check results ───────────────────────────────────────
 
@@ -74,8 +65,8 @@ export function checkCopilotCli(): CliCheckResult {
 
 /**
  * Run a check function with interactive retry.
- * After 2 failures, prints a terminal-restart hint and exits.
- * If a spinner is provided, it is stopped before prompting and restarted on retry.
+ * Loops forever until the check passes — the user installs the tool
+ * in another terminal and presses Enter to retry.
  */
 export async function withRetry<T extends { found?: boolean; authenticated?: boolean }>(
   checkFn: () => T,
@@ -83,29 +74,16 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
   installHint: string,
   spinner?: { stop: () => void; start: () => void },
 ): Promise<T> {
-  let failures = 0;
-
   while (true) {
     const result = checkFn();
     const ok = ('found' in result ? result.found : result.authenticated) ?? false;
 
     if (ok) return result;
 
-    failures++;
     spinner?.stop();
     console.log(chalk.yellow(`\n⚠  ${label} not found.`));
     console.log(chalk.dim(`   ${installHint}`));
-
-    if (failures >= 2) {
-      console.log(chalk.red(`\n✖  Still not detected after ${failures} attempts.`));
-      console.log(chalk.dim('   Try opening a new terminal window and running kraki again.'));
-      exit(1);
-    }
-
-    const retry = await confirm({ message: 'Retry?', default: true });
-    if (!retry) {
-      exit(1);
-    }
+    await input({ message: 'Press Enter to retry…' });
     spinner?.start();
   }
 }

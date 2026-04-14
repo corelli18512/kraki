@@ -29,15 +29,22 @@ import { printStaticBanner } from './banner.js';
 // Detect Node.js SEA (Single Executable Application)
 const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
 
-// On Windows SEA, process.exit() can crash libuv if async handles are still
-// draining. Delay slightly so libuv can close handles before shutdown.
-const exit = (code: number): never => {
-  if (_isSEA && process.platform === 'win32') {
-    setTimeout(() => process.exit(code), 100);
-    throw Object.assign(new Error(), { __exitCode: code });
+// Detect double-click on Windows: stdin is TTY but parent is explorer
+const _isWindowsDoubleClick = process.platform === 'win32' && _isSEA && process.stdin.isTTY;
+
+// Graceful exit: on Windows SEA, avoid process.exit() after async work.
+// Instead, schedule exit and let libuv drain.
+function gracefulExit(code: number): void {
+  if (_isWindowsDoubleClick) {
+    const readline = require('node:readline');
+    const rl = readline.createInterface({ input: process.stdin });
+    process.stdout.write('\nPress any key to exit...');
+    process.stdin.setRawMode?.(true);
+    process.stdin.once('data', () => process.exit(code));
+    return;
   }
   process.exit(code);
-};
+}
 
 // ── Help ────────────────────────────────────────────────
 
@@ -285,7 +292,7 @@ function cmdConfigLog(verbosity?: string): void {
   if (verbosity !== 'normal' && verbosity !== 'verbose') {
     console.log(chalk.red(`Invalid log verbosity: ${verbosity}`));
     console.log(chalk.dim('Use `kraki config log normal` or `kraki config log verbose`.'));
-    exit(1);
+    gracefulExit(1);
     return;
   }
 
@@ -314,7 +321,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   if (!isDaemonRunning()) {
     if (urlOnly) {
       process.stderr.write('error: daemon not running\n');
-      exit(1);
+      gracefulExit(1);
       return;
     }
     const { confirm } = await import('@inquirer/prompts');
@@ -331,7 +338,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   if (!config) {
     if (urlOnly) {
       process.stderr.write('error: no config found\n');
-      exit(1);
+      gracefulExit(1);
       return;
     }
     console.log(chalk.red('No config found. Run `kraki` to set up.'));
@@ -371,7 +378,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   } catch (err) {
     if (urlOnly) {
       process.stderr.write(`error: ${(err as Error).message}\n`);
-      exit(1);
+      gracefulExit(1);
       return;
     }
     console.log(chalk.red(`  Failed to create pairing token: ${(err as Error).message}`));
@@ -393,7 +400,7 @@ async function cmdSetupHeadless(args: string[]): Promise<void> {
 
   if (!relay) {
     process.stderr.write('error: --relay is required\n');
-    exit(1);
+    gracefulExit(1);
     return;
   }
 
@@ -444,12 +451,12 @@ async function cmdRelayInfo(args: string[]): Promise<void> {
   const url = args[1];
   if (!url) {
     process.stderr.write('error: relay URL is required\nusage: kraki relay-info <url>\n');
-    exit(1);
+    gracefulExit(1);
     return;
   }
   if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
     process.stderr.write('error: URL must start with wss:// or ws://\n');
-    exit(1);
+    gracefulExit(1);
     return;
   }
 
@@ -496,7 +503,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   const clientId = getArgValue(args, '--client-id');
   if (!clientId) {
     process.stderr.write('error: --client-id is required\n');
-    exit(1);
+    gracefulExit(1);
     return;
   }
 
@@ -508,7 +515,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   });
   if (!res.ok) {
     process.stderr.write(`error: GitHub device code request failed: ${res.status}\n`);
-    exit(1);
+    gracefulExit(1);
     return;
   }
   const data = await res.json() as { device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number };
@@ -552,12 +559,12 @@ async function cmdAuth(args: string[]): Promise<void> {
 
     if (tokenData.error === 'expired_token') {
       process.stderr.write('error: device code expired\n');
-      exit(1);
+      gracefulExit(1);
       return;
     }
     if (tokenData.error === 'access_denied') {
       process.stderr.write('error: authorization denied\n');
-      exit(1);
+      gracefulExit(1);
       return;
     }
     if (tokenData.error === 'slow_down') {
@@ -566,7 +573,7 @@ async function cmdAuth(args: string[]): Promise<void> {
   }
 
   process.stderr.write('error: authorization timed out\n');
-  exit(1);
+  gracefulExit(1);
 }
 
 // ── Arg parsing ─────────────────────────────────────────
@@ -670,18 +677,16 @@ async function main(): Promise<void> {
 
   console.log(chalk.red(`Unknown command: ${cmd}`));
   printHelp();
-  exit(1);
+  gracefulExit(1);
 }
 
 main().catch((err) => {
-  // Delayed exit throw — ignore
-  if (err?.__exitCode !== undefined) return;
   // User pressed Esc or Ctrl+C during a prompt — exit cleanly
   if (err?.name === 'ExitPromptError' || err?.message?.includes('User force closed')) {
     console.log(chalk.dim('\n  Cancelled.'));
-    exit(0);
+    gracefulExit(0);
     return;
   }
   console.error(chalk.red('Fatal error:'), err);
-  exit(1);
+  gracefulExit(1);
 });
