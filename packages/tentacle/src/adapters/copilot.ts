@@ -322,10 +322,23 @@ export class CopilotAdapter extends AgentAdapter {
       throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
     }
 
-    // On Windows, the SDK needs the .cmd wrapper to spawn correctly
-    if (cliPath && process.platform === 'win32' && !cliPath.endsWith('.cmd') && !cliPath.endsWith('.exe')) {
-      const cmdPath = cliPath + '.cmd';
-      if (existsSync(cmdPath)) cliPath = cmdPath;
+    // On Windows, resolve the actual .js entry point from the .cmd wrapper.
+    // Node spawn() can't execute .cmd files, and the SDK handles .js files natively.
+    if (cliPath && process.platform === 'win32' && !cliPath.endsWith('.js') && !cliPath.endsWith('.exe')) {
+      const cmdPath = cliPath.endsWith('.cmd') ? cliPath : cliPath + '.cmd';
+      if (existsSync(cmdPath)) {
+        try {
+          const cmdContent = readFileSync(cmdPath, 'utf8');
+          const match = cmdContent.match(/"%dp0%\\(.+\.js)"/);
+          if (match) {
+            const jsPath = join(dirname(cmdPath), match[1]);
+            if (existsSync(jsPath)) {
+              cliPath = jsPath;
+              logger.debug({ cliPath }, 'Resolved Windows .cmd to .js entry point');
+            }
+          }
+        } catch { /* fall through to original path */ }
+      }
     }
 
     const opts = {
