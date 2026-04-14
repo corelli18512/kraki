@@ -255,7 +255,6 @@ async function updateViaBinary(version: string): Promise<void> {
     release = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/tags/tentacle-v${version}`);
   }
 
-  const release = await fetchJson(releaseUrl);
   const asset = release.assets?.find((a) => a.name === assetName);
   if (!asset) {
     throw new Error(`No binary found for ${assetName} in release v${version}`);
