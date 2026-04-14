@@ -341,6 +341,24 @@ export class CopilotAdapter extends AgentAdapter {
       }
     }
 
+    // In SEA mode, process.execPath is the SEA binary, not node.exe.
+    // The SDK uses process.execPath to spawn .js files — override it temporarily.
+    let restoreExecPath: (() => void) | null = null;
+    if (isSea() && cliPath?.endsWith('.js')) {
+      try {
+        const nodePath = execSync(
+          process.platform === 'win32' ? 'where node' : 'command -v node',
+          { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+        ).trim().split(/\r?\n/)[0];
+        if (nodePath && existsSync(nodePath)) {
+          const origExecPath = process.execPath;
+          Object.defineProperty(process, 'execPath', { value: nodePath, writable: true, configurable: true });
+          restoreExecPath = () => { Object.defineProperty(process, 'execPath', { value: origExecPath, writable: true, configurable: true }); };
+          logger.debug({ nodePath }, 'Overriding process.execPath for Copilot SDK');
+        }
+      } catch { /* can't find node — SDK will use process.execPath */ }
+    }
+
     const opts = {
       // Use Copilot's own credential store when no gh token is available
       useLoggedInUser: !githubToken,
@@ -351,6 +369,7 @@ export class CopilotAdapter extends AgentAdapter {
     const CopilotClient = await loadCopilotClient();
     this.client = new CopilotClient(opts);
     await this.client.start();
+    if (restoreExecPath) restoreExecPath();
     logger.debug('started');
   }
 
