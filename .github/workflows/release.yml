@@ -610,6 +610,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: needs.prepare.outputs.publish_mode == 'publish'
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Check out repository
@@ -636,15 +639,9 @@ jobs:
 
       - name: Publish @kraki/protocol
         run: cd packages/protocol && npm publish --provenance --access public || echo "Already published (skipped)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @kraki/crypto
         run: cd packages/crypto && npm publish --provenance --access public || echo "Already published (skipped)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @kraki/tentacle
         run: cd packages/tentacle && npm publish --provenance --access public || echo "Already published (skipped)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
