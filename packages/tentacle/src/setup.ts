@@ -341,7 +341,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     if (ghResult.authenticated) {
       spinner.succeed(`Authenticated via GitHub CLI as ${chalk.bold(ghResult.username ?? 'unknown')}`);
     } else {
-      spinner.info('GitHub CLI not found — signing in via browser');
+      spinner.info('GitHub CLI not authenticated — signing in via browser');
       if (!relayInfo.githubClientId) {
         throw new Error('Relay does not provide a GitHub client ID. Install GitHub CLI and run: gh auth login');
       }
