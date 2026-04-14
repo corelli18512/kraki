@@ -19,6 +19,12 @@ Kraki bridges your coding agent to your phone or browser. Watch sessions in real
 
 **[Download →](https://github.com/corelli18512/kraki/releases/latest)**
 
+Install with one command:
+
+```bash
+curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+```
+
 ## You need Kraki if
 
 - **You want to step away from the desk** but keep steering the agent. Approve tool calls, answer questions, and send follow-ups from your phone while the agent keeps working.
@@ -28,9 +34,13 @@ Kraki bridges your coding agent to your phone or browser. Watch sessions in real
 
 ## Set up
 
-[Download the latest binary from GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run the matching `kraki-cli-*` asset for your platform.
+Install with one command:
 
-On macOS/Linux, run `chmod +x ./kraki-cli-*` once if needed.
+```bash
+curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+```
+
+Or [download the binary manually](https://github.com/corelli18512/kraki/releases/latest) — on macOS/Linux, run `chmod +x ./kraki-cli-*` first.
 
 > Note: macOS may show Gatekeeper and Windows may show SmartScreen on first launch. If you trust the release, use "Open Anyway" / "Run anyway".
 

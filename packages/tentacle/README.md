@@ -20,7 +20,11 @@ Right now the main supported agent flow is GitHub Copilot CLI.
 
 ## Install
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/corelli18512/kraki/releases/latest) and run it.
+```bash
+curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+```
+
+Or [download the binary manually](https://github.com/corelli18512/kraki/releases/latest).
 
 ## Requirements
 
