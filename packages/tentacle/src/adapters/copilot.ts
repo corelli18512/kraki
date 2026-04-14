@@ -317,13 +317,20 @@ export class CopilotAdapter extends AgentAdapter {
       }
     }
 
-    const cliPath = this.cliPath ?? resolveCopilotCliPath();
+    let cliPath = this.cliPath ?? resolveCopilotCliPath();
     if (!cliPath && isSea()) {
       throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
     }
 
+    // On Windows, the SDK needs the .cmd wrapper to spawn correctly
+    if (cliPath && process.platform === 'win32' && !cliPath.endsWith('.cmd') && !cliPath.endsWith('.exe')) {
+      const cmdPath = cliPath + '.cmd';
+      if (existsSync(cmdPath)) cliPath = cmdPath;
+    }
+
     const opts = {
-      useLoggedInUser: false,
+      // Use Copilot's own credential store when no gh token is available
+      useLoggedInUser: !githubToken,
       ...(githubToken && { githubToken }),
       ...(cliPath && { cliPath }),
     };
