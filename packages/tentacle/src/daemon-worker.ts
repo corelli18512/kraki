@@ -36,10 +36,7 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason) => {
-  logger.fatal({ reason }, 'Unhandled rejection');
-  process.exit(1);
-});
+// unhandledRejection is handled at the top of this file (line ~19)
 
 // ── Main ────────────────────────────────────────────────
 
