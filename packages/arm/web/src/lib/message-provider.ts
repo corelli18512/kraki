@@ -50,11 +50,15 @@ function rebuildPreview(sessionId: string): void {
     const payload = 'payload' in m ? (m.payload as Record<string, unknown>) : null;
 
     if (m.type === 'question' && payload) {
+      // Skip already-answered questions — they shouldn't show the question badge
+      if (payload.answer) continue;
       const q = typeof payload.question === 'string' ? payload.question : '';
       preview = { text: stripMarkdown(q).slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
       break;
     }
     if (m.type === 'permission' && payload) {
+      // Skip already-resolved permissions
+      if (payload.resolution) continue;
       const tool = typeof payload.toolName === 'string' ? payload.toolName : '';
       preview = { text: tool.slice(0, PREVIEW_MAX), type: 'permission', timestamp: ts };
       break;

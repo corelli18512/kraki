@@ -161,6 +161,11 @@ export function answer(
   });
   getStore().removeQuestion(questionId);
   resolveQuestionMessage(sessionId, questionId, answerText);
+  // Update preview optimistically so the question badge clears immediately
+  if (answerText) {
+    const timestamp = new Date().toISOString();
+    getStore().setSessionPreview(sessionId, { text: answerText.slice(0, 80), type: 'answer', timestamp });
+  }
 }
 
 export function killSession(
