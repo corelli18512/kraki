@@ -1,9 +1,9 @@
-name: Release
+name: Release Tentacle
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - 'tentacle/v*'
   workflow_dispatch:
     inputs:
       mode:
@@ -15,7 +15,7 @@ on:
           - dry-run
           - publish
       tag:
-        description: Existing release tag to upload assets to (required for publish)
+        description: Existing tag to build from (required for publish)
         required: false
         type: string
 
@@ -26,7 +26,7 @@ permissions:
   checks: read
 
 concurrency:
-  group: release-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 # ─── Prepare ─────────────────────────────────────────────
@@ -53,7 +53,6 @@ jobs:
         env:
           INPUT_MODE: ${{ github.event.inputs.mode || 'dry-run' }}
           INPUT_TAG: ${{ github.event.inputs.tag || '' }}
-          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
         run: |
           set -euo pipefail
 
@@ -61,9 +60,9 @@ jobs:
           checkout_ref="${GITHUB_SHA}"
           release_tag=""
 
-          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             publish_mode="publish"
-            release_tag="${EVENT_RELEASE_TAG}"
+            release_tag="${GITHUB_REF_NAME}"
             checkout_ref="${release_tag}"
           elif [ "${INPUT_MODE}" = "publish" ]; then
             publish_mode="publish"
@@ -129,6 +128,18 @@ jobs:
 
           echo "CI did not complete within 5 minutes. Refusing to release."
           exit 1
+
+      - name: Verify tag matches package version
+        if: steps.meta.outputs.publish_mode == 'publish'
+        run: |
+          TAG_VERSION="${{ steps.meta.outputs.release_tag }}"
+          TAG_VERSION="${TAG_VERSION#tentacle/v}"
+          PKG_VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Version: $PKG_VERSION ✅"
 
   # ─── Build Tentacle Binary ───────────────────────────────
 
@@ -588,17 +599,16 @@ jobs:
           path: release-assets
           if-no-files-found: error
 
-      - name: Ensure GitHub Release exists
+      - name: Create GitHub Release
         if: needs.prepare.outputs.publish_mode == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release view "${{ needs.prepare.outputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null
-
-      - name: Upload assets to GitHub Release
-        if: needs.prepare.outputs.publish_mode == 'publish'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ needs.prepare.outputs.release_tag }}" release-assets/* --clobber --repo "${{ github.repository }}"
+        run: |
+          gh release create "${{ needs.prepare.outputs.release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ needs.prepare.outputs.release_tag }}" \
+            --generate-notes \
+            release-assets/*
 
   # ─── Publish npm packages ──────────────────────────────
 

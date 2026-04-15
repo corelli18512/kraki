@@ -1,12 +1,12 @@
-name: Publish Head
+name: Release Head
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - 'head/v*'
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -14,15 +14,12 @@ jobs:
     name: Publish @kraki/head
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: startsWith(github.event.release.tag_name, 'head-v')
     env:
       ARTIFACT_DIR: ${{ github.workspace }}/npm-artifacts
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.release.tag_name }}
 
       - name: Enable corepack
         run: corepack enable
@@ -46,8 +43,7 @@ jobs:
 
       - name: Verify tag matches package version
         run: |
-          TAG_VERSION="${{ github.event.release.tag_name }}"
-          TAG_VERSION="${TAG_VERSION#head-v}"
+          TAG_VERSION="${GITHUB_REF_NAME#head/v}"
           PKG_VERSION=$(node -p "require('./packages/head/package.json').version")
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
@@ -84,3 +80,12 @@ jobs:
             npm publish "$ARTIFACT_DIR/$tarball_name" --access public --provenance
             echo "::endgroup::"
           done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
