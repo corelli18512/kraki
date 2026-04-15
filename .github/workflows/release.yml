@@ -666,7 +666,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm -r build
+        run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm --filter @kraki/tentacle build && pnpm --filter @kraki/head build
 
       - name: Pack and publish
         run: |
