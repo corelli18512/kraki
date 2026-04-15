@@ -61,6 +61,7 @@ if (args.includes('--help') || args.includes('-h')) {
   GitHub OAuth (env only, for web login):
     GITHUB_CLIENT_ID      GitHub OAuth App client ID
     GITHUB_CLIENT_SECRET  GitHub OAuth App client secret
+    GITHUB_PROXY          HTTP/SOCKS proxy for GitHub API calls (e.g. http://127.0.0.1:1081)
 
   APNs push notifications (env only):
     APNS_KEY_PATH         Path to .p8 private key file
@@ -99,12 +100,27 @@ const API_KEY = process.env.API_KEY;
 const ADMIN_KEY = flag('admin-key', process.env.ADMIN_KEY || '');
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+const GITHUB_PROXY = process.env.GITHUB_PROXY;
 const PAIRING = process.env.PAIRING_ENABLED !== 'false'; // default true
 const LOG_LEVEL = flag('log', process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error';
 const LOG_PATH = process.env.LOG_PATH;
 const PUSH_PROVIDERS = flag('push', process.env.PUSH_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 function createAuthProviders(): Map<string, AuthProvider> {
+  // Build a proxy-aware fetcher for GitHub API calls if GITHUB_PROXY is set
+  let ghFetcher: typeof fetch | undefined;
+  if (GITHUB_PROXY) {
+    try {
+      const { ProxyAgent } = require('undici') as typeof import('undici');
+      const dispatcher = new ProxyAgent(GITHUB_PROXY);
+      ghFetcher = (input: RequestInfo | URL, init?: RequestInit) =>
+        fetch(input, { ...init, dispatcher } as RequestInit);
+      console.log(`  GitHub API proxy: ${GITHUB_PROXY}`);
+    } catch {
+      console.warn(`  ⚠ GITHUB_PROXY set but undici not available — ignoring`);
+    }
+  }
+
   const providers = new Map<string, AuthProvider>();
   for (const mode of AUTH_MODES) {
     switch (mode) {
@@ -117,6 +133,7 @@ function createAuthProviders(): Map<string, AuthProvider> {
         const ghProvider = new GitHubAuthProvider({
           clientId: GITHUB_CLIENT_ID,
           clientSecret: GITHUB_CLIENT_SECRET,
+          ...(ghFetcher && { fetcher: ghFetcher }),
         });
         providers.set('github', new ThrottledAuthProvider(ghProvider));
         if (GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) {
