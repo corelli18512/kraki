@@ -1,9 +1,10 @@
-name: Release Tentacle
+name: Release
 
 on:
   push:
     tags:
       - 'tentacle/v*'
+      - 'head/v*'
   workflow_dispatch:
     inputs:
       mode:
@@ -132,9 +133,20 @@ jobs:
       - name: Verify tag matches package version
         if: steps.meta.outputs.publish_mode == 'publish'
         run: |
-          TAG_VERSION="${{ steps.meta.outputs.release_tag }}"
-          TAG_VERSION="${TAG_VERSION#tentacle/v}"
-          PKG_VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.release_tag }}"
+
+          if [[ "$TAG" == tentacle/v* ]]; then
+            TAG_VERSION="${TAG#tentacle/v}"
+            PKG_VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          elif [[ "$TAG" == head/v* ]]; then
+            TAG_VERSION="${TAG#head/v}"
+            PKG_VERSION=$(node -p "require('./packages/head/package.json').version")
+          else
+            echo "Unknown tag prefix: $TAG"
+            exit 1
+          fi
+
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
             exit 1
@@ -146,6 +158,7 @@ jobs:
   build-binary:
     name: Build Binary (${{ matrix.label }})
     needs: prepare
+    if: startsWith(github.ref_name, 'tentacle/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -486,6 +499,7 @@ jobs:
     needs:
       - prepare
       - build-binary
+    if: startsWith(github.ref_name, 'tentacle/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -616,12 +630,14 @@ jobs:
     name: Publish npm Packages
     needs:
       - prepare
-      - publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: needs.prepare.outputs.publish_mode == 'publish'
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.publish_mode == 'publish'
     permissions:
-      contents: read
+      contents: write
       id-token: write
     env:
       ARTIFACT_DIR: ${{ github.workspace }}/npm-artifacts
@@ -650,7 +666,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm --filter @kraki/tentacle build
+        run: pnpm -r build
 
       - name: Pack and publish
         run: |
@@ -661,6 +677,7 @@ jobs:
             "packages/protocol|@kraki/protocol"
             "packages/crypto|@kraki/crypto"
             "packages/tentacle|@kraki/tentacle"
+            "packages/head|@kraki/head"
           )
 
           for spec in "${specs[@]}"; do
@@ -679,3 +696,13 @@ jobs:
             npm publish "$ARTIFACT_DIR/$tarball_name" --access public --provenance
             echo "::endgroup::"
           done
+
+      - name: Create GitHub Release (head)
+        if: startsWith(github.ref_name, 'head/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
