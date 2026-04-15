@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: startsWith(github.event.release.tag_name, 'head-v')
+    env:
+      ARTIFACT_DIR: ${{ github.workspace }}/npm-artifacts
 
     steps:
       - name: Check out repository
@@ -32,6 +34,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
+
+      - name: Update npm CLI
+        run: npm install --global npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -53,16 +58,29 @@ jobs:
       - name: Build
         run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/head build
 
-      - name: Publish @kraki/protocol
+      - name: Pack and publish
         run: |
-          cd packages/protocol
-          npm publish --provenance --access public || echo "Already published (skipped)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
 
-      - name: Publish @kraki/head
-        run: |
-          cd packages/head
-          npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          specs=(
+            "packages/protocol|@kraki/protocol"
+            "packages/head|@kraki/head"
+          )
+
+          for spec in "${specs[@]}"; do
+            dir="${spec%%|*}"
+            pkg="${spec##*|}"
+            version="$(node -p "require('./${dir}/package.json').version")"
+
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${pkg}@${version}; already published."
+              continue
+            fi
+
+            echo "::group::Publishing ${pkg}@${version}"
+            pnpm --dir "$dir" pack --pack-destination "$ARTIFACT_DIR"
+            tarball_name="$(node -p "const p = require('./${dir}/package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")"
+            npm publish "$ARTIFACT_DIR/$tarball_name" --access public --provenance
+            echo "::endgroup::"
+          done
