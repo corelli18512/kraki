@@ -860,6 +860,28 @@ export class CopilotAdapter extends AgentAdapter {
         }
       }
 
+      // Fallback: the SDK strips binaryResultsForLlm from tool.execution_complete,
+      // but for image-viewing tools (e.g. `view` on a .png) the telemetry still
+      // carries viewType and mimeType, and detailedContent has the file path.
+      // Read the file directly to forward the image to the arm.
+      if (attachments.length === 0) {
+        const telemetry = data.toolTelemetry as Record<string, unknown> | undefined;
+        const props = telemetry?.properties as Record<string, string> | undefined;
+        if (props?.viewType === 'image' && props?.mimeType) {
+          const detailed = resultObj?.detailedContent as string | undefined;
+          const pathMatch = detailed?.match(/path\s+(.+)/);
+          const filePath = pathMatch?.[1]?.trim();
+          if (filePath && existsSync(filePath)) {
+            try {
+              const imageData = readFileSync(filePath).toString('base64');
+              attachments.push({ type: 'image', data: imageData, mimeType: props.mimeType });
+            } catch (err) {
+              logger.debug({ err, filePath }, 'Failed to read image for forwarding');
+            }
+          }
+        }
+      }
+
       this.onToolComplete?.(sessionId, {
         toolName: data.toolName as string,
         result,
