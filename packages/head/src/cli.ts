@@ -106,12 +106,12 @@ const LOG_LEVEL = flag('log', process.env.LOG_LEVEL || 'info') as 'debug' | 'inf
 const LOG_PATH = process.env.LOG_PATH;
 const PUSH_PROVIDERS = flag('push', process.env.PUSH_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
 
-function createAuthProviders(): Map<string, AuthProvider> {
+async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
   // Build a proxy-aware fetcher for GitHub API calls if GITHUB_PROXY is set
   let ghFetcher: typeof fetch | undefined;
   if (GITHUB_PROXY) {
     try {
-      const { ProxyAgent } = require('undici') as typeof import('undici');
+      const { ProxyAgent } = await import('undici');
       const dispatcher = new ProxyAgent(GITHUB_PROXY);
       ghFetcher = (input: RequestInfo | URL, init?: RequestInit) =>
         fetch(input, { ...init, dispatcher } as RequestInit);
@@ -168,7 +168,7 @@ setGlobalLogger(logger);
 
 logger.info('Kraki Head starting...');
 
-const authProviders = createAuthProviders();
+const authProviders = await createAuthProviders();
 const storage = new Storage(DB_PATH);
 
 // --- Push providers ---
