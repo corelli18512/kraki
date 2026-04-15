@@ -36,16 +36,13 @@ function getSeq(m: ChatMessage): number {
 
 export function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const messagesMap = useStore((s) => s.messages);
-  const streamingMap = useStore((s) => s.streamingContent);
+  const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
+  const streaming = useStore((s) => sessionId ? s.streamingContent.get(sessionId) : undefined);
   const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
   const devices = useStore((s) => s.devices);
   const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
   const permissionsMap = useStore((s) => s.pendingPermissions);
   const questionsMap = useStore((s) => s.pendingQuestions);
-
-  const messages = sessionId ? messagesMap.get(sessionId) ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
-  const streaming = sessionId ? streamingMap.get(sessionId) : undefined;
 
   const pendingPermIds = useMemo(
     () => new Set([...permissionsMap.values()].map((p) => p.id)),
@@ -138,10 +135,9 @@ export function ChatView() {
     const el = scrollRef.current;
     const prevHeight = prevScrollHeightRef.current;
     const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
-    // Only adjust if height grew AND we're NOT near the bottom (prepend case).
-    // Direct DOM check avoids stale ref issues.
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (heightGrew && !atBottom) {
+    // Only adjust for prepends: height grew while user was scrolled up.
+    // If user was at bottom, skip — the useEffect handles scrollToBottom.
+    if (heightGrew && !isAtBottomRef.current) {
       el.scrollTop += el.scrollHeight - prevHeight;
     }
     prevScrollHeightRef.current = el.scrollHeight;
