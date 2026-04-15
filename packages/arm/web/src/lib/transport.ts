@@ -221,6 +221,16 @@ export class KrakiTransport {
     getStore().setStatus('disconnected');
   }
 
+  /** Pair with a scanned QR code — set relay + token and reconnect. */
+  pairWithToken(relay: string, token: string) {
+    this.disconnect();
+    this._url = relay;
+    this.pairingToken = token;
+    this.storedDeviceId = undefined;
+    this.intentionalClose = false;
+    this.connect();
+  }
+
   send(msg: Record<string, unknown>) {
     if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
       this.ws.send(JSON.stringify(msg));

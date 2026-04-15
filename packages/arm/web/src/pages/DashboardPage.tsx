@@ -1,7 +1,10 @@
+import { useState, useCallback } from 'react';
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
 import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
+import { ScanQrCode } from 'lucide-react';
+import { QrScanner } from '../components/common/QrScanner';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -22,6 +25,19 @@ export function DashboardPage() {
   const clientId = getOAuthClientId(githubClientId);
   const oauthAvailable = supportsOAuthLogin(githubClientId);
   const hasCredentials = !!loadStoredDevice()?.deviceId;
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  const handleQrScan = useCallback((url: string) => {
+    setScannerOpen(false);
+    try {
+      const parsed = new URL(url);
+      const relay = parsed.searchParams.get('relay');
+      const token = parsed.searchParams.get('token');
+      if (relay && token) {
+        wsClient.pairWithToken(relay, token);
+      }
+    } catch { /* invalid URL — ignored */ }
+  }, []);
 
   if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
     const isAuthenticating = status === 'connecting';
@@ -61,16 +77,25 @@ export function DashboardPage() {
           </div>
         )}
 
-        <p className={`${oauthAvailable ? 'mt-4' : 'mt-6'} max-w-sm text-xs text-text-muted animate-fade-up-d3`}>
-          Scan a pairing QR code from your terminal to connect.
-        </p>
-        <p className="mt-2 max-w-sm text-xs text-text-muted animate-fade-up-d3">
-          Run <code className="rounded bg-surface-secondary px-1 py-0.5">kraki connect</code> to generate a new one.
+        <button
+          onClick={() => setScannerOpen(true)}
+          className={`${oauthAvailable ? 'mt-4' : 'mt-6'} inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border-primary bg-surface-secondary px-5 py-2.5 text-sm font-medium text-text-primary shadow-sm transition-colors hover:bg-surface-tertiary animate-fade-up-d2`}
+        >
+          <ScanQrCode className="h-5 w-5" />
+          Scan QR Code
+        </button>
+
+        <p className="mt-4 max-w-sm text-xs text-text-muted animate-fade-up-d3">
+          Run <code className="rounded bg-surface-secondary px-1 py-0.5">kraki connect</code> to generate a QR code.
         </p>
 
         <p className="mt-6 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted animate-fade-up-d3">
           {wsClient.url}
         </p>
+
+        {scannerOpen && (
+          <QrScanner onScan={handleQrScan} onClose={() => setScannerOpen(false)} />
+        )}
       </div>
     );
   }

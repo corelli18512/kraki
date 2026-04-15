@@ -19,6 +19,7 @@
     "@kraki/protocol": "workspace:*",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",
+    "jsqr": "^1.4.0",
     "lucide-react": "^0.577.0",
     "react": "^19.0.0",
     "react-diff-viewer-continued": "^4.2.0",

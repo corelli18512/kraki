@@ -55,7 +55,7 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Sign in to connect to your coding agent sessions.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeInTheDocument();
     expect(screen.getByText(/^or$/)).toBeInTheDocument();
-    expect(screen.getByText('Scan a pairing QR code from your terminal to connect.')).toBeInTheDocument();
+    expect(screen.getByText('Scan QR Code')).toBeInTheDocument();
   });
 
   it('shows only pairing copy when oauth login is unavailable', () => {
@@ -67,7 +67,7 @@ describe('DashboardPage', () => {
     expect(screen.queryByText('Sign in to connect to your coding agent sessions.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).not.toBeInTheDocument();
     expect(screen.queryByText(/^or$/)).not.toBeInTheDocument();
-    expect(screen.getByText('Scan a pairing QR code from your terminal to connect.')).toBeInTheDocument();
+    expect(screen.getByText('Scan QR Code')).toBeInTheDocument();
   });
 
   it('shows connecting spinner', () => {

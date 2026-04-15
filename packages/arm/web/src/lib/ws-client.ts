@@ -21,6 +21,11 @@ export class KrakiWSClient {
 
   get url(): string { return this.transport.url; }
 
+  /** Pair with a scanned QR code URL. */
+  pairWithToken(relay: string, token: string) {
+    this.transport.pairWithToken(relay, token);
+  }
+
   constructor(url?: string) {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
