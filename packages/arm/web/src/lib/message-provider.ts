@@ -68,6 +68,13 @@ function rebuildPreview(sessionId: string): void {
       preview = { text: stripMarkdown(msg).slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
       break;
     }
+    if (m.type === 'agent_message' && payload) {
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      if (content) {
+        preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
+        break;
+      }
+    }
     if (m.type === 'user_message' && payload) {
       const content = typeof payload.content === 'string' ? payload.content : '';
       preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'user', timestamp: ts };
@@ -76,14 +83,6 @@ function rebuildPreview(sessionId: string): void {
     if (m.type === 'answer' && payload) {
       const answer = typeof payload.answer === 'string' ? payload.answer : '';
       if (answer) { preview = { text: stripMarkdown(answer).slice(0, PREVIEW_MAX), type: 'answer', timestamp: ts }; break; }
-    }
-    if (m.type === 'agent_message' && payload) {
-      const content = typeof payload.content === 'string' ? payload.content : '';
-      const next = msgs[i + 1];
-      if (!next || next.type === 'idle') {
-        preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
-        break;
-      }
     }
   }
 
