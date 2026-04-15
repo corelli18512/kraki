@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Mock the logger so tests don't emit log output
@@ -1075,6 +1075,91 @@ describe('CopilotAdapter', () => {
         data: { toolName: 'test' },
       });
       expect(spy).toHaveBeenCalledWith(sessionId, { toolName: 'test', result: '' });
+    });
+
+    it('tool_complete reads image file when telemetry indicates viewType=image', async () => {
+      const spy = vi.fn();
+      adapter.onToolComplete = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+      const imgPath = '/tmp/test-image.png';
+      // Mock fs to return the image
+      mockExistsSync.mockImplementation((p: string) => p === imgPath);
+      mockReadFileSync.mockImplementation((p: string) => {
+        if (p === imgPath) return Buffer.from(pngBase64, 'base64');
+        throw new Error('not found');
+      });
+      try {
+        mockSessions[0]._emit('tool.execution_start', {
+          data: { toolName: 'view', toolCallId: 'tc_img', args: { path: imgPath } },
+        });
+        mockSessions[0]._emit('tool.execution_complete', {
+          data: {
+            toolName: 'view', toolCallId: 'tc_img',
+            result: { content: 'Viewed image file successfully.' },
+            toolTelemetry: { properties: { viewType: 'image', mimeType: 'image/png' } },
+          },
+        });
+        expect(spy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+          toolName: 'view',
+          result: 'Viewed image file successfully.',
+          attachments: [{ type: 'image', data: pngBase64, mimeType: 'image/png' }],
+        }));
+      } finally {
+        mockExistsSync.mockReset();
+        mockReadFileSync.mockReset();
+      }
+    });
+
+    it('tool_complete does not attach image when file does not exist', async () => {
+      const spy = vi.fn();
+      adapter.onToolComplete = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockExistsSync.mockReturnValue(false);
+      mockSessions[0]._emit('tool.execution_start', {
+        data: { toolName: 'view', toolCallId: 'tc_nofile', args: { path: '/nonexistent/file.png' } },
+      });
+      mockSessions[0]._emit('tool.execution_complete', {
+        data: {
+          toolName: 'view', toolCallId: 'tc_nofile',
+          result: { content: 'Viewed image file successfully.' },
+          toolTelemetry: { properties: { viewType: 'image', mimeType: 'image/png' } },
+        },
+      });
+      expect(spy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+        toolName: 'view',
+        attachments: undefined,
+      }));
+      mockExistsSync.mockReset();
+    });
+
+    it('tool_complete cleans up pendingToolArgs after completion', async () => {
+      const spy = vi.fn();
+      adapter.onToolComplete = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0]._emit('tool.execution_start', {
+        data: { toolName: 'bash', toolCallId: 'tc_clean', args: { command: 'ls' } },
+      });
+      mockSessions[0]._emit('tool.execution_complete', {
+        data: { toolName: 'bash', toolCallId: 'tc_clean', result: 'output' },
+      });
+      // Emit another complete with same toolCallId — should NOT have stale args
+      mockExistsSync.mockReturnValue(false);
+      mockSessions[0]._emit('tool.execution_complete', {
+        data: {
+          toolName: 'view', toolCallId: 'tc_clean',
+          result: { content: 'Viewed image file successfully.' },
+          toolTelemetry: { properties: { viewType: 'image', mimeType: 'image/png' } },
+        },
+      });
+      // No path from stale args → no attachment
+      expect(spy).toHaveBeenLastCalledWith(sessionId, expect.objectContaining({
+        attachments: undefined,
+      }));
+      mockExistsSync.mockReset();
     });
   });
 

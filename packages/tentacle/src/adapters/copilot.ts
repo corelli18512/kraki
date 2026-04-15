@@ -255,6 +255,8 @@ export class CopilotAdapter extends AgentAdapter {
   private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
   /** Fallback idle timers — fire onIdle if SDK doesn't emit session.idle after turn_end */
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Track tool start args by toolCallId for correlating with tool_complete */
+  private pendingToolArgs = new Map<string, Record<string, unknown>>();
   /**
    * Grace period (ms) after assistant.turn_end before firing a fallback idle.
    * The Copilot CLI has a known bug where session.idle is sometimes not emitted
@@ -833,16 +835,20 @@ export class CopilotAdapter extends AgentAdapter {
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
       }
+      const args = (data.args ?? data.arguments ?? {}) as Record<string, unknown>;
+      const toolCallId = data.toolCallId as string | undefined;
+      if (toolCallId) this.pendingToolArgs.set(toolCallId, args);
       this.onToolStart?.(sessionId, {
         toolName: data.toolName as string,
-        args: (data.args ?? data.arguments ?? {}) as Record<string, unknown>,
-        toolCallId: data.toolCallId as string | undefined,
+        args,
+        toolCallId,
       });
     });
 
     session.on('tool.execution_complete', (event) => {
       const data = event.data as Record<string, unknown>;
       const rawResult = data.result;
+      const toolCallId = data.toolCallId as string | undefined;
       // SDK sends result as { content: string, contents?: [...] } or as a plain string
       const resultObj = typeof rawResult === 'object' && rawResult !== null
         ? rawResult as Record<string, unknown>
@@ -862,15 +868,14 @@ export class CopilotAdapter extends AgentAdapter {
 
       // Fallback: the SDK strips binaryResultsForLlm from tool.execution_complete,
       // but for image-viewing tools (e.g. `view` on a .png) the telemetry still
-      // carries viewType and mimeType, and detailedContent has the file path.
-      // Read the file directly to forward the image to the arm.
+      // carries viewType and mimeType. Use the file path from the original tool
+      // args (correlated by toolCallId) to read the image directly.
       if (attachments.length === 0) {
         const telemetry = data.toolTelemetry as Record<string, unknown> | undefined;
         const props = telemetry?.properties as Record<string, string> | undefined;
         if (props?.viewType === 'image' && props?.mimeType) {
-          const detailed = resultObj?.detailedContent as string | undefined;
-          const pathMatch = detailed?.match(/path\s+(.+)/);
-          const filePath = pathMatch?.[1]?.trim();
+          const startArgs = toolCallId ? this.pendingToolArgs.get(toolCallId) : undefined;
+          const filePath = startArgs?.path as string | undefined;
           if (filePath && existsSync(filePath)) {
             try {
               const imageData = readFileSync(filePath).toString('base64');
@@ -882,10 +887,13 @@ export class CopilotAdapter extends AgentAdapter {
         }
       }
 
+      // Clean up tracked args
+      if (toolCallId) this.pendingToolArgs.delete(toolCallId);
+
       this.onToolComplete?.(sessionId, {
         toolName: data.toolName as string,
         result,
-        toolCallId: data.toolCallId as string | undefined,
+        toolCallId,
         success: data.success as boolean | undefined,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
