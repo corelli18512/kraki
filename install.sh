@@ -115,8 +115,9 @@ main() {
   echo "  ✓ Kraki ${VERSION} installed"
   echo ""
 
-  # Auto-run kraki after install
-  exec "${INSTALL_DIR}/${BINARY_NAME}"
+  # Auto-run kraki — redirect stdin from /dev/tty so inquirer prompts
+  # work even when the script itself was piped (curl | bash).
+  exec "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
 }
 
 main

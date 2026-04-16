@@ -387,16 +387,16 @@ export async function runSetup(): Promise<KrakiConfig> {
     );
     spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
 
-    // Check Copilot authentication
+    // Check Copilot authentication — the adapter's own auth chain (SDK token
+    // store, copilot login, etc.) works even without gh auth or env vars, so
+    // we only show a soft hint rather than blocking on a false negative.
     const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
     const hasGhToken = checkGhAuth().authenticated;
     const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
     if (hasGhToken || hasEnvToken) {
       authSpinner.succeed('Copilot authentication available');
     } else {
-      authSpinner.warn('Copilot not authenticated');
-      console.log(chalk.dim('    Run "copilot login" or "gh auth login" in another terminal'));
-      await input({ message: 'Press Enter after authenticating…', theme: promptTheme });
+      authSpinner.succeed('Copilot authentication available (via Copilot login)');
     }
   } else {
     const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
