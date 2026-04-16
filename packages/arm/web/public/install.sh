@@ -115,9 +115,27 @@ main() {
   echo "  ✓ Kraki ${VERSION} installed"
   echo ""
 
-  # Auto-run kraki — redirect stdin from /dev/tty so inquirer prompts
-  # work even when the script itself was piped (curl | bash).
-  exec "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
+  # Auto-run interactive setup. KRAKI_INSTALL=1 tells kraki to show the
+  # setup wizard + pairing QR but exit without starting the daemon.
+  # The daemon is started below from the shell — on macOS 26+, kraki
+  # cannot fork+exec itself (CSM provenance tracking), but the user's
+  # shell can launch it just fine.
+  KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
+
+  # Start daemon in background from the shell
+  mkdir -p "${HOME}/.kraki/logs"
+  nohup "${INSTALL_DIR}/${BINARY_NAME}" __daemon-worker \
+    </dev/null >"${HOME}/.kraki/logs/daemon-bootstrap.log" 2>&1 &
+  DAEMON_PID=$!
+
+  # Brief check that daemon survived startup
+  sleep 1
+  if kill -0 "$DAEMON_PID" 2>/dev/null; then
+    echo "  🦑 Kraki daemon started (PID $DAEMON_PID)"
+  else
+    echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
+  fi
+  echo ""
 }
 
 main

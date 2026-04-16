@@ -184,6 +184,20 @@ async function cmdStart(): Promise<void> {
 // ── Shared start logic ──────────────────────────────────
 
 async function silentStart(config: KrakiConfig): Promise<void> {
+  // In install mode, the install script handles daemon startup from the
+  // shell (needed on macOS where kraki can't fork+exec itself due to CSM).
+  if (process.env.KRAKI_INSTALL === '1') {
+    const { showPairingQr } = await import('./setup.js');
+    await showPairingQr(config);
+    console.log(chalk.dim('  Commands:'));
+    console.log(chalk.dim('    kraki connect   Generate a new connect code'));
+    console.log(chalk.dim('    kraki status    Show connection status'));
+    console.log(chalk.dim('    kraki logs -f   Follow logs'));
+    console.log(chalk.dim('    kraki stop      Stop Kraki'));
+    console.log('');
+    return;
+  }
+
   let pid: number;
   try {
     pid = await startDaemon(config);
