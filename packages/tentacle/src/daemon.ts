@@ -4,12 +4,11 @@
  * The daemon runs as a background child process executing daemon-worker.js.
  * Its PID is tracked under the current Kraki home.
  *
- * On macOS, the daemon is spawned WITHOUT `detached: true` (no setsid).
- * macOS 26+ Code Signing Monitor (CSM 2) ties Gatekeeper approval of
- * downloaded binaries (com.apple.provenance) to the current session.
- * Calling setsid() creates a new session, so the approval doesn't carry
- * over and the kernel SIGKILLs the child with "Code Signature Invalid".
- * The daemon-worker ignores SIGHUP to survive terminal close instead.
+ * On macOS, downloaded SEA binaries carry com.apple.provenance which
+ * cannot be removed. macOS 26+ CSM 2 blocks fork()+execve() of such
+ * binaries from child processes (SIGKILL with "Code Signature Invalid").
+ * When this happens, the caller falls back to running the daemon worker
+ * in the current process instead of spawning a child.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -156,6 +155,16 @@ export function getDaemonStatus(): DaemonStatus {
   }
 }
 
+export class MacOSCodeSignatureError extends Error {
+  constructor(bootstrapLogPath: string) {
+    super(
+      `macOS blocked the daemon process (code signature provenance). ` +
+      `Falling back to in-process daemon. Check ${bootstrapLogPath}`,
+    );
+    this.name = 'MacOSCodeSignatureError';
+  }
+}
+
 // ── Start / Stop ────────────────────────────────────────
 
 export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
@@ -169,7 +178,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   const bootstrapFd = openSync(bootstrapLogPath, 'w');
 
   const child = spawn(launch.runtime, launch.args, {
-    detached: process.platform !== 'darwin',
+    detached: true,
     stdio: ['ignore', bootstrapFd, bootstrapFd],
     cwd: launch.cwd,
     env: launch.env,
@@ -188,6 +197,16 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
       process.kill(child.pid, 'SIGTERM');
     } catch {
       // Child may already be gone
+    }
+    // On macOS, downloaded SEA binaries get SIGKILL'd by CSM 2 when
+    // fork()+execve()'d due to com.apple.provenance. Signal the caller
+    // to fall back to in-process daemon.
+    if (
+      process.platform === 'darwin' &&
+      err instanceof Error &&
+      err.message.includes('SIGKILL')
+    ) {
+      throw new MacOSCodeSignatureError(bootstrapLogPath);
     }
     throw err;
   }

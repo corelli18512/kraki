@@ -21,7 +21,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
-import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
+import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon, MacOSCodeSignatureError } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
@@ -188,6 +188,9 @@ async function silentStart(config: KrakiConfig): Promise<void> {
   try {
     pid = await startDaemon(config);
   } catch (err) {
+    if (err instanceof MacOSCodeSignatureError) {
+      return startDaemonInProcess(config);
+    }
     console.log(chalk.red(`  Failed to start Kraki: ${(err as Error).message}`));
     return;
   }
@@ -204,6 +207,34 @@ async function silentStart(config: KrakiConfig): Promise<void> {
   console.log(chalk.dim('    kraki logs -f   Follow logs'));
   console.log(chalk.dim('    kraki stop      Stop Kraki'));
   console.log('');
+}
+
+/**
+ * Run the daemon worker in the current process.
+ * Used on macOS when the kernel blocks child process spawning of
+ * downloaded SEA binaries (com.apple.provenance + CSM 2).
+ */
+async function startDaemonInProcess(config: KrakiConfig): Promise<void> {
+  // Ignore SIGHUP so the daemon survives terminal close
+  process.on('SIGHUP', () => {});
+
+  const { saveDaemonPid, getLogVerbosity: getLogV } = await import('./config.js');
+  saveDaemonPid(process.pid);
+  process.env.LOG_LEVEL = getLogV(config) === 'verbose' ? 'debug' : 'info';
+
+  console.log(chalk.green(`  🦑 Kraki started (PID ${process.pid})`));
+
+  // Show pairing QR code
+  const { showPairingQr } = await import('./setup.js');
+  await showPairingQr(config);
+
+  console.log(chalk.dim('  Running in-process (close this terminal to background)'));
+  console.log(chalk.dim('  Stop with: kraki stop'));
+  console.log('');
+
+  const { startWorker } = await import('./daemon-worker.js');
+  await startWorker();
+  // This never returns — the process is now the daemon
 }
 
 function cmdStop(): void {

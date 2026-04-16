@@ -168,7 +168,7 @@ describe('startDaemon()', () => {
     const [cmd, args, opts] = mockSpawn.mock.calls[0];
     expect(cmd).toBe(process.execPath);
     expect(args).toContain('__daemon-worker');
-    expect(opts.detached).toBe(process.platform !== 'darwin');
+    expect(opts.detached).toBe(true);
     expect(opts.stdio).toEqual(['ignore', 99, 99]);
     expect(opts.env.NODE_ENV).toBe('production');
     expect(opts.env.LOG_LEVEL).toBe('info');
