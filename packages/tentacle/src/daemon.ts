@@ -6,15 +6,16 @@
  *
  * On macOS, downloaded SEA binaries carry com.apple.provenance which
  * cannot be removed. macOS 26+ CSM 2 blocks direct fork()+execve() of
- * such binaries (SIGKILL with "Code Signature Invalid"). To work around
- * this, macOS SEA builds spawn the daemon through /bin/sh so a trusted
- * system binary performs the execve(). If that also fails, the caller
- * falls back to running the daemon worker in the current process.
+ * such binaries from child processes. To bypass this, macOS SEA builds
+ * use launchctl to have launchd spawn the daemon in a completely
+ * independent context. If launchctl also fails, the caller falls back
+ * to running the daemon worker in the current process.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { isSea } from 'node:sea';
 
 import {
@@ -27,6 +28,23 @@ import {
 } from './config.js';
 
 const STARTUP_GRACE_MS = 1500;
+const LAUNCHD_LABEL = 'cloud.corelli.kraki';
+
+function getLaunchdPlistPath(): string {
+  return join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+}
+
+function unloadLaunchdAgent(): void {
+  try {
+    execSync(`launchctl unload "${getLaunchdPlistPath()}" 2>/dev/null`, { stdio: 'ignore' });
+  } catch { /* not loaded */ }
+}
+
+function cleanupLaunchdPlist(): void {
+  unloadLaunchdAgent();
+  const p = getLaunchdPlistPath();
+  if (existsSync(p)) unlinkSync(p);
+}
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
 
 export interface DaemonLaunchSpec {
@@ -168,9 +186,101 @@ export class MacOSCodeSignatureError extends Error {
 
 // ── Start / Stop ────────────────────────────────────────
 
+/**
+ * Start the daemon via launchctl on macOS SEA.
+ * launchd spawns the process in a clean context, bypassing CSM restrictions.
+ * The daemon-worker saves its own PID; we poll for it here.
+ */
+async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
+  const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
+  const bootstrapLogPath = getDaemonBootstrapLogPath();
+  mkdirSync(dirname(bootstrapLogPath), { recursive: true });
+
+  const plistDir = join(homedir(), 'Library', 'LaunchAgents');
+  mkdirSync(plistDir, { recursive: true });
+
+  // Build PATH that includes locations for `gh` and other tools
+  const pathParts = new Set((process.env.PATH ?? '').split(':'));
+  for (const p of ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin']) pathParts.add(p);
+
+  const envEntries: [string, string][] = [
+    ['NODE_ENV', 'production'],
+    ['LOG_LEVEL', logLevel],
+    ['PATH', [...pathParts].filter(Boolean).join(':')],
+    ['HOME', homedir()],
+  ];
+  if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
+
+  const envXml = envEntries
+    .map(([k, v]) => `        <key>${k}</key>\n        <string>${escapeXml(v)}</string>`)
+    .join('\n');
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${escapeXml(process.execPath)}</string>
+        <string>${INTERNAL_DAEMON_WORKER_COMMAND}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>EnvironmentVariables</key>
+    <dict>
+${envXml}
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${escapeXml(bootstrapLogPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${escapeXml(bootstrapLogPath)}</string>
+    <key>WorkingDirectory</key>
+    <string>${escapeXml(homedir())}</string>
+</dict>
+</plist>`;
+
+  const plistPath = getLaunchdPlistPath();
+  writeFileSync(plistPath, plist);
+  unloadLaunchdAgent();
+  execSync(`launchctl load "${plistPath}"`, { stdio: 'ignore' });
+
+  // The daemon-worker writes its own PID on startup. Poll for it.
+  const deadline = Date.now() + STARTUP_GRACE_MS;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    const pid = loadDaemonPid();
+    if (pid !== null) {
+      try {
+        process.kill(pid, 0);
+        return pid;
+      } catch {
+        // PID saved but process already dead → CSM or crash
+        break;
+      }
+    }
+  }
+
+  // Daemon didn't start or died immediately
+  cleanupLaunchdPlist();
+  throw new MacOSCodeSignatureError(bootstrapLogPath);
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
-  // Kill any existing daemon(s) before starting a new one
   stopDaemon();
+
+  // On macOS SEA, use launchctl so launchd spawns the daemon in a clean
+  // context that isn't blocked by CSM provenance tracking.
+  if (process.platform === 'darwin' && isSea()) {
+    return startDaemonLaunchctl(config);
+  }
 
   const launch = resolveDaemonLaunch(cliEntryPath);
   launch.env.LOG_LEVEL = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
@@ -178,26 +288,12 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
   const bootstrapFd = openSync(bootstrapLogPath, 'w');
 
-  // On macOS, downloaded SEA binaries carry com.apple.provenance.
-  // CSM 2 blocks a direct fork()+execve() of provenance-marked binaries
-  // from a child of the same binary. Spawning through /bin/sh (a trusted
-  // system binary) lets the shell perform the execve() instead.
-  // If this still fails the caller gets MacOSCodeSignatureError and can
-  // fall back to running the daemon worker in-process.
-  const useMacOSShellSpawn = process.platform === 'darwin' && isSea();
-
-  const child = useMacOSShellSpawn
-    ? spawn(
-        '/bin/sh',
-        ['-c', `exec "${launch.runtime}" ${launch.args.map(a => `"${a}"`).join(' ')}`],
-        { detached: true, stdio: ['ignore', bootstrapFd, bootstrapFd], cwd: launch.cwd, env: launch.env },
-      )
-    : spawn(launch.runtime, launch.args, {
-        detached: true,
-        stdio: ['ignore', bootstrapFd, bootstrapFd],
-        cwd: launch.cwd,
-        env: launch.env,
-      });
+  const child = spawn(launch.runtime, launch.args, {
+    detached: true,
+    stdio: ['ignore', bootstrapFd, bootstrapFd],
+    cwd: launch.cwd,
+    env: launch.env,
+  });
 
   closeSync(bootstrapFd);
 
@@ -212,16 +308,6 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
       process.kill(child.pid, 'SIGTERM');
     } catch {
       // Child may already be gone
-    }
-    // On macOS, downloaded SEA binaries get SIGKILL'd by CSM 2 when
-    // fork()+execve()'d due to com.apple.provenance. Signal the caller
-    // to fall back to in-process daemon.
-    if (
-      process.platform === 'darwin' &&
-      err instanceof Error &&
-      err.message.includes('SIGKILL')
-    ) {
-      throw new MacOSCodeSignatureError(bootstrapLogPath);
     }
     throw err;
   }
@@ -241,6 +327,9 @@ export function stopDaemon(): boolean {
     }
     clearDaemonPid();
   }
+
+  // On macOS, also clean up launchd agent
+  if (process.platform === 'darwin') cleanupLaunchdPlist();
 
   return pid !== null;
 }

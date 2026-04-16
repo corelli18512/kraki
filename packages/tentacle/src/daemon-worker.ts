@@ -11,7 +11,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 
 // On macOS the daemon is NOT detached (no setsid) to preserve the
@@ -53,6 +53,8 @@ export interface WorkerResult {
 }
 
 export async function startWorker(): Promise<WorkerResult> {
+  // Write PID immediately so the launcher (launchctl or CLI) can find us
+  saveDaemonPid(process.pid);
   logger.info('Daemon starting…');
   const configPath = getConfigPath();
   const channelKeyPath = getChannelKeyPath();

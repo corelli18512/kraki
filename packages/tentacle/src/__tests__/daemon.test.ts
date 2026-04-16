@@ -11,8 +11,10 @@ import { resolve } from 'node:path';
 // ── Mocks ───────────────────────────────────────────────
 
 const mockSpawn = vi.fn();
+const mockExecSync = vi.fn();
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
+  execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
 const mockSaveDaemonPid = vi.fn();
@@ -21,11 +23,26 @@ const mockClearDaemonPid = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockOpenSync = vi.fn();
 const mockCloseSync = vi.fn();
+const mockExistsSync = vi.fn(() => false);
+const mockUnlinkSync = vi.fn();
+const mockWriteFileSync = vi.fn();
 
 vi.mock('node:fs', () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   openSync: (...args: unknown[]) => mockOpenSync(...args),
   closeSync: (...args: unknown[]) => mockCloseSync(...args),
+  existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+}));
+
+vi.mock('node:os', () => ({
+  homedir: vi.fn(() => '/tmp/fake-home'),
+}));
+
+// Force isSea() → false so startDaemon tests use the spawn path (not launchctl)
+vi.mock('node:sea', () => ({
+  isSea: vi.fn(() => false),
 }));
 
 vi.mock('../config.js', () => ({
