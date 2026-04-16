@@ -222,14 +222,17 @@ async function startDaemonInProcess(config: KrakiConfig): Promise<void> {
   saveDaemonPid(process.pid);
   process.env.LOG_LEVEL = getLogV(config) === 'verbose' ? 'debug' : 'info';
 
+  // Force production logging so pino writes to files, not stdout.
+  // (The spawned-daemon path doesn't need this because stdio is 'ignore'.)
+  process.env.NODE_ENV = 'production';
+
   console.log(chalk.green(`  🦑 Kraki started (PID ${process.pid})`));
 
   // Show pairing QR code
   const { showPairingQr } = await import('./setup.js');
   await showPairingQr(config);
 
-  console.log(chalk.dim('  Running in-process (close this terminal to background)'));
-  console.log(chalk.dim('  Stop with: kraki stop'));
+  console.log(chalk.dim('  Running in foreground — press Ctrl+C or run `kraki stop` to quit'));
   console.log('');
 
   const { startWorker } = await import('./daemon-worker.js');
