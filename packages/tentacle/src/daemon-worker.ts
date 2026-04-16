@@ -1,7 +1,7 @@
 /**
  * Kraki tentacle daemon worker.
  *
- * This file is spawned as a detached background process by daemon.ts.
+ * This file is spawned as a background process by daemon.ts.
  * It loads config, resolves authentication, starts the Copilot adapter,
  * and connects to the head via RelayClient.
  *
@@ -13,6 +13,11 @@
 import { execSync } from 'node:child_process';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion } from './config.js';
 import { CopilotAdapter } from './adapters/copilot.js';
+
+// On macOS the daemon is NOT detached (no setsid) to preserve the
+// Gatekeeper session for code signing. Ignore SIGHUP so we survive
+// when the launching terminal closes.
+process.on('SIGHUP', () => {});
 
 // Prevent unhandled promise rejections from crashing the daemon.
 // Node v15+ exits on unhandled rejections by default; we want the daemon to survive.

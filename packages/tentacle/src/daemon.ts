@@ -1,8 +1,15 @@
 /**
  * Daemon process management for Kraki tentacle.
  *
- * The daemon runs as a detached child process executing daemon-worker.js.
+ * The daemon runs as a background child process executing daemon-worker.js.
  * Its PID is tracked under the current Kraki home.
+ *
+ * On macOS, the daemon is spawned WITHOUT `detached: true` (no setsid).
+ * macOS 26+ Code Signing Monitor (CSM 2) ties Gatekeeper approval of
+ * downloaded binaries (com.apple.provenance) to the current session.
+ * Calling setsid() creates a new session, so the approval doesn't carry
+ * over and the kernel SIGKILLs the child with "Code Signature Invalid".
+ * The daemon-worker ignores SIGHUP to survive terminal close instead.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -162,7 +169,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   const bootstrapFd = openSync(bootstrapLogPath, 'w');
 
   const child = spawn(launch.runtime, launch.args, {
-    detached: true,
+    detached: process.platform !== 'darwin',
     stdio: ['ignore', bootstrapFd, bootstrapFd],
     cwd: launch.cwd,
     env: launch.env,
