@@ -107,9 +107,24 @@ export function App() {
     }
   }, [navigateToSession, navigate, setNavigateToSession]);
 
+  // Track visual viewport height for iOS PWA keyboard handling.
+  // On iOS, `dvh` can desync with the actual visible area when the keyboard
+  // shows/hides (especially with position:fixed on body). Using the visual
+  // viewport API gives us the real height synchronously.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    return () => vv.removeEventListener('resize', update);
+  }, []);
+
   if (status === 'awaiting_login') {
     return (
-      <div className="flex h-dvh overflow-hidden bg-surface-primary">
+      <div className="flex overflow-hidden bg-surface-primary" style={{ height: 'var(--app-height, 100dvh)' }}>
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
@@ -121,7 +136,7 @@ export function App() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-surface-primary">
+    <div className="flex overflow-hidden bg-surface-primary" style={{ height: 'var(--app-height, 100dvh)' }}>
       <ErrorBanner />
       <aside className="hidden w-72 shrink-0 flex-col border-r border-border-primary md:flex lg:w-80" aria-hidden={showBlockingOverlay}>
         <Sidebar />
