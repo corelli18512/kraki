@@ -5,10 +5,11 @@
  * Its PID is tracked under the current Kraki home.
  *
  * On macOS, downloaded SEA binaries carry com.apple.provenance which
- * cannot be removed. macOS 26+ CSM 2 blocks fork()+execve() of such
- * binaries from child processes (SIGKILL with "Code Signature Invalid").
- * When this happens, the caller falls back to running the daemon worker
- * in the current process instead of spawning a child.
+ * cannot be removed. macOS 26+ CSM 2 blocks direct fork()+execve() of
+ * such binaries (SIGKILL with "Code Signature Invalid"). To work around
+ * this, macOS SEA builds spawn the daemon through /bin/sh so a trusted
+ * system binary performs the execve(). If that also fails, the caller
+ * falls back to running the daemon worker in the current process.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -177,12 +178,26 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
   const bootstrapFd = openSync(bootstrapLogPath, 'w');
 
-  const child = spawn(launch.runtime, launch.args, {
-    detached: true,
-    stdio: ['ignore', bootstrapFd, bootstrapFd],
-    cwd: launch.cwd,
-    env: launch.env,
-  });
+  // On macOS, downloaded SEA binaries carry com.apple.provenance.
+  // CSM 2 blocks a direct fork()+execve() of provenance-marked binaries
+  // from a child of the same binary. Spawning through /bin/sh (a trusted
+  // system binary) lets the shell perform the execve() instead.
+  // If this still fails the caller gets MacOSCodeSignatureError and can
+  // fall back to running the daemon worker in-process.
+  const useMacOSShellSpawn = process.platform === 'darwin' && isSea();
+
+  const child = useMacOSShellSpawn
+    ? spawn(
+        '/bin/sh',
+        ['-c', `exec "${launch.runtime}" ${launch.args.map(a => `"${a}"`).join(' ')}`],
+        { detached: true, stdio: ['ignore', bootstrapFd, bootstrapFd], cwd: launch.cwd, env: launch.env },
+      )
+    : spawn(launch.runtime, launch.args, {
+        detached: true,
+        stdio: ['ignore', bootstrapFd, bootstrapFd],
+        cwd: launch.cwd,
+        env: launch.env,
+      });
 
   closeSync(bootstrapFd);
 
