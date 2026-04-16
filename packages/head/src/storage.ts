@@ -338,6 +338,16 @@ export class Storage {
     return (this.db.prepare('SELECT COUNT(*) as cnt FROM devices').get() as { cnt: number }).cnt;
   }
 
+  getAllUsers(): StoredUser[] {
+    const rows = this.db.prepare(
+      'SELECT user_id, username, provider, email, preferences, created_at FROM users ORDER BY created_at'
+    ).all() as UserRow[];
+    return rows.map(row => ({
+      userId: row.user_id, username: row.username, provider: row.provider,
+      email: row.email ?? undefined, createdAt: row.created_at,
+    }));
+  }
+
   // --- Cleanup ---
 
   close(): void {

@@ -955,6 +955,23 @@ export class HeadServer {
       kind?: string;
       connectedAt?: string;
     }>;
+    registeredUsers: Array<{
+      userId: string;
+      username: string;
+      provider: string;
+      email?: string;
+      createdAt: string;
+      online: boolean;
+      devices: Array<{
+        id: string;
+        name: string;
+        role: string;
+        kind?: string;
+        online: boolean;
+        lastSeen: string;
+        createdAt: string;
+      }>;
+    }>;
   } {
     const onlineUserIds = new Set<string>();
     const connectionList: Array<{
@@ -987,6 +1004,28 @@ export class HeadServer {
       });
     }
 
+    const allUsers = this.storage.getAllUsers();
+    const registeredUsers = allUsers.map(u => {
+      const devices = this.storage.getDevicesByUser(u.userId);
+      return {
+        userId: u.userId,
+        username: u.username,
+        provider: u.provider,
+        email: u.email,
+        createdAt: u.createdAt,
+        online: onlineUserIds.has(u.userId),
+        devices: devices.map(d => ({
+          id: d.id,
+          name: d.name,
+          role: d.role,
+          kind: d.kind ?? undefined,
+          online: this.connections.has(d.id),
+          lastSeen: d.lastSeen,
+          createdAt: d.createdAt,
+        })),
+      };
+    });
+
     return {
       users: {
         total: this.storage.getUserCount(),
@@ -997,6 +1036,7 @@ export class HeadServer {
         online: this.connections.size,
       },
       connections: connectionList,
+      registeredUsers,
     };
   }
 
