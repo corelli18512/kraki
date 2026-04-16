@@ -226,6 +226,7 @@ export class HeadServer {
         // Only clean up if this socket is still the active connection.
         // A reconnecting device may have already replaced us in the map.
         if (this.connections.get(disconnectedDeviceId) === ws) {
+          try { this.storage.touchDeviceLastSeen(disconnectedDeviceId); } catch { /* storage may be closed */ }
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
           logger.info('Device disconnected', { deviceId: disconnectedDeviceId });
@@ -819,6 +820,14 @@ export class HeadServer {
       payload.environment as string | undefined,
       payload.bundleId as string | undefined,
     );
+
+    // Clean up push tokens from stale devices (offline >24h) to prevent
+    // duplicate notifications from abandoned PWA installs on the same phone.
+    const onlineDeviceIds = Array.from(this.connections.keys());
+    const pruned = this.storage.deleteStaleUserPushTokens(state.userId, state.deviceId, onlineDeviceIds);
+    if (pruned > 0) {
+      logger.info('Pruned stale push tokens', { userId: state.userId, count: pruned });
+    }
 
     logger.info('Push token registered', { deviceId: state.deviceId, provider: payload.provider });
     ws.send(JSON.stringify({ type: 'push_token_registered', payload: { provider: payload.provider } }));

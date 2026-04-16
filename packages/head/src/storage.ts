@@ -272,6 +272,13 @@ export class Storage {
     return result.changes;
   }
 
+  // --- Device activity ---
+
+  /** Update last_seen timestamp for a device (called on disconnect). */
+  touchDeviceLastSeen(deviceId: string): void {
+    this.db.prepare("UPDATE devices SET last_seen = datetime('now') WHERE id = ?").run(deviceId);
+  }
+
   // --- Push tokens ---
 
   upsertPushToken(deviceId: string, provider: string, token: string, environment?: string, bundleId?: string): void {
@@ -295,6 +302,29 @@ export class Storage {
 
   deletePushTokensForDevice(deviceId: string): void {
     this.db.prepare('DELETE FROM push_tokens WHERE device_id = ?').run(deviceId);
+  }
+
+  /**
+   * Delete push tokens from stale devices of the same user.
+   * A device is considered stale if it is not currently connected
+   * AND its last_seen is older than the given threshold (default 24h).
+   * Returns the number of tokens deleted.
+   */
+  deleteStaleUserPushTokens(userId: string, excludeDeviceId: string, onlineDeviceIds: string[], maxAgeHours = 24): number {
+    const hours = Math.floor(Math.abs(Number(maxAgeHours)));
+    if (!Number.isFinite(hours) || hours === 0) return 0;
+    const cutoff = new Date(Date.now() - hours * 3600_000).toISOString().replace('T', ' ').slice(0, 19);
+    const allExcluded = [excludeDeviceId, ...onlineDeviceIds];
+    const placeholders = allExcluded.map(() => '?').join(',');
+    const result = this.db.prepare(`
+      DELETE FROM push_tokens WHERE device_id IN (
+        SELECT d.id FROM devices d
+        WHERE d.user_id = ?
+          AND d.id NOT IN (${placeholders})
+          AND d.last_seen < ?
+      )
+    `).run(userId, ...allExcluded, cutoff);
+    return result.changes;
   }
 
   /** Get push tokens for offline devices of a user (devices NOT in the online set). */
