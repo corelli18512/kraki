@@ -62,6 +62,12 @@ install() {
 
   chmod +x "$TARGET"
 
+  # macOS: remove quarantine/provenance xattrs so Gatekeeper doesn't
+  # SIGKILL the daemon child process even when the binary is signed.
+  if [ "$PLATFORM" = "macos" ]; then
+    xattr -cr "$TARGET" 2>/dev/null || true
+  fi
+
   # Windows (Git Bash): install to user's local bin
   if [ "$PLATFORM" = "windows" ]; then
     INSTALL_DIR="${HOME}/bin"

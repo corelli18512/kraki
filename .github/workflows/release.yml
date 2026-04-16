@@ -234,6 +234,7 @@ jobs:
           xcrun notarytool submit $RUNNER_TEMP/binary.zip \
             --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple packages/tentacle/dist/sea/${{ matrix.asset_name }}
 
       - name: Smoke test tentacle binary
         run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
