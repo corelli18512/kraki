@@ -54,7 +54,7 @@ install() {
 
   echo "  Installing Kraki ${VERSION} (${PLATFORM}/${ARCH})..."
 
-  if ! curl -fsSL -o "$TARGET" "$URL"; then
+  if ! curl -fSL# -o "$TARGET" "$URL"; then
     echo "Error: Download failed — ${URL}"
     rm -rf "$TMP"
     exit 1
