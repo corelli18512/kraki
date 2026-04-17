@@ -8,6 +8,19 @@ import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
 import './index.css';
 
+// Self-service channel switch: ?channel=beta or ?channel=stable
+// Sets cookie and reloads before React mounts.
+(function handleChannelParam() {
+  const params = new URLSearchParams(window.location.search);
+  const channel = params.get('channel');
+  if (channel && /^[a-z]+$/.test(channel)) {
+    document.cookie = `kraki_channel=${channel};path=/;max-age=${365 * 86400};SameSite=Lax`;
+    params.delete('channel');
+    const clean = params.toString();
+    window.location.replace(window.location.pathname + (clean ? `?${clean}` : ''));
+  }
+})();
+
 function Root() {
   useTheme();
   return (
