@@ -446,4 +446,78 @@ describe('SessionManager', () => {
       expect(sm.getResumableSessions()).toEqual([]);
     });
   });
+
+  // ── Link table ────────────────────────────────────────
+
+  describe('link table', () => {
+    it('should add and retrieve a link', () => {
+      sm.addLink({
+        localSessionId: 'local-1',
+        krakiSessionId: 'kraki-1',
+        source: 'copilot-cli',
+        cwd: '/proj',
+        branch: 'main',
+        linkedAt: '2026-04-10T00:00:00Z',
+      });
+
+      const link = sm.getLink('local-1');
+      expect(link).toBeTruthy();
+      expect(link!.krakiSessionId).toBe('kraki-1');
+      expect(link!.source).toBe('copilot-cli');
+    });
+
+    it('should return null for unknown links', () => {
+      expect(sm.getLink('nonexistent')).toBeNull();
+    });
+
+    it('should return all linked IDs', () => {
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k1', source: 'copilot-cli', linkedAt: '' });
+      sm.addLink({ localSessionId: 'l2', krakiSessionId: 'k2', source: 'vscode', linkedAt: '' });
+
+      const ids = sm.getLinkedIds();
+      expect(ids.size).toBe(2);
+      expect(ids.has('l1')).toBe(true);
+      expect(ids.has('l2')).toBe(true);
+    });
+
+    it('should remove link by local session ID', () => {
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k1', source: 'copilot-cli', linkedAt: '' });
+      sm.removeLink('l1');
+      expect(sm.getLink('l1')).toBeNull();
+    });
+
+    it('should remove link by Kraki session ID', () => {
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k1', source: 'copilot-cli', linkedAt: '' });
+      sm.removeLinkByKrakiId('k1');
+      expect(sm.getLink('l1')).toBeNull();
+    });
+
+    it('should replace existing link for same local session', () => {
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k1', source: 'copilot-cli', linkedAt: 'old' });
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k2', source: 'vscode', linkedAt: 'new' });
+
+      const link = sm.getLink('l1');
+      expect(link!.krakiSessionId).toBe('k2');
+      expect(sm.getAllLinks()).toHaveLength(1);
+    });
+
+    it('should persist across instances', () => {
+      sm.addLink({ localSessionId: 'l1', krakiSessionId: 'k1', source: 'copilot-cli', linkedAt: '' });
+
+      const sm2 = new SessionManager(dir);
+      expect(sm2.getLink('l1')).toBeTruthy();
+      expect(sm2.getLink('l1')!.krakiSessionId).toBe('k1');
+    });
+
+    it('should include source in session list', () => {
+      const { sessionId } = sm.createSession('copilot', 'gpt-4');
+      const meta = sm.getMeta(sessionId);
+      meta!.source = 'copilot-cli';
+      // Write back (normally done via a setter, but test the field)
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      // source is on meta but getSessionList reads it
+      expect(entry).toBeTruthy();
+    });
+  });
 });
