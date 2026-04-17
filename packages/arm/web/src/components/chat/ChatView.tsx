@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
@@ -34,7 +34,7 @@ function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
 }
 
-export function ChatView() {
+export const ChatView = memo(function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
   const streaming = useStore((s) => sessionId ? s.streamingContent.get(sessionId) : undefined);
@@ -313,4 +313,4 @@ export function ChatView() {
       )}
     </div>
   );
-}
+});
