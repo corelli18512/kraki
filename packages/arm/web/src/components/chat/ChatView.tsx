@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { MessageBubble } from './MessageBubble';
@@ -34,7 +34,7 @@ function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
 }
 
-export function ChatView() {
+export const ChatView = memo(function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
   const streaming = useStore((s) => sessionId ? s.streamingContent.get(sessionId) : undefined);
@@ -43,6 +43,8 @@ export function ChatView() {
   const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
   const permissionsMap = useStore((s) => s.pendingPermissions);
   const questionsMap = useStore((s) => s.pendingQuestions);
+  const storeUnread = useStore((s) => sessionId ? (s.unreadCount.get(sessionId) ?? 0) : 0);
+  const hadUnreadRef = useRef(false);
 
   const pendingPermIds = useMemo(
     () => new Set([...permissionsMap.values()].map((p) => p.id)),
@@ -112,6 +114,15 @@ export function ChatView() {
     // No in-progress turn — append one so streaming has a home
     return [...rawGrouped, { type: 'turn' as const, turn: { thinkingMessages: [] as ChatMessage[], finalMessage: null } }];
   }, [rawGrouped, streaming]);
+
+  // Index of the last turn group that has a finalMessage (for data-last-agent marker)
+  const lastAgentIdx = useMemo(() => {
+    for (let i = grouped.length - 1; i >= 0; i--) {
+      const g = grouped[i];
+      if (g.type === 'turn' && g.turn.finalMessage) return i;
+    }
+    return -1;
+  }, [grouped]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -186,16 +197,35 @@ export function ChatView() {
     prevLastSeqRef.current = curLastSeq;
   }, [grouped, streaming, scrollToBottom]);
 
+  // Snapshot unread state before SessionPage clears it
+  useEffect(() => {
+    hadUnreadRef.current = storeUnread > 0;
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps -- capture on session entry only
+
   // Reset when switching sessions
   useEffect(() => {
     setShowScrollBtn(false);
     setUnreadCount(0);
     isAtBottomRef.current = true;
-    // Scroll to bottom on session change
+    // Scroll after DOM settles
     setTimeout(() => {
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const container = scrollRef.current;
+      if (!container) return;
+
+      // If session had unread messages, try to scroll to the top of the last
+      // agent message bubble so the user can start reading from the beginning.
+      if (hadUnreadRef.current) {
+        const lastAgent = container.querySelector<HTMLElement>('[data-last-agent]');
+        if (lastAgent && lastAgent.offsetHeight > container.clientHeight) {
+          lastAgent.scrollIntoView({ block: 'start' });
+          // Small top padding so it doesn't sit flush against the edge
+          container.scrollTop = Math.max(0, container.scrollTop - 12);
+          isAtBottomRef.current = false;
+          return;
+        }
       }
+
+      container.scrollTop = container.scrollHeight;
     }, 0);
   }, [sessionId]);
 
@@ -255,7 +285,7 @@ export function ChatView() {
               const isActive = isLastTurn && !sessionIdle && (!turn.finalMessage || hasStreaming);
 
               return (
-                <div key={`turn-${idx}`}>
+                <div key={`turn-${idx}`} {...(idx === lastAgentIdx ? { 'data-last-agent': '' } : {})}>
                   {(turn.thinkingMessages.length > 0 || hasStreaming) && (
                     <ThinkingBox
                       messages={turn.thinkingMessages}
@@ -313,4 +343,4 @@ export function ChatView() {
       )}
     </div>
   );
-}
+});

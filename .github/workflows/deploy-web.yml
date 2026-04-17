@@ -8,73 +8,125 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      target:
+        description: Deploy target
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - production
 
 permissions:
   contents: read
   actions: write
 
 concurrency:
-  group: deploy-web-${{ github.ref }}
+  group: deploy-web-${{ github.ref }}-${{ github.event.inputs.target || 'beta' }}
   cancel-in-progress: true
 
+# ── Shared build steps (reusable) ─────────────────────────
+
 jobs:
-  detect-version-bump:
-    name: Detect web version bump
+  read-version:
+    name: Read version
     runs-on: ubuntu-latest
-    # Skip if triggered by workflow_run and CI failed
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
     outputs:
-      should_deploy: ${{ steps.detect.outputs.should_deploy }}
-      previous_version: ${{ steps.detect.outputs.previous_version }}
-      current_version: ${{ steps.detect.outputs.current_version }}
+      version: ${{ steps.v.outputs.version }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Read web version
+        id: v
+        run: echo "version=$(node -p "require('./packages/arm/web/package.json').version")" >> "$GITHUB_OUTPUT"
+
+  # ── Beta: eager deploy on every CI pass ──────────────────
+
+  deploy-beta:
+    name: Deploy beta v${{ needs.read-version.outputs.version }}
+    needs: read-version
+    if: >-
+      (github.event_name == 'workflow_run')
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'beta')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: beta
+      url: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
+    env:
+      WEB_DEPLOY_HOST: ${{ vars.WEB_DEPLOY_HOST }}
+      WEB_DEPLOY_USER: ${{ vars.WEB_DEPLOY_USER }}
+      WEB_DEPLOY_PORT: ${{ vars.WEB_DEPLOY_PORT != '' && vars.WEB_DEPLOY_PORT || '22' }}
+      WEB_DEPLOY_PATH: ${{ vars.WEB_DEPLOY_PATH != '' && vars.WEB_DEPLOY_PATH || '/var/www/kraki-beta' }}
+      WEB_DEPLOY_KNOWN_HOSTS: ${{ vars.WEB_DEPLOY_KNOWN_HOSTS }}
+      WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
+      VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://kraki.corelli.cloud' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          fetch-depth: 0
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Detect version bump
-        id: detect
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate repository
+        run: pnpm validate
+
+      - name: Build web app
+        run: pnpm --filter @kraki/arm-web build
+
+      - name: Configure SSH
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          WEB_DEPLOY_SSH_KEY: ${{ secrets.WEB_DEPLOY_SSH_KEY }}
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
+          test -n "$WEB_DEPLOY_HOST" || { echo "Missing WEB_DEPLOY_HOST"; exit 1; }
+          test -n "$WEB_DEPLOY_USER" || { echo "Missing WEB_DEPLOY_USER"; exit 1; }
+          test -n "$WEB_DEPLOY_PATH" || { echo "Missing WEB_DEPLOY_PATH"; exit 1; }
+          test -n "$WEB_DEPLOY_SSH_KEY" || { echo "Missing WEB_DEPLOY_SSH_KEY"; exit 1; }
+          test -n "$WEB_DEPLOY_KNOWN_HOSTS" || { echo "Missing WEB_DEPLOY_KNOWN_HOSTS"; exit 1; }
 
-          current = json.loads(Path('packages/arm/web/package.json').read_text())['version']
-          previous = ''
-          should_deploy = os.environ['EVENT_NAME'] == 'workflow_dispatch'
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$WEB_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$WEB_DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-          if not should_deploy:
-              try:
-                  previous_source = subprocess.check_output(
-                      ['git', 'show', 'HEAD~1:packages/arm/web/package.json'],
-                      text=True,
-                  )
-                  previous = json.loads(previous_source)['version']
-                  should_deploy = previous != current
-              except subprocess.CalledProcessError:
-                  # File didn't exist in previous commit — first deploy
-                  should_deploy = True
+      - name: Deploy static bundle
+        run: |
+          SSH_RSYNC="ssh -p $WEB_DEPLOY_PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes"
 
-          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as fh:
-              fh.write(f'current_version={current}\n')
-              fh.write(f'previous_version={previous}\n')
-              fh.write(f"should_deploy={'true' if should_deploy else 'false'}\n")
+          ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "mkdir -p '$WEB_DEPLOY_PATH'"
 
-          print(f'previous_version={previous or "(none)"}')
-          print(f'current_version={current}')
-          print(f'should_deploy={should_deploy}')
-          PY
+          rsync -az --delete -e "$SSH_RSYNC" \
+            packages/arm/web/dist/ \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/"
 
-  deploy:
-    name: Deploy web v${{ needs.detect-version-bump.outputs.current_version }}
-    needs: detect-version-bump
-    if: needs.detect-version-bump.outputs.should_deploy == 'true'
+          ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "test -f '$WEB_DEPLOY_PATH/index.html'"
+
+  # ── Production: manual dispatch only ─────────────────────
+
+  deploy-production:
+    name: Deploy production v${{ needs.read-version.outputs.version }}
+    needs: read-version
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'production'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -109,18 +161,18 @@ jobs:
       - name: Validate repository
         run: pnpm validate
 
-      - name: Build production web app
+      - name: Build web app
         run: pnpm --filter @kraki/arm-web build
 
       - name: Configure SSH
         env:
           WEB_DEPLOY_SSH_KEY: ${{ secrets.WEB_DEPLOY_SSH_KEY }}
         run: |
-          test -n "$WEB_DEPLOY_HOST" || { echo "Missing repository variable WEB_DEPLOY_HOST"; exit 1; }
-          test -n "$WEB_DEPLOY_USER" || { echo "Missing repository variable WEB_DEPLOY_USER"; exit 1; }
-          test -n "$WEB_DEPLOY_PATH" || { echo "Missing repository variable WEB_DEPLOY_PATH"; exit 1; }
-          test -n "$WEB_DEPLOY_SSH_KEY" || { echo "Missing repository secret WEB_DEPLOY_SSH_KEY"; exit 1; }
-          test -n "$WEB_DEPLOY_KNOWN_HOSTS" || { echo "Missing repository variable WEB_DEPLOY_KNOWN_HOSTS"; exit 1; }
+          test -n "$WEB_DEPLOY_HOST" || { echo "Missing WEB_DEPLOY_HOST"; exit 1; }
+          test -n "$WEB_DEPLOY_USER" || { echo "Missing WEB_DEPLOY_USER"; exit 1; }
+          test -n "$WEB_DEPLOY_PATH" || { echo "Missing WEB_DEPLOY_PATH"; exit 1; }
+          test -n "$WEB_DEPLOY_SSH_KEY" || { echo "Missing WEB_DEPLOY_SSH_KEY"; exit 1; }
+          test -n "$WEB_DEPLOY_KNOWN_HOSTS" || { echo "Missing WEB_DEPLOY_KNOWN_HOSTS"; exit 1; }
 
           install -m 700 -d ~/.ssh
           printf '%s\n' "$WEB_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
@@ -144,21 +196,3 @@ jobs:
 
       - name: Verify live site
         run: curl --fail --silent --show-error "$WEBAPP_PUBLIC_URL" > /dev/null
-
-  status:
-    name: Deploy Web Status
-    needs: [detect-version-bump, deploy]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report outcome
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ needs.deploy.result }}" = "success" ]; then
-            echo "✅ Deployed web v${{ needs.detect-version-bump.outputs.current_version }}"
-          else
-            echo "⏭️ No deploy needed — cancelling workflow"
-            gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
-            sleep 5
-          fi

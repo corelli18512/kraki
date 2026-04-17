@@ -3,16 +3,19 @@ import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { isPushSupported, isPushSubscribed, subscribeToPush, unsubscribeFromPush, getPushPermission } from '../../lib/push';
+import { getCurrentChannel, setChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
   const vapidPublicKey = useStore((s) => s.vapidPublicKey);
+  const isInternal = useStore((s) => s.user?.preferences?.internal === true);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
   const pushSupported = isPushSupported();
   const pushDenied = getPushPermission() === 'denied';
+  const isBeta = getCurrentChannel() === 'beta';
 
   // Check current push subscription state on mount
   useEffect(() => {
@@ -113,6 +116,38 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         </section>
       )}
 
+      {isInternal && (
+        <section>
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+            Dogfood
+          </h3>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-text-primary">Beta channel</p>
+              <p className="text-[11px] text-text-muted">
+                {isBeta ? 'Using latest unreleased build' : 'Switch to unreleased builds'}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const next = isBeta ? 'stable' : 'beta';
+                wsClient.updatePreferences({ channel: next });
+                setChannel(next);
+              }}
+              className={`relative h-6 w-11 rounded-full transition-colors ${
+                isBeta ? 'bg-amber-500' : 'bg-slate-300'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  isBeta ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        </section>
+      )}
+
       <section>
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
           Connection
@@ -130,7 +165,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
           About
         </h3>
         <div className="space-y-1 text-xs text-text-secondary">
-          <p>Client version: {version}</p>
+          <p>Client version: {version}{isBeta ? '-beta' : ''}</p>
           {relayVersion && <p>Relay version: {relayVersion}</p>}
           <p>Agent-agnostic relay for AI coding agents</p>
         </div>

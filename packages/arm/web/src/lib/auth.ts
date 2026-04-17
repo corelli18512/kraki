@@ -160,4 +160,27 @@ export function applyPreferences(prefs: Record<string, unknown> | undefined): vo
   if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
     setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
+  // Channel switching: set cookie so nginx serves the correct build
+  if (typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel)) {
+    const current = getCurrentChannel();
+    if (prefs.channel !== current) {
+      setChannelCookie(prefs.channel);
+      window.location.reload();
+    }
+  }
+}
+
+/** Read the current release channel from the cookie. */
+export function getCurrentChannel(): string {
+  return document.cookie.match(/(?:^|; )kraki_channel=([a-z]+)/)?.[1] ?? 'stable';
+}
+
+/** Set the release channel cookie and reload to pick up the new build. */
+export function setChannel(channel: string): void {
+  setChannelCookie(channel);
+  window.location.reload();
+}
+
+function setChannelCookie(channel: string): void {
+  document.cookie = `kraki_channel=${channel};path=/;max-age=${365 * 86400};SameSite=Lax`;
 }

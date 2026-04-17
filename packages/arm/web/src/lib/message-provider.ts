@@ -369,7 +369,17 @@ class MessageProvider {
       getStore().prependMessages(sessionId, messages);
       processReplayedActions(sessionId, messages);
       if (initial) {
+        const existingPreview = getStore().sessionPreviews.get(sessionId);
         rebuildPreview(sessionId);
+        // Preserve the existing preview timestamp if it's newer than the rebuilt one.
+        // This keeps forked sessions showing their fork time instead of the source
+        // session's last message time.
+        if (existingPreview) {
+          const rebuilt = getStore().sessionPreviews.get(sessionId);
+          if (rebuilt && existingPreview.timestamp > rebuilt.timestamp) {
+            getStore().setSessionPreview(sessionId, { ...rebuilt, timestamp: existingPreview.timestamp });
+          }
+        }
       }
     }
     logger.info('delivered', { sessionId, count: messages.length, initial });
