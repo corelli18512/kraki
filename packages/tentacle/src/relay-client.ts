@@ -9,6 +9,7 @@
 import { WebSocket } from 'ws';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
@@ -19,6 +20,8 @@ import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
+import { scanLocalSessions, filterSessions } from './session-scanner.js';
+import { parseSessionHistory } from './history-parser.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 
@@ -383,6 +386,16 @@ export class RelayClient {
       return;
     }
 
+    // ── Local session sync (no sessionId) ────────────────
+    if (msg.type === 'request_local_sessions') {
+      this.handleRequestLocalSessions(msg);
+      return;
+    }
+    if (msg.type === 'import_session') {
+      this.handleImportSession(msg);
+      return;
+    }
+
     const sessionId = msg.sessionId;
     if (!sessionId) return;
 
@@ -439,6 +452,7 @@ export class RelayClient {
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
             .finally(() => {
+              this.sessionManager.removeLinkByKrakiId(sessionId);
               this.sessionManager.deleteSession(sessionId);
               this.lastAgentContent.delete(sessionId);
               this.send({ type: 'session_deleted', sessionId, payload: {} });
@@ -584,6 +598,143 @@ export class RelayClient {
         type: 'error',
         sessionId: '',
         payload: { message: errorMsg },
+      });
+    }
+  }
+
+  // ── Local session sync handlers ───────────────────────
+
+  private handleRequestLocalSessions(msg: ConsumerMessage): void {
+    if (msg.type !== 'request_local_sessions') return;
+
+    const { requestId, filter } = msg.payload;
+    const requesterDeviceId = msg.deviceId;
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Local sessions requested but no encryption key');
+      return;
+    }
+
+    try {
+      let sessions = scanLocalSessions();
+      const linkedIds = this.sessionManager.getLinkedIds();
+
+      // Mark sessions that are already linked
+      for (const s of sessions) {
+        const link = this.sessionManager.getLink(s.sessionId);
+        if (link) s.linkedKrakiSessionId = link.krakiSessionId;
+      }
+
+      // Apply filters
+      if (filter) {
+        sessions = filterSessions(sessions, filter, linkedIds);
+      }
+
+      const response = {
+        type: 'local_sessions_list',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: { sessions, requestId },
+      };
+      this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+
+      logger.debug({ count: sessions.length, requestId }, 'Sent local sessions list');
+    } catch (err) {
+      logger.error({ err }, 'Failed to scan local sessions');
+      const response = {
+        type: 'local_sessions_list',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: { sessions: [], requestId },
+      };
+      this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+    }
+  }
+
+  private async handleImportSession(msg: ConsumerMessage): Promise<void> {
+    if (msg.type !== 'import_session') return;
+
+    const { requestId, localSessionId } = msg.payload;
+
+    // Check if already linked
+    const existing = this.sessionManager.getLink(localSessionId);
+    if (existing) {
+      this.send({
+        type: 'error',
+        sessionId: '',
+        payload: { message: `Session already imported as ${existing.krakiSessionId} (requestId: ${requestId})` },
+      });
+      return;
+    }
+
+    try {
+      // Use localSessionId as Kraki session ID (shared identity)
+      const krakiSessionId = localSessionId;
+
+      // Parse events.jsonl for backfill
+      const sessionStateDir = join(
+        homedir(), '.copilot', 'session-state', localSessionId,
+      );
+      const { messages: backfilledMessages, meta: parsedMeta } = parseSessionHistory(sessionStateDir);
+
+      // Scan to get local session metadata
+      const scanResults = scanLocalSessions();
+      const localSession = scanResults.find(s => s.sessionId === localSessionId);
+
+      // Create Kraki session
+      this.sessionManager.createSession(
+        'copilot',
+        parsedMeta.model ?? localSession?.model,
+        krakiSessionId,
+      );
+
+      // Set source and title on meta
+      const meta = this.sessionManager.getMeta(krakiSessionId);
+      if (meta) {
+        meta.source = localSession?.source ?? 'copilot-cli';
+        if (localSession?.summary) {
+          meta.autoTitle = localSession.summary.slice(0, 100);
+        }
+        // Write back since createSession doesn't set source
+        this.sessionManager.setTitle(krakiSessionId, meta.title ?? '');
+      }
+
+      // Backfill messages
+      for (const m of backfilledMessages) {
+        this.sessionManager.appendMessage(krakiSessionId, m.type, m.payload);
+      }
+
+      // Write link table entry
+      this.sessionManager.addLink({
+        localSessionId,
+        krakiSessionId,
+        source: localSession?.source ?? 'copilot-cli',
+        cwd: localSession?.cwd,
+        branch: localSession?.branch,
+        linkedAt: new Date().toISOString(),
+      });
+
+      // Map requestId for session_created correlation
+      if (requestId) {
+        this.pendingRequestIds.set(krakiSessionId, requestId);
+      }
+
+      // Resume via SDK (works for both live and dead sessions)
+      await this.adapter.resumeSession(krakiSessionId);
+
+      // Mark idle — will transition to active when user sends a message
+      this.sessionManager.markIdle(krakiSessionId);
+      this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
+
+      logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length }, 'Session imported');
+    } catch (err) {
+      logger.error({ err, localSessionId }, 'Import session failed');
+      this.send({
+        type: 'error',
+        sessionId: '',
+        payload: { message: `Failed to import session: ${(err as Error).message} (requestId: ${requestId})` },
       });
     }
   }

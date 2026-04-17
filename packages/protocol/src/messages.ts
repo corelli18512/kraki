@@ -287,6 +287,17 @@ export interface SessionReadMessage extends BaseEnvelope {
   };
 }
 
+/** Response to request_local_sessions. Unicast to requester only. */
+export interface LocalSessionsListMessage extends BaseEnvelope {
+  type: 'local_sessions_list';
+  payload: {
+    /** All sessions matching filter, sorted by modifiedTime desc. */
+    sessions: import('./sessions.js').LocalSession[];
+    /** Echoed from request for correlation. */
+    requestId?: string;
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -310,7 +321,8 @@ export type ProducerMessage =
   | SessionReplayBatchMessage
   | SessionListMessage
   | PermissionResolvedMessage
-  | QuestionResolvedMessage;
+  | QuestionResolvedMessage
+  | LocalSessionsListMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -456,6 +468,34 @@ export interface MarkUnreadMessage extends BaseEnvelope {
   payload: Record<string, never>;
 }
 
+/** Request catalog of local Copilot sessions for the import picker. */
+export interface RequestLocalSessionsMessage extends BaseEnvelope {
+  type: 'request_local_sessions';
+  payload: {
+    requestId?: string;
+    filter?: {
+      /** Case-insensitive substring across summary, cwd, gitRoot, repository, branch. */
+      search?: string;
+      /** Only live sessions. */
+      liveOnly?: boolean;
+      /** Include already-imported sessions. Default false. */
+      includeLinked?: boolean;
+    };
+  };
+}
+
+/** Import a local Copilot session into Kraki.
+ *  Tentacle resumes the same session ID — both Kraki and original CLI share state on disk. */
+export interface ImportSessionMessage extends BaseEnvelope {
+  type: 'import_session';
+  payload: {
+    /** Echoed in session_created.payload.requestId on success. */
+    requestId: string;
+    /** Must match a sessionId from a previous local_sessions_list. */
+    localSessionId: string;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -473,7 +513,9 @@ export type ConsumerMessage =
   | MarkUnreadMessage
   | RequestSessionReplayMessage
   | RenameSessionMessage
-  | PinSessionMessage;
+  | PinSessionMessage
+  | RequestLocalSessionsMessage
+  | ImportSessionMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method

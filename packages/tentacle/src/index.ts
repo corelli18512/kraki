@@ -24,8 +24,11 @@ export type {
 
 export { loadConfig, saveConfig, configExists, getOrCreateDeviceId } from './config.js';
 export { SessionManager } from './session-manager.js';
-export type { SessionContext, SessionMeta, RunRecord, LoggedMessage } from './session-manager.js';
+export type { SessionContext, SessionMeta, RunRecord, LoggedMessage, SessionLink } from './session-manager.js';
 export { RelayClient } from './relay-client.js';
 export type { RelayClientOptions, RelayClientState } from './relay-client.js';
 export { KeyManager } from './key-manager.js';
-
+export { scanLocalSessions, filterSessions } from './session-scanner.js';
+export type { ScanOptions, SessionFilter } from './session-scanner.js';
+export { parseEventsFile, parseSessionHistory } from './history-parser.js';
+export type { BackfilledMessage, ParsedSessionMeta } from './history-parser.js';
