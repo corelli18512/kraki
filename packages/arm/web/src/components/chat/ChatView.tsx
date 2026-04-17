@@ -115,14 +115,32 @@ export const ChatView = memo(function ChatView() {
     return [...rawGrouped, { type: 'turn' as const, turn: { thinkingMessages: [] as ChatMessage[], finalMessage: null } }];
   }, [rawGrouped, streaming]);
 
-  // Index of the last turn group that has a finalMessage (for data-last-agent marker)
-  const lastAgentIdx = useMemo(() => {
+  // Index of the element to scroll to when entering an unread session.
+  // Priority: pending question > last user message (if idle) > last agent turn.
+  // (Pending permissions are filtered out of chat and shown as a blocking card at bottom.)
+  const scrollTargetIdx = useMemo(() => {
+    // Pending question — scroll to its chat bubble
+    for (let i = grouped.length - 1; i >= 0; i--) {
+      const g = grouped[i];
+      if (g.type === 'standalone' && g.message.type === 'question') {
+        const payload = g.message.payload as Record<string, unknown> | undefined;
+        if (!payload?.answer) return i;
+      }
+    }
+    // Idle — scroll to the last user message (the prompt they sent)
+    if (sessionIdle) {
+      for (let i = grouped.length - 1; i >= 0; i--) {
+        const g = grouped[i];
+        if (g.type === 'standalone' && (g.message.type === 'user_message' || g.message.type === 'send_input')) return i;
+      }
+    }
+    // Default — last completed agent turn
     for (let i = grouped.length - 1; i >= 0; i--) {
       const g = grouped[i];
       if (g.type === 'turn' && g.turn.finalMessage) return i;
     }
     return -1;
-  }, [grouped]);
+  }, [grouped, sessionIdle]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -212,16 +230,20 @@ export const ChatView = memo(function ChatView() {
       const container = scrollRef.current;
       if (!container) return;
 
-      // If session had unread messages, try to scroll to the top of the last
-      // agent message bubble so the user can start reading from the beginning.
+      // If session had unread messages, try to scroll to the relevant element:
+      // pending question/permission, last user message (idle), or last agent bubble.
       if (hadUnreadRef.current) {
-        const lastAgent = container.querySelector<HTMLElement>('[data-last-agent]');
-        if (lastAgent && lastAgent.offsetHeight > container.clientHeight) {
-          lastAgent.scrollIntoView({ block: 'start' });
-          // Small top padding so it doesn't sit flush against the edge
-          container.scrollTop = Math.max(0, container.scrollTop - 12);
-          isAtBottomRef.current = false;
-          return;
+        const target = container.querySelector<HTMLElement>('[data-scroll-target]');
+        if (target) {
+          // Check if content from the target to the bottom overflows the viewport
+          const targetTop = target.offsetTop;
+          const contentBelow = container.scrollHeight - targetTop;
+          if (contentBelow > container.clientHeight) {
+            target.scrollIntoView({ block: 'start' });
+            container.scrollTop = Math.max(0, container.scrollTop - 12);
+            isAtBottomRef.current = false;
+            return;
+          }
         }
       }
 
@@ -269,7 +291,7 @@ export const ChatView = memo(function ChatView() {
               if (item.type === 'standalone') {
                 const msg = item.message;
                 return (
-                  <div key={`g-${idx}`}>
+                  <div key={`g-${idx}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
                     <MessageBubble
                       message={msg}
                       agent={session.agent}
@@ -285,7 +307,7 @@ export const ChatView = memo(function ChatView() {
               const isActive = isLastTurn && !sessionIdle && (!turn.finalMessage || hasStreaming);
 
               return (
-                <div key={`turn-${idx}`} {...(idx === lastAgentIdx ? { 'data-last-agent': '' } : {})}>
+                <div key={`turn-${idx}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
                   {(turn.thinkingMessages.length > 0 || hasStreaming) && (
                     <ThinkingBox
                       messages={turn.thinkingMessages}
