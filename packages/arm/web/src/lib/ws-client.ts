@@ -153,6 +153,14 @@ export class KrakiWSClient {
     commands.pinSession(sessionId, pinned, (msg) => this.sendEncrypted(msg));
   }
 
+  requestLocalSessions(filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean }) {
+    return commands.requestLocalSessions((msg) => this.sendEncrypted(msg), filter);
+  }
+
+  importSession(localSessionId: string) {
+    return commands.importSession(localSessionId, (msg) => this.sendEncrypted(msg), this.cmdState);
+  }
+
   markRead(sessionId: string, seq?: number): void {
     markSessionRead(sessionId);
     // Send to tentacle so it persists readSeq and broadcasts to other arms

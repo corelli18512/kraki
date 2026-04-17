@@ -67,6 +67,8 @@ const initialState = {
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
   loadingSessions: new Set<string>(),
+  localSessions: [],
+  localSessionsLoading: false,
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -359,6 +361,10 @@ export const useStore = create<Store>()(persist((set) => ({
       }
       return { loadingSessions: next };
     }),
+
+  setLocalSessions: (sessions) => set({ localSessions: sessions }),
+
+  setLocalSessionsLoading: (loading) => set({ localSessionsLoading: loading }),
 
   prependMessages: (sessionId, older) => {
     // Write to IndexedDB (idempotent by [sessionId, seq] key)

@@ -137,6 +137,11 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
             {session.model && (
               <span className="text-[10px] text-text-muted">{session.model}</span>
             )}
+            {session.source && session.source !== 'kraki' && (
+              <span className="shrink-0 rounded-full bg-kraki-500/10 px-1.5 py-0.5 text-[9px] font-medium text-kraki-600 dark:text-kraki-400">
+                {session.source === 'copilot-cli' ? 'imported' : session.source === 'vscode' ? 'VS Code' : 'imported'}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 truncate text-[11px] text-text-secondary">
             {draft && !isActive ? (

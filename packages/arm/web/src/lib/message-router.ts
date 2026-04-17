@@ -57,6 +57,14 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
+  // Handle local_sessions_list — response to import picker request
+  if (msg.type === 'local_sessions_list') {
+    const payload = (msg as { payload: { sessions: unknown[]; requestId?: string } }).payload;
+    store.setLocalSessions(payload.sessions as import('@kraki/protocol').LocalSession[]);
+    store.setLocalSessionsLoading(false);
+    return;
+  }
+
   // Handle device_greeting before sessionId check (greetings have no sessionId)
   if (msg.type === 'device_greeting') {
     const greeting = (msg as DeviceGreetingMessage).payload;

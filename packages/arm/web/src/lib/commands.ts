@@ -348,3 +348,30 @@ export function pinSession(
     payload: { pinned },
   });
 }
+
+export function requestLocalSessions(
+  send: (msg: Record<string, unknown>) => void,
+  filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean },
+): string {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  getStore().setLocalSessionsLoading(true);
+  send({
+    type: 'request_local_sessions',
+    payload: { requestId, filter },
+  });
+  return requestId;
+}
+
+export function importSession(
+  localSessionId: string,
+  send: (msg: Record<string, unknown>) => void,
+  state: CommandState,
+): string {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  state.pendingCreateRequests.add(requestId);
+  send({
+    type: 'import_session',
+    payload: { requestId, localSessionId },
+  });
+  return requestId;
+}
