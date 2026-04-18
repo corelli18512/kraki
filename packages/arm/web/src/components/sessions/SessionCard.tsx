@@ -128,6 +128,9 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
                 <span className="text-[10px] text-text-muted">{machineName}</span>
               </>
             )}
+            {machineName && session.model && (
+              <span className="text-[10px] text-text-muted">·</span>
+            )}
             {session.model && (
               <span className="text-[10px] text-text-muted">{session.model}</span>
             )}
