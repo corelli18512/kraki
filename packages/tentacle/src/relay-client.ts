@@ -621,7 +621,7 @@ export class RelayClient {
         if (link) s.linkedKrakiSessionId = link.krakiSessionId;
       }
 
-      // Exclude sessions that Kraki already manages (created natively, not imported)
+      // Exclude sessions that Kraki manages (natively created or imported)
       const krakiSessionIds = new Set(this.sessionManager.getSessionList().map(s => s.id));
       sessions = sessions.filter(s => !krakiSessionIds.has(s.sessionId) || s.linkedKrakiSessionId);
 
@@ -760,6 +760,43 @@ export class RelayClient {
       // Mark idle — will transition to active when user sends a message
       this.sessionManager.markIdle(krakiSessionId);
       this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
+
+      // Send title so the web UI displays it (session_created doesn't carry title)
+      const finalMeta = this.sessionManager.getMeta(krakiSessionId);
+      if (finalMeta?.autoTitle || finalMeta?.title) {
+        this.send({
+          type: 'session_title_updated',
+          sessionId: krakiSessionId,
+          payload: { title: finalMeta.title, autoTitle: finalMeta.autoTitle },
+        });
+      }
+
+      // Proactively send backfilled history as a replay batch.
+      // Don't rely on the web requesting it — the encrypted request_session_replay
+      // may fail in some auth configurations.
+      if (backfilledMessages.length > 0) {
+        const replayMessages = this.sessionManager.getMessagesAfterSeq(krakiSessionId, 0, 500);
+        const asProducerMessages = replayMessages.map(m => {
+          try {
+            const payload = JSON.parse(m.payload);
+            return { type: m.type, seq: m.seq, timestamp: m.ts, sessionId: krakiSessionId, deviceId: this.authInfo?.deviceId ?? '', payload } as unknown as import('@kraki/protocol').ProducerMessage;
+          } catch { return null; }
+        }).filter((m): m is import('@kraki/protocol').ProducerMessage => m !== null);
+
+        this.send({
+          type: 'session_replay_batch',
+          sessionId: krakiSessionId,
+          payload: {
+            sessionId: krakiSessionId,
+            messages: asProducerMessages,
+            lastSeq: finalMeta?.lastSeq ?? backfilledMessages.length,
+            totalLastSeq: finalMeta?.lastSeq ?? backfilledMessages.length,
+          },
+        });
+      }
+
+      // Broadcast updated session list so web gets full metadata (model, source, etc.)
+      this.broadcastSessionList();
 
       logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length }, 'Session imported');
     } catch (err) {

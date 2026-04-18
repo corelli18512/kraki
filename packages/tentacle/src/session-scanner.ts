@@ -207,6 +207,9 @@ export function scanLocalSessions(options: ScanOptions = {}): LocalSession[] {
         // Skip Kraki daemon sessions (cwd: "/" with no git context)
         if (session.cwd === '/' && !session.gitRoot) continue;
 
+        // Skip sessions with no events.jsonl (empty shells with no conversation)
+        if (!existsSync(join(sessionDir, 'events.jsonl'))) continue;
+
         if (options.includeModel) {
           const model = extractModelFromEvents(sessionDir);
           if (model) session.model = model;
