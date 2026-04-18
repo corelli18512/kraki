@@ -189,4 +189,61 @@ describe('ChatView', () => {
 
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
+
+  it('does not re-arm the session entry scroll after mount', async () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
+    ]);
+    useStore.setState({ unreadCount: new Map([['s1', 1]]) });
+
+    const now = new Date().toISOString();
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message',
+      deviceId: 'd1', seq: 1,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Question' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'idle',
+      deviceId: 'd1', seq: 2,
+      timestamp: now, sessionId: 's1',
+      payload: {},
+    } as ChatMessage);
+
+    const scrollIntoView = vi.fn();
+    let scrollTopValue = 1200;
+    const setScrollTop = vi.fn((value: number) => {
+      scrollTopValue = value;
+    });
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+      configurable: true,
+      value: 1100,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => 2000,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 760,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTopValue,
+      set: setScrollTop,
+    });
+
+    renderChatView('s1');
+
+    await act(async () => {});
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(setScrollTop).not.toHaveBeenCalledWith(2000);
+    expect(scrollTopValue).toBe(1188);
+  });
 });

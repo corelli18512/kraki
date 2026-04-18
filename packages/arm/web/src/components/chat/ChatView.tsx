@@ -175,6 +175,7 @@ export const ChatView = memo(function ChatView() {
   const prevMsgLenRef: MutableRefObject<number> = useRef(0);
   const prevLastSeqRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
+  const suppressAutoScrollRef = useRef(false);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -201,6 +202,7 @@ export const ChatView = memo(function ChatView() {
             target.scrollIntoView({ block: 'start' });
             el.scrollTop = Math.max(0, el.scrollTop - 12);
             isAtBottomRef.current = false;
+            suppressAutoScrollRef.current = true;
             pendingSessionScrollRef.current = false;
             hadUnreadRef.current = false;
             prevScrollHeightRef.current = el.scrollHeight;
@@ -274,6 +276,9 @@ export const ChatView = memo(function ChatView() {
       }
       logger.info('SCROLL justWentIdle → scrollToBottom (fits)');
       scrollToBottom();
+    } else if (suppressAutoScrollRef.current) {
+      logger.info('SCROLL autoScroll skipped after sessionEntry');
+      suppressAutoScrollRef.current = false;
     } else if (isAtBottomRef.current || isFromUser) {
       logger.info('SCROLL autoScroll → scrollToBottom', { atBottom: isAtBottomRef.current, isFromUser, curLen, curLastSeq });
       scrollToBottom();
@@ -299,9 +304,15 @@ export const ChatView = memo(function ChatView() {
     isAtBottomRef.current = true;
     prependedRef.current = false;
     prevFirstSeqRef.current = 0;
+    prevScrollHeightRef.current = 0;
     prevMsgLenRef.current = 0;
     prevLastSeqRef.current = 0;
-    pendingSessionScrollRef.current = true;
+    suppressAutoScrollRef.current = false;
+    logger.info('SCROLL sessionEntry resetState', {
+      sessionId,
+      pending: pendingSessionScrollRef.current,
+      unread: hadUnreadRef.current,
+    });
     wasIdleRef.current = sessionIdle;
   }, [sessionId]);
 
