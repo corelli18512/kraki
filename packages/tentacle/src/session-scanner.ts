@@ -89,12 +89,14 @@ function isSessionLive(sessionDir: string): boolean {
     const pid = parseInt(pidStr, 10);
     if (isNaN(pid)) return false;
 
-    // Check if PID is alive (signal 0 = check existence, doesn't actually send signal)
+    // Check if PID is alive (signal 0 = check existence)
     try {
       process.kill(pid, 0);
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      // ESRCH = process doesn't exist → dead
+      // EPERM = process exists but different owner → alive
+      return (err as NodeJS.ErrnoException).code !== 'ESRCH';
     }
   } catch {
     return false;

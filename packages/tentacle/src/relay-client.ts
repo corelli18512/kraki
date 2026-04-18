@@ -740,9 +740,21 @@ export class RelayClient {
           cwd,
         });
       } catch (createErr) {
-        // If createSession fails (e.g. session state corrupted), still keep
-        // the backfilled history — the session is browsable but not interactive.
+        // SDK resume failed — still keep backfilled history, but manually
+        // send session_created so the web UI knows the session exists.
         logger.warn({ err: (createErr as Error).message, krakiSessionId }, 'SDK resume failed — session imported as idle');
+        const meta = this.sessionManager.getMeta(krakiSessionId);
+        this.send({
+          type: 'session_created',
+          sessionId: krakiSessionId,
+          payload: {
+            agent: 'copilot',
+            model: parsedMeta.model ?? localSession?.model,
+            requestId,
+            lastSeq: meta?.lastSeq ?? 0,
+          },
+        });
+        if (requestId) this.pendingRequestIds.delete(krakiSessionId);
       }
 
       // Mark idle — will transition to active when user sends a message
