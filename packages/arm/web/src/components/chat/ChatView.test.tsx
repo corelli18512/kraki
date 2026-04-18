@@ -247,7 +247,7 @@ describe('ChatView', () => {
     expect(scrollTopValue).toBe(1188);
   });
 
-  it('does not auto-follow if content growth pushed the viewport off bottom', async () => {
+  it('does not auto-follow when the user is already away from bottom', async () => {
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
     ]);
@@ -267,7 +267,7 @@ describe('ChatView', () => {
     } as ChatMessage);
 
     let scrollHeightValue = 1000;
-    let scrollTopValue = 240;
+    let scrollTopValue = 100;
     const setScrollTop = vi.fn((value: number) => {
       scrollTopValue = value;
     });
@@ -286,17 +286,83 @@ describe('ChatView', () => {
       set: setScrollTop,
     });
 
-    renderChatView('s1');
+    const { container } = renderChatView('s1');
+    const scrollArea = container.querySelector('.overflow-y-auto') as HTMLDivElement;
     await act(async () => {});
+    scrollTopValue = 100;
+    scrollArea.dispatchEvent(new Event('scroll'));
 
     setScrollTop.mockClear();
     scrollHeightValue = 1400;
-    scrollTopValue = 240;
+    scrollTopValue = 100;
 
     await act(async () => {
       useStore.getState().appendDelta('s1', 'more streaming content');
     });
 
     expect(setScrollTop).not.toHaveBeenCalled();
+  });
+
+  it('only counts unread for completed message bubbles, not streaming updates', async () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
+    ]);
+
+    const now = new Date().toISOString();
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message',
+      deviceId: 'd1', seq: 1,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Question' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message',
+      deviceId: 'd1', seq: 2,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Working...' },
+    } as ChatMessage);
+
+    let scrollHeightValue = 1200;
+    let scrollTopValue = 100;
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeightValue,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 760,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTopValue,
+      set: (value: number) => { scrollTopValue = value; },
+    });
+
+    const { container } = renderChatView('s1');
+    const scrollArea = container.querySelector('.overflow-y-auto') as HTMLDivElement;
+    await act(async () => {});
+    scrollTopValue = 100;
+    scrollArea.dispatchEvent(new Event('scroll'));
+
+    await act(async () => {
+      useStore.getState().appendDelta('s1', 'still streaming');
+    });
+
+    expect(container.querySelector('span.bg-kraki-500')).toBeNull();
+
+    await act(async () => {
+      useStore.getState().flushDelta('s1');
+      useStore.getState().appendMessage('s1', {
+        type: 'idle',
+        deviceId: 'd1', seq: 3,
+        timestamp: now, sessionId: 's1',
+        payload: {},
+      } as ChatMessage);
+    });
+    await act(async () => {});
+
+    const scrollBtn = container.querySelector('button.absolute');
+    expect(scrollBtn).toBeTruthy();
+    expect(container.querySelector('span.bg-kraki-500')?.textContent).toContain('1');
   });
 });
