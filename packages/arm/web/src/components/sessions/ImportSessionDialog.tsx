@@ -97,21 +97,38 @@ function buildGroups(sessions: LocalSession[]): SessionGroup[] {
 
 const INITIAL_SHOW = 5;
 
-function GroupSection({ group, importingIds, onImport }: {
+/** Highlight matching substring in text. */
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query || !text) return <>{text}</>;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-kraki-500/20 text-inherit rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
+
+function GroupSection({ group, importingIds, onImport, search }: {
   group: SessionGroup;
   importingIds: Set<string>;
   onImport: (sessionId: string) => void;
+  search: string;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const autoExpand = search.length > 0;
+  const [manualExpanded, setManualExpanded] = useState(false);
+  const expanded = autoExpand || manualExpanded;
   const [showAll, setShowAll] = useState(false);
   const hasGit = group.sessions.some(s => s.gitRoot);
-  const visible = expanded ? (showAll ? group.sessions : group.sessions.slice(0, INITIAL_SHOW)) : [];
-  const hasMore = expanded && !showAll && group.sessions.length > INITIAL_SHOW;
+  const visible = expanded ? (showAll || autoExpand ? group.sessions : group.sessions.slice(0, INITIAL_SHOW)) : [];
+  const hasMore = expanded && !showAll && !autoExpand && group.sessions.length > INITIAL_SHOW;
 
   return (
     <div className="mb-1">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setManualExpanded(!manualExpanded)}
         className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-tertiary"
       >
         {expanded
@@ -120,7 +137,7 @@ function GroupSection({ group, importingIds, onImport }: {
         }
         {groupIcon(group.path, hasGit)}
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-          {group.label}
+          <Highlight text={group.label} query={search} />
         </span>
         {group.liveCount > 0 && (
           <span className="flex items-center gap-1 text-[10px] text-emerald-500">
@@ -141,6 +158,7 @@ function GroupSection({ group, importingIds, onImport }: {
           session={session}
           importing={importingIds.has(session.sessionId)}
           onImport={() => onImport(session.sessionId)}
+          search={search}
         />
       ))}
 
@@ -156,12 +174,14 @@ function GroupSection({ group, importingIds, onImport }: {
   );
 }
 
-function SessionRow({ session, importing, onImport }: {
+function SessionRow({ session, importing, onImport, search }: {
   session: LocalSession;
   importing: boolean;
   onImport: () => void;
+  search: string;
 }) {
   const isLinked = !!session.linkedKrakiSessionId;
+  const displayText = session.summary ?? session.sessionId.slice(0, 12);
 
   return (
     <div className="ml-5 flex items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-surface-secondary transition-colors">
@@ -169,11 +189,11 @@ function SessionRow({ session, importing, onImport }: {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
           <span className="truncate text-xs text-text-primary">
-            {session.summary ?? session.sessionId.slice(0, 12)}
+            <Highlight text={displayText} query={search} />
           </span>
           {session.branch && (
             <span className="shrink-0 rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[9px] text-text-muted">
-              {session.branch}
+              <Highlight text={session.branch} query={search} />
             </span>
           )}
         </div>
@@ -370,6 +390,7 @@ export function ImportSessionDialog({ open, onClose }: Props) {
                 group={group}
                 importingIds={importingIds}
                 onImport={handleImport}
+                search={search}
               />
             ))
           )}
