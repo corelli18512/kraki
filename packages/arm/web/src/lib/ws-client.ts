@@ -153,12 +153,12 @@ export class KrakiWSClient {
     commands.pinSession(sessionId, pinned, (msg) => this.sendEncrypted(msg));
   }
 
-  requestLocalSessions(filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean }) {
-    return commands.requestLocalSessions((msg) => this.sendEncrypted(msg), filter);
+  requestLocalSessions(targetDeviceId: string, filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean }) {
+    return commands.requestLocalSessions(targetDeviceId, (msg) => this.sendEncrypted(msg), filter);
   }
 
-  importSession(localSessionId: string) {
-    return commands.importSession(localSessionId, (msg) => this.sendEncrypted(msg), this.cmdState);
+  importSession(localSessionId: string, targetDeviceId: string) {
+    return commands.importSession(localSessionId, targetDeviceId, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
   markRead(sessionId: string, seq?: number): void {

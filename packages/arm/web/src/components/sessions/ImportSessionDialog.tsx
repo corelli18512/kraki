@@ -55,13 +55,34 @@ function buildGroups(sessions: LocalSession[]): SessionGroup[] {
       return b.modifiedTime.localeCompare(a.modifiedTime);
     });
     groups.push({
-      label: repo ? repo.split('/').pop() ?? groupLabel(path) : groupLabel(path),
+      label: '', // filled below after dedup
       path,
       repository: repo,
       branches,
       sessions: items,
       liveCount,
     });
+  }
+
+  // Disambiguate labels: use repo short name, then last path component,
+  // and add parent dir if there are collisions
+  const labelCounts = new Map<string, number>();
+  for (const g of groups) {
+    const base = g.repository ? g.repository.split('/').pop()! : groupLabel(g.path);
+    g.label = base;
+    labelCounts.set(base, (labelCounts.get(base) ?? 0) + 1);
+  }
+  for (const g of groups) {
+    if ((labelCounts.get(g.label) ?? 0) > 1) {
+      // Disambiguate with branch info or path suffix
+      const branchHint = g.branches.length === 1 ? g.branches[0] : '';
+      const pathSuffix = g.path.replace(/^.*\/Repos\//, '').replace(/^.*\/Documents\//, '');
+      if (branchHint && branchHint !== 'main') {
+        g.label = `${g.label} (${branchHint})`;
+      } else if (pathSuffix !== g.label && pathSuffix.length > 0) {
+        g.label = pathSuffix;
+      }
+    }
   }
 
   // Sort groups: most recent activity first
@@ -181,17 +202,26 @@ function SessionRow({ session, importing, onImport }: {
 export function ImportSessionDialog({ open, onClose }: Props) {
   const localSessions = useStore(s => s.localSessions);
   const loading = useStore(s => s.localSessionsLoading);
+  const devices = useStore(s => s.devices);
   const [search, setSearch] = useState('');
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
 
+  // Pick the first online tentacle as the target device
+  const tentacle = useMemo(() => {
+    for (const [, d] of devices) {
+      if (d.role === 'tentacle' && d.online) return d;
+    }
+    return undefined;
+  }, [devices]);
+
   // Request sessions when dialog opens
   useEffect(() => {
-    if (open) {
-      wsClient.requestLocalSessions();
+    if (open && tentacle) {
+      wsClient.requestLocalSessions(tentacle.id);
       setSearch('');
       setImportingIds(new Set());
     }
-  }, [open]);
+  }, [open, tentacle?.id]);
 
   // Client-side search filter
   const filtered = useMemo(() => {
@@ -208,9 +238,10 @@ export function ImportSessionDialog({ open, onClose }: Props) {
   const totalCount = localSessions.length;
 
   const handleImport = useCallback((sessionId: string) => {
+    if (!tentacle) return;
     setImportingIds(prev => new Set(prev).add(sessionId));
-    wsClient.importSession(sessionId);
-  }, []);
+    wsClient.importSession(sessionId, tentacle.id);
+  }, [tentacle?.id]);
 
   // Mark as linked when session appears in main sessions list
   const sessions = useStore(s => s.sessions);

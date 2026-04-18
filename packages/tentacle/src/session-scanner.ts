@@ -202,6 +202,9 @@ export function scanLocalSessions(options: ScanOptions = {}): LocalSession[] {
         if (ws.branch) session.branch = ws.branch;
         if (ws.summary) session.summary = ws.summary.slice(0, 200);
 
+        // Skip Kraki daemon sessions (cwd: "/" with no git context)
+        if (session.cwd === '/' && !session.gitRoot) continue;
+
         if (options.includeModel) {
           const model = extractModelFromEvents(sessionDir);
           if (model) session.model = model;

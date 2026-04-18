@@ -350,6 +350,7 @@ export function pinSession(
 }
 
 export function requestLocalSessions(
+  targetDeviceId: string,
   send: (msg: Record<string, unknown>) => void,
   filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean },
 ): string {
@@ -357,13 +358,14 @@ export function requestLocalSessions(
   getStore().setLocalSessionsLoading(true);
   send({
     type: 'request_local_sessions',
-    payload: { requestId, filter },
+    payload: { requestId, targetDeviceId, filter },
   });
   return requestId;
 }
 
 export function importSession(
   localSessionId: string,
+  targetDeviceId: string,
   send: (msg: Record<string, unknown>) => void,
   state: CommandState,
 ): string {
@@ -371,7 +373,7 @@ export function importSession(
   state.pendingCreateRequests.add(requestId);
   send({
     type: 'import_session',
-    payload: { requestId, localSessionId },
+    payload: { requestId, localSessionId, targetDeviceId },
   });
   return requestId;
 }

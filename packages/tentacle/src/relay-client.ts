@@ -610,10 +610,6 @@ export class RelayClient {
     const { requestId, filter } = msg.payload;
     const requesterDeviceId = msg.deviceId;
     const requesterKey = this.consumerKeys.get(requesterDeviceId);
-    if (!requesterKey) {
-      logger.warn({ requesterDeviceId }, 'Local sessions requested but no encryption key');
-      return;
-    }
 
     try {
       let sessions = scanLocalSessions();
@@ -624,6 +620,10 @@ export class RelayClient {
         const link = this.sessionManager.getLink(s.sessionId);
         if (link) s.linkedKrakiSessionId = link.krakiSessionId;
       }
+
+      // Exclude sessions that Kraki already manages (created natively, not imported)
+      const krakiSessionIds = new Set(this.sessionManager.getSessionList().map(s => s.id));
+      sessions = sessions.filter(s => !krakiSessionIds.has(s.sessionId) || s.linkedKrakiSessionId);
 
       // Apply filters
       if (filter) {
@@ -637,7 +637,13 @@ export class RelayClient {
         timestamp: new Date().toISOString(),
         payload: { sessions, requestId },
       };
-      this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+
+      if (requesterKey) {
+        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+      } else {
+        // No encryption key — broadcast (works in open/non-E2E mode)
+        this.send(response as Partial<ProducerMessage>);
+      }
 
       logger.debug({ count: sessions.length, requestId }, 'Sent local sessions list');
     } catch (err) {
@@ -649,7 +655,12 @@ export class RelayClient {
         timestamp: new Date().toISOString(),
         payload: { sessions: [], requestId },
       };
-      this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+
+      if (requesterKey) {
+        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+      } else {
+        this.send(response as Partial<ProducerMessage>);
+      }
     }
   }
 
