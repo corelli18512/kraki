@@ -732,8 +732,21 @@ export class RelayClient {
         this.pendingRequestIds.set(krakiSessionId, requestId);
       }
 
-      // Resume via SDK (works for both live and dead sessions)
-      await this.adapter.resumeSession(krakiSessionId);
+      // Resume the session via SDK. Use createSession with the existing sessionId
+      // so the CLI server discovers the state on disk. resumeSession only works
+      // for sessions the CLI server has already loaded in memory.
+      const cwd = localSession?.cwd ?? parsedMeta.cwd ?? '/';
+      try {
+        await this.adapter.createSession({
+          sessionId: krakiSessionId,
+          model: parsedMeta.model,
+          cwd,
+        });
+      } catch (createErr) {
+        // If createSession fails (e.g. session state corrupted), still keep
+        // the backfilled history — the session is browsable but not interactive.
+        logger.warn({ err: (createErr as Error).message, krakiSessionId }, 'SDK resume failed — session imported as idle');
+      }
 
       // Mark idle — will transition to active when user sends a message
       this.sessionManager.markIdle(krakiSessionId);
