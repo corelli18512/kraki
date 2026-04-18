@@ -50,6 +50,8 @@ export interface SessionMeta {
   updatedAt: string;
   /** Cumulative token usage (persisted across restarts) */
   usage?: import('@kraki/protocol').SessionUsage;
+  /** Origin of this session — set for imported sessions */
+  source?: import('@kraki/protocol').LocalSessionSource | 'imported';
 }
 
 export interface RunRecord {
@@ -444,6 +446,24 @@ export class SessionManager {
     return this.readMeta(sessionId);
   }
 
+  /**
+   * Bulk-update session metadata fields. Reads from disk, merges, writes back.
+   */
+  updateMeta(sessionId: string, updates: Partial<Pick<SessionMeta, 'model' | 'title' | 'autoTitle' | 'source' | 'createdAt' | 'state' | 'mode' | 'pinned'>>): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    if (updates.model !== undefined) meta.model = updates.model;
+    if (updates.title !== undefined) meta.title = updates.title || undefined;
+    if (updates.autoTitle !== undefined) meta.autoTitle = updates.autoTitle;
+    if (updates.source !== undefined) meta.source = updates.source;
+    if (updates.createdAt !== undefined) meta.createdAt = updates.createdAt;
+    if (updates.state !== undefined) meta.state = updates.state;
+    if (updates.mode !== undefined) meta.mode = updates.mode;
+    if (updates.pinned !== undefined) meta.pinned = updates.pinned || undefined;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
   // ── Message log ────────────────────────────────────────
 
   /**
@@ -527,6 +547,7 @@ export class SessionManager {
     messageCount: number;
     createdAt: string;
     usage?: import('@kraki/protocol').SessionUsage;
+    source?: import('@kraki/protocol').LocalSessionSource | 'imported';
   }> {
     const result: ReturnType<SessionManager['getSessionList']> = [];
     if (!existsSync(this.sessionsDir)) return result;
@@ -552,6 +573,7 @@ export class SessionManager {
         messageCount: meta.lastSeq ?? 0,
         createdAt: meta.createdAt,
         usage: meta.usage,
+        source: meta.source,
       });
     }
     return result;
@@ -592,6 +614,69 @@ export class SessionManager {
   private writeRun(sessionId: string, run: RunRecord): void {
     atomicWrite(join(this.sessionDir(sessionId), 'runs', `${run.id}.json`), JSON.stringify(run, null, 2));
   }
+
+  // ── Link table (local session sync) ───────────────────
+
+  private get linkTablePath(): string {
+    return join(this.sessionsDir, 'link-table.json');
+  }
+
+  private readLinkTable(): SessionLink[] {
+    try {
+      return JSON.parse(readFileSync(this.linkTablePath, 'utf8'));
+    } catch { return []; }
+  }
+
+  private writeLinkTable(links: SessionLink[]): void {
+    atomicWrite(this.linkTablePath, JSON.stringify(links, null, 2));
+  }
+
+  /** Add a link between a local Copilot session and a Kraki session. */
+  addLink(link: SessionLink): void {
+    const links = this.readLinkTable();
+    // Replace existing link for this local session ID
+    const idx = links.findIndex(l => l.localSessionId === link.localSessionId);
+    if (idx >= 0) links[idx] = link;
+    else links.push(link);
+    this.writeLinkTable(links);
+  }
+
+  /** Remove a link by local session ID. */
+  removeLink(localSessionId: string): void {
+    const links = this.readLinkTable().filter(l => l.localSessionId !== localSessionId);
+    this.writeLinkTable(links);
+  }
+
+  /** Remove a link by Kraki session ID (used on session delete). */
+  removeLinkByKrakiId(krakiSessionId: string): void {
+    const links = this.readLinkTable().filter(l => l.krakiSessionId !== krakiSessionId);
+    this.writeLinkTable(links);
+  }
+
+  /** Get link for a local session ID. */
+  getLink(localSessionId: string): SessionLink | null {
+    return this.readLinkTable().find(l => l.localSessionId === localSessionId) ?? null;
+  }
+
+  /** Get all linked local session IDs. */
+  getLinkedIds(): Set<string> {
+    return new Set(this.readLinkTable().map(l => l.localSessionId));
+  }
+
+  /** Get all links. */
+  getAllLinks(): SessionLink[] {
+    return this.readLinkTable();
+  }
+}
+
+/** Link between a local Copilot session and a Kraki session. */
+export interface SessionLink {
+  localSessionId: string;
+  krakiSessionId: string;
+  source: import('@kraki/protocol').LocalSessionSource;
+  cwd?: string;
+  branch?: string;
+  linkedAt: string;
 }
 
 /** Atomic write: write to temp file, then rename (prevents corruption on crash). */

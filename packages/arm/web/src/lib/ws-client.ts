@@ -153,6 +153,14 @@ export class KrakiWSClient {
     commands.pinSession(sessionId, pinned, (msg) => this.sendEncrypted(msg));
   }
 
+  requestLocalSessions(targetDeviceId: string, filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean }) {
+    return commands.requestLocalSessions(targetDeviceId, (msg) => this.sendEncrypted(msg), filter);
+  }
+
+  importSession(localSessionId: string, targetDeviceId: string) {
+    return commands.importSession(localSessionId, targetDeviceId, (msg) => this.sendEncrypted(msg), this.cmdState);
+  }
+
   markRead(sessionId: string, seq?: number): void {
     markSessionRead(sessionId);
     // Send to tentacle so it persists readSeq and broadcasts to other arms
@@ -464,7 +472,28 @@ export class KrakiWSClient {
         break;
       }
 
+      // local_sessions_list can arrive as plaintext (mock/e2e) or decrypted (production)
+      case 'local_sessions_list': {
+        const payload = (msg as { payload: { sessions: unknown[]; requestId?: string } }).payload;
+        if (payload?.sessions) {
+          getStore().setLocalSessions(payload.sessions as import('@kraki/protocol').LocalSession[]);
+          getStore().setLocalSessionsLoading(false);
+        }
+        break;
+      }
+
       default:
+        // Data messages (session_created, agent_message, etc.) arrive encrypted
+        // in production but as plaintext from mock relay in E2E tests.
+        // Route them to the message router so both paths work.
+        if ('sessionId' in msg || 'payload' in msg) {
+          handleDataMessage(msg as InnerMessage, {
+            cmdState: this.cmdState,
+            sendEncrypted: (m) => this.sendEncrypted(m),
+            onSessionList: (m) => this.handleSessionList(m),
+            onSessionReplayBatch: (m) => this.handleReplayBatch(m),
+          });
+        }
         break;
     }
   }

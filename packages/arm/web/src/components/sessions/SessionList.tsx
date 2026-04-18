@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { SessionCard } from './SessionCard';
 import { NewSessionDialog } from './NewSessionDialog';
+import { ImportSessionDialog } from './ImportSessionDialog';
+import { Download } from 'lucide-react';
 
 export function SessionList() {
   const sessions = useStore((s) => s.sessions);
@@ -9,6 +11,7 @@ export function SessionList() {
   const sessionPreviews = useStore((s) => s.sessionPreviews);
   const devices = useStore((s) => s.devices);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
 
   const hasTentacle = [...devices.values()].some((d) => d.role === 'tentacle' && d.online);
@@ -39,20 +42,32 @@ export function SessionList() {
               ? 'Start a coding agent on your connected device'
               : 'Connect an agent via tentacle to get started'}
           </p>
-          {hasTentacle ? (
-            <button
-              onClick={() => setDialogOpen(true)}
-              className="mt-3 rounded-lg bg-kraki-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-kraki-600"
-            >
-              + New Session
-            </button>
-          ) : (
+          {hasTentacle && (
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                onClick={() => setDialogOpen(true)}
+                className="rounded-lg bg-kraki-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-kraki-600"
+              >
+                + New Session
+              </button>
+              <button
+                onClick={() => setImportOpen(true)}
+                title="Import local session"
+                className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+              >
+                <Download className="inline h-3.5 w-3.5 -mt-0.5 mr-1" />
+                Import
+              </button>
+            </div>
+          )}
+          {!hasTentacle && (
             <code className="mt-3 rounded bg-surface-tertiary px-2.5 py-1 text-[11px] text-text-secondary">
               npx @kraki/tentacle
             </code>
           )}
         </div>
         <NewSessionDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
+        <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
       </>
     );
   }
@@ -67,15 +82,26 @@ export function SessionList() {
           <h3 className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
             Sessions
           </h3>
-          <button
-            onClick={() => setDialogOpen(true)}
-            title="New session"
-            className="rounded p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-0.5">
+            {hasTentacle && (
+              <button
+                onClick={() => setImportOpen(true)}
+                title="Import local session"
+                className="rounded p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <button
+              onClick={() => setDialogOpen(true)}
+              title="New session"
+              className="rounded p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+            </button>
+          </div>
         </div>
       {pinnedList.length > 0 && (
         <div className="mb-1 space-y-1">
@@ -91,6 +117,7 @@ export function SessionList() {
       </div>
     </div>
     <NewSessionDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
+    <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
   </>
   );
 }

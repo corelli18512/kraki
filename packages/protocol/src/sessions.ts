@@ -27,6 +27,8 @@ export interface SessionSummary {
   autoTitle?: string;
   state: SessionState;
   messageCount: number;
+  /** Origin of this session. Absent for sessions created natively in Kraki. */
+  source?: LocalSessionSource | 'imported';
 }
 
 /** Compact session metadata sent in session_list for sync. */
@@ -44,4 +46,46 @@ export interface SessionDigest {
   createdAt: string;
   usage?: SessionUsage;
   pinned?: boolean;
+  /** Origin of this session. Absent for sessions created natively in Kraki. */
+  source?: LocalSessionSource | 'imported';
+}
+
+// ------------------------------------------------------------
+// Local session types — for local session sync / import feature
+// ------------------------------------------------------------
+
+/** Where a local session originated. */
+export type LocalSessionSource = 'copilot-cli' | 'vscode' | 'unknown';
+
+/**
+ * A Copilot session discovered on the local filesystem.
+ * Lightweight descriptor — no message history.
+ * Sent from tentacle to arm as part of local_sessions_list.
+ */
+export interface LocalSession {
+  sessionId: string;
+
+  /** Where the CLI was launched. Always present. */
+  cwd: string;
+  /** Git repo root. Preferred tree grouping key. Absent ~46% of sessions. */
+  gitRoot?: string;
+  /** "owner/repo" format. Best display label when available. */
+  repository?: string;
+  /** Git branch. Absent when gitRoot is absent. */
+  branch?: string;
+
+  /** SDK-generated summary. Absent for very new sessions. */
+  summary?: string;
+  /** Model ID (e.g. "claude-opus-4.6-1m"). Only if scanner read events.jsonl line 1. */
+  model?: string;
+  /** ISO 8601 creation time. */
+  startTime: string;
+  /** ISO 8601 last activity. */
+  modifiedTime: string;
+
+  /** Lock file exists + PID alive. */
+  isLive: boolean;
+  source: LocalSessionSource;
+  /** Set if already imported into Kraki. */
+  linkedKrakiSessionId?: string;
 }

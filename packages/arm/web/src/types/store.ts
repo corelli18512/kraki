@@ -5,6 +5,7 @@ import type {
   ConsumerMessage,
   ModelDetail,
   SessionUsage,
+  LocalSession,
 } from '@kraki/protocol';
 
 // --- Connection ---
@@ -114,6 +115,10 @@ export interface AppState {
 
   // Sessions currently loading initial messages
   loadingSessions: Set<string>;
+
+  // Local session import picker
+  localSessions: LocalSession[];
+  localSessionsLoading: boolean;
 }
 
 export interface AppActions {
@@ -157,6 +162,8 @@ export interface AppActions {
   setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;
+  setLocalSessions: (sessions: LocalSession[]) => void;
+  setLocalSessionsLoading: (loading: boolean) => void;
   clearTransientState: () => void;
   reset: () => void;
 
