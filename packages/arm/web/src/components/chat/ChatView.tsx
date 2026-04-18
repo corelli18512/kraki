@@ -189,8 +189,8 @@ export const ChatView = memo(function ChatView() {
     if (prependedRef.current && heightGrew && !isAtBottomRef.current) {
       logger.info('SCROLL layoutEffect prepend adjust', { from: el.scrollTop, delta: el.scrollHeight - prevHeight });
       el.scrollTop += el.scrollHeight - prevHeight;
-      prependedRef.current = false;
     }
+    prependedRef.current = false;
     prevScrollHeightRef.current = el.scrollHeight;
   });
 
@@ -270,6 +270,8 @@ export const ChatView = memo(function ChatView() {
     setShowScrollBtn(false);
     setUnreadCount(0);
     isAtBottomRef.current = true;
+    prependedRef.current = false;
+    prevFirstSeqRef.current = 0;
     // Scroll after DOM settles
     setTimeout(() => {
       const container = scrollRef.current;
