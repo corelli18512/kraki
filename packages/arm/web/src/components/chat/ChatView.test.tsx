@@ -246,4 +246,57 @@ describe('ChatView', () => {
     expect(setScrollTop).not.toHaveBeenCalledWith(2000);
     expect(scrollTopValue).toBe(1188);
   });
+
+  it('does not auto-follow if content growth pushed the viewport off bottom', async () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
+    ]);
+
+    const now = new Date().toISOString();
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message',
+      deviceId: 'd1', seq: 1,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Question' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message',
+      deviceId: 'd1', seq: 2,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Answer' },
+    } as ChatMessage);
+
+    let scrollHeightValue = 1000;
+    let scrollTopValue = 240;
+    const setScrollTop = vi.fn((value: number) => {
+      scrollTopValue = value;
+    });
+
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeightValue,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 760,
+    });
+    Object.defineProperty(HTMLDivElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTopValue,
+      set: setScrollTop,
+    });
+
+    renderChatView('s1');
+    await act(async () => {});
+
+    setScrollTop.mockClear();
+    scrollHeightValue = 1400;
+    scrollTopValue = 240;
+
+    await act(async () => {
+      useStore.getState().appendDelta('s1', 'more streaming content');
+    });
+
+    expect(setScrollTop).not.toHaveBeenCalled();
+  });
 });

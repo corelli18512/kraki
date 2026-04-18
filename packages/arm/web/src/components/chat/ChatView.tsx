@@ -17,6 +17,7 @@ const logger = createLogger('chat-view');
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const IDLE_SCROLL_OVERFLOW_PX = 120;
+const BOTTOM_STICKY_THRESHOLD_PX = 8;
 
 /** Collect image attachments from tool_complete messages in a turn's thinking. */
 function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
@@ -175,13 +176,21 @@ export const ChatView = memo(function ChatView() {
   const prevMsgLenRef: MutableRefObject<number> = useRef(0);
   const prevLastSeqRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
+  const prevStreamingLenRef = useRef(0);
   const suppressAutoScrollRef = useRef(false);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
       const el = scrollRef.current;
-      logger.info('SCROLL scrollToBottom', { from: el.scrollTop, to: el.scrollHeight, trace: new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()) });
+      logger.info('SCROLL scrollToBottom', {
+        from: el.scrollTop,
+        to: Math.max(0, el.scrollHeight - el.clientHeight),
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        trace: new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()),
+      });
       el.scrollTop = el.scrollHeight;
+      isAtBottomRef.current = true;
     }
     setShowScrollBtn(false);
     setUnreadCount(0);
@@ -234,6 +243,7 @@ export const ChatView = memo(function ChatView() {
   // Auto-scroll to bottom when new messages arrive (only if already at bottom)
   useEffect(() => {
     const curLen = grouped.length;
+    const curStreamingLen = streaming?.length ?? 0;
     let curLastSeq = 0;
     if (curLen > 0) {
       const lastGroup = grouped[curLen - 1];
@@ -244,7 +254,13 @@ export const ChatView = memo(function ChatView() {
         if (tm) curLastSeq = getSeq(tm);
       }
     }
-    const isNewAtEnd = curLastSeq > prevLastSeqRef.current;
+    const prevLen = prevMsgLenRef.current;
+    const prevLastSeq = prevLastSeqRef.current;
+    const prevStreamingLen = prevStreamingLenRef.current;
+    const isNewAtEnd = curLastSeq > prevLastSeq;
+    const hasNewGroup = curLen > prevLen;
+    const streamingAdvanced = curStreamingLen > prevStreamingLen;
+    const hasContentChange = hasNewGroup || isNewAtEnd || streamingAdvanced;
 
     const lastGroup = curLen > 0 ? grouped[curLen - 1] : null;
     const isFromUser = lastGroup?.type === 'standalone' && (
@@ -253,13 +269,19 @@ export const ChatView = memo(function ChatView() {
       lastGroup.message.type === 'answer' ||
       lastGroup.message.type === 'send_input'
     );
+    const shouldFollowUserMessage = isFromUser && (hasNewGroup || isNewAtEnd);
+    const container = scrollRef.current;
+    const distanceFromBottom = container
+      ? container.scrollHeight - container.scrollTop - container.clientHeight
+      : Number.POSITIVE_INFINITY;
+    const isActuallyAtBottom = distanceFromBottom < BOTTOM_STICKY_THRESHOLD_PX;
+    isAtBottomRef.current = isActuallyAtBottom;
 
     // On idle transition: if the response is long, scroll user message to top
     const justWentIdle = sessionIdle && !wasIdleRef.current;
     wasIdleRef.current = sessionIdle;
 
-    if (justWentIdle && isAtBottomRef.current && scrollRef.current) {
-      const container = scrollRef.current;
+    if (justWentIdle && isActuallyAtBottom && container) {
       const target = container.querySelector<HTMLElement>('[data-scroll-target]');
       if (target) {
         const targetTop = target.offsetTop;
@@ -279,11 +301,21 @@ export const ChatView = memo(function ChatView() {
     } else if (suppressAutoScrollRef.current) {
       logger.info('SCROLL autoScroll skipped after sessionEntry');
       suppressAutoScrollRef.current = false;
-    } else if (isAtBottomRef.current || isFromUser) {
-      logger.info('SCROLL autoScroll → scrollToBottom', { atBottom: isAtBottomRef.current, isFromUser, curLen, curLastSeq });
+    } else if (hasContentChange && (isActuallyAtBottom || shouldFollowUserMessage)) {
+      logger.info('SCROLL autoScroll → scrollToBottom', {
+        atBottom: isActuallyAtBottom,
+        distanceFromBottom,
+        isFromUser,
+        shouldFollowUserMessage,
+        curLen,
+        curLastSeq,
+        curStreamingLen,
+        prevLen,
+        prevLastSeq,
+        prevStreamingLen,
+      });
       scrollToBottom();
     } else if (isNewAtEnd) {
-      const prevLen = prevMsgLenRef.current;
       if (curLen > prevLen) {
         if (!isFromUser) {
           setUnreadCount((c) => c + (curLen - prevLen));
@@ -292,9 +324,21 @@ export const ChatView = memo(function ChatView() {
       } else if (streaming) {
         setShowScrollBtn(true);
       }
+    } else if (streamingAdvanced && !isActuallyAtBottom) {
+      setShowScrollBtn(true);
+    } else if (!hasContentChange) {
+      logger.info('SCROLL autoScroll skipped (no content change)', {
+        atBottom: isActuallyAtBottom,
+        distanceFromBottom,
+        isFromUser,
+        curLen,
+        curLastSeq,
+        curStreamingLen,
+      });
     }
     prevMsgLenRef.current = curLen;
     prevLastSeqRef.current = curLastSeq;
+    prevStreamingLenRef.current = curStreamingLen;
   }, [grouped, streaming, sessionIdle, scrollToBottom]);
 
   // Reset when switching sessions
@@ -307,6 +351,7 @@ export const ChatView = memo(function ChatView() {
     prevScrollHeightRef.current = 0;
     prevMsgLenRef.current = 0;
     prevLastSeqRef.current = 0;
+    prevStreamingLenRef.current = 0;
     suppressAutoScrollRef.current = false;
     logger.info('SCROLL sessionEntry resetState', {
       sessionId,
@@ -319,7 +364,7 @@ export const ChatView = memo(function ChatView() {
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const atBottom = scrollHeight - scrollTop - clientHeight < 40;
+    const atBottom = scrollHeight - scrollTop - clientHeight < BOTTOM_STICKY_THRESHOLD_PX;
     isAtBottomRef.current = atBottom;
     if (atBottom) {
       setShowScrollBtn(false);
