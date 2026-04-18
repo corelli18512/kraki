@@ -38,6 +38,10 @@ import type { AuthProvider } from './auth.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
+import type { AuthBackend } from './auth-backend.js';
+import { LocalAuthBackend } from './local-auth-backend.js';
+import { RemoteAuthBackend } from './remote-auth-backend.js';
+import { AccountApi } from './account-api.js';
 
 // --- CLI flags ---
 const args = process.argv.slice(2);
@@ -57,6 +61,14 @@ if (args.includes('--help') || args.includes('-h')) {
     --log <level>     Log level: debug | info | warn | error (default: info)
     --help, -h        Show this help
     --version, -v     Show version
+
+  Multi-region (connected mode):
+    --account-url <url>   Remote account service URL (env: ACCOUNT_URL)
+                          When set, auth is delegated to the account service.
+    --service-key <key>   Service API key for account service (env: SERVICE_KEY)
+    --region <name>       This head's region identifier (env: REGION)
+    --region-urls <json>  Region → relay URL map, JSON (env: REGION_URLS)
+                          Example: '{"us":"wss://us.example.com","cn":"wss://cn.example.com"}'
 
   GitHub OAuth (env only, for web login):
     GITHUB_CLIENT_ID      GitHub OAuth App client ID
@@ -105,6 +117,20 @@ const PAIRING = process.env.PAIRING_ENABLED !== 'false'; // default true
 const LOG_LEVEL = flag('log', process.env.LOG_LEVEL || 'info') as 'debug' | 'info' | 'warn' | 'error';
 const LOG_PATH = process.env.LOG_PATH;
 const PUSH_PROVIDERS = flag('push', process.env.PUSH_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
+
+// --- Multi-region flags ---
+const ACCOUNT_URL = flag('account-url', process.env.ACCOUNT_URL || '');
+const SERVICE_KEY = flag('service-key', process.env.SERVICE_KEY || '');
+const REGION = flag('region', process.env.REGION || '');
+const REGION_URLS_RAW = flag('region-urls', process.env.REGION_URLS || '');
+let REGION_URLS: Record<string, string> = {};
+if (REGION_URLS_RAW) {
+  try { REGION_URLS = JSON.parse(REGION_URLS_RAW); } catch {
+    console.error('Error: --region-urls must be valid JSON');
+    process.exit(1);
+  }
+}
+const IS_CONNECTED_MODE = !!ACCOUNT_URL;
 
 async function createAuthProviders(): Promise<Map<string, AuthProvider>> {
   // Build a proxy-aware fetcher for GitHub API calls if GITHUB_PROXY is set
@@ -166,64 +192,117 @@ const logger = new Logger({
 });
 setGlobalLogger(logger);
 
-logger.info('Kraki Head starting...');
+logger.info('Kraki Head starting...', { mode: IS_CONNECTED_MODE ? 'connected' : 'standalone', region: REGION || '(none)' });
 
-const authProviders = await createAuthProviders();
-const storage = new Storage(DB_PATH);
-
-// --- Push providers ---
+// --- Auth backend setup ---
+let authBackend: AuthBackend | undefined;
+let accountApi: AccountApi | undefined;
+let storage: Storage | undefined;
 let pushManager: PushManager | undefined;
-if (PUSH_PROVIDERS.length > 0) {
-  const pushProviderInstances: IPushProvider[] = [];
-  for (const provider of PUSH_PROVIDERS) {
-    switch (provider) {
-      case 'apns': {
-        const keyPath = process.env.APNS_KEY_PATH;
-        const keyId = process.env.APNS_KEY_ID;
-        const teamId = process.env.APNS_TEAM_ID;
-        const bundleId = process.env.APNS_BUNDLE_ID;
-        if (!keyPath || !keyId || !teamId || !bundleId) {
-          console.error('Error: APNs requires APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
-          process.exit(1);
-        }
-        pushProviderInstances.push(new ApnsProvider({
-          keyPath, keyId, teamId, bundleId,
-          environment: (process.env.APNS_ENVIRONMENT as 'production' | 'sandbox') ?? 'production',
-        }));
-        logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
-        break;
-      }
-      case 'web_push': {
-        const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-        const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-        const vapidEmail = process.env.VAPID_EMAIL;
-        if (!vapidPublicKey || !vapidPrivateKey || !vapidEmail) {
-          console.error('Error: Web Push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL');
-          process.exit(1);
-        }
-        pushProviderInstances.push(new WebPushProvider({ vapidPublicKey, vapidPrivateKey, vapidEmail }));
-        logger.info('Web Push provider configured', { email: vapidEmail });
-        break;
-      }
-      default:
-        console.error(`Error: Unknown push provider '${provider}'. Use: apns, web_push`);
-        process.exit(1);
-    }
+
+if (IS_CONNECTED_MODE) {
+  // Connected mode: delegate auth to remote account service
+  if (!SERVICE_KEY) {
+    console.error('Error: --service-key required when --account-url is set');
+    process.exit(1);
   }
-  pushManager = new PushManager(storage, pushProviderInstances);
+  const remoteBackend = new RemoteAuthBackend({ accountUrl: ACCOUNT_URL, serviceKey: SERVICE_KEY });
+  authBackend = remoteBackend;
+  // Fetch config from account service
+  await remoteBackend.refreshConfig();
+  logger.info('Connected to account service', { url: ACCOUNT_URL, region: REGION });
+
+  // Connected mode still needs local storage for devices, pending, push tokens
+  storage = new Storage(DB_PATH);
+} else {
+  // Standalone mode: local auth + expose account API
+  const authProviders = await createAuthProviders();
+  storage = new Storage(DB_PATH);
+
+  // Push providers (standalone only — in connected mode, push is handled by the account service's head)
+  if (PUSH_PROVIDERS.length > 0) {
+    const pushProviderInstances: IPushProvider[] = [];
+    for (const provider of PUSH_PROVIDERS) {
+      switch (provider) {
+        case 'apns': {
+          const keyPath = process.env.APNS_KEY_PATH;
+          const keyId = process.env.APNS_KEY_ID;
+          const teamId = process.env.APNS_TEAM_ID;
+          const bundleId = process.env.APNS_BUNDLE_ID;
+          if (!keyPath || !keyId || !teamId || !bundleId) {
+            console.error('Error: APNs requires APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
+            process.exit(1);
+          }
+          pushProviderInstances.push(new ApnsProvider({
+            keyPath, keyId, teamId, bundleId,
+            environment: (process.env.APNS_ENVIRONMENT as 'production' | 'sandbox') ?? 'production',
+          }));
+          logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
+          break;
+        }
+        case 'web_push': {
+          const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+          const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+          const vapidEmail = process.env.VAPID_EMAIL;
+          if (!vapidPublicKey || !vapidPrivateKey || !vapidEmail) {
+            console.error('Error: Web Push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL');
+            process.exit(1);
+          }
+          pushProviderInstances.push(new WebPushProvider({ vapidPublicKey, vapidPrivateKey, vapidEmail }));
+          logger.info('Web Push provider configured', { email: vapidEmail });
+          break;
+        }
+        default:
+          console.error(`Error: Unknown push provider '${provider}'. Use: apns, web_push`);
+          process.exit(1);
+      }
+    }
+    pushManager = new PushManager(storage, pushProviderInstances);
+  }
+
+  const localBackend = new LocalAuthBackend({
+    storage,
+    authProviders,
+    pairingEnabled: PAIRING,
+    pushManager,
+    region: REGION || undefined,
+    regionUrls: REGION_URLS,
+  });
+  authBackend = localBackend;
+
+  // Expose account API if service key is configured (for remote heads to call)
+  if (SERVICE_KEY) {
+    accountApi = new AccountApi({ authBackend: localBackend, serviceKey: SERVICE_KEY });
+    logger.info('Account API enabled (service key configured)');
+  }
 }
 
-const head = new HeadServer(storage, {
-  authProviders,
+const head = new HeadServer(storage!, {
+  authProviders: IS_CONNECTED_MODE ? undefined : (await createAuthProviders()),
   pairingEnabled: PAIRING,
   version: VERSION,
   pushManager,
+  authBackend,
+  region: REGION || undefined,
 });
 
 const startedAt = Date.now();
 
-const httpServer = createServer((req, res) => {
+const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+  // Account API routes (standalone mode only)
+  if (accountApi && url.pathname.startsWith('/api/')) {
+    try {
+      const handled = await accountApi.handleRequest(req, res);
+      if (handled) return;
+    } catch (err) {
+      logger.error('Account API error', { error: (err as Error).message });
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'internal_error' }));
+      return;
+    }
+  }
 
   if (url.pathname === '/admin/stats') {
     // CORS for cross-origin admin portal
@@ -269,16 +348,19 @@ head.attach(httpServer);
 httpServer.listen(PORT, () => {
   logger.info(`Kraki Head listening on port ${PORT}`, {
     ws: `ws://localhost:${PORT}`,
-    auth: AUTH_MODES.join(', '),
+    mode: IS_CONNECTED_MODE ? 'connected' : 'standalone',
+    auth: IS_CONNECTED_MODE ? '(delegated)' : AUTH_MODES.join(', '),
     pairing: PAIRING,
     db: DB_PATH,
+    region: REGION || '(none)',
+    accountApi: !!accountApi,
   });
 });
 
 async function shutdown() {
   logger.info('Shutting down...');
   head.close();
-  storage.close();
+  storage?.close();
   logger.close();
   httpServer.close();
   process.exit(0);

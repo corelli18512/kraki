@@ -8,6 +8,7 @@ interface UserRow {
   provider: string;
   email: string | null;
   preferences: string | null;
+  region: string | null;
   created_at: string;
 }
 
@@ -53,10 +54,11 @@ export interface StoredUser {
   provider: string;
   email?: string;
   preferences?: Record<string, unknown>;
+  region?: string;
   createdAt: string;
 }
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export class Storage {
   private db: Database.Database;
@@ -133,30 +135,42 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 5) {
+      try {
+        this.db.exec(`ALTER TABLE users ADD COLUMN region TEXT`);
+      } catch {
+        // Column may already exist
+      }
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }
 
   // --- Users ---
 
-  upsertUser(userId: string, username: string, provider?: string, email?: string): StoredUser {
+  upsertUser(userId: string, username: string, provider?: string, email?: string, region?: string): StoredUser {
     this.db.prepare(`
-      INSERT INTO users (user_id, username, provider, email)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO users (user_id, username, provider, email, region)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, provider = excluded.provider, email = excluded.email
-    `).run(userId, username, provider ?? 'open', email ?? null);
+    `).run(userId, username, provider ?? 'open', email ?? null, region ?? null);
     return this.getUser(userId)!;
   }
 
   getUser(userId: string): StoredUser | undefined {
     const row = this.db.prepare(
-      'SELECT user_id, username, provider, email, preferences, created_at FROM users WHERE user_id = ?'
+      'SELECT user_id, username, provider, email, preferences, region, created_at FROM users WHERE user_id = ?'
     ).get(userId) as UserRow | undefined;
     if (!row) return undefined;
     let prefs: Record<string, unknown> | undefined;
     if (row.preferences) {
       try { prefs = JSON.parse(row.preferences); } catch { /* ignore */ }
     }
-    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, preferences: prefs, createdAt: row.created_at };
+    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, preferences: prefs, region: row.region ?? undefined, createdAt: row.created_at };
+  }
+
+  setUserRegion(userId: string, region: string): void {
+    this.db.prepare('UPDATE users SET region = ? WHERE user_id = ?').run(region, userId);
   }
 
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
@@ -370,11 +384,11 @@ export class Storage {
 
   getAllUsers(): StoredUser[] {
     const rows = this.db.prepare(
-      'SELECT user_id, username, provider, email, preferences, created_at FROM users ORDER BY created_at'
+      'SELECT user_id, username, provider, email, preferences, region, created_at FROM users ORDER BY created_at'
     ).all() as UserRow[];
     return rows.map(row => ({
       userId: row.user_id, username: row.username, provider: row.provider,
-      email: row.email ?? undefined, createdAt: row.created_at,
+      email: row.email ?? undefined, region: row.region ?? undefined, createdAt: row.created_at,
     }));
   }
 

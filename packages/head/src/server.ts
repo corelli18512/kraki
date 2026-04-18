@@ -8,10 +8,11 @@ import type {
   UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
-import type { AuthProvider, AuthUser, AuthOutcome } from './auth.js';
+import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
 import type { PushManager } from './push/index.js';
+import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
 
 function importPublicKey(compactKey: string): string {
   const lines = compactKey.match(/.{1,64}/g) ?? [];
@@ -50,6 +51,10 @@ export interface HeadServerOptions {
   pairingTtl?: number;
   version?: string;
   pushManager?: PushManager;
+  /** Optional auth backend. If provided, auth is delegated to it instead of using local providers. */
+  authBackend?: AuthBackend;
+  /** This head's region identifier (e.g., 'us', 'china'). Sent to auth backend for region checks. */
+  region?: string;
 }
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
@@ -256,22 +261,32 @@ export class HeadServer {
     // Pre-auth: auth_info, auth, auth_response
     if (!state.authenticated) {
       if (msg.type === 'auth_info') {
-        const methods: string[] = [];
-        if (this.options.authProviders?.has('github')) {
-          methods.push('github_token');
-          const ghProvider = this.findGitHubProvider();
-          if (ghProvider?.oauthConfigured) methods.push('github_oauth');
+        if (this.options.authBackend) {
+          const info = this.options.authBackend.getAuthInfo();
+          ws.send(JSON.stringify({
+            type: 'auth_info_response',
+            methods: info.methods,
+            githubClientId: info.githubClientId,
+            vapidPublicKey: info.vapidPublicKey ?? this.getVapidPublicKey(),
+          }));
+        } else {
+          const methods: string[] = [];
+          if (this.options.authProviders?.has('github')) {
+            methods.push('github_token');
+            const ghProvider = this.findGitHubProvider();
+            if (ghProvider?.oauthConfigured) methods.push('github_oauth');
+          }
+          if (this.options.authProviders?.has('apikey')) methods.push('apikey');
+          if (this.options.authProviders?.has('open')) methods.push('open');
+          if (this.options.pairingEnabled !== false) methods.push('pairing');
+          methods.push('challenge');
+          ws.send(JSON.stringify({
+            type: 'auth_info_response',
+            methods,
+            githubClientId: this.getGitHubClientId(),
+            vapidPublicKey: this.getVapidPublicKey(),
+          }));
         }
-        if (this.options.authProviders?.has('apikey')) methods.push('apikey');
-        if (this.options.authProviders?.has('open')) methods.push('open');
-        if (this.options.pairingEnabled !== false) methods.push('pairing');
-        methods.push('challenge');
-        ws.send(JSON.stringify({
-          type: 'auth_info_response',
-          methods,
-          githubClientId: this.getGitHubClientId(),
-          vapidPublicKey: this.getVapidPublicKey(),
-        }));
         return;
       }
       if (msg.type === 'auth') {
@@ -443,9 +458,9 @@ export class HeadServer {
     }
   }
 
-  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string): void {
+  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string): void {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'auth_error', code, message }));
+      ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }) }));
     }
   }
 
@@ -454,6 +469,36 @@ export class HeadServer {
   private async handleAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
     const logger = getLogger();
     const { auth } = msg;
+
+    // If auth backend is configured, delegate everything to it
+    if (this.options.authBackend) {
+      if (auth.method === 'challenge') {
+        // Challenge is multi-step — start here, verify in handleChallengeResponse
+        const result = await this.options.authBackend.startChallenge(
+          auth.deviceId,
+          msg.device.encryptionKey,
+          this.options.region,
+        );
+        if (!result.ok) {
+          this.sendAuthError(ws, result.code as AuthErrorCode, result.message,
+            result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined);
+          return;
+        }
+        state.pendingNonce = result.nonce;
+        state.pendingDeviceId = result.deviceId;
+        state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
+        state.pendingAuthMethod = 'challenge';
+        logger.debug('Issuing auth challenge (via backend)', { deviceId: auth.deviceId });
+        ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
+        return;
+      }
+
+      const result = await this.options.authBackend.authenticate(auth, msg.device, this.options.region);
+      this.handleBackendAuthResult(ws, state, result);
+      return;
+    }
+
+    // Legacy: inline auth (no backend configured)
 
     switch (auth.method) {
       case 'pairing': {
@@ -576,6 +621,23 @@ export class HeadServer {
       return;
     }
 
+    // If auth backend is configured, delegate verification
+    if (this.options.authBackend) {
+      this.options.authBackend.verifyChallenge(
+        deviceId, nonce, msg.signature,
+        pendingInfo?.encryptionKey,
+        this.options.region,
+      ).then(result => {
+        this.handleBackendAuthResult(ws, state, result);
+      }).catch(err => {
+        logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
+        this.sendAuthError(ws, 'auth_rejected', 'Internal auth error');
+      });
+      return;
+    }
+
+    // Legacy: inline challenge verification
+
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
       this.sendAuthError(ws, 'device_not_found', 'Device not found');
@@ -630,6 +692,56 @@ export class HeadServer {
 
     // Notify other connected devices about the reconnected device
     this.broadcastDeviceJoined(user.userId, deviceId);
+  }
+
+  /**
+   * Handle a result from AuthBackend — registers connection state and sends response.
+   * Used for both initial auth and challenge-response verification.
+   */
+  private handleBackendAuthResult(ws: WebSocket, state: ClientState, result: AuthOutcome): void {
+    const logger = getLogger();
+
+    if (!result.ok) {
+      const redirect = result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined;
+      this.sendAuthError(ws, result.code as AuthErrorCode, result.message, redirect);
+      return;
+    }
+
+    // Register connection
+    state.authenticated = true;
+    state.authenticatedAt = Date.now();
+    state.deviceId = result.deviceId;
+    state.userId = result.userId;
+    this.connections.set(result.deviceId, ws);
+    this.userByDevice.set(result.deviceId, result.userId);
+
+    logger.info('Device authenticated (via backend)', {
+      deviceId: result.deviceId,
+      user: result.user.login,
+      method: result.authMethod,
+      ip: state.ip,
+    });
+
+    // Set correct online status on device summaries
+    const devices = result.devices.map(d => ({
+      ...d,
+      online: this.connections.has(d.id),
+    }));
+
+    ws.send(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: result.deviceId,
+      authMethod: result.authMethod,
+      user: result.user,
+      devices,
+      githubClientId: result.githubClientId,
+      vapidPublicKey: result.vapidPublicKey ?? this.getVapidPublicKey(),
+      relayVersion: this.options.version,
+      ...(result.pendingMessages.length > 0 && { pendingMessages: result.pendingMessages }),
+    }));
+
+    // Notify other connected devices
+    this.broadcastDeviceJoined(result.userId, result.deviceId);
   }
 
   private completeAuth(
@@ -703,6 +815,18 @@ export class HeadServer {
       return;
     }
 
+    if (this.options.authBackend) {
+      try {
+        const result = this.options.authBackend.createPairingToken(state.userId);
+        logger.info('Pairing token created (via backend)', { userId: state.userId });
+        ws.send(JSON.stringify({ type: 'pairing_token_created', token: result.token, expiresIn: result.expiresIn }));
+      } catch {
+        // Remote backend needs async — fall through to error
+        this.sendError(ws, 'Pairing not available in remote mode');
+      }
+      return;
+    }
+
     const token = `pt_${randomBytes(32).toString('hex')}`;
     const ttl = this.options.pairingTtl ?? 300;
     this.pairingTokens.set(token, {
@@ -729,13 +853,28 @@ export class HeadServer {
       return;
     }
 
-    // Try all configured auth providers until one succeeds
-    let authResult: AuthOutcome = { ok: false, message: 'No auth provider accepted the token' };
+    // If auth backend is configured, delegate
+    if (this.options.authBackend) {
+      const result = await this.options.authBackend.requestPairingToken(msg.token, state.ip);
+      if (!result.ok) {
+        this.sendAuthError(ws, result.code as AuthErrorCode, result.message);
+        return;
+      }
+      logger.info('Pairing token created (one-shot, via backend)', { userId: result.userId });
+      ws.send(JSON.stringify({
+        type: 'pairing_token_created',
+        token: result.pairingToken,
+        expiresIn: result.expiresIn,
+      }));
+      return;
+    }
+
+    // Legacy: inline pairing token creation
+    let authResult: ProviderAuthOutcome = { ok: false, message: 'No auth provider accepted the token' };
     for (const provider of (this.options.authProviders?.values() ?? [])) {
       authResult = await provider.authenticate({ token: msg.token, ip: state.ip });
       if (authResult.ok) break;
     }
-    // Fall back to legacy single provider if no authProviders map
     if (!authResult.ok && this.options.authProvider && !this.options.authProviders?.size) {
       authResult = await this.options.authProvider.authenticate({ token: msg.token, ip: state.ip });
     }
@@ -745,7 +884,6 @@ export class HeadServer {
       return;
     }
 
-    // Ensure user exists
     this.storage.upsertUser(authResult.user.id, authResult.user.login, authResult.user.provider, authResult.user.email);
 
     const token = `pt_${randomBytes(32).toString('hex')}`;

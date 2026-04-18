@@ -590,13 +590,16 @@ export type AuthErrorCode =
   | 'device_not_found'
   | 'invalid_signature'
   | 'user_not_found'
-  | 'device_registration_failed';
+  | 'device_registration_failed'
+  | 'wrong_region';
 
 export interface AuthErrorMessage {
   type: 'auth_error';
   /** Machine-readable auth failure reason for client behavior */
   code: AuthErrorCode;
   message: string;
+  /** When code is 'wrong_region', the correct relay URL to connect to */
+  redirect?: string;
 }
 
 export interface AuthChallengeMessage {
