@@ -446,6 +446,24 @@ export class SessionManager {
     return this.readMeta(sessionId);
   }
 
+  /**
+   * Bulk-update session metadata fields. Reads from disk, merges, writes back.
+   */
+  updateMeta(sessionId: string, updates: Partial<Pick<SessionMeta, 'model' | 'title' | 'autoTitle' | 'source' | 'createdAt' | 'state' | 'mode' | 'pinned'>>): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    if (updates.model !== undefined) meta.model = updates.model;
+    if (updates.title !== undefined) meta.title = updates.title || undefined;
+    if (updates.autoTitle !== undefined) meta.autoTitle = updates.autoTitle;
+    if (updates.source !== undefined) meta.source = updates.source;
+    if (updates.createdAt !== undefined) meta.createdAt = updates.createdAt;
+    if (updates.state !== undefined) meta.state = updates.state;
+    if (updates.mode !== undefined) meta.mode = updates.mode;
+    if (updates.pinned !== undefined) meta.pinned = updates.pinned || undefined;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+  }
+
   // ── Message log ────────────────────────────────────────
 
   /**

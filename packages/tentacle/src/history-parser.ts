@@ -168,6 +168,11 @@ function convertEvent(
       const result = resultObj?.content as string
         ?? (typeof rawResult === 'string' ? rawResult : (event.data.output as string ?? ''));
 
+      // Extract model from the first tool completion that has it
+      if (!meta.model && event.data.model) {
+        meta.model = event.data.model as string;
+      }
+
       return {
         type: 'tool_complete',
         payload: JSON.stringify({

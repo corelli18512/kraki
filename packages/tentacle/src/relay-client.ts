@@ -701,16 +701,13 @@ export class RelayClient {
         krakiSessionId,
       );
 
-      // Set source and title on meta
-      const meta = this.sessionManager.getMeta(krakiSessionId);
-      if (meta) {
-        meta.source = localSession?.source ?? 'copilot-cli';
-        if (localSession?.summary) {
-          meta.autoTitle = localSession.summary.slice(0, 100);
-        }
-        // Write back since createSession doesn't set source
-        this.sessionManager.setTitle(krakiSessionId, meta.title ?? '');
-      }
+      // Persist source, title, model, and original creation time
+      this.sessionManager.updateMeta(krakiSessionId, {
+        source: localSession?.source ?? 'copilot-cli',
+        autoTitle: localSession?.summary?.slice(0, 100),
+        model: parsedMeta.model ?? localSession?.model,
+        createdAt: localSession?.startTime,
+      });
 
       // Backfill messages
       for (const m of backfilledMessages) {
