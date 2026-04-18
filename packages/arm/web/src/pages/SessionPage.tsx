@@ -125,12 +125,6 @@ export function SessionPage() {
                 <span className="text-[10px] text-text-muted">{session.deviceName}</span>
               </>
             )}
-            {displayTitle && (
-              <>
-                {session.deviceName && <span className="text-[10px] text-text-muted">·</span>}
-                <span className="text-[10px] text-text-muted">{label}</span>
-              </>
-            )}
             {session.model && (
               <span className="text-[10px] text-text-muted">{session.model}</span>
             )}

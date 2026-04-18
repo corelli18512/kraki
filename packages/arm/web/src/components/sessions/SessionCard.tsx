@@ -21,7 +21,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
   const navigate = useNavigate();
   const { sessionId } = useParams();
   const isActive = sessionId === session.id;
-  const { emoji, label } = agentInfo(session.agent);
+  const { label } = agentInfo(session.agent);
   const device = useStore((s) => s.devices.get(session.deviceId));
   const handleTogglePin = () => {
     import('../../lib/ws-client').then(({ wsClient }) => wsClient.pinSession(session.id, !pinned));
@@ -126,12 +126,6 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
                   }`}
                 />
                 <span className="text-[10px] text-text-muted">{machineName}</span>
-              </>
-            )}
-            {(session.title || session.autoTitle) && (
-              <>
-                {machineName && <span className="text-[10px] text-text-muted">·</span>}
-                <span className="text-[10px] text-text-muted">{label}</span>
               </>
             )}
             {session.model && (
