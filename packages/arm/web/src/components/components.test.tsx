@@ -169,7 +169,7 @@ describe('SessionCard', () => {
   it('applies inactive style when route does not match', () => {
     renderWithRouter(<SessionCard session={session} />, { route: '/' });
     const cardButton = screen.getByText('Copilot').closest('button')!;
-    expect(cardButton.className).toContain('hover:bg-surface-tertiary');
+    expect(cardButton.className).toContain('hover:bg-black/[0.03]');
   });
 
   it('renders without model', () => {
