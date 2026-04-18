@@ -199,29 +199,46 @@ function SessionRow({ session, importing, onImport }: {
   );
 }
 
+const LAST_IMPORT_DEVICE_KEY = 'kraki:last-import-device';
+
 export function ImportSessionDialog({ open, onClose }: Props) {
   const localSessions = useStore(s => s.localSessions);
   const loading = useStore(s => s.localSessionsLoading);
   const devices = useStore(s => s.devices);
   const [search, setSearch] = useState('');
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
+  const [selectedDevice, setSelectedDevice] = useState('');
 
-  // Pick the first online tentacle as the target device
-  const tentacle = useMemo(() => {
-    for (const [, d] of devices) {
-      if (d.role === 'tentacle' && d.online) return d;
-    }
-    return undefined;
-  }, [devices]);
+  const tentacles = useMemo(
+    () => [...devices.values()].filter(d => d.role === 'tentacle' && d.online),
+    [devices],
+  );
 
-  // Request sessions when dialog opens
+  // Default to last selected device, or first tentacle
   useEffect(() => {
-    if (open && tentacle) {
-      wsClient.requestLocalSessions(tentacle.id);
+    if (!open) return;
+    const lastId = localStorage.getItem(LAST_IMPORT_DEVICE_KEY);
+    const lastOnline = tentacles.find(d => d.id === lastId);
+    if (lastOnline) {
+      setSelectedDevice(lastOnline.id);
+    } else if (tentacles.length >= 1) {
+      setSelectedDevice(tentacles[0].id);
+    }
+  }, [open, tentacles.length]);
+
+  // Request sessions when dialog opens or device changes
+  useEffect(() => {
+    if (open && selectedDevice) {
+      wsClient.requestLocalSessions(selectedDevice);
       setSearch('');
       setImportingIds(new Set());
     }
-  }, [open, tentacle?.id]);
+  }, [open, selectedDevice]);
+
+  const handleSelectDevice = (id: string) => {
+    setSelectedDevice(id);
+    localStorage.setItem(LAST_IMPORT_DEVICE_KEY, id);
+  };
 
   // Client-side search filter
   const filtered = useMemo(() => {
@@ -238,25 +255,22 @@ export function ImportSessionDialog({ open, onClose }: Props) {
   const totalCount = localSessions.length;
 
   const handleImport = useCallback((sessionId: string) => {
-    if (!tentacle) return;
+    if (!selectedDevice) return;
     setImportingIds(prev => new Set(prev).add(sessionId));
-    wsClient.importSession(sessionId, tentacle.id);
-  }, [tentacle?.id]);
+    wsClient.importSession(sessionId, selectedDevice);
+  }, [selectedDevice]);
 
-  // Mark as linked when session appears in main sessions list
+  // Dismiss dialog when import succeeds (session appears in main store)
   const sessions = useStore(s => s.sessions);
   useEffect(() => {
     if (importingIds.size === 0) return;
-    const next = new Set(importingIds);
-    let changed = false;
     for (const id of importingIds) {
       if (sessions.has(id)) {
-        next.delete(id);
-        changed = true;
+        onClose();
+        return;
       }
     }
-    if (changed) setImportingIds(next);
-  }, [sessions, importingIds]);
+  }, [sessions, importingIds, onClose]);
 
   if (!open) return null;
 
@@ -310,6 +324,28 @@ export function ImportSessionDialog({ open, onClose }: Props) {
             )}
           </div>
         </div>
+
+        {/* Device picker — shown when multiple tentacles are online */}
+        {tentacles.length > 1 && (
+          <div className="shrink-0 border-b border-border-primary px-4 py-2">
+            <div className="flex flex-wrap gap-1.5">
+              {tentacles.map((d) => (
+                <button
+                  key={d.id}
+                  onClick={() => handleSelectDevice(d.id)}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    selectedDevice === d.id
+                      ? 'bg-kraki-500 text-white'
+                      : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                  }`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${d.online ? 'bg-emerald-400' : 'bg-slate-400'}`} />
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Content */}
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
