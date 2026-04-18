@@ -16,6 +16,7 @@ import type { Attachment } from '@kraki/protocol';
 const logger = createLogger('chat-view');
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+const IDLE_SCROLL_OVERFLOW_PX = 120;
 
 /** Collect image attachments from tool_complete messages in a turn's thinking. */
 function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
@@ -67,7 +68,7 @@ export const ChatView = memo(function ChatView() {
     useShallow((s) => [...s.pendingQuestions.values()].filter((q) => q.sessionId === sessionId)),
   );
 
-  const hadUnreadRef = useRef(false);
+  const hadUnreadRef = useRef(storeUnread > 0);
   /** Set when older messages are prepended — gates the scroll-preservation layout effect. */
   const prependedRef = useRef(false);
 
@@ -97,6 +98,15 @@ export const ChatView = memo(function ChatView() {
 
   // Only the last turn can be active, and only if the session isn't idle
   const sessionIdle = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].type === 'idle';
+  const prevSessionIdRef = useRef(sessionId);
+  const pendingSessionScrollRef = useRef(true);
+  const wasIdleRef = useRef(sessionIdle);
+  if (sessionId !== prevSessionIdRef.current) {
+    prevSessionIdRef.current = sessionId;
+    pendingSessionScrollRef.current = true;
+    hadUnreadRef.current = storeUnread > 0;
+    wasIdleRef.current = sessionIdle;
+  }
 
   // Log turn grouping for debugging
   useMemo(() => {
@@ -180,6 +190,31 @@ export const ChatView = memo(function ChatView() {
   useLayoutEffect(() => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
+    if (pendingSessionScrollRef.current) {
+      if (hadUnreadRef.current) {
+        const target = el.querySelector<HTMLElement>('[data-scroll-target]');
+        if (target) {
+          const targetTop = target.offsetTop;
+          const contentBelow = el.scrollHeight - targetTop;
+          if (contentBelow > el.clientHeight + IDLE_SCROLL_OVERFLOW_PX) {
+            logger.info('SCROLL sessionEntry → scrollIntoView (unread)', { targetTop, contentBelow, clientHeight: el.clientHeight });
+            target.scrollIntoView({ block: 'start' });
+            el.scrollTop = Math.max(0, el.scrollTop - 12);
+            isAtBottomRef.current = false;
+            pendingSessionScrollRef.current = false;
+            hadUnreadRef.current = false;
+            prevScrollHeightRef.current = el.scrollHeight;
+            return;
+          }
+        }
+      }
+      logger.info('SCROLL sessionEntry → scrollToHeight', { scrollHeight: el.scrollHeight });
+      el.scrollTop = el.scrollHeight;
+      pendingSessionScrollRef.current = false;
+      hadUnreadRef.current = false;
+      prevScrollHeightRef.current = el.scrollHeight;
+      return;
+    }
     const prevHeight = prevScrollHeightRef.current;
     const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
     const heightShrank = prevHeight > 0 && el.scrollHeight < prevHeight;
@@ -193,9 +228,6 @@ export const ChatView = memo(function ChatView() {
     prependedRef.current = false;
     prevScrollHeightRef.current = el.scrollHeight;
   });
-
-  // Track whether the previous render was idle (to detect idle transition)
-  const wasIdleRef = useRef(sessionIdle);
 
   // Auto-scroll to bottom when new messages arrive (only if already at bottom)
   useEffect(() => {
@@ -230,7 +262,7 @@ export const ChatView = memo(function ChatView() {
       if (target) {
         const targetTop = target.offsetTop;
         const contentBelow = container.scrollHeight - targetTop;
-        if (contentBelow > container.clientHeight) {
+        if (contentBelow > container.clientHeight + IDLE_SCROLL_OVERFLOW_PX) {
           logger.info('SCROLL justWentIdle → scrollIntoView', { targetTop, contentBelow, clientHeight: container.clientHeight, scrollTop: container.scrollTop });
           target.scrollIntoView({ block: 'start' });
           container.scrollTop = Math.max(0, container.scrollTop - 12);
@@ -260,11 +292,6 @@ export const ChatView = memo(function ChatView() {
     prevLastSeqRef.current = curLastSeq;
   }, [grouped, streaming, sessionIdle, scrollToBottom]);
 
-  // Snapshot unread state before SessionPage clears it
-  useEffect(() => {
-    hadUnreadRef.current = storeUnread > 0;
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps -- capture on session entry only
-
   // Reset when switching sessions
   useEffect(() => {
     setShowScrollBtn(false);
@@ -272,31 +299,10 @@ export const ChatView = memo(function ChatView() {
     isAtBottomRef.current = true;
     prependedRef.current = false;
     prevFirstSeqRef.current = 0;
-    // Scroll after DOM settles
-    setTimeout(() => {
-      const container = scrollRef.current;
-      if (!container) return;
-
-      // If session had unread messages, try to scroll to the relevant element:
-      // pending question/permission, last user message (idle), or last agent bubble.
-      if (hadUnreadRef.current) {
-        const target = container.querySelector<HTMLElement>('[data-scroll-target]');
-        if (target) {
-          const targetTop = target.offsetTop;
-          const contentBelow = container.scrollHeight - targetTop;
-          if (contentBelow > container.clientHeight) {
-            logger.info('SCROLL sessionSwitch → scrollIntoView (unread)', { targetTop, contentBelow, clientHeight: container.clientHeight });
-            target.scrollIntoView({ block: 'start' });
-            container.scrollTop = Math.max(0, container.scrollTop - 12);
-            isAtBottomRef.current = false;
-            return;
-          }
-        }
-      }
-
-      logger.info('SCROLL sessionSwitch → scrollToHeight', { scrollHeight: container.scrollHeight });
-      container.scrollTop = container.scrollHeight;
-    }, 0);
+    prevMsgLenRef.current = 0;
+    prevLastSeqRef.current = 0;
+    pendingSessionScrollRef.current = true;
+    wasIdleRef.current = sessionIdle;
   }, [sessionId]);
 
   const handleScroll = () => {

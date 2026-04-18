@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { ChatView } from './ChatView';
@@ -142,5 +142,51 @@ describe('ChatView', () => {
     if (scrollArea) {
       scrollArea.dispatchEvent(new Event('scroll'));
     }
+  });
+
+  it('does not jump upward on idle for tiny overflow', async () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
+    ]);
+    const now = new Date().toISOString();
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message',
+      deviceId: 'd1', seq: 1,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Question' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message',
+      deviceId: 'd1', seq: 2,
+      timestamp: now, sessionId: 's1',
+      payload: { content: 'Answer' },
+    } as ChatMessage);
+
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    const { container } = renderChatView('s1');
+    const scrollArea = container.querySelector('.overflow-y-auto') as HTMLDivElement;
+    expect(scrollArea).toBeTruthy();
+
+    Object.defineProperty(scrollArea, 'scrollHeight', { configurable: true, value: 801 });
+    Object.defineProperty(scrollArea, 'clientHeight', { configurable: true, value: 760 });
+    Object.defineProperty(scrollArea, 'scrollTop', { configurable: true, writable: true, value: 3332 });
+
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, value: 3291 });
+
+    await act(async () => {
+      useStore.getState().appendMessage('s1', {
+        type: 'idle',
+        deviceId: 'd1', seq: 3,
+        timestamp: now, sessionId: 's1',
+        payload: {},
+      } as ChatMessage);
+    });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });
