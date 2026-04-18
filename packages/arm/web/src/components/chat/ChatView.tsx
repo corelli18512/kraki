@@ -168,7 +168,9 @@ export const ChatView = memo(function ChatView() {
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const el = scrollRef.current;
+      logger.info('SCROLL scrollToBottom', { from: el.scrollTop, to: el.scrollHeight, trace: new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()) });
+      el.scrollTop = el.scrollHeight;
     }
     setShowScrollBtn(false);
     setUnreadCount(0);
@@ -180,7 +182,12 @@ export const ChatView = memo(function ChatView() {
     const el = scrollRef.current;
     const prevHeight = prevScrollHeightRef.current;
     const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
+    const heightShrank = prevHeight > 0 && el.scrollHeight < prevHeight;
+    if (heightGrew || heightShrank) {
+      logger.info('SCROLL layoutEffect heightChange', { prevHeight, newHeight: el.scrollHeight, scrollTop: el.scrollTop, prepended: prependedRef.current, atBottom: isAtBottomRef.current });
+    }
     if (prependedRef.current && heightGrew && !isAtBottomRef.current) {
+      logger.info('SCROLL layoutEffect prepend adjust', { from: el.scrollTop, delta: el.scrollHeight - prevHeight });
       el.scrollTop += el.scrollHeight - prevHeight;
       prependedRef.current = false;
     }
@@ -224,7 +231,7 @@ export const ChatView = memo(function ChatView() {
         const targetTop = target.offsetTop;
         const contentBelow = container.scrollHeight - targetTop;
         if (contentBelow > container.clientHeight) {
-          // Response overflows — scroll user message to top
+          logger.info('SCROLL justWentIdle → scrollIntoView', { targetTop, contentBelow, clientHeight: container.clientHeight, scrollTop: container.scrollTop });
           target.scrollIntoView({ block: 'start' });
           container.scrollTop = Math.max(0, container.scrollTop - 12);
           isAtBottomRef.current = false;
@@ -233,9 +240,10 @@ export const ChatView = memo(function ChatView() {
           return;
         }
       }
-      // Response fits in viewport — just stay at bottom
+      logger.info('SCROLL justWentIdle → scrollToBottom (fits)');
       scrollToBottom();
     } else if (isAtBottomRef.current || isFromUser) {
+      logger.info('SCROLL autoScroll → scrollToBottom', { atBottom: isAtBottomRef.current, isFromUser, curLen, curLastSeq });
       scrollToBottom();
     } else if (isNewAtEnd) {
       const prevLen = prevMsgLenRef.current;
@@ -272,10 +280,10 @@ export const ChatView = memo(function ChatView() {
       if (hadUnreadRef.current) {
         const target = container.querySelector<HTMLElement>('[data-scroll-target]');
         if (target) {
-          // Check if content from the target to the bottom overflows the viewport
           const targetTop = target.offsetTop;
           const contentBelow = container.scrollHeight - targetTop;
           if (contentBelow > container.clientHeight) {
+            logger.info('SCROLL sessionSwitch → scrollIntoView (unread)', { targetTop, contentBelow, clientHeight: container.clientHeight });
             target.scrollIntoView({ block: 'start' });
             container.scrollTop = Math.max(0, container.scrollTop - 12);
             isAtBottomRef.current = false;
@@ -284,6 +292,7 @@ export const ChatView = memo(function ChatView() {
         }
       }
 
+      logger.info('SCROLL sessionSwitch → scrollToHeight', { scrollHeight: container.scrollHeight });
       container.scrollTop = container.scrollHeight;
     }, 0);
   }, [sessionId]);

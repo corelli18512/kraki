@@ -376,6 +376,7 @@ function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {
                 if (scrollable) {
                   const { scrollTop, scrollHeight, clientHeight } = scrollable;
                   if (scrollHeight - scrollTop - clientHeight < 80) {
+                    console.info('[Kraki:scroll] IMG onLoad → scrollToBottom', { scrollTop, scrollHeight, clientHeight });
                     scrollable.scrollTop = scrollHeight;
                   }
                 }
