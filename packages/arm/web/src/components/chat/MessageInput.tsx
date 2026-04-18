@@ -27,10 +27,10 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const [awaitingActive, setAwaitingActive] = useState(false);
   const isIdle = !sessionActive && !awaitingActive;
 
-  // Clear awaitingActive once session goes active
+  // Clear awaitingActive on any session state change (active, idle, ended)
   useEffect(() => {
-    if (sessionActive) setAwaitingActive(false);
-  }, [sessionActive]);
+    setAwaitingActive(false);
+  }, [session?.state]);
   const modeContainerRef = useRef<HTMLDivElement>(null);
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const [pill, setPill] = useState({ left: 0, width: 0 });
