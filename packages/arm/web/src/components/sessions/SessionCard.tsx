@@ -92,8 +92,8 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
           isActive
             ? 'border-l-2 border-kraki-500 bg-surface-primary shadow-sm dark:bg-surface-tertiary'
             : pinned
-              ? 'border-l-2 border-transparent bg-surface-primary dark:bg-surface-tertiary hover:bg-surface-primary hover:shadow-sm dark:hover:bg-surface-tertiary active:scale-[0.98]'
-              : 'border-l-2 border-transparent hover:bg-black/[0.03] dark:hover:bg-white/[0.06] active:scale-[0.98]'
+              ? 'border-l-2 border-transparent bg-surface-secondary hover:bg-surface-tertiary active:scale-[0.98]'
+              : 'border-l-2 border-transparent hover:bg-surface-secondary active:scale-[0.98]'
         }`}
       >
         <div className="relative self-start shrink-0">

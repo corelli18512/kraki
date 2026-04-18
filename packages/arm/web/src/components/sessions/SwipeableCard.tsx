@@ -143,7 +143,7 @@ export function SwipeableCard({ actions, isOpen, onSwipeOpen, onSwipeClose, chil
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="relative bg-surface-secondary will-change-transform touch-pan-y"
+        className="relative will-change-transform touch-pan-y"
         style={{ transform: isOpen ? `translateX(${maxTranslate}px)` : 'translateX(0)' }}
       >
         {children}
