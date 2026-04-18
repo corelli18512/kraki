@@ -155,7 +155,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         <div>
           <p className="text-sm text-text-primary">Relay server</p>
           <p className="mt-1 rounded-lg bg-surface-secondary px-3 py-2 font-mono text-xs text-text-secondary">
-            {wsUrl}
+            {wsUrl.replace(/^wss?:\/\//, '')}
           </p>
         </div>
       </section>
