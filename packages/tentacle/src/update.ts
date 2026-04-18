@@ -11,7 +11,9 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { get as httpsGet } from 'node:https';
+import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
+import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
+import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { isSea } from 'node:sea';
 import chalk from 'chalk';
@@ -22,6 +24,8 @@ const GITHUB_REPO = 'corelli18512/kraki';
 const NPM_PACKAGE = '@kraki/tentacle';
 const CHECK_CACHE_FILE = 'update-check.json';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_REDIRECTS = 10;
 
 // ── Install method detection ────────────────────────────
 
@@ -46,40 +50,193 @@ interface GitHubRelease {
   assets?: Array<{ name: string; browser_download_url: string }>;
 }
 
-function fetchJson(url: string): Promise<GitHubRelease> {
+export function shouldBypassProxy(hostname: string, noProxyRaw = process.env.NO_PROXY ?? process.env.no_proxy ?? ''): boolean {
+  if (!noProxyRaw) return false;
+
+  const normalizedHost = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return noProxyRaw
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .some((entry) => {
+      if (entry === '*') return true;
+
+      const hostPart = entry.startsWith('*.') ? entry.slice(2) : entry.startsWith('.') ? entry.slice(1) : entry;
+      return normalizedHost === hostPart || normalizedHost.endsWith(`.${hostPart}`);
+    });
+}
+
+export function getProxyForUrl(url: string): URL | null {
+  const target = new URL(url);
+  if (shouldBypassProxy(target.hostname)) {
+    return null;
+  }
+
+  const rawProxy = target.protocol === 'https:'
+    ? process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy
+    : process.env.HTTP_PROXY ?? process.env.http_proxy ?? process.env.HTTPS_PROXY ?? process.env.https_proxy;
+
+  if (!rawProxy) return null;
+
+  try {
+    const parsed = new URL(rawProxy);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed;
+    }
+  } catch {
+    // Ignore malformed proxy env values and fall back to direct networking.
+  }
+  return null;
+}
+
+function buildProxyAuthHeader(proxyUrl: URL): string | undefined {
+  if (!proxyUrl.username && !proxyUrl.password) return undefined;
+  const user = decodeURIComponent(proxyUrl.username);
+  const pass = decodeURIComponent(proxyUrl.password);
+  return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+}
+
+function isRedirect(statusCode?: number): boolean {
+  return statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307 || statusCode === 308;
+}
+
+function getLocation(location: string | string[] | undefined): string | undefined {
+  if (Array.isArray(location)) return location[0];
+  return location;
+}
+
+function createDirectRequest(target: URL, onResponse: (res: IncomingMessage) => void) {
+  const requestFn = target.protocol === 'https:' ? httpsRequest : httpRequest;
+  const req = requestFn(target, {
+    headers: { 'User-Agent': 'kraki-updater' },
+    method: 'GET',
+  }, onResponse);
+
+  req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+    req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  });
+
+  return req;
+}
+
+function createProxiedRequest(
+  target: URL,
+  proxyUrl: URL,
+  onResponse: (res: IncomingMessage) => void,
+  onError: (err: Error) => void,
+) {
+  const proxyAuth = buildProxyAuthHeader(proxyUrl);
+  const proxyHeaders: Record<string, string> = {
+    Host: `${target.hostname}:${target.port || '443'}`,
+    'User-Agent': 'kraki-updater',
+  };
+  if (proxyAuth) {
+    proxyHeaders['Proxy-Authorization'] = proxyAuth;
+  }
+
+  const options: HttpRequestOptions = {
+    host: proxyUrl.hostname,
+    port: proxyUrl.port ? Number(proxyUrl.port) : proxyUrl.protocol === 'https:' ? 443 : 80,
+    method: 'CONNECT',
+    path: `${target.hostname}:${target.port || '443'}`,
+    headers: proxyHeaders,
+  };
+
+  const connectReq = (proxyUrl.protocol === 'https:' ? httpsRequest : httpRequest)(options);
+  connectReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
+    connectReq.destroy(new Error(`Proxy connection timed out after ${REQUEST_TIMEOUT_MS}ms`));
+  });
+
+  connectReq.on('connect', (res, socket, head) => {
+    if (res.statusCode !== 200) {
+      socket.destroy();
+      onResponse(Object.assign(res, { statusCode: res.statusCode ?? 502 }));
+      return;
+    }
+
+    if (head.length > 0) {
+      socket.unshift(head);
+    }
+
+    const tunneledOptions: HttpsRequestOptions & { socket: typeof socket } = {
+      agent: false,
+      headers: { 'User-Agent': 'kraki-updater' },
+      host: target.hostname,
+      method: 'GET',
+      path: `${target.pathname}${target.search}`,
+      port: target.port ? Number(target.port) : 443,
+      servername: target.hostname,
+      socket,
+    };
+    const tunneledReq = httpsRequest(tunneledOptions, onResponse);
+
+    tunneledReq.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      tunneledReq.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+    });
+    tunneledReq.on('error', (err) => {
+      socket.destroy();
+      onError(err);
+    });
+    tunneledReq.end();
+  });
+
+  return connectReq;
+}
+
+function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
-    httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchJson(res.headers.location!).then(resolve, reject);
+    if (redirects > MAX_REDIRECTS) {
+      reject(new Error(`Too many redirects while fetching ${url}`));
+      return;
+    }
+
+    const target = new URL(url);
+    const proxyUrl = getProxyForUrl(url);
+    const req = proxyUrl ? createProxiedRequest(target, proxyUrl, (res) => {
+      const location = getLocation(res.headers.location);
+      if (isRedirect(res.statusCode) && location) {
+        res.resume();
+        sendRequest(new URL(location, target).toString(), redirects + 1).then(resolve, reject);
+        return;
       }
-      if (res.statusCode !== 200) {
-        return reject(new Error(`HTTP ${res.statusCode}`));
+      resolve(res);
+    }, reject) : createDirectRequest(target, (res) => {
+      const location = getLocation(res.headers.location);
+      if (isRedirect(res.statusCode) && location) {
+        res.resume();
+        sendRequest(new URL(location, target).toString(), redirects + 1).then(resolve, reject);
+        return;
       }
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
+      resolve(res);
+    });
+
+    req.on('error', reject);
+    req.end();
   });
 }
 
-function fetchJsonArray(url: string): Promise<GitHubRelease[]> {
+function readResponseText(res: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
-    httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchJsonArray(res.headers.location!).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
+    let data = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => { data += chunk; });
+    res.on('end', () => resolve(data));
+    res.on('error', reject);
   });
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await sendRequest(url);
+  if (res.statusCode !== 200) {
+    throw new Error(`HTTP ${res.statusCode}`);
+  }
+
+  const data = await readResponseText(res);
+  return JSON.parse(data) as T;
+}
+
+function fetchJsonArray(url: string): Promise<GitHubRelease[]> {
+  return fetchJson<GitHubRelease[]>(url);
 }
 
 export async function fetchLatestVersion(): Promise<string | null> {
@@ -315,32 +472,25 @@ function parseChecksum(checksumData: string, assetName: string): string | null {
 }
 
 function fetchText(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchText(res.headers.location!).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
+  return sendRequest(url).then(async (res) => {
+    if (res.statusCode !== 200) {
+      throw new Error(`HTTP ${res.statusCode}`);
+    }
+    return readResponseText(res);
   });
 }
 
-function downloadFile(url: string, dest: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    httpsGet(url, { headers: { 'User-Agent': 'kraki-updater' } }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return downloadFile(res.headers.location!, dest).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
-      }
-      const file = createWriteStream(dest);
-      res.pipe(file);
-      file.on('finish', () => { file.close(); resolve(); });
-      file.on('error', (err) => { unlinkSync(dest); reject(err); });
-    }).on('error', reject);
-  });
+async function downloadFile(url: string, dest: string): Promise<void> {
+  const res = await sendRequest(url);
+  if (res.statusCode !== 200) {
+    throw new Error(`Download failed: HTTP ${res.statusCode}`);
+  }
+
+  const file = createWriteStream(dest);
+  try {
+    await pipeline(res, file);
+  } catch (err) {
+    try { unlinkSync(dest); } catch { /* ignore */ }
+    throw err;
+  }
 }
