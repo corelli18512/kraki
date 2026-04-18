@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
+import { useShallow } from 'zustand/shallow';
 import { MessageBubble } from './MessageBubble';
 import { ThinkingBox } from './ThinkingBox';
 import { MessageInput } from './MessageInput';
@@ -39,32 +40,42 @@ export const ChatView = memo(function ChatView() {
   const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
   const streaming = useStore((s) => sessionId ? s.streamingContent.get(sessionId) : undefined);
   const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
-  const devices = useStore((s) => s.devices);
-  const isDeviceOnline = session ? devices.get(session.deviceId)?.online ?? false : false;
-  const permissionsMap = useStore((s) => s.pendingPermissions);
-  const questionsMap = useStore((s) => s.pendingQuestions);
   const storeUnread = useStore((s) => sessionId ? (s.unreadCount.get(sessionId) ?? 0) : 0);
+
+  // Scoped selectors — only re-render when THIS session's data changes
+  const deviceId = session?.deviceId;
+  const isDeviceOnline = useStore(
+    useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
+  );
+
+  // Session-scoped pending permission IDs (sorted array for shallow stability)
+  const pendingPermIds = useStore(
+    useShallow((s) => {
+      const ids: string[] = [];
+      for (const p of s.pendingPermissions.values()) {
+        if (p.sessionId === sessionId) ids.push(p.id);
+      }
+      return ids.sort();
+    }),
+  );
+
+  // Session-scoped permissions and questions lists
+  const permissions = useStore(
+    useShallow((s) => [...s.pendingPermissions.values()].filter((p) => p.sessionId === sessionId)),
+  );
+  const questions = useStore(
+    useShallow((s) => [...s.pendingQuestions.values()].filter((q) => q.sessionId === sessionId)),
+  );
+
   const hadUnreadRef = useRef(false);
-
-  const pendingPermIds = useMemo(
-    () => new Set([...permissionsMap.values()].map((p) => p.id)),
-    [permissionsMap],
-  );
-
-  const permissions = useMemo(
-    () => [...permissionsMap.values()].filter((p) => p.sessionId === sessionId),
-    [permissionsMap, sessionId],
-  );
-  const questions = useMemo(
-    () => [...questionsMap.values()].filter((q) => q.sessionId === sessionId),
-    [questionsMap, sessionId],
-  );
+  /** Set when older messages are prepended — gates the scroll-preservation layout effect. */
+  const prependedRef = useRef(false);
 
   // Filter out pending permission bubbles — the blocking card handles them.
   // Questions are always shown as normal chat bubbles.
   const filteredMessages = useMemo(
     () => messages.filter((msg) => {
-      if (msg.type === 'permission' && pendingPermIds.has(msg.payload.id)) return false;
+      if (msg.type === 'permission' && pendingPermIds.includes(msg.payload.id)) return false;
       return true;
     }),
     [messages, pendingPermIds],
@@ -76,6 +87,11 @@ export const ChatView = memo(function ChatView() {
     return seqs.length > 0 ? seqs[0] : 0;
   }, [filteredMessages]);
   const hasOlderMessages = firstSeq > 1;
+  const prevFirstSeqRef = useRef(firstSeq);
+  if (firstSeq > 0 && prevFirstSeqRef.current > 0 && firstSeq < prevFirstSeqRef.current) {
+    prependedRef.current = true;
+  }
+  prevFirstSeqRef.current = firstSeq;
 
   const rawGrouped = useTurns(filteredMessages);
 
@@ -158,23 +174,24 @@ export const ChatView = memo(function ChatView() {
     setUnreadCount(0);
   }, []);
 
-  // Preserve scroll position when older messages are prepended (before paint)
+  // Preserve scroll position: prepend adjustment (before paint)
   useLayoutEffect(() => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
     const prevHeight = prevScrollHeightRef.current;
     const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
-    // Only adjust for prepends: height grew while user was scrolled up.
-    // If user was at bottom, skip — the useEffect handles scrollToBottom.
-    if (heightGrew && !isAtBottomRef.current) {
+    if (prependedRef.current && heightGrew && !isAtBottomRef.current) {
       el.scrollTop += el.scrollHeight - prevHeight;
+      prependedRef.current = false;
     }
     prevScrollHeightRef.current = el.scrollHeight;
   });
 
+  // Track whether the previous render was idle (to detect idle transition)
+  const wasIdleRef = useRef(sessionIdle);
+
   // Auto-scroll to bottom when new messages arrive (only if already at bottom)
   useEffect(() => {
-    // Detect if messages were appended (new) vs prepended (history)
     const curLen = grouped.length;
     let curLastSeq = 0;
     if (curLen > 0) {
@@ -188,7 +205,6 @@ export const ChatView = memo(function ChatView() {
     }
     const isNewAtEnd = curLastSeq > prevLastSeqRef.current;
 
-    // Check if the latest message is from the user — always scroll for user sends
     const lastGroup = curLen > 0 ? grouped[curLen - 1] : null;
     const isFromUser = lastGroup?.type === 'standalone' && (
       lastGroup.message.type === 'user_message' ||
@@ -197,10 +213,31 @@ export const ChatView = memo(function ChatView() {
       lastGroup.message.type === 'send_input'
     );
 
-    if (isAtBottomRef.current || isFromUser) {
+    // On idle transition: if the response is long, scroll user message to top
+    const justWentIdle = sessionIdle && !wasIdleRef.current;
+    wasIdleRef.current = sessionIdle;
+
+    if (justWentIdle && isAtBottomRef.current && scrollRef.current) {
+      const container = scrollRef.current;
+      const target = container.querySelector<HTMLElement>('[data-scroll-target]');
+      if (target) {
+        const targetTop = target.offsetTop;
+        const contentBelow = container.scrollHeight - targetTop;
+        if (contentBelow > container.clientHeight) {
+          // Response overflows — scroll user message to top
+          target.scrollIntoView({ block: 'start' });
+          container.scrollTop = Math.max(0, container.scrollTop - 12);
+          isAtBottomRef.current = false;
+          prevMsgLenRef.current = curLen;
+          prevLastSeqRef.current = curLastSeq;
+          return;
+        }
+      }
+      // Response fits in viewport — just stay at bottom
+      scrollToBottom();
+    } else if (isAtBottomRef.current || isFromUser) {
       scrollToBottom();
     } else if (isNewAtEnd) {
-      // Only count as unread if new messages were appended at the end
       const prevLen = prevMsgLenRef.current;
       if (curLen > prevLen) {
         if (!isFromUser) {
@@ -213,7 +250,7 @@ export const ChatView = memo(function ChatView() {
     }
     prevMsgLenRef.current = curLen;
     prevLastSeqRef.current = curLastSeq;
-  }, [grouped, streaming, scrollToBottom]);
+  }, [grouped, streaming, sessionIdle, scrollToBottom]);
 
   // Snapshot unread state before SessionPage clears it
   useEffect(() => {
