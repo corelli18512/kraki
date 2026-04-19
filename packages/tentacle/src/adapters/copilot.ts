@@ -259,6 +259,8 @@ export class CopilotAdapter extends AgentAdapter {
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
   /** Expected model per session — detects involuntary model fallbacks by the CLI */
   private expectedModels = new Map<string, string>();
+  /** User's originally requested model — never updated on involuntary fallbacks */
+  private userRequestedModels = new Map<string, string>();
   /** Whether the current turn has produced any output (message or tool call) */
   private turnHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
@@ -448,7 +450,10 @@ export class CopilotAdapter extends AgentAdapter {
     this.wireEvents(sid, session);
 
     logger.info(`session created: ${sid} (model: ${config.model ?? 'default'})`);
-    if (config.model) this.expectedModels.set(sid, config.model);
+    if (config.model) {
+      this.expectedModels.set(sid, config.model);
+      this.userRequestedModels.set(sid, config.model);
+    }
     this.onSessionCreated?.({
       sessionId: sid,
       agent: 'copilot',
@@ -717,6 +722,7 @@ export class CopilotAdapter extends AgentAdapter {
       return;
     }
     this.expectedModels.set(sessionId, model);
+    this.userRequestedModels.set(sessionId, model);
     await entry.session.setModel(model);
     logger.info({ sessionId, model }, 'Session model changed');
   }
@@ -738,6 +744,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
     this.expectedModels.delete(sessionId);
+    this.userRequestedModels.delete(sessionId);
     this.turnHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
     this.clearIdleTimer(sessionId);
@@ -919,7 +926,11 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('assistant.turn_start', () => {
       this.clearIdleTimer(sessionId);
       this.turnHasOutput.set(sessionId, false);
-      this.turnErrorReported.set(sessionId, false);
+      // Only reset if no error was reported before this turn started
+      // (session.error can fire before turn_start in error recovery paths)
+      if (!this.turnErrorReported.get(sessionId)) {
+        this.turnErrorReported.set(sessionId, false);
+      }
     });
 
     session.on('session.error', (event) => {
@@ -938,10 +949,11 @@ export class CopilotAdapter extends AgentAdapter {
       const expected = this.expectedModels.get(sessionId);
 
       if (expected && newModel !== expected) {
-        logger.warn({ sessionId, expected, previousModel, newModel }, 'Involuntary model fallback detected');
+        const requested = this.userRequestedModels.get(sessionId) ?? expected;
+        logger.warn({ sessionId, requested, previousModel, newModel }, 'Involuntary model fallback detected');
         this.expectedModels.set(sessionId, newModel);
         this.onError?.(sessionId, {
-          message: `Model changed from ${expected} to ${newModel} (requested model may be unavailable)`,
+          message: `Model changed from ${requested} to ${newModel} (requested model may be unavailable)`,
         });
       } else {
         logger.info({ sessionId, previousModel, newModel }, 'Session model changed (SDK)');

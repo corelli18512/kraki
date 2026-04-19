@@ -664,6 +664,23 @@ describe('CopilotAdapter', () => {
       // Should not double-report — session.error already surfaced
       expect(spy).not.toHaveBeenCalled();
     });
+
+    it('does not double-report when session.error fires before turn_start', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      await adapter.createSession({});
+      // session.error arrives BEFORE turn_start (error recovery path)
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'query', message: 'Model not available' },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockClear();
+      // turn_start should NOT reset the error flag
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('assistant.turn_end', { data: {} });
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 
   // ── Permission flow ─────────────────────────────────
