@@ -573,15 +573,34 @@ describe('CopilotAdapter', () => {
       expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Unknown agent error' });
     });
 
-    it('does not fire onError for non-error turn_end', async () => {
+    it('does not fire onError for non-error turn_end with output', async () => {
       const spy = vi.fn();
       adapter.onError = spy;
       await adapter.start();
       await adapter.createSession({});
+      // Simulate a complete turn: start → message → end
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('assistant.message', { data: { content: 'hello' } });
       mockSessions[0]._emit('assistant.turn_end', {
         data: { reason: 'complete' },
       });
       expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('fires onError for empty turn (no output)', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      await adapter.createSession({});
+      // Simulate an empty turn: start → end with no message or tool
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('assistant.turn_end', {
+        data: { reason: 'complete' },
+      });
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('no output') }),
+      );
     });
 
     it('does not throw when callbacks are null', async () => {
@@ -591,6 +610,59 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('assistant.message', { data: { content: 'test' } });
       mockSessions[0]._emit('session.idle', {});
       mockSessions[0]._emit('assistant.turn_end', { data: { reason: 'error', error: 'test' } });
+    });
+
+    it('fires onError for session.error events', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'query', message: 'Model "opus" is not available.', statusCode: 400 },
+      });
+      expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model "opus" is not available.' });
+    });
+
+    it('fires onError on involuntary model change', async () => {
+      const errorSpy = vi.fn();
+      adapter.onError = errorSpy;
+      await adapter.start();
+      await adapter.createSession({ model: 'claude-opus-4.6' });
+      mockSessions[0]._emit('session.model_change', {
+        data: { previousModel: 'claude-opus-4.6', newModel: 'goldeneye' },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('goldeneye') }),
+      );
+    });
+
+    it('does not fire onError on expected model change', async () => {
+      const errorSpy = vi.fn();
+      adapter.onError = errorSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({ model: 'claude-opus-4.6' });
+      // User explicitly changes model
+      await adapter.setSessionModel(sessionId, 'gpt-4.1');
+      mockSessions[0]._emit('session.model_change', {
+        data: { previousModel: 'claude-opus-4.6', newModel: 'gpt-4.1' },
+      });
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not fire empty-turn error when session.error already reported', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      await adapter.createSession({});
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'query', message: 'API error' },
+      });
+      spy.mockClear();
+      mockSessions[0]._emit('assistant.turn_end', { data: {} });
+      // Should not double-report — session.error already surfaced
+      expect(spy).not.toHaveBeenCalled();
     });
   });
 

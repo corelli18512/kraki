@@ -257,6 +257,12 @@ export class CopilotAdapter extends AgentAdapter {
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
+  /** Expected model per session — detects involuntary model fallbacks by the CLI */
+  private expectedModels = new Map<string, string>();
+  /** Whether the current turn has produced any output (message or tool call) */
+  private turnHasOutput = new Map<string, boolean>();
+  /** Whether an error was already reported for the current turn */
+  private turnErrorReported = new Map<string, boolean>();
   /**
    * Grace period (ms) after assistant.turn_end before firing a fallback idle.
    * The Copilot CLI has a known bug where session.idle is sometimes not emitted
@@ -442,7 +448,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.wireEvents(sid, session);
 
     logger.info(`session created: ${sid} (model: ${config.model ?? 'default'})`);
-
+    if (config.model) this.expectedModels.set(sid, config.model);
     this.onSessionCreated?.({
       sessionId: sid,
       agent: 'copilot',
@@ -710,6 +716,7 @@ export class CopilotAdapter extends AgentAdapter {
       logger.warn({ sessionId }, 'setSessionModel: session not found');
       return;
     }
+    this.expectedModels.set(sessionId, model);
     await entry.session.setModel(model);
     logger.info({ sessionId, model }, 'Session model changed');
   }
@@ -730,6 +737,9 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
+    this.expectedModels.delete(sessionId);
+    this.turnHasOutput.delete(sessionId);
+    this.turnErrorReported.delete(sessionId);
     this.clearIdleTimer(sessionId);
   }
 
@@ -826,11 +836,13 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('assistant.message', (event) => {
       // Skip empty messages (SDK sends these before tool calls)
       if (event.data.content) {
+        this.turnHasOutput.set(sessionId, true);
         this.onMessage?.(sessionId, { content: event.data.content });
       }
     });
 
     session.on('tool.execution_start', (event) => {
+      this.turnHasOutput.set(sessionId, true);
       const data = event.data as Record<string, unknown>;
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
@@ -906,6 +918,37 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('assistant.turn_start', () => {
       this.clearIdleTimer(sessionId);
+      this.turnHasOutput.set(sessionId, false);
+      this.turnErrorReported.set(sessionId, false);
+    });
+
+    session.on('session.error', (event) => {
+      const data = event.data as Record<string, unknown>;
+      const message = (data.message as string) ?? 'Unknown session error';
+      const errorType = data.errorType as string | undefined;
+      logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
+      this.turnErrorReported.set(sessionId, true);
+      this.onError?.(sessionId, { message });
+    });
+
+    session.on('session.model_change', (event) => {
+      const data = event.data as Record<string, unknown>;
+      const previousModel = data.previousModel as string | undefined;
+      const newModel = data.newModel as string;
+      const expected = this.expectedModels.get(sessionId);
+
+      if (expected && newModel !== expected) {
+        logger.warn({ sessionId, expected, previousModel, newModel }, 'Involuntary model fallback detected');
+        this.expectedModels.set(sessionId, newModel);
+        this.onError?.(sessionId, {
+          message: `Model changed from ${expected} to ${newModel} (requested model may be unavailable)`,
+        });
+      } else {
+        logger.info({ sessionId, previousModel, newModel }, 'Session model changed (SDK)');
+        this.expectedModels.set(sessionId, newModel);
+      }
+      // Notify so the arm updates the model badge
+      this.onModelChanged?.(sessionId, newModel);
     });
 
     session.on('session.info', (event) => {
@@ -928,10 +971,21 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as Record<string, unknown>;
       const reason = data?.reason;
       if (reason === 'error') {
+        this.turnErrorReported.set(sessionId, true);
         this.onError?.(sessionId, {
           message: (data?.error as string) ?? 'Unknown agent error',
         });
       }
+
+      // Detect empty turns — the agent started a turn but produced no output
+      // and no error was reported via session.error or turn_end.reason
+      if (!this.turnHasOutput.get(sessionId) && !this.turnErrorReported.get(sessionId)) {
+        logger.warn({ sessionId }, 'Empty turn detected — agent produced no output');
+        this.onError?.(sessionId, {
+          message: 'Agent produced no output. The session may need to be restarted or the model may be unavailable.',
+        });
+      }
+
       // Fallback: schedule idle in case the SDK doesn't emit session.idle
       // (known CLI bug — github/copilot-sdk#794). Cancelled if turn_start
       // or session.idle arrives first.

@@ -414,26 +414,41 @@ export class RelayClient {
           this.sessionManager.markActive(sessionId);
           this.send({ type: 'active', sessionId, payload: {} });
           this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments)
-            .catch((err) => logger.error({ err, sessionId }, 'sendMessage failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'sendMessage failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
+            });
           break;
         case 'approve':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
-            .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'respondToPermission failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
+            });
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
-            .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'respondToPermission failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
+            });
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
           break;
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
-            .catch((err) => logger.error({ err, sessionId }, 'respondToPermission failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'respondToPermission failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
+            });
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
           break;
         case 'answer':
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, false)
-            .catch((err) => logger.error({ err, sessionId }, 'respondToQuestion failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'respondToQuestion failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
+            });
           this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
           break;
         case 'kill_session':
@@ -446,7 +461,10 @@ export class RelayClient {
               this.sessionManager.markIdle(sessionId);
               this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
             })
-            .catch((err) => logger.error({ err, sessionId }, 'abortSession failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'abortSession failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
+            });
           break;
         case 'delete_session':
           this.adapter.killSession(sessionId)
@@ -509,7 +527,10 @@ export class RelayClient {
         case 'set_session_model': {
           const { model, reasoningEffort } = msg.payload;
           this.adapter.setSessionModel(sessionId, model, reasoningEffort)
-            .catch((err) => logger.error({ err, sessionId }, 'setSessionModel failed'));
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'setSessionModel failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
+            });
           this.sessionManager.setModel(sessionId, model);
           this.send({
             type: 'session_model_set',
@@ -994,6 +1015,16 @@ export class RelayClient {
           payload: { title: meta?.title, autoTitle: title },
         });
       }
+    };
+
+    // SDK model change — update session metadata and notify arms
+    this.adapter.onModelChanged = (sessionId, model) => {
+      this.sessionManager.setModel(sessionId, model);
+      this.send({
+        type: 'session_model_set',
+        sessionId,
+        payload: { model },
+      });
     };
   }
 
