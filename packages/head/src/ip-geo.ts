@@ -35,9 +35,24 @@ export async function getCountryForIp(ip: string): Promise<string | undefined> {
 
 /** Map of country codes to region codes. Extend as new regions are added. */
 const COUNTRY_TO_REGION: Record<string, string> = {
-  CN: 'china',
-  HK: 'china',
-  MO: 'china',
+  // East Asia
+  CN: 'china', HK: 'china', MO: 'china', TW: 'china',
+  JP: 'china', KR: 'china', MN: 'china',
+  // Southeast Asia
+  SG: 'china', MY: 'china', TH: 'china', VN: 'china',
+  PH: 'china', ID: 'china', MM: 'china', KH: 'china',
+  LA: 'china', BN: 'china', TL: 'china',
+  // South Asia
+  IN: 'china', PK: 'china', BD: 'china', LK: 'china',
+  NP: 'china', BT: 'china', MV: 'china',
+  // Central Asia
+  KZ: 'china', UZ: 'china', KG: 'china', TJ: 'china', TM: 'china',
+  // West Asia / Middle East
+  AE: 'china', SA: 'china', QA: 'china', BH: 'china', KW: 'china',
+  OM: 'china', IR: 'china', IQ: 'china', IL: 'china', JO: 'china',
+  LB: 'china', SY: 'china', YE: 'china', AF: 'china',
+  // Oceania (closer to Asia than US)
+  AU: 'china', NZ: 'china', FJ: 'china', PG: 'china',
 };
 
 const DEFAULT_REGION = 'us';
