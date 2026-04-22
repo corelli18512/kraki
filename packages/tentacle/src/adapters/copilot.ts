@@ -942,25 +942,32 @@ export class CopilotAdapter extends AgentAdapter {
       this.onError?.(sessionId, { message });
     });
 
-    session.on('session.model_change', (event) => {
-      const data = event.data as Record<string, unknown>;
-      const previousModel = data.previousModel as string | undefined;
-      const newModel = data.newModel as string;
-      const expected = this.expectedModels.get(sessionId);
+    // session.tools_updated is ephemeral and not in the typed event union,
+    // so we use the generic catch-all handler form.
+    session.on((event: { type: string; data?: Record<string, unknown> }) => {
+      if (event.type !== 'session.tools_updated') return;
+      const actualModel = event.data?.model as string | undefined;
+      if (!actualModel) return;
 
-      if (expected && newModel !== expected) {
-        const requested = this.userRequestedModels.get(sessionId) ?? expected;
-        logger.warn({ sessionId, requested, previousModel, newModel }, 'Involuntary model fallback detected');
-        this.expectedModels.set(sessionId, newModel);
-        this.onError?.(sessionId, {
-          message: `Model changed from ${requested} to ${newModel} (requested model may be unavailable)`,
-        });
-      } else {
-        logger.info({ sessionId, previousModel, newModel }, 'Session model changed (SDK)');
-        this.expectedModels.set(sessionId, newModel);
+      const expected = this.expectedModels.get(sessionId);
+      if (!expected || actualModel === expected) return;
+
+      const requested = this.userRequestedModels.get(sessionId) ?? expected;
+      logger.warn({ sessionId, requested, actualModel }, 'Model mismatch detected — aborting to prevent history pollution');
+
+      // Abort the in-flight turn and disconnect before any polluted events are produced
+      const entry = this.sessions.get(sessionId);
+      if (entry) {
+        entry.session.abort().catch(() => {});
+        entry.session.disconnect().catch(() => {});
+        this.sessions.delete(sessionId);
       }
-      // Notify so the arm updates the model badge
-      this.onModelChanged?.(sessionId, newModel);
+
+      this.turnErrorReported.set(sessionId, true);
+      this.onError?.(sessionId, {
+        message: `${requested} is unavailable — session paused to prevent history corruption. Send a message to retry.`,
+      });
+      this.onIdle?.(sessionId);
     });
 
     session.on('session.info', (event) => {

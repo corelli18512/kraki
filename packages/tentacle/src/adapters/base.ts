@@ -109,8 +109,6 @@ export abstract class AgentAdapter {
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
   /** Called when the agent produces a title for a session (e.g. via SDK event). */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
-  /** Called when the SDK changes the session model (e.g. involuntary fallback). */
-  onModelChanged: ((sessionId: string, model: string) => void) | null = null;
   /** Called with updated cumulative token usage for a session */
   onUsageUpdate: ((sessionId: string, usage: SessionUsage) => void) | null = null;
 

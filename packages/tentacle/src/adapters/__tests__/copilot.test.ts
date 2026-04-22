@@ -40,20 +40,31 @@ vi.mock('../../logger.js', () => {
 
 function createMockSession(sessionId: string) {
   const listeners = new Map<string, Function[]>();
+  const catchAllListeners: Function[] = [];
   return {
     sessionId,
     send: vi.fn(),
     abort: vi.fn().mockResolvedValue(undefined),
-    disconnect: vi.fn(),
+    disconnect: vi.fn().mockResolvedValue(undefined),
     setModel: vi.fn().mockResolvedValue(undefined),
     getMessages: vi.fn().mockResolvedValue([]),
-    on: vi.fn((event: string, handler: Function) => {
-      if (!listeners.has(event)) listeners.set(event, []);
-      listeners.get(event)!.push(handler);
+    on: vi.fn((...args: unknown[]) => {
+      if (args.length === 2) {
+        // Typed form: on(eventType, handler)
+        const [event, handler] = args as [string, Function];
+        if (!listeners.has(event)) listeners.set(event, []);
+        listeners.get(event)!.push(handler);
+      } else if (args.length === 1 && typeof args[0] === 'function') {
+        // Catch-all form: on(handler)
+        catchAllListeners.push(args[0] as Function);
+      }
     }),
     // Test helper: fire a fake SDK event
     _emit(event: string, data: unknown) {
       for (const fn of listeners.get(event) ?? []) fn(data);
+      // Also dispatch to catch-all listeners with {type, data} shape
+      const eventObj = { type: event, ...(typeof data === 'object' && data !== null ? data : { data }) };
+      for (const fn of catchAllListeners) fn(eventObj);
     },
     _listeners: listeners,
   };
@@ -623,31 +634,64 @@ describe('CopilotAdapter', () => {
       expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model "opus" is not available.' });
     });
 
-    it('fires onError on involuntary model change', async () => {
+    it('disconnects and errors on model mismatch in tools_updated', async () => {
+      const errorSpy = vi.fn();
+      const idleSpy = vi.fn();
+      adapter.onError = errorSpy;
+      adapter.onIdle = idleSpy;
+      await adapter.start();
+      await adapter.createSession({ model: 'claude-opus-4.6' });
+      mockSessions[0]._emit('session.tools_updated', {
+        data: { model: 'goldeneye' },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('unavailable') }),
+      );
+      expect(idleSpy).toHaveBeenCalled();
+      // Session should be removed from adapter — next getSession would throw
+      expect(mockSessions[0].abort).toHaveBeenCalled();
+      expect(mockSessions[0].disconnect).toHaveBeenCalled();
+    });
+
+    it('does not disconnect when tools_updated matches expected model', async () => {
       const errorSpy = vi.fn();
       adapter.onError = errorSpy;
       await adapter.start();
       await adapter.createSession({ model: 'claude-opus-4.6' });
-      mockSessions[0]._emit('session.model_change', {
-        data: { previousModel: 'claude-opus-4.6', newModel: 'goldeneye' },
+      mockSessions[0]._emit('session.tools_updated', {
+        data: { model: 'claude-opus-4.6' },
       });
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('goldeneye') }),
-      );
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(mockSessions[0].abort).not.toHaveBeenCalled();
     });
 
-    it('does not fire onError on expected model change', async () => {
+    it('does not disconnect when user changed model via setSessionModel', async () => {
       const errorSpy = vi.fn();
       adapter.onError = errorSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({ model: 'claude-opus-4.6' });
-      // User explicitly changes model
       await adapter.setSessionModel(sessionId, 'gpt-4.1');
-      mockSessions[0]._emit('session.model_change', {
-        data: { previousModel: 'claude-opus-4.6', newModel: 'gpt-4.1' },
+      mockSessions[0]._emit('session.tools_updated', {
+        data: { model: 'gpt-4.1' },
       });
       expect(errorSpy).not.toHaveBeenCalled();
+      expect(mockSessions[0].abort).not.toHaveBeenCalled();
+    });
+
+    it('uses original user-requested model in error message after fallback', async () => {
+      const errorSpy = vi.fn();
+      adapter.onError = errorSpy;
+      adapter.onIdle = vi.fn();
+      await adapter.start();
+      await adapter.createSession({ model: 'claude-opus-4.6-1m' });
+      mockSessions[0]._emit('session.tools_updated', {
+        data: { model: 'goldeneye' },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('claude-opus-4.6-1m') }),
+      );
     });
 
     it('does not fire empty-turn error when session.error already reported', async () => {

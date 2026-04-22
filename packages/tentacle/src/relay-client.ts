@@ -1016,16 +1016,6 @@ export class RelayClient {
         });
       }
     };
-
-    // SDK model change — update session metadata and notify arms
-    this.adapter.onModelChanged = (sessionId, model) => {
-      this.sessionManager.setModel(sessionId, model);
-      this.send({
-        type: 'session_model_set',
-        sessionId,
-        payload: { model },
-      });
-    };
   }
 
   // ── Session resume on reconnect ─────────────────────
