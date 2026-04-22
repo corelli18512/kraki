@@ -91,6 +91,9 @@ interface ScrollCtx {
   prevStreamLen: number;
   wasIdle: boolean;
 
+  // Idle reposition — suppresses unread count for the turn that just completed
+  idleRepositioned: boolean;
+
   // Session tracking (for inline change detection)
   prevSessionId: string | undefined;
 }
@@ -108,6 +111,7 @@ function makeCtx(): ScrollCtx {
     prevHadFinal: false,
     prevStreamLen: 0,
     wasIdle: false,
+    idleRepositioned: false,
     prevSessionId: undefined,
   };
 }
@@ -152,6 +156,7 @@ export function useScrollController(
       c.prevHadFinal = false;
       c.prevStreamLen = 0;
       c.wasIdle = sessionIdle;
+      c.idleRepositioned = false;
     }
     c.prevSessionId = sessionId;
     c.entryPending = true;
@@ -223,6 +228,7 @@ export function useScrollController(
     else if (justWentIdle && c.sticky && contentChanged) {
       if (scrollToTarget(el)) {
         c.sticky = false;
+        c.idleRepositioned = true;
         logger.info('scroll: ③ idle → target');
       } else {
         scrollToMax(el);
@@ -261,7 +267,11 @@ export function useScrollController(
       (curHasFinal && !c.prevHadFinal)
     );
 
-    if (newBubbleAtEnd && !isFromUser && !c.sticky) {
+    if (c.idleRepositioned) {
+      // Step ③ just repositioned the viewport to show the completed response —
+      // the user is reading it, not scrolled away. Don't count as unread.
+      c.idleRepositioned = false;
+    } else if (newBubbleAtEnd && !isFromUser && !c.sticky) {
       setUnreadCount((n) => n + 1);
       setShowScrollBtn(true);
     }
