@@ -231,6 +231,13 @@ export class KrakiTransport {
     this.connect();
   }
 
+  redirectToRelay(relay: string) {
+    this.disconnect();
+    this._url = relay;
+    this.intentionalClose = false;
+    this.connect();
+  }
+
   send(msg: Record<string, unknown>) {
     if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
       this.ws.send(JSON.stringify(msg));

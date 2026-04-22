@@ -223,6 +223,12 @@ export class RelayClient {
 
     if (msg.type === 'auth_error') {
       const authError = msg as unknown as AuthErrorMessage;
+      if (authError.code === 'wrong_region' && authError.redirect) {
+        logger.info({ to: authError.redirect }, 'Relay requested reconnect to assigned region');
+        this.options.relayUrl = authError.redirect;
+        this.ws?.close();
+        return;
+      }
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
         this.preferChallengeAuth = false;

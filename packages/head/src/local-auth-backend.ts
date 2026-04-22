@@ -12,6 +12,7 @@ import { GitHubAuthProvider } from './auth.js';
 import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
 import { getLogger } from './logger.js';
+import { suggestRegionForIp } from './ip-geo.js';
 
 function importPublicKey(compactKey: string): string {
   const lines = compactKey.match(/.{1,64}/g) ?? [];
@@ -35,6 +36,36 @@ export interface LocalAuthBackendOptions {
   /** Map of region name → relay URL for wrong_region redirects. */
   regionUrls?: Record<string, string>;
 }
+
+export interface RegionDirectoryEntry {
+  code: string;
+  relayUrl: string;
+  displayName?: string;
+}
+
+export type LoginResolveOutcome =
+  | {
+    ok: true;
+    registered: boolean;
+    needsRegionSelection: boolean;
+    user: {
+      id: string;
+      login: string;
+      provider: string;
+      email?: string;
+      preferences?: Record<string, unknown>;
+      region?: string;
+    };
+    region?: string;
+    relayUrl?: string;
+    suggestedRegion?: string;
+    regions: RegionDirectoryEntry[];
+  }
+  | { ok: false; code: string; message: string };
+
+export type EdgeJoinOutcome =
+  | { ok: true; region: string; relayUrl: string; displayName?: string; serviceKey: string }
+  | { ok: false; code: string; message: string };
 
 export class LocalAuthBackend implements AuthBackend {
   private storage: Storage;
@@ -71,42 +102,13 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unknown_auth_method', message: 'Use startChallenge/verifyChallenge for challenge auth' };
     }
 
-    // Token-based auth methods
-    let provider: AuthProvider | undefined;
-    let credentials: { token?: string; githubCode?: string; ip?: string } = {};
-
-    switch (auth.method) {
-      case 'github_token':
-        provider = this.getProviderForMode('github');
-        credentials = { token: auth.token };
-        break;
-      case 'github_oauth':
-        provider = this.getProviderForMode('github');
-        credentials = { githubCode: auth.code };
-        break;
-      case 'apikey':
-        provider = this.getProviderForMode('apikey');
-        credentials = { token: auth.key };
-        break;
-      case 'open':
-        provider = this.getProviderForMode('open');
-        credentials = { token: auth.sharedKey };
-        break;
-      default:
-        return { ok: false, code: 'unknown_auth_method', message: `Unknown auth method: ${(auth as { method: string }).method}` };
+    const resolved = await this.resolveAuthUser(auth);
+    if (this.isAuthError(resolved)) {
+      logger.warn('Auth rejected', { method: auth.method, reason: resolved.message });
+      return resolved;
     }
 
-    if (!provider) {
-      return { ok: false, code: 'auth_rejected', message: `Auth method ${auth.method} not configured` };
-    }
-
-    const result = await provider.authenticate(credentials);
-    if (!result.ok) {
-      logger.warn('Auth rejected', { method: auth.method, reason: result.message });
-      return { ok: false, code: 'auth_rejected', message: result.message };
-    }
-
-    return this.completeAuth(result.user, device, auth.method, headRegion);
+    return this.completeAuth(resolved, device, auth.method, headRegion);
   }
 
   async startChallenge(
@@ -226,6 +228,101 @@ export class LocalAuthBackend implements AuthBackend {
     };
   }
 
+  async resolveLogin(auth: AuthMethod, preferredRegion?: string, clientIp?: string): Promise<LoginResolveOutcome> {
+    if (auth.method === 'pairing' || auth.method === 'challenge') {
+      return { ok: false, code: 'unsupported_auth_method', message: `${auth.method} cannot be used for login-first routing` };
+    }
+
+    const resolved = await this.resolveAuthUser(auth);
+    if (this.isAuthError(resolved)) return resolved;
+
+    const regions = this.getRegions();
+    const storedUser = this.storage.getUser(resolved.id);
+    const assignedRegion = storedUser?.region;
+
+    if (assignedRegion) {
+      return {
+        ok: true,
+        registered: true,
+        needsRegionSelection: false,
+        user: this.buildUserProfile(resolved, storedUser?.preferences, assignedRegion),
+        region: assignedRegion,
+        relayUrl: this.getRelayUrlForRegion(assignedRegion),
+        regions,
+      };
+    }
+
+    if (preferredRegion) {
+      const regionInfo = this.storage.getRegion(preferredRegion);
+      if (!regionInfo?.enabled) {
+        return { ok: false, code: 'unknown_region', message: `Region "${preferredRegion}" is not available` };
+      }
+
+      this.storage.upsertUser(resolved.id, resolved.login, resolved.provider, resolved.email, regionInfo.code);
+      this.storage.setUserRegion(resolved.id, regionInfo.code);
+      return {
+        ok: true,
+        registered: true,
+        needsRegionSelection: false,
+        user: this.buildUserProfile(resolved, storedUser?.preferences, regionInfo.code),
+        region: regionInfo.code,
+        relayUrl: regionInfo.relayUrl,
+        regions,
+      };
+    }
+
+    // Auto-detect region from client IP for new users
+    let suggestedRegion = regions[0]?.code;
+    if (clientIp) {
+      const geoRegion = await suggestRegionForIp(clientIp);
+      if (geoRegion && regions.some(r => r.code === geoRegion)) {
+        suggestedRegion = geoRegion;
+      }
+    }
+
+    return {
+      ok: true,
+      registered: false,
+      needsRegionSelection: true,
+      user: this.buildUserProfile(resolved, storedUser?.preferences),
+      suggestedRegion,
+      regions,
+    };
+  }
+
+  getRegions(): RegionDirectoryEntry[] {
+    return this.storage.getRegions(true).map(region => ({
+      code: region.code,
+      relayUrl: region.relayUrl,
+      displayName: region.displayName,
+    }));
+  }
+
+  getRegionVersion(): number {
+    return this.storage.getRegionVersion();
+  }
+
+  completeEdgeJoin(token: string, region: string, relayUrl: string, displayName?: string): EdgeJoinOutcome {
+    const joinResult = this.storage.consumeEdgeJoinToken(token, region, relayUrl, displayName);
+    if (!joinResult.ok) return joinResult;
+
+    this.storage.upsertRegion(joinResult.region, joinResult.relayUrl, joinResult.displayName, true);
+    const { serviceKey } = this.storage.issueRegionServiceKey(joinResult.region);
+
+    return {
+      ok: true,
+      region: joinResult.region,
+      relayUrl: joinResult.relayUrl,
+      displayName: joinResult.displayName,
+      serviceKey,
+    };
+  }
+
+  validateServiceKey(serviceKey: string): { valid: boolean; region?: string } {
+    const result = this.storage.validateServiceKey(serviceKey);
+    return result.valid ? { valid: true, region: result.region } : { valid: false };
+  }
+
   /** Sweep expired pairing tokens. Called periodically by HeadServer. */
   sweepPairingTokens(): void {
     const now = Date.now();
@@ -324,7 +421,7 @@ export class LocalAuthBackend implements AuthBackend {
   private checkRegion(
     userId: string,
     headRegion?: string,
-  ): { ok: false; code: 'wrong_region'; redirect: string; message: string } | null {
+  ): { ok: false; code: 'wrong_region'; redirect?: string; message: string } | null {
     if (!this.region || !headRegion) return null; // Region checks disabled
 
     const user = this.storage.getUser(userId);
@@ -332,15 +429,75 @@ export class LocalAuthBackend implements AuthBackend {
 
     if (user.region === headRegion) return null; // Correct region
 
-    const redirectUrl = this.regionUrls[user.region];
-    if (!redirectUrl) return null; // No redirect URL configured for that region
+    const redirectUrl = this.getRelayUrlForRegion(user.region);
 
     return {
       ok: false,
       code: 'wrong_region',
-      redirect: redirectUrl,
-      message: `User is assigned to region '${user.region}', connect to ${redirectUrl}`,
+      ...(redirectUrl && { redirect: redirectUrl }),
+      message: redirectUrl
+        ? `User is assigned to region '${user.region}', connect to ${redirectUrl}`
+        : `User is assigned to region '${user.region}'`,
     };
+  }
+
+  private async resolveAuthUser(auth: AuthMethod): Promise<AuthUser | { ok: false; code: string; message: string }> {
+    let provider: AuthProvider | undefined;
+    let credentials: { token?: string; githubCode?: string; ip?: string } = {};
+
+    switch (auth.method) {
+      case 'github_token':
+        provider = this.getProviderForMode('github');
+        credentials = { token: auth.token };
+        break;
+      case 'github_oauth':
+        provider = this.getProviderForMode('github');
+        credentials = { githubCode: auth.code };
+        break;
+      case 'apikey':
+        provider = this.getProviderForMode('apikey');
+        credentials = { token: auth.key };
+        break;
+      case 'open':
+        provider = this.getProviderForMode('open');
+        credentials = { token: auth.sharedKey };
+        break;
+      default:
+        return { ok: false, code: 'unknown_auth_method', message: `Unknown auth method: ${(auth as { method: string }).method}` };
+    }
+
+    if (!provider) {
+      return { ok: false, code: 'auth_rejected', message: `Auth method ${auth.method} not configured` };
+    }
+
+    const result = await provider.authenticate(credentials);
+    if (!result.ok) {
+      return { ok: false, code: 'auth_rejected', message: result.message };
+    }
+    return result.user;
+  }
+
+  private isAuthError(result: AuthUser | { ok: false; code: string; message: string }): result is { ok: false; code: string; message: string } {
+    return 'ok' in result && result.ok === false;
+  }
+
+  private buildUserProfile(
+    authUser: AuthUser,
+    preferences?: Record<string, unknown>,
+    region?: string,
+  ): { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string } {
+    return {
+      id: authUser.id,
+      login: authUser.login,
+      provider: authUser.provider,
+      email: authUser.email,
+      preferences,
+      region,
+    };
+  }
+
+  private getRelayUrlForRegion(region: string): string | undefined {
+    return this.storage.getRegion(region)?.relayUrl ?? this.regionUrls[region];
   }
 
   private getProviderForMode(mode: string): AuthProvider | undefined {

@@ -42,7 +42,7 @@ export interface AuthChallengeResult {
 export interface AuthRegionMismatch {
   ok: false;
   code: 'wrong_region';
-  redirect: string;
+  redirect?: string;
   message: string;
 }
 

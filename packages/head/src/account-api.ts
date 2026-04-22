@@ -14,12 +14,12 @@ import { getLogger } from './logger.js';
 
 export interface AccountApiOptions {
   authBackend: LocalAuthBackend;
-  serviceKey: string;
+  serviceKey?: string;
 }
 
 export class AccountApi {
   private backend: LocalAuthBackend;
-  private serviceKey: string;
+  private serviceKey?: string;
 
   constructor(options: AccountApiOptions) {
     this.backend = options.authBackend;
@@ -36,9 +36,6 @@ export class AccountApi {
 
     if (!path.startsWith('/api/')) return false;
 
-    // Authenticate service key
-    if (!this.checkServiceKey(req, res)) return true;
-
     // CORS for all API routes
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
@@ -48,8 +45,21 @@ export class AccountApi {
       return true;
     }
 
+    const publicRoute =
+      (path === '/api/regions' && req.method === 'GET')
+      || (path === '/api/login/resolve' && req.method === 'POST')
+      || (path === '/api/edge/join' && req.method === 'POST');
+
+    if (!publicRoute && !this.checkServiceKey(req, res)) return true;
+
     try {
       switch (path) {
+        case '/api/regions':
+          if (req.method === 'GET') return this.handleGetRegions(req, res);
+          break;
+        case '/api/login/resolve':
+          if (req.method === 'POST') return await this.handleResolveLogin(req, res);
+          break;
         case '/api/auth':
           if (req.method === 'POST') return await this.handleAuth(req, res);
           break;
@@ -60,13 +70,16 @@ export class AccountApi {
           if (req.method === 'POST') return await this.handleVerify(req, res);
           break;
         case '/api/pairing/create':
-          if (req.method === 'POST') return this.handleCreatePairing(req, res);
+          if (req.method === 'POST') return await this.handleCreatePairing(req, res);
           break;
         case '/api/pairing/request':
           if (req.method === 'POST') return await this.handleRequestPairing(req, res);
           break;
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
+          break;
+        case '/api/edge/join':
+          if (req.method === 'POST') return await this.handleEdgeJoin(req, res);
           break;
       }
     } catch (err) {
@@ -79,6 +92,40 @@ export class AccountApi {
   }
 
   // ── Route handlers ────────────────────────────────────
+
+  private handleGetRegions(_req: IncomingMessage, res: ServerResponse): boolean {
+    this.json(res, 200, {
+      version: this.backend.getRegionVersion(),
+      ttlSec: 300,
+      regions: this.backend.getRegions(),
+    });
+    return true;
+  }
+
+  private async handleResolveLogin(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const body = await readBody(req);
+    if (!body?.auth) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'auth is required' });
+      return true;
+    }
+
+    const clientIp = req.headers['x-forwarded-for']?.toString().split(',')[0].trim()
+      ?? req.socket?.remoteAddress;
+
+    const result = await this.backend.resolveLogin(
+      body.auth as import('@kraki/protocol').AuthMethod,
+      body.preferredRegion as string | undefined,
+      clientIp,
+    );
+
+    if (!result.ok) {
+      const status = result.code === 'unknown_region' ? 400 : 401;
+      this.json(res, status, result);
+    } else {
+      this.json(res, 200, result);
+    }
+    return true;
+  }
 
   private async handleAuth(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const body = await readBody(req);
@@ -151,10 +198,16 @@ export class AccountApi {
     return true;
   }
 
-  private handleCreatePairing(_req: IncomingMessage, res: ServerResponse): boolean {
-    // Body should contain { userId }
-    // But we need to read it async, so handle inline
-    return false; // Let the async version handle it
+  private async handleCreatePairing(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const body = await readBody(req);
+    if (!body?.userId) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId required' });
+      return true;
+    }
+
+    const result = this.backend.createPairingToken(body.userId as string);
+    this.json(res, 200, result);
+    return true;
   }
 
   private async handleRequestPairing(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -187,12 +240,38 @@ export class AccountApi {
     return true;
   }
 
+  private async handleEdgeJoin(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const body = await readBody(req);
+    if (!body?.token || !body?.region || !body?.relayUrl) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'token, region, and relayUrl are required' });
+      return true;
+    }
+
+    const result = this.backend.completeEdgeJoin(
+      body.token as string,
+      body.region as string,
+      body.relayUrl as string,
+      body.displayName as string | undefined,
+    );
+    if (!result.ok) {
+      const status = result.code === 'join_token_expired' ? 410 : 401;
+      this.json(res, status, result);
+    } else {
+      this.json(res, 200, result);
+    }
+    return true;
+  }
+
   // ── Helpers ───────────────────────────────────────────
 
   private checkServiceKey(req: IncomingMessage, res: ServerResponse): boolean {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (!token || !safeEqual(token, this.serviceKey)) {
+    const valid = !!token && (
+      (this.serviceKey ? safeEqual(token, this.serviceKey) : false)
+      || this.backend.validateServiceKey(token).valid
+    );
+    if (!valid) {
       this.json(res, 401, { ok: false, code: 'unauthorized', message: 'Invalid service key' });
       return false;
     }

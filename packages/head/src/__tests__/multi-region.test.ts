@@ -62,6 +62,8 @@ describe('LocalAuthBackend', () => {
 
   beforeEach(() => {
     storage = new Storage(':memory:');
+    storage.upsertRegion('us', 'wss://us.example.com', 'US');
+    storage.upsertRegion('china', 'wss://cn.example.com', 'China');
     const providers = new Map();
     providers.set('open', new OpenAuthProvider());
     backend = new LocalAuthBackend({
@@ -149,6 +151,35 @@ describe('LocalAuthBackend', () => {
     expect(info.methods).toContain('open');
     expect(info.methods).toContain('challenge');
   });
+
+  it('should resolve login-first routing for an existing user', async () => {
+    storage.upsertUser('local', 'local', 'open', undefined, 'china');
+
+    const result = await backend.resolveLogin(
+      { method: 'open', sharedKey: 'test' } as import("@kraki/protocol").AuthMethod,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.registered).toBe(true);
+      expect(result.needsRegionSelection).toBe(false);
+      expect(result.region).toBe('china');
+      expect(result.relayUrl).toBe('wss://cn.example.com');
+    }
+  });
+
+  it('should request region selection for a new user in login-first flow', async () => {
+    const result = await backend.resolveLogin(
+      { method: 'open', sharedKey: 'test' } as import("@kraki/protocol").AuthMethod,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.registered).toBe(false);
+      expect(result.needsRegionSelection).toBe(true);
+      expect(result.regions.map(r => r.code)).toEqual(expect.arrayContaining(['us', 'china']));
+    }
+  });
 });
 
 describe('AccountApi', () => {
@@ -159,6 +190,8 @@ describe('AccountApi', () => {
 
   beforeEach(async () => {
     storage = new Storage(':memory:');
+    storage.upsertRegion('us', 'wss://us.example.com', 'US');
+    storage.upsertRegion('china', 'wss://cn.example.com', 'China');
     const providers = new Map();
     providers.set('open', new OpenAuthProvider());
     const localBackend = new LocalAuthBackend({
@@ -202,6 +235,20 @@ describe('AccountApi', () => {
     const res = await fetch(`http://localhost:${port}${path}`, {
       headers: { 'Authorization': `Bearer ${key}` },
     });
+    return { status: res.status, data: await res.json() };
+  }
+
+  async function apiPostPublic(path: string, body: unknown) {
+    const res = await fetch(`http://localhost:${port}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, data: await res.json() };
+  }
+
+  async function apiGetPublic(path: string) {
+    const res = await fetch(`http://localhost:${port}${path}`);
     return { status: res.status, data: await res.json() };
   }
 
@@ -249,12 +296,61 @@ describe('AccountApi', () => {
     expect(data.methods).toContain('challenge');
   });
 
+  it('should return the public region directory', async () => {
+    const { status, data } = await apiGetPublic('/api/regions');
+    expect(status).toBe(200);
+    expect(data.ttlSec).toBe(300);
+    expect(data.regions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'us', relayUrl: 'wss://us.example.com' }),
+      expect.objectContaining({ code: 'china', relayUrl: 'wss://cn.example.com' }),
+    ]));
+  });
+
+  it('should resolve login-first routing publicly', async () => {
+    storage.upsertUser('local', 'local', 'open', undefined, 'china');
+
+    const { status, data } = await apiPostPublic('/api/login/resolve', {
+      auth: { method: 'open', sharedKey: 'test' },
+    });
+
+    expect(status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.region).toBe('china');
+    expect(data.relayUrl).toBe('wss://cn.example.com');
+  });
+
   it('should create pairing token', async () => {
     storage.upsertUser('u1', 'alice', 'open');
     const { status, data } = await apiPost('/api/pairing/request', { userId: 'u1' });
     expect(status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.token).toMatch(/^pt_/);
+  });
+
+  it('should exchange an edge join token for a permanent service key', async () => {
+    const issued = storage.issueEdgeJoinToken();
+
+    const { status, data } = await apiPostPublic('/api/edge/join', {
+      token: issued.token,
+      region: 'china',
+      relayUrl: 'wss://cn.example.com',
+      displayName: 'China',
+    });
+    expect(status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.region).toBe('china');
+    expect(data.serviceKey).toMatch(/^ksk_/);
+
+    const config = await apiGet('/api/config', data.serviceKey);
+    expect(config.status).toBe(200);
+    expect(config.data.methods).toContain('open');
+  });
+
+  it('should reject edge join without region or relayUrl', async () => {
+    const issued = storage.issueEdgeJoinToken();
+    const { status, data } = await apiPostPublic('/api/edge/join', { token: issued.token });
+    expect(status).toBe(400);
+    expect(data.code).toBe('bad_request');
   });
 });
 
