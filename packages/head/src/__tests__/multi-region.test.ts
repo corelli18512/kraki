@@ -6,7 +6,7 @@
  * - Schema v5 (region column)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { Storage } from '../storage.js';
 import { LocalAuthBackend } from '../local-auth-backend.js';
@@ -14,6 +14,7 @@ import { RemoteAuthBackend } from '../remote-auth-backend.js';
 import { AccountApi } from '../account-api.js';
 import { OpenAuthProvider } from '../auth.js';
 import { Logger, setGlobalLogger } from '../logger.js';
+import { regionForCountry, isPrivateIp } from '../ip-geo.js';
 
 // Suppress log output during tests
 setGlobalLogger(new Logger({ level: 'error', stdout: false }));
@@ -421,5 +422,195 @@ describe('RemoteAuthBackend', () => {
       { name: 'Bad', role: 'tentacle' },
     );
     expect(result.ok).toBe(false);
+  });
+});
+
+// ── IP Geo utilities ────────────────────────────────────
+
+describe('IP Geo — regionForCountry', () => {
+  it('should map China to china region', () => {
+    expect(regionForCountry('CN')).toBe('china');
+    expect(regionForCountry('HK')).toBe('china');
+    expect(regionForCountry('MO')).toBe('china');
+    expect(regionForCountry('TW')).toBe('china');
+  });
+
+  it('should map Asian countries to china region', () => {
+    expect(regionForCountry('JP')).toBe('china');
+    expect(regionForCountry('KR')).toBe('china');
+    expect(regionForCountry('SG')).toBe('china');
+    expect(regionForCountry('IN')).toBe('china');
+    expect(regionForCountry('AU')).toBe('china');
+  });
+
+  it('should map non-Asian countries to us region', () => {
+    expect(regionForCountry('US')).toBe('us');
+    expect(regionForCountry('CA')).toBe('us');
+    expect(regionForCountry('GB')).toBe('us');
+    expect(regionForCountry('DE')).toBe('us');
+    expect(regionForCountry('BR')).toBe('us');
+  });
+
+  it('should be case-insensitive', () => {
+    expect(regionForCountry('cn')).toBe('china');
+    expect(regionForCountry('Jp')).toBe('china');
+    expect(regionForCountry('us')).toBe('us');
+  });
+
+  it('should default unknown codes to us', () => {
+    expect(regionForCountry('XX')).toBe('us');
+    expect(regionForCountry('')).toBe('us');
+  });
+});
+
+describe('IP Geo — isPrivateIp', () => {
+  it('should detect loopback', () => {
+    expect(isPrivateIp('127.0.0.1')).toBe(true);
+    expect(isPrivateIp('::1')).toBe(true);
+    expect(isPrivateIp('localhost')).toBe(true);
+  });
+
+  it('should detect IPv4-mapped IPv6 loopback', () => {
+    expect(isPrivateIp('::ffff:127.0.0.1')).toBe(true);
+  });
+
+  it('should detect private ranges', () => {
+    expect(isPrivateIp('10.0.0.1')).toBe(true);
+    expect(isPrivateIp('10.255.255.255')).toBe(true);
+    expect(isPrivateIp('172.16.0.1')).toBe(true);
+    expect(isPrivateIp('172.31.255.255')).toBe(true);
+    expect(isPrivateIp('192.168.0.1')).toBe(true);
+    expect(isPrivateIp('192.168.100.50')).toBe(true);
+  });
+
+  it('should not flag public IPs', () => {
+    expect(isPrivateIp('8.8.8.8')).toBe(false);
+    expect(isPrivateIp('223.5.5.5')).toBe(false);
+    expect(isPrivateIp('172.32.0.1')).toBe(false);
+    expect(isPrivateIp('11.0.0.1')).toBe(false);
+  });
+
+  it('should handle IPv4-mapped IPv6 private', () => {
+    expect(isPrivateIp('::ffff:10.0.0.1')).toBe(true);
+    expect(isPrivateIp('::ffff:192.168.1.1')).toBe(true);
+    expect(isPrivateIp('::ffff:8.8.8.8')).toBe(false);
+  });
+});
+
+// ── Edge join flow (simplified) ─────────────────────────
+
+describe('Storage — edge join tokens (simplified)', () => {
+  let storage: Storage;
+
+  beforeEach(() => {
+    storage = new Storage(':memory:');
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it('should issue a blank join token with no region', () => {
+    const issued = storage.issueEdgeJoinToken();
+    expect(issued.token).toMatch(/^kjt_/);
+    expect(issued.expiresIn).toBeGreaterThanOrEqual(60);
+  });
+
+  it('should consume token with edge-provided region and relayUrl', () => {
+    const issued = storage.issueEdgeJoinToken();
+    const result = storage.consumeEdgeJoinToken(issued.token, 'eu', 'wss://eu.example.com', 'Europe');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.region).toBe('eu');
+      expect(result.relayUrl).toBe('wss://eu.example.com');
+      expect(result.displayName).toBe('Europe');
+    }
+  });
+
+  it('should reject already-used token', () => {
+    const issued = storage.issueEdgeJoinToken();
+    storage.consumeEdgeJoinToken(issued.token, 'eu', 'wss://eu.example.com');
+    const result = storage.consumeEdgeJoinToken(issued.token, 'eu', 'wss://eu.example.com');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('join_token_used');
+    }
+  });
+
+  it('should reject invalid token', () => {
+    const result = storage.consumeEdgeJoinToken('kjt_invalid', 'eu', 'wss://eu.example.com');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('invalid_join_token');
+    }
+  });
+
+  it('should reject consume without relayUrl', () => {
+    const issued = storage.issueEdgeJoinToken();
+    const result = storage.consumeEdgeJoinToken(issued.token, 'eu', '');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('bad_request');
+    }
+  });
+});
+
+// ── Region directory & service keys ─────────────────────
+
+describe('Storage — region directory', () => {
+  let storage: Storage;
+
+  beforeEach(() => {
+    storage = new Storage(':memory:');
+  });
+
+  afterEach(() => {
+    storage.close();
+  });
+
+  it('should upsert and retrieve regions', () => {
+    storage.upsertRegion('us', 'wss://us.example.com', 'United States');
+    storage.upsertRegion('china', 'wss://cn.example.com', 'China');
+
+    const us = storage.getRegion('us');
+    expect(us?.code).toBe('us');
+    expect(us?.relayUrl).toBe('wss://us.example.com');
+    expect(us?.enabled).toBe(true);
+
+    const all = storage.getRegions(true);
+    expect(all.length).toBe(2);
+  });
+
+  it('should normalize region codes to lowercase', () => {
+    storage.upsertRegion('US', 'wss://us.example.com');
+    expect(storage.getRegion('us')?.code).toBe('us');
+    expect(storage.getRegion('US')?.code).toBe('us');
+  });
+
+  it('should issue and validate service keys', () => {
+    storage.upsertRegion('china', 'wss://cn.example.com');
+    const { serviceKey } = storage.issueRegionServiceKey('china');
+    expect(serviceKey).toMatch(/^ksk_/);
+
+    const validation = storage.validateServiceKey(serviceKey);
+    expect(validation.valid).toBe(true);
+    if (validation.valid) {
+      expect(validation.region).toBe('china');
+    }
+  });
+
+  it('should reject invalid service keys', () => {
+    const validation = storage.validateServiceKey('ksk_invalid');
+    expect(validation.valid).toBe(false);
+  });
+
+  it('should replace service key on re-issue', () => {
+    storage.upsertRegion('china', 'wss://cn.example.com');
+    const first = storage.issueRegionServiceKey('china');
+    const second = storage.issueRegionServiceKey('china');
+
+    expect(first.serviceKey).not.toBe(second.serviceKey);
+    expect(storage.validateServiceKey(first.serviceKey).valid).toBe(false);
+    expect(storage.validateServiceKey(second.serviceKey).valid).toBe(true);
   });
 });

@@ -75,7 +75,7 @@ export async function suggestRegionForIp(ip: string): Promise<string | undefined
   return regionForCountry(country);
 }
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   // Strip IPv6 prefix
   const clean = ip.replace(/^::ffff:/, '');
   if (clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true;
