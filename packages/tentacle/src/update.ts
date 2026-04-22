@@ -9,8 +9,9 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
 import { pipeline } from 'node:stream/promises';
@@ -419,7 +420,9 @@ async function updateViaBinary(version: string): Promise<void> {
 
   const downloadUrl = asset.browser_download_url;
   const currentBinary = process.execPath;
-  const tmpPath = currentBinary + '.update';
+
+  // Download to OS temp dir (always user-writable)
+  const tmpPath = join(tmpdir(), assetName + '.update');
 
   // Download binary
   await downloadFile(downloadUrl, tmpPath);
@@ -443,17 +446,57 @@ async function updateViaBinary(version: string): Promise<void> {
     chmodSync(tmpPath, 0o755);
   }
 
-  // Replace current binary
-  const backupPath = currentBinary + '.bak';
+  // Replace current binary — try direct first, sudo fallback for system dirs
+  replaceBinary(tmpPath, currentBinary);
+}
+
+function replaceBinary(source: string, target: string): void {
+  const backupPath = target + '.bak';
+
   try {
-    renameSync(currentBinary, backupPath);
-    renameSync(tmpPath, currentBinary);
-    try { unlinkSync(backupPath); } catch { /* keep backup if delete fails */ }
-  } catch (err) {
-    try { renameSync(backupPath, currentBinary); } catch { /* ignore */ }
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    renameSync(target, backupPath);
+  } catch (err: unknown) {
+    if (isPermissionError(err)) {
+      replaceBinaryElevated(source, target);
+      return;
+    }
+    try { unlinkSync(source); } catch { /* ignore */ }
     throw err;
   }
+
+  try {
+    // rename won't work cross-filesystem (tmpdir vs install dir), use copy
+    copyFileSync(source, target);
+    if (process.platform !== 'win32') chmodSync(target, 0o755);
+    try { unlinkSync(source); } catch { /* ignore */ }
+    try { unlinkSync(backupPath); } catch { /* ignore */ }
+  } catch (err) {
+    // Restore backup
+    try { renameSync(backupPath, target); } catch { /* ignore */ }
+    try { unlinkSync(source); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
+function replaceBinaryElevated(source: string, target: string): void {
+  try {
+    execSync(
+      `sudo cp "${source}" "${target}" && sudo chmod 755 "${target}"`,
+      { stdio: 'inherit' },
+    );
+    try { unlinkSync(source); } catch { /* ignore */ }
+  } catch {
+    try { unlinkSync(source); } catch { /* ignore */ }
+    throw new Error(
+      `Permission denied. To fix, reinstall to a user-writable location:\n` +
+      `  curl -fsSL https://kraki.corelli.cloud/install.sh | bash`,
+    );
+  }
+}
+
+function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'EACCES' || code === 'EPERM';
 }
 
 function hashFile(path: string): string {

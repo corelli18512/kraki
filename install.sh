@@ -4,7 +4,7 @@
 set -e
 
 REPO="corelli18512/kraki"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${HOME}/.local/bin"
 BINARY_NAME="kraki"
 
 # ── Detect platform ──────────────────────────────────────
@@ -78,7 +78,14 @@ install() {
     return
   fi
 
-  # macOS / Linux: try /usr/local/bin, fall back to ~/.local/bin
+  # --global flag: install to /usr/local/bin (requires sudo if not writable)
+  if [ "${KRAKI_INSTALL_GLOBAL:-}" = "1" ]; then
+    INSTALL_DIR="/usr/local/bin"
+  fi
+
+  mkdir -p "$INSTALL_DIR"
+
+  # macOS / Linux: install to user-writable dir, sudo fallback for --global
   if [ -w "$INSTALL_DIR" ]; then
     mv "$TARGET" "${INSTALL_DIR}/${BINARY_NAME}"
     echo "  Installed to ${INSTALL_DIR}/${BINARY_NAME}"
@@ -87,15 +94,33 @@ install() {
     sudo mv "$TARGET" "${INSTALL_DIR}/${BINARY_NAME}"
     echo "  Installed to ${INSTALL_DIR}/${BINARY_NAME}"
   else
-    INSTALL_DIR="${HOME}/.local/bin"
-    mkdir -p "$INSTALL_DIR"
-    mv "$TARGET" "${INSTALL_DIR}/${BINARY_NAME}"
-    echo "  Installed to ${INSTALL_DIR}/${BINARY_NAME}"
-    case ":$PATH:" in
-      *":${INSTALL_DIR}:"*) ;;
-      *) echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\"" ;;
-    esac
+    echo "  Error: ${INSTALL_DIR} is not writable and sudo is not available"
+    rm -rf "$TMP"
+    exit 1
   fi
+
+  case ":$PATH:" in
+    *":${INSTALL_DIR}:"*) ;;
+    *)
+      echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
+      # Try to add to shell profile automatically
+      SHELL_NAME=$(basename "${SHELL:-/bin/sh}")
+      PROFILE=""
+      case "$SHELL_NAME" in
+        zsh)  PROFILE="$HOME/.zshrc" ;;
+        bash)
+          if [ -f "$HOME/.bash_profile" ]; then PROFILE="$HOME/.bash_profile"
+          elif [ -f "$HOME/.bashrc" ]; then PROFILE="$HOME/.bashrc"
+          fi ;;
+      esac
+      if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
+        if ! grep -q "${INSTALL_DIR}" "$PROFILE" 2>/dev/null; then
+          printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$PROFILE"
+          echo "  Added to ${PROFILE} (restart your shell or run: source ${PROFILE})"
+        fi
+      fi
+      ;;
+  esac
 
   rm -rf "$TMP"
 }
