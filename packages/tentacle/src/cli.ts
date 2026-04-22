@@ -25,6 +25,7 @@ import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, start
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
+import { readStatusFile } from './status-file.js';
 
 // Detect Node.js SEA (Single Executable Application)
 const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
@@ -286,6 +287,10 @@ function cmdStatus(): void {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
     console.log(`  Auth:    ${config.authMethod}`);
     console.log(`  Device:  ${config.device.name}`);
+    const statusFile = readStatusFile();
+    if (statusFile?.region) {
+      console.log(`  Region:  ${statusFile.region}`);
+    }
     console.log(`  Logs:    ${getLogVerbosity(config)}`);
   } else {
     console.log(chalk.dim('  No config found. Run `kraki` to set up.'));

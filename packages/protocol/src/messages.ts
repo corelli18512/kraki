@@ -568,7 +568,7 @@ export interface AuthOkMessage {
   deviceId: string;
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
-  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown> };
+  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
