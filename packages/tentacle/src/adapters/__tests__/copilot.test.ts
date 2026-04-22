@@ -694,6 +694,23 @@ describe('CopilotAdapter', () => {
       );
     });
 
+    it('does not duplicate session.error reports within the same turn', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      await adapter.createSession({});
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'query', message: 'First error' },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'query', message: 'Duplicate error' },
+      });
+      // Second session.error should be suppressed
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
     it('does not fire empty-turn error when session.error already reported', async () => {
       const spy = vi.fn();
       adapter.onError = spy;

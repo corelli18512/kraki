@@ -938,8 +938,10 @@ export class CopilotAdapter extends AgentAdapter {
       const message = (data.message as string) ?? 'Unknown session error';
       const errorType = data.errorType as string | undefined;
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
-      this.turnErrorReported.set(sessionId, true);
-      this.onError?.(sessionId, { message });
+      if (!this.turnErrorReported.get(sessionId)) {
+        this.turnErrorReported.set(sessionId, true);
+        this.onError?.(sessionId, { message });
+      }
     });
 
     // session.tools_updated is ephemeral and not in the typed event union,
@@ -963,11 +965,11 @@ export class CopilotAdapter extends AgentAdapter {
         this.sessions.delete(sessionId);
       }
 
-      this.turnErrorReported.set(sessionId, true);
       this.onError?.(sessionId, {
-        message: `${requested} is unavailable — session paused to prevent history corruption. Send a message to retry.`,
+        message: `${requested} is currently unavailable. Session paused — send a message to retry.`,
       });
       this.onIdle?.(sessionId);
+      this.cleanupSessionPermissions(sessionId);
     });
 
     session.on('session.info', (event) => {
