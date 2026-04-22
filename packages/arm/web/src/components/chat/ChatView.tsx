@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, type MutableRefObject } from 'react';
+import { memo, useRef, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { useShallow } from 'zustand/shallow';
@@ -8,16 +8,12 @@ import { MessageInput } from './MessageInput';
 import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { useTurns } from '../../hooks/useTurns';
+import { useScrollController } from '../../hooks/useScrollController';
 import { GapMarker } from './GapMarker';
-import { createLogger } from '../../lib/logger';
 import type { ChatMessage } from '../../types/store';
 import type { Attachment } from '@kraki/protocol';
 
-const logger = createLogger('chat-view');
-
 const EMPTY_MESSAGES: ChatMessage[] = [];
-const IDLE_SCROLL_OVERFLOW_PX = 120;
-const BOTTOM_STICKY_THRESHOLD_PX = 40;
 
 /** Collect image attachments from tool_complete messages in a turn's thinking. */
 function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
@@ -69,12 +65,7 @@ export const ChatView = memo(function ChatView() {
     useShallow((s) => [...s.pendingQuestions.values()].filter((q) => q.sessionId === sessionId)),
   );
 
-  const hadUnreadRef = useRef(storeUnread > 0);
-  /** Set when older messages are prepended — gates the scroll-preservation layout effect. */
-  const prependedRef = useRef(false);
-
   // Filter out pending permission bubbles — the blocking card handles them.
-  // Questions are always shown as normal chat bubbles.
   const filteredMessages = useMemo(
     () => messages.filter((msg) => {
       if (msg.type === 'permission' && pendingPermIds.includes(msg.payload.id)) return false;
@@ -83,70 +74,28 @@ export const ChatView = memo(function ChatView() {
     [messages, pendingPermIds],
   );
 
-  // Show spinner at top if there are older messages not yet loaded
+  // First seq for gap detection / prepend tracking
   const firstSeq = useMemo(() => {
     const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
     return seqs.length > 0 ? seqs[0] : 0;
   }, [filteredMessages]);
   const hasOlderMessages = firstSeq > 1;
-  const prevFirstSeqRef = useRef(firstSeq);
-  if (firstSeq > 0 && prevFirstSeqRef.current > 0 && firstSeq < prevFirstSeqRef.current) {
-    prependedRef.current = true;
-  }
-  prevFirstSeqRef.current = firstSeq;
 
   const rawGrouped = useTurns(filteredMessages);
 
-  // Only the last turn can be active, and only if the session isn't idle
   const sessionIdle = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].type === 'idle';
-  const prevSessionIdRef = useRef(sessionId);
-  const pendingSessionScrollRef = useRef(true);
-  const wasIdleRef = useRef(sessionIdle);
-  if (sessionId !== prevSessionIdRef.current) {
-    prevSessionIdRef.current = sessionId;
-    pendingSessionScrollRef.current = true;
-    hadUnreadRef.current = storeUnread > 0;
-    wasIdleRef.current = sessionIdle;
-  }
-
-  // Log turn grouping for debugging
-  useMemo(() => {
-    if (!sessionId) return;
-    const turns = rawGrouped.filter(g => g.type === 'turn');
-    const activeTurns = turns.filter(g => g.type === 'turn' && !g.turn.finalMessage);
-    if (activeTurns.length > 0 || turns.length > 0) {
-      logger.info('turns grouped', {
-        sessionId,
-        totalGroups: rawGrouped.length,
-        turnCount: turns.length,
-        activeTurns: activeTurns.length,
-        messageCount: filteredMessages.length,
-        turnDetails: turns.map((g, i) => ({
-          idx: i,
-          thinkingCount: g.turn.thinkingMessages.length,
-          hasFinal: !!g.turn.finalMessage,
-          finalType: g.turn.finalMessage?.type ?? 'null',
-          lastThinkingType: g.turn.thinkingMessages.length > 0 ? g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1].type : 'none',
-          lastThinkingSeq: g.turn.thinkingMessages.length > 0 ? ('seq' in g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1] ? (g.turn.thinkingMessages[g.turn.thinkingMessages.length - 1] as { seq?: number }).seq : '?') : '?',
-        })),
-      });
-    }
-  }, [rawGrouped, sessionId, filteredMessages.length]);
 
   // Ensure streaming always attaches to a turn group
   const grouped = useMemo(() => {
     if (!streaming) return rawGrouped;
     const last = rawGrouped[rawGrouped.length - 1];
     if (last && last.type === 'turn' && !last.turn.finalMessage) return rawGrouped;
-    // No in-progress turn — append one so streaming has a home
     return [...rawGrouped, { type: 'turn' as const, turn: { thinkingMessages: [] as ChatMessage[], finalMessage: null } }];
   }, [rawGrouped, streaming]);
 
   // Index of the element to scroll to when entering an unread session.
   // Priority: pending question > last user message (if idle) > last agent turn.
-  // (Pending permissions are filtered out of chat and shown as a blocking card at bottom.)
   const scrollTargetIdx = useMemo(() => {
-    // Pending question — scroll to its chat bubble
     for (let i = grouped.length - 1; i >= 0; i--) {
       const g = grouped[i];
       if (g.type === 'standalone' && g.message.type === 'question') {
@@ -154,14 +103,12 @@ export const ChatView = memo(function ChatView() {
         if (!payload?.answer) return i;
       }
     }
-    // Idle — scroll to the last user message (the prompt they sent)
     if (sessionIdle) {
       for (let i = grouped.length - 1; i >= 0; i--) {
         const g = grouped[i];
         if (g.type === 'standalone' && (g.message.type === 'user_message' || g.message.type === 'send_input')) return i;
       }
     }
-    // Default — last completed agent turn
     for (let i = grouped.length - 1; i >= 0; i--) {
       const g = grouped[i];
       if (g.type === 'turn' && g.turn.finalMessage) return i;
@@ -169,214 +116,21 @@ export const ChatView = memo(function ChatView() {
     return -1;
   }, [grouped, sessionIdle]);
 
+  // ── Scroll controller (all scroll logic lives here) ───
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = useRef(true);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const prevMsgLenRef: MutableRefObject<number> = useRef(0);
-  const prevLastSeqRef = useRef(0);
-  const prevLastHasFinalRef = useRef(false);
-  const prevScrollHeightRef = useRef(0);
-  const prevStreamingLenRef = useRef(0);
-  const suppressAutoScrollRef = useRef(false);
 
-  const scrollToBottom = useCallback(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
-      logger.info('SCROLL scrollToBottom', {
-        from: el.scrollTop,
-        to: Math.max(0, el.scrollHeight - el.clientHeight),
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        trace: new Error().stack?.split('\n').slice(1, 4).map(s => s.trim()),
-      });
-      el.scrollTop = el.scrollHeight;
-      isAtBottomRef.current = true;
-    }
-    setShowScrollBtn(false);
-    setUnreadCount(0);
-  }, []);
+  const { showScrollBtn, unreadCount, scrollToBottom, handleScroll } = useScrollController(
+    scrollRef,
+    grouped,
+    streaming,
+    sessionId,
+    sessionIdle,
+    storeUnread,
+    firstSeq,
+  );
 
-  // Preserve scroll position: prepend adjustment (before paint)
-  useLayoutEffect(() => {
-    if (!scrollRef.current) return;
-    const el = scrollRef.current;
-    if (pendingSessionScrollRef.current) {
-      if (hadUnreadRef.current) {
-        const target = el.querySelector<HTMLElement>('[data-scroll-target]');
-        if (target) {
-          const targetTop = target.offsetTop;
-          const contentBelow = el.scrollHeight - targetTop;
-          if (contentBelow > el.clientHeight + IDLE_SCROLL_OVERFLOW_PX) {
-            logger.info('SCROLL sessionEntry → scrollIntoView (unread)', { targetTop, contentBelow, clientHeight: el.clientHeight });
-            target.scrollIntoView({ block: 'start' });
-            el.scrollTop = Math.max(0, el.scrollTop - 12);
-            isAtBottomRef.current = false;
-            suppressAutoScrollRef.current = true;
-            pendingSessionScrollRef.current = false;
-            hadUnreadRef.current = false;
-            prevScrollHeightRef.current = el.scrollHeight;
-            return;
-          }
-        }
-      }
-      logger.info('SCROLL sessionEntry → scrollToHeight', { scrollHeight: el.scrollHeight });
-      el.scrollTop = el.scrollHeight;
-      pendingSessionScrollRef.current = false;
-      hadUnreadRef.current = false;
-      prevScrollHeightRef.current = el.scrollHeight;
-      return;
-    }
-    const prevHeight = prevScrollHeightRef.current;
-    const heightGrew = prevHeight > 0 && el.scrollHeight > prevHeight;
-    const heightShrank = prevHeight > 0 && el.scrollHeight < prevHeight;
-    if (heightGrew || heightShrank) {
-      logger.info('SCROLL layoutEffect heightChange', { prevHeight, newHeight: el.scrollHeight, scrollTop: el.scrollTop, prepended: prependedRef.current, atBottom: isAtBottomRef.current });
-    }
-    if (prependedRef.current && heightGrew && !isAtBottomRef.current) {
-      logger.info('SCROLL layoutEffect prepend adjust', { from: el.scrollTop, delta: el.scrollHeight - prevHeight });
-      el.scrollTop += el.scrollHeight - prevHeight;
-    }
-    prependedRef.current = false;
-    prevScrollHeightRef.current = el.scrollHeight;
-  });
-
-  // Auto-scroll to bottom when new messages arrive (only if already at bottom)
-  useEffect(() => {
-    const curLen = grouped.length;
-    const curStreamingLen = streaming?.length ?? 0;
-    let curLastSeq = 0;
-    if (curLen > 0) {
-      const lastGroup = grouped[curLen - 1];
-      if (lastGroup.type === 'standalone') {
-        curLastSeq = getSeq(lastGroup.message);
-      } else {
-        const tm = lastGroup.turn.finalMessage ?? lastGroup.turn.thinkingMessages[lastGroup.turn.thinkingMessages.length - 1];
-        if (tm) curLastSeq = getSeq(tm);
-      }
-    }
-    const prevLen = prevMsgLenRef.current;
-    const prevLastSeq = prevLastSeqRef.current;
-    const prevStreamingLen = prevStreamingLenRef.current;
-    const prevLastHasFinal = prevLastHasFinalRef.current;
-    const isNewAtEnd = curLastSeq > prevLastSeq;
-    const hasNewGroup = curLen > prevLen;
-    const streamingAdvanced = curStreamingLen > prevStreamingLen;
-
-    const lastGroup = curLen > 0 ? grouped[curLen - 1] : null;
-    const isFromUser = lastGroup?.type === 'standalone' && (
-      lastGroup.message.type === 'user_message' ||
-      lastGroup.message.type === 'pending_input' ||
-      lastGroup.message.type === 'answer' ||
-      lastGroup.message.type === 'send_input'
-    );
-    const hasFinalBubbleAtEnd = !!(lastGroup?.type === 'turn' && lastGroup.turn.finalMessage);
-    const justCompletedTurn = hasFinalBubbleAtEnd && !prevLastHasFinal;
-    const hasContentChange = hasNewGroup || isNewAtEnd || streamingAdvanced || justCompletedTurn;
-    const shouldFollowUserMessage = isFromUser && (hasNewGroup || isNewAtEnd);
-    const hasBubbleAtEnd = !!lastGroup && (
-      lastGroup.type === 'standalone' ||
-      hasFinalBubbleAtEnd
-    );
-    const newBubbleAtEnd = hasBubbleAtEnd && (hasNewGroup || isNewAtEnd || justCompletedTurn);
-    const container = scrollRef.current;
-    const distanceFromBottom = container
-      ? container.scrollHeight - container.scrollTop - container.clientHeight
-      : Number.POSITIVE_INFINITY;
-    const isActuallyAtBottom = distanceFromBottom < BOTTOM_STICKY_THRESHOLD_PX;
-    const shouldStickToBottom = isAtBottomRef.current || isActuallyAtBottom;
-    isAtBottomRef.current = isActuallyAtBottom;
-
-    // On idle transition: if the response is long, scroll user message to top
-    const justWentIdle = sessionIdle && !wasIdleRef.current;
-    wasIdleRef.current = sessionIdle;
-
-    if (justWentIdle && shouldStickToBottom && container) {
-      const target = container.querySelector<HTMLElement>('[data-scroll-target]');
-      if (target) {
-        const targetTop = target.offsetTop;
-        const contentBelow = container.scrollHeight - targetTop;
-        if (contentBelow > container.clientHeight + IDLE_SCROLL_OVERFLOW_PX) {
-          logger.info('SCROLL justWentIdle → scrollIntoView', { targetTop, contentBelow, clientHeight: container.clientHeight, scrollTop: container.scrollTop });
-          target.scrollIntoView({ block: 'start' });
-          container.scrollTop = Math.max(0, container.scrollTop - 12);
-          isAtBottomRef.current = false;
-          prevMsgLenRef.current = curLen;
-          prevLastSeqRef.current = curLastSeq;
-          return;
-        }
-      }
-      logger.info('SCROLL justWentIdle → scrollToBottom (fits)');
-      scrollToBottom();
-    } else if (suppressAutoScrollRef.current) {
-      logger.info('SCROLL autoScroll skipped after sessionEntry');
-      suppressAutoScrollRef.current = false;
-    } else if (hasContentChange && (shouldStickToBottom || shouldFollowUserMessage)) {
-      logger.info('SCROLL autoScroll → scrollToBottom', {
-        atBottom: isActuallyAtBottom,
-        shouldStickToBottom,
-        distanceFromBottom,
-        isFromUser,
-        shouldFollowUserMessage,
-        curLen,
-        curLastSeq,
-        curStreamingLen,
-        prevLen,
-        prevLastSeq,
-        prevStreamingLen,
-      });
-      scrollToBottom();
-    } else if (newBubbleAtEnd && !isFromUser) {
-      setUnreadCount((c) => c + 1);
-      setShowScrollBtn(true);
-    } else if (!hasContentChange) {
-      logger.info('SCROLL autoScroll skipped (no content change)', {
-        atBottom: isActuallyAtBottom,
-        shouldStickToBottom,
-        distanceFromBottom,
-        isFromUser,
-        curLen,
-        curLastSeq,
-        curStreamingLen,
-      });
-    }
-    prevMsgLenRef.current = curLen;
-    prevLastSeqRef.current = curLastSeq;
-    prevLastHasFinalRef.current = hasFinalBubbleAtEnd;
-    prevStreamingLenRef.current = curStreamingLen;
-  }, [grouped, streaming, sessionIdle, scrollToBottom]);
-
-  // Reset when switching sessions
-  useEffect(() => {
-    setShowScrollBtn(false);
-    setUnreadCount(0);
-    isAtBottomRef.current = true;
-    prependedRef.current = false;
-    prevFirstSeqRef.current = 0;
-    prevScrollHeightRef.current = 0;
-    prevMsgLenRef.current = 0;
-    prevLastSeqRef.current = 0;
-    prevLastHasFinalRef.current = false;
-    prevStreamingLenRef.current = 0;
-    suppressAutoScrollRef.current = false;
-    logger.info('SCROLL sessionEntry resetState', {
-      sessionId,
-      pending: pendingSessionScrollRef.current,
-      unread: hadUnreadRef.current,
-    });
-    wasIdleRef.current = sessionIdle;
-  }, [sessionId]);
-
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const atBottom = scrollHeight - scrollTop - clientHeight < BOTTOM_STICKY_THRESHOLD_PX;
-    isAtBottomRef.current = atBottom;
-    if (atBottom) {
-      setShowScrollBtn(false);
-      setUnreadCount(0);
-    }
-  };
+  // ── Render ────────────────────────────────────────────
 
   if (!sessionId || !session) {
     return (
@@ -399,7 +153,6 @@ export const ChatView = memo(function ChatView() {
           className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
         >
           <div className="mx-auto max-w-3xl space-y-3">
-            {/* Top spinner when older messages exist */}
             {hasOlderMessages && (
               <GapMarker sessionId={sessionId!} beforeSeq={firstSeq} scrollRef={scrollRef} />
             )}
@@ -443,12 +196,10 @@ export const ChatView = memo(function ChatView() {
           </div>
         </div>
 
-        {/* Subtle dim overlay when a blocking card is shown */}
         {(permissions.length > 0 || questions.length > 0) && (
           <div className="pointer-events-none absolute inset-0 bg-black/5 dark:bg-black/15 transition-opacity" />
         )}
 
-        {/* Scroll to bottom button */}
         {showScrollBtn && (
           <button
             onClick={scrollToBottom}
