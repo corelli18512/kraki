@@ -25,22 +25,24 @@ const markdownComponents = {
 };
 
 export function MessageBubble({ message, agent, forceExpanded, turnImages, cancelled, sessionId }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; cancelled?: boolean; sessionId?: string }) {
+  const hueVars = { '--user-hue': stringToHue(sessionId ?? agent ?? '') } as React.CSSProperties;
+
   switch (message.type) {
     case 'user_message': {
       const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
       return (
         <CopyableBubble text={message.payload.content}>
           <div className="flex justify-end">
-            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
+            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
               {showUserText && (
-                <div className="markdown-content text-sm leading-relaxed">
+                <div className="markdown-content text-sm leading-relaxed text-text-primary">
                   <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                     {message.payload.content}
                   </Markdown>
                 </div>
               )}
               <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
-              <p className="mt-1 text-right text-[10px] text-white/60">
+              <p className="mt-1 text-right text-[10px] text-text-muted">
                 {formatTime(message.timestamp)}
               </p>
             </div>
@@ -56,7 +58,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
             <div className="mt-0.5 shrink-0">
               <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
             </div>
-            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            <div className="agent-bubble min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm sm:max-w-[70%]" style={hueVars}>
               <div className="markdown-content text-sm leading-relaxed text-text-primary">
                 <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                   {message.payload.content}
@@ -128,10 +130,10 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
     case 'send_input':
       return (
         <div className="flex justify-end">
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            {message.payload.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.payload.text}</p>}
+          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            {message.payload.text !== IMAGE_PLACEHOLDER && <p className="text-sm text-text-primary">{message.payload.text}</p>}
             <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
-            <p className="mt-1 text-right text-[10px] text-white/60">
+            <p className="mt-1 text-right text-[10px] text-text-muted">
               {formatTime(message.timestamp)}
             </p>
           </div>
@@ -208,7 +210,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
             <div className="mt-0.5 shrink-0">
               <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
             </div>
-            <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            <div className="agent-bubble min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm sm:max-w-[70%]" style={hueVars}>
               <div className="markdown-content text-sm leading-relaxed text-text-primary">
                 <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                   {message.payload.question}
@@ -221,9 +223,9 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
           </div>
           {answer && (
             <div className="flex justify-end">
-              <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-                <p className="text-sm">{answer}</p>
-                <p className="mt-1 text-right text-[10px] text-white/60">
+              <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+                <p className="text-sm text-text-primary">{answer}</p>
+                <p className="mt-1 text-right text-[10px] text-text-muted">
                   {formatTime(message.timestamp)}
                 </p>
               </div>
@@ -241,9 +243,9 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
     case 'answer':
       return (
         <div className="flex justify-end">
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-600 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            <p className="text-[10px] font-medium text-white/70">Answer</p>
-            <p className="text-sm">{message.payload.answer}</p>
+          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            <p className="text-[10px] font-medium text-text-secondary">Answer</p>
+            <p className="text-sm text-text-primary">{message.payload.answer}</p>
           </div>
         </div>
       );
@@ -254,11 +256,11 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
     case 'pending_input':
       return (
         <div className="flex justify-end">
-          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500/70 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
-            {message.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.text}</p>}
+          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-ocean-500/5 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+            {message.text !== IMAGE_PLACEHOLDER && <p className="text-sm text-text-primary">{message.text}</p>}
             <ImageAttachments attachments={message.attachments as Attachment[] | undefined} />
-            <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-white/60">
-              <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/90" />
+            <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-text-muted">
+              <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-text-muted/40 border-t-text-muted/90" />
               Sending…
             </p>
           </div>

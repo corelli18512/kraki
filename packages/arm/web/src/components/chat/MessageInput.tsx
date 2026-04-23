@@ -15,7 +15,7 @@ const MODE_COLORS: Record<typeof MODES[number], { pill: string; text: string }> 
   safe:     { pill: 'bg-emerald-400/80 dark:bg-emerald-500/60', text: 'text-emerald-900 dark:text-emerald-100' },
   discuss:  { pill: 'bg-ocean-400/80 dark:bg-ocean-500/60',     text: 'text-ocean-900 dark:text-ocean-100' },
   execute:  { pill: 'bg-amber-400/80 dark:bg-amber-500/60',     text: 'text-amber-900 dark:text-amber-100' },
-  delegate: { pill: 'bg-kraki-400/80 dark:bg-kraki-500/60',     text: 'text-kraki-900 dark:text-kraki-100' },
+  delegate: { pill: 'bg-accent-400/80 dark:bg-accent-500/60',     text: 'text-accent-900 dark:text-accent-100' },
 };
 
 export function MessageInput({ sessionId }: { sessionId: string }) {

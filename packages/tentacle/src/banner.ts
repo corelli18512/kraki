@@ -10,7 +10,7 @@ const data = bannerData as { lines: string[]; colors: [number, number, number, n
 
 const SCRAMBLE = '!@#$%^&*=+<>~/';
 const TITLE = 'KRAKI';
-const TITLE_COLORS = ['#00c9a7', '#00b4d8', '#ea6046', '#0891b2', '#ea6046'];
+const TITLE_COLORS = ['#00c9a7', '#00b4d8', '#e74867', '#0891b2', '#e74867'];
 
 const BLOCK_MAP: Record<string, string> = {
   '.': '░', ':': '░', '-': '▒', '=': '▓', '+': '█', '*': '█', '#': '█', '%': '█', '@': '█',
