@@ -395,6 +395,7 @@ export const useStore = create<Store>()(persist((set) => ({
   },
 
   clearTransientState: () => set({
+    lastError: null,
     streamingContent: new Map(),
     sessionUsage: new Map(),
     pendingPermissions: new Map(),

@@ -458,9 +458,9 @@ export class HeadServer {
     }
   }
 
-  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string): void {
+  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }) }));
+      ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
     }
   }
 
@@ -703,7 +703,8 @@ export class HeadServer {
 
     if (!result.ok) {
       const redirect = result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined;
-      this.sendAuthError(ws, result.code as AuthErrorCode, result.message, redirect);
+      const deviceId = result.code === 'wrong_region' ? (result as { deviceId?: string }).deviceId : undefined;
+      this.sendAuthError(ws, result.code as AuthErrorCode, result.message, redirect, deviceId);
       return;
     }
 

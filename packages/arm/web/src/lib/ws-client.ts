@@ -404,6 +404,7 @@ export class KrakiWSClient {
       case 'auth_error':
         processAuthError(msg as AuthErrorMessage, this.transport.storedDeviceId, {
           clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
+          setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
           connect: () => this.connect(),
           redirectToRelay: (url: string) => this.transport.redirectToRelay(url),

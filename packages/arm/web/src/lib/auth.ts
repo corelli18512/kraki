@@ -121,10 +121,11 @@ export function processAuthOk(
 
 /** Process auth_error: return to login page with error message. */
 export function processAuthError(
-  authError: { code?: string; redirect?: string; message?: string },
+  authError: { code?: string; redirect?: string; deviceId?: string; message?: string },
   storedDeviceId: string | undefined,
   deps: {
     clearStoredDeviceId: () => void;
+    setStoredDeviceId: (id: string) => void;
     disconnect: () => void;
     connect: () => void;
     redirectToRelay: (url: string) => void;
@@ -133,8 +134,12 @@ export function processAuthError(
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
   if (authError.code === 'wrong_region' && authError.redirect) {
-    if (storedDeviceId) {
-      saveStoredDevice({ relay: authError.redirect, deviceId: storedDeviceId });
+    // Use deviceId from the response (server registers device before region check),
+    // falling back to any existing storedDeviceId
+    const deviceId = authError.deviceId ?? storedDeviceId;
+    if (deviceId) {
+      saveStoredDevice({ relay: authError.redirect, deviceId });
+      deps.setStoredDeviceId(deviceId);
     }
     store.setLastError('Switching to your assigned region...');
     deps.redirectToRelay(authError.redirect);

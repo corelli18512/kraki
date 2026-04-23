@@ -43,6 +43,7 @@ export interface AuthRegionMismatch {
   ok: false;
   code: 'wrong_region';
   redirect?: string;
+  deviceId?: string;
   message: string;
 }
 

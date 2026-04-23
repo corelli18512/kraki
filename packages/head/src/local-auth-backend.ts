@@ -384,11 +384,8 @@ export class LocalAuthBackend implements AuthBackend {
       this.storage.setUserRegion(authUser.id, userRegion);
     }
 
-    // Region check
-    const regionCheck = this.checkRegion(authUser.id, headRegion);
-    if (regionCheck) return regionCheck;
-
-    // Register device
+    // Register device before region check so the deviceId is available
+    // for challenge auth after a wrong_region redirect
     const deviceId = device.deviceId ?? `dev_${uuid().slice(0, 12)}`;
     try {
       this.storage.upsertDevice(
@@ -399,6 +396,10 @@ export class LocalAuthBackend implements AuthBackend {
       logger.warn('Device registration failed', { error: (err as Error).message });
       return { ok: false, code: 'device_registration_failed', message: (err as Error).message };
     }
+
+    // Region check — include deviceId so client can use challenge auth after redirect
+    const regionCheck = this.checkRegion(authUser.id, headRegion);
+    if (regionCheck) return { ...regionCheck, deviceId };
 
     const fullUser = this.storage.getUser(authUser.id);
 
