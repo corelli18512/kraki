@@ -312,8 +312,10 @@ export function useScrollController(
       setUnreadCount(0);
     }
 
-    // Gap loading: when user scrolls near the top, load older messages
-    if (sessionId && el.scrollTop < GAP_LOAD_TOP_THRESHOLD_PX && firstSeq > 1) {
+    // Gap loading: when user scrolls near the top, load older messages.
+    // Guard: only when content overflows the viewport (scrollHeight > clientHeight),
+    // otherwise scrollTop=0 just means everything fits — not "user is at the top".
+    if (sessionId && el.scrollTop < GAP_LOAD_TOP_THRESHOLD_PX && firstSeq > 1 && el.scrollHeight > el.clientHeight) {
       if (!messageProvider.isLoading(sessionId)) {
         const toSeq = firstSeq - 1;
         const fromSeq = Math.max(1, toSeq - 99);
