@@ -9,7 +9,6 @@ import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { useTurns } from '../../hooks/useTurns';
 import { useScrollController } from '../../hooks/useScrollController';
-import { GapMarker } from './GapMarker';
 import type { ChatMessage } from '../../types/store';
 import type { Attachment } from '@kraki/protocol';
 
@@ -74,12 +73,11 @@ export const ChatView = memo(function ChatView() {
     [messages, pendingPermIds],
   );
 
-  // First seq for gap detection / prepend tracking
+  // First seq for prepend tracking (passed to scroll controller)
   const firstSeq = useMemo(() => {
     const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
     return seqs.length > 0 ? seqs[0] : 0;
   }, [filteredMessages]);
-  const hasOlderMessages = firstSeq > 1;
 
   const rawGrouped = useTurns(filteredMessages);
 
@@ -120,7 +118,7 @@ export const ChatView = memo(function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const { showScrollBtn, unreadCount, scrollToBottom, handleScroll } = useScrollController(
+  const { showScrollBtn, unreadCount, scrollToBottom, handleScroll, hasOlderMessages } = useScrollController(
     scrollRef,
     grouped,
     streaming,
@@ -154,7 +152,9 @@ export const ChatView = memo(function ChatView() {
         >
           <div className="mx-auto max-w-3xl space-y-3">
             {hasOlderMessages && (
-              <GapMarker sessionId={sessionId!} beforeSeq={firstSeq} scrollRef={scrollRef} />
+              <div className="flex justify-center py-3">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
+              </div>
             )}
             {grouped.map((item, idx) => {
               if (item.type === 'standalone') {

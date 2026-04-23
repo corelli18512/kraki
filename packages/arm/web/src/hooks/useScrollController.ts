@@ -12,11 +12,13 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react
 import type { RefObject } from 'react';
 import type { GroupedMessages } from './useTurns';
 import type { ChatMessage } from '../types/store';
+import { messageProvider } from '../lib/message-provider';
 import { createLogger } from '../lib/logger';
 
 const logger = createLogger('scroll-ctrl');
 
 const BOTTOM_STICKY_THRESHOLD_PX = 40;
+const GAP_LOAD_TOP_THRESHOLD_PX = 200;
 const IDLE_SCROLL_OVERFLOW_PX = 120;
 
 // ── Helpers ─────────────────────────────────────────────
@@ -91,8 +93,9 @@ interface ScrollCtx {
   prevStreamLen: number;
   wasIdle: boolean;
 
-  // Idle reposition — suppresses unread count for the turn that just completed
+  // Reposition flags — suppress false unread badge after deliberate scroll
   idleRepositioned: boolean;
+  entryRepositioned: boolean;
 
   // Session tracking (for inline change detection)
   prevSessionId: string | undefined;
@@ -112,6 +115,7 @@ function makeCtx(): ScrollCtx {
     prevStreamLen: 0,
     wasIdle: false,
     idleRepositioned: false,
+    entryRepositioned: false,
     prevSessionId: undefined,
   };
 }
@@ -123,6 +127,8 @@ export interface ScrollController {
   unreadCount: number;
   scrollToBottom: () => void;
   handleScroll: () => void;
+  /** Whether older messages exist above the loaded range */
+  hasOlderMessages: boolean;
 }
 
 export function useScrollController(
@@ -137,6 +143,8 @@ export function useScrollController(
   const ctx = useRef(makeCtx());
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  const hasOlderMessages = firstSeq > 1;
 
   // ── Session change detection (inline, before effects) ─
   // Critical: entryPending and entryHadUnread MUST be set during
@@ -157,10 +165,14 @@ export function useScrollController(
       c.prevStreamLen = 0;
       c.wasIdle = sessionIdle;
       c.idleRepositioned = false;
+      c.entryRepositioned = false;
     }
     c.prevSessionId = sessionId;
     c.entryPending = true;
-    c.entryHadUnread = storeUnread > 0;
+    // Only use unread entry path when messages are actually loaded AND store
+    // reports unreads. Before session_list arrives, messages are empty and
+    // storeUnread may be stale from localStorage — skip the unread path.
+    c.entryHadUnread = storeUnread > 0 && grouped.length > 0;
   }
 
   // ── Prepend detection (inline, before effects) ────────
@@ -206,6 +218,7 @@ export function useScrollController(
     if (c.entryPending) {
       if (c.entryHadUnread && scrollToTarget(el)) {
         c.sticky = false;
+        c.entryRepositioned = true;
         logger.info('scroll: ① entry → target (unread)');
       } else {
         scrollToMax(el);
@@ -247,6 +260,17 @@ export function useScrollController(
 
     c.prevHeight = el.scrollHeight;
     c.wasIdle = sessionIdle;
+
+    // If content is shorter than the viewport and there are older messages,
+    // trigger a gap load immediately — no scroll event will ever fire.
+    if (sessionId && el.scrollHeight <= el.clientHeight && firstSeq > 1) {
+      if (!messageProvider.isLoading(sessionId)) {
+        const toSeq = firstSeq - 1;
+        const fromSeq = Math.max(1, toSeq - 99);
+        logger.info('scroll: gap load (short content)', { sessionId, fromSeq, toSeq });
+        messageProvider.fetchRange(sessionId, fromSeq, toSeq);
+      }
+    }
   });
 
   // ── Effect 3: Unread counting (after paint) ───────────
@@ -267,10 +291,11 @@ export function useScrollController(
       (curHasFinal && !c.prevHadFinal)
     );
 
-    if (c.idleRepositioned) {
-      // Step ③ just repositioned the viewport to show the completed response —
-      // the user is reading it, not scrolled away. Don't count as unread.
+    if (c.idleRepositioned || c.entryRepositioned) {
+      // Step ① or ③ just repositioned the viewport deliberately —
+      // the user is reading the content, not scrolled away. Don't count as unread.
       c.idleRepositioned = false;
+      c.entryRepositioned = false;
     } else if (newBubbleAtEnd && !isFromUser && !c.sticky) {
       setUnreadCount((n) => n + 1);
       setShowScrollBtn(true);
@@ -289,13 +314,25 @@ export function useScrollController(
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+
+    // Bottom tracking
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     ctx.current.sticky = distance < BOTTOM_STICKY_THRESHOLD_PX;
     if (ctx.current.sticky) {
       setShowScrollBtn(false);
       setUnreadCount(0);
     }
-  }, [scrollRef]);
+
+    // Gap loading: when user scrolls near the top, load older messages
+    if (sessionId && el.scrollTop < GAP_LOAD_TOP_THRESHOLD_PX && firstSeq > 1) {
+      if (!messageProvider.isLoading(sessionId)) {
+        const toSeq = firstSeq - 1;
+        const fromSeq = Math.max(1, toSeq - 99);
+        logger.info('scroll: gap load (near top)', { sessionId, fromSeq, toSeq });
+        messageProvider.fetchRange(sessionId, fromSeq, toSeq);
+      }
+    }
+  }, [scrollRef, sessionId, firstSeq]);
 
   // ── scrollToBottom (button click) ─────────────────────
 
@@ -309,5 +346,5 @@ export function useScrollController(
     setUnreadCount(0);
   }, [scrollRef]);
 
-  return { showScrollBtn, unreadCount, scrollToBottom, handleScroll };
+  return { showScrollBtn, unreadCount, scrollToBottom, handleScroll, hasOlderMessages };
 }
