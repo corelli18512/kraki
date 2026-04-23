@@ -211,6 +211,17 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   ];
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
+  // Forward proxy and other relevant env vars so the daemon can reach
+  // external services (e.g. Copilot API behind a proxy).
+  const forwardVars = [
+    'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
+    'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
+    'GITHUB_TOKEN', 'GH_TOKEN',
+  ];
+  for (const key of forwardVars) {
+    if (process.env[key]) envEntries.push([key, process.env[key]!]);
+  }
+
   const envXml = envEntries
     .map(([k, v]) => `        <key>${k}</key>\n        <string>${escapeXml(v)}</string>`)
     .join('\n');
