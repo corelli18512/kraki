@@ -260,17 +260,6 @@ export function useScrollController(
 
     c.prevHeight = el.scrollHeight;
     c.wasIdle = sessionIdle;
-
-    // If content is shorter than the viewport and there are older messages,
-    // trigger a gap load immediately — no scroll event will ever fire.
-    if (sessionId && el.scrollHeight <= el.clientHeight && firstSeq > 1) {
-      if (!messageProvider.isLoading(sessionId)) {
-        const toSeq = firstSeq - 1;
-        const fromSeq = Math.max(1, toSeq - 99);
-        logger.info('scroll: gap load (short content)', { sessionId, fromSeq, toSeq });
-        messageProvider.fetchRange(sessionId, fromSeq, toSeq);
-      }
-    }
   });
 
   // ── Effect 3: Unread counting (after paint) ───────────
