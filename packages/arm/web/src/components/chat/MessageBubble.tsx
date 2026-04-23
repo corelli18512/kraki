@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
+import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { Lock, Check, X, LockOpen, CircleStop, Copy } from 'lucide-react';
