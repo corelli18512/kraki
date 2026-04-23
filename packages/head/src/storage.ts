@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'crypto';
 import Database from 'better-sqlite3';
 
 // --- Row types for SQLite result mapping ---
@@ -8,6 +9,7 @@ interface UserRow {
   provider: string;
   email: string | null;
   preferences: string | null;
+  region: string | null;
   created_at: string;
 }
 
@@ -21,6 +23,33 @@ interface DeviceRow {
   encryption_key: string | null;
   last_seen: string;
   created_at: string;
+}
+
+interface RegionRow {
+  code: string;
+  relay_url: string;
+  display_name: string | null;
+  enabled: number;
+  registered_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+}
+
+interface EdgeJoinTokenRow {
+  token_hash: string;
+  region: string;
+  relay_url: string;
+  display_name: string | null;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+}
+
+interface EdgeServiceRow {
+  region: string;
+  service_key_hash: string;
+  issued_at: string;
+  last_seen_at: string | null;
 }
 
 // --- Public stored types ---
@@ -53,13 +82,37 @@ export interface StoredUser {
   provider: string;
   email?: string;
   preferences?: Record<string, unknown>;
+  region?: string;
   createdAt: string;
 }
 
-const SCHEMA_VERSION = 4;
+export interface StoredRegion {
+  code: string;
+  relayUrl: string;
+  displayName?: string;
+  enabled: boolean;
+  registeredAt: string;
+  updatedAt: string;
+  lastSeenAt?: string;
+}
+
+const SCHEMA_VERSION = 7;
 
 export class Storage {
   private db: Database.Database;
+
+  private static hashSecret(secret: string): string {
+    return createHash('sha256').update(secret).digest('hex');
+  }
+
+  private static normalizeRegionCode(region: string): string {
+    const value = region.trim().toLowerCase();
+    if (!value) throw new Error('Region code is required');
+    if (!/^[a-z0-9_-]+$/.test(value)) {
+      throw new Error(`Invalid region code "${region}". Use letters, numbers, - or _.`);
+    }
+    return value;
+  }
 
   constructor(dbPath: string = ':memory:') {
     this.db = new Database(dbPath);
@@ -133,30 +186,101 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 5) {
+      try {
+        this.db.exec(`ALTER TABLE users ADD COLUMN region TEXT`);
+      } catch {
+        // Column may already exist
+      }
+    }
+
+    if (currentVersion < 6) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS regions (
+          code          TEXT PRIMARY KEY,
+          relay_url     TEXT NOT NULL,
+          display_name  TEXT,
+          enabled       INTEGER NOT NULL DEFAULT 1,
+          registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          last_seen_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_regions_enabled ON regions(enabled);
+
+        CREATE TABLE IF NOT EXISTS edge_join_tokens (
+          token_hash    TEXT PRIMARY KEY,
+          region        TEXT,
+          relay_url     TEXT,
+          display_name  TEXT,
+          expires_at    TEXT NOT NULL,
+          used_at       TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_edge_join_tokens_expires ON edge_join_tokens(expires_at);
+
+        CREATE TABLE IF NOT EXISTS edge_services (
+          region            TEXT PRIMARY KEY,
+          service_key_hash  TEXT NOT NULL,
+          issued_at         TEXT NOT NULL DEFAULT (datetime('now')),
+          last_seen_at      TEXT
+        );
+      `);
+    }
+
+    if (currentVersion < 7) {
+      // Make region and relay_url nullable (edge provides them at join time)
+      try {
+        const rows = this.db.prepare('SELECT token_hash, region, relay_url, display_name, expires_at, used_at, created_at FROM edge_join_tokens').all();
+        this.db.exec('DROP TABLE IF EXISTS edge_join_tokens');
+        this.db.exec(`
+          CREATE TABLE edge_join_tokens (
+            token_hash    TEXT PRIMARY KEY,
+            region        TEXT,
+            relay_url     TEXT,
+            display_name  TEXT,
+            expires_at    TEXT NOT NULL,
+            used_at       TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE INDEX IF NOT EXISTS idx_edge_join_tokens_expires ON edge_join_tokens(expires_at);
+        `);
+        const ins = this.db.prepare('INSERT INTO edge_join_tokens (token_hash, region, relay_url, display_name, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        for (const row of rows as Array<{ token_hash: string; region: string | null; relay_url: string | null; display_name: string | null; expires_at: string; used_at: string | null; created_at: string }>) {
+          ins.run(row.token_hash, row.region, row.relay_url, row.display_name, row.expires_at, row.used_at, row.created_at);
+        }
+      } catch {
+        // Table may not exist yet on fresh DBs
+      }
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }
 
   // --- Users ---
 
-  upsertUser(userId: string, username: string, provider?: string, email?: string): StoredUser {
+  upsertUser(userId: string, username: string, provider?: string, email?: string, region?: string): StoredUser {
     this.db.prepare(`
-      INSERT INTO users (user_id, username, provider, email)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO users (user_id, username, provider, email, region)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, provider = excluded.provider, email = excluded.email
-    `).run(userId, username, provider ?? 'open', email ?? null);
+    `).run(userId, username, provider ?? 'open', email ?? null, region ?? null);
     return this.getUser(userId)!;
   }
 
   getUser(userId: string): StoredUser | undefined {
     const row = this.db.prepare(
-      'SELECT user_id, username, provider, email, preferences, created_at FROM users WHERE user_id = ?'
+      'SELECT user_id, username, provider, email, preferences, region, created_at FROM users WHERE user_id = ?'
     ).get(userId) as UserRow | undefined;
     if (!row) return undefined;
     let prefs: Record<string, unknown> | undefined;
     if (row.preferences) {
       try { prefs = JSON.parse(row.preferences); } catch { /* ignore */ }
     }
-    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, preferences: prefs, createdAt: row.created_at };
+    return { userId: row.user_id, username: row.username, provider: row.provider, email: row.email ?? undefined, preferences: prefs, region: row.region ?? undefined, createdAt: row.created_at };
+  }
+
+  setUserRegion(userId: string, region: string): void {
+    this.db.prepare('UPDATE users SET region = ? WHERE user_id = ?').run(region, userId);
   }
 
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
@@ -165,6 +289,163 @@ export class Storage {
     const merged = { ...(existing.preferences ?? {}), ...preferences };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+  }
+
+  // --- Region registry ---
+
+  upsertRegion(code: string, relayUrl: string, displayName?: string, enabled = true): StoredRegion {
+    const normalizedCode = Storage.normalizeRegionCode(code);
+    const trimmedRelayUrl = relayUrl.trim();
+    if (!trimmedRelayUrl) throw new Error('Relay URL is required');
+
+    this.db.prepare(`
+      INSERT INTO regions (code, relay_url, display_name, enabled)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(code) DO UPDATE SET
+        relay_url = excluded.relay_url,
+        display_name = excluded.display_name,
+        enabled = excluded.enabled,
+        updated_at = datetime('now')
+    `).run(normalizedCode, trimmedRelayUrl, displayName ?? null, enabled ? 1 : 0);
+
+    return this.getRegion(normalizedCode)!;
+  }
+
+  getRegion(code: string): StoredRegion | undefined {
+    const row = this.db.prepare(`
+      SELECT code, relay_url, display_name, enabled, registered_at, updated_at, last_seen_at
+      FROM regions WHERE code = ?
+    `).get(Storage.normalizeRegionCode(code)) as RegionRow | undefined;
+    if (!row) return undefined;
+    return this.mapRegionRow(row);
+  }
+
+  getRegions(enabledOnly = false): StoredRegion[] {
+    const rows = enabledOnly
+      ? this.db.prepare(`
+          SELECT code, relay_url, display_name, enabled, registered_at, updated_at, last_seen_at
+          FROM regions WHERE enabled = 1 ORDER BY code
+        `).all()
+      : this.db.prepare(`
+          SELECT code, relay_url, display_name, enabled, registered_at, updated_at, last_seen_at
+          FROM regions ORDER BY code
+        `).all();
+    return (rows as RegionRow[]).map(row => this.mapRegionRow(row));
+  }
+
+  touchRegion(code: string): void {
+    this.db.prepare('UPDATE regions SET last_seen_at = datetime(\'now\') WHERE code = ?')
+      .run(Storage.normalizeRegionCode(code));
+  }
+
+  getRegionVersion(): number {
+    const row = this.db.prepare(`
+      SELECT MAX(CAST(strftime('%s', COALESCE(last_seen_at, updated_at, registered_at)) AS INTEGER)) AS version
+      FROM regions
+      WHERE enabled = 1
+    `).get() as { version: number | null };
+    return Number(row.version ?? 0);
+  }
+
+  private mapRegionRow(row: RegionRow): StoredRegion {
+    return {
+      code: row.code,
+      relayUrl: row.relay_url,
+      displayName: row.display_name ?? undefined,
+      enabled: row.enabled === 1,
+      registeredAt: row.registered_at,
+      updatedAt: row.updated_at,
+      lastSeenAt: row.last_seen_at ?? undefined,
+    };
+  }
+
+  // --- Edge registration / service credentials ---
+
+  issueEdgeJoinToken(expiresIn = 300): {
+    token: string;
+    expiresIn: number;
+  } {
+    const ttl = Math.max(60, Math.floor(expiresIn));
+    const token = `kjt_${randomBytes(18).toString('hex')}`;
+    const tokenHash = Storage.hashSecret(token);
+
+    this.db.prepare(`
+      INSERT INTO edge_join_tokens (token_hash, expires_at)
+      VALUES (?, datetime('now', '+' || ? || ' seconds'))
+    `).run(tokenHash, ttl);
+
+    return { token, expiresIn: ttl };
+  }
+
+  consumeEdgeJoinToken(token: string, region: string, relayUrl: string, displayName?: string): (
+    { ok: true; region: string; relayUrl: string; displayName?: string }
+    | { ok: false; code: string; message: string }
+  ) {
+    const normalizedRegion = Storage.normalizeRegionCode(region);
+    const trimmedRelayUrl = relayUrl.trim();
+    if (!trimmedRelayUrl) {
+      return { ok: false, code: 'bad_request', message: 'relayUrl is required' };
+    }
+
+    const tokenHash = Storage.hashSecret(token);
+    const row = this.db.prepare(`
+      SELECT token_hash, region, relay_url, display_name, expires_at, used_at, created_at
+      FROM edge_join_tokens
+      WHERE token_hash = ?
+    `).get(tokenHash) as EdgeJoinTokenRow | undefined;
+
+    if (!row) {
+      return { ok: false, code: 'invalid_join_token', message: 'Join token not found' };
+    }
+    if (row.used_at) {
+      return { ok: false, code: 'join_token_used', message: 'Join token has already been used' };
+    }
+
+    const expiresAt = new Date(`${row.expires_at.replace(' ', 'T')}Z`).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      return { ok: false, code: 'join_token_expired', message: 'Join token has expired' };
+    }
+
+    this.db.prepare('UPDATE edge_join_tokens SET used_at = datetime(\'now\'), region = ?, relay_url = ?, display_name = ? WHERE token_hash = ?')
+      .run(normalizedRegion, trimmedRelayUrl, displayName ?? null, tokenHash);
+
+    return {
+      ok: true,
+      region: normalizedRegion,
+      relayUrl: trimmedRelayUrl,
+      displayName: displayName ?? undefined,
+    };
+  }
+
+  issueRegionServiceKey(region: string): { region: string; serviceKey: string } {
+    const normalizedRegion = Storage.normalizeRegionCode(region);
+    const serviceKey = `ksk_${randomBytes(24).toString('hex')}`;
+    const serviceKeyHash = Storage.hashSecret(serviceKey);
+
+    this.db.prepare(`
+      INSERT INTO edge_services (region, service_key_hash)
+      VALUES (?, ?)
+      ON CONFLICT(region) DO UPDATE SET
+        service_key_hash = excluded.service_key_hash,
+        issued_at = datetime('now'),
+        last_seen_at = NULL
+    `).run(normalizedRegion, serviceKeyHash);
+
+    return { region: normalizedRegion, serviceKey };
+  }
+
+  validateServiceKey(serviceKey: string): { valid: true; region: string } | { valid: false } {
+    const row = this.db.prepare(`
+      SELECT region, service_key_hash, issued_at, last_seen_at
+      FROM edge_services
+      WHERE service_key_hash = ?
+    `).get(Storage.hashSecret(serviceKey)) as EdgeServiceRow | undefined;
+
+    if (!row) return { valid: false };
+
+    this.db.prepare('UPDATE edge_services SET last_seen_at = datetime(\'now\') WHERE region = ?').run(row.region);
+    this.touchRegion(row.region);
+    return { valid: true, region: row.region };
   }
 
   // --- Devices ---
@@ -370,11 +651,11 @@ export class Storage {
 
   getAllUsers(): StoredUser[] {
     const rows = this.db.prepare(
-      'SELECT user_id, username, provider, email, preferences, created_at FROM users ORDER BY created_at'
+      'SELECT user_id, username, provider, email, preferences, region, created_at FROM users ORDER BY created_at'
     ).all() as UserRow[];
     return rows.map(row => ({
       userId: row.user_id, username: row.username, provider: row.provider,
-      email: row.email ?? undefined, createdAt: row.created_at,
+      email: row.email ?? undefined, region: row.region ?? undefined, createdAt: row.created_at,
     }));
   }
 

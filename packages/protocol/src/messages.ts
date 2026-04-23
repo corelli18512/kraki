@@ -568,7 +568,7 @@ export interface AuthOkMessage {
   deviceId: string;
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
-  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown> };
+  user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
@@ -590,13 +590,16 @@ export type AuthErrorCode =
   | 'device_not_found'
   | 'invalid_signature'
   | 'user_not_found'
-  | 'device_registration_failed';
+  | 'device_registration_failed'
+  | 'wrong_region';
 
 export interface AuthErrorMessage {
   type: 'auth_error';
   /** Machine-readable auth failure reason for client behavior */
   code: AuthErrorCode;
   message: string;
+  /** When code is 'wrong_region', the correct relay URL to connect to */
+  redirect?: string;
 }
 
 export interface AuthChallengeMessage {

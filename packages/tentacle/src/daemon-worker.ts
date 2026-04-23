@@ -29,7 +29,7 @@ import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { createLogger } from './logger.js';
-import { initStatusFile, updateRelayState, clearStatusFile } from './status-file.js';
+import { initStatusFile, updateRelayState, updateRegion, clearStatusFile } from './status-file.js';
 import type { AgentAdapter } from './adapters/base.js';
 
 const logger = createLogger('daemon');
@@ -154,8 +154,12 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.info({
       deviceId: info.deviceId,
       user: info.user?.login,
+      region: info.user?.region,
       devices: info.devices.length,
     }, 'Connected to relay');
+    if (info.user?.region) {
+      updateRegion(info.user.region);
+    }
   };
 
   relay.onFatalError = (message) => {

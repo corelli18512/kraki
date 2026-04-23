@@ -78,6 +78,7 @@ function installToPath(): void {
 }
 
 const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
+const OFFICIAL_API = 'https://kraki.corelli.cloud';
 
 function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
 const icon = '◈';
@@ -272,10 +273,175 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
 export async function runSetup(): Promise<KrakiConfig> {
   await printAnimatedBanner();
 
+  // Self-hosted relay override — skip login-first routing
+  const customRelay = process.env.KRAKI_RELAY_URL;
+  if (customRelay) {
+    return runSetupDirect(customRelay);
+  }
+
+  const total = 4;
+  const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
+
+  // 1. Authentication
+  console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Authentication')}`);
+
+  let ghToken: string | undefined;
+  const spinner = ora({ text: 'Checking GitHub CLI…', indent: 4 }).start();
+  const ghResult = checkGhAuth();
+  if (ghResult.authenticated) {
+    spinner.succeed(`Authenticated via GitHub CLI as ${chalk.bold(ghResult.username ?? 'unknown')}`);
+    try {
+      const { execSync } = await import('node:child_process');
+      ghToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
+    } catch { /* ignore */ }
+  } else {
+    // Try device flow — need GitHub client ID from the API first
+    spinner.info('GitHub CLI not authenticated — signing in via browser');
+    let clientId: string | undefined;
+    try {
+      const configRes = await fetch(`${apiBase}/api/config`, { signal: AbortSignal.timeout(5000) });
+      const configData = await configRes.json() as { githubClientId?: string };
+      clientId = configData.githubClientId;
+    } catch { /* ignore */ }
+
+    if (!clientId) {
+      // Fall back to querying the relay directly for client ID
+      try {
+        const info = await queryRelayInfo(OFFICIAL_RELAY);
+        clientId = info.githubClientId;
+      } catch { /* ignore */ }
+    }
+
+    if (!clientId) {
+      throw new Error('Could not obtain GitHub client ID. Install GitHub CLI and run: gh auth login');
+    }
+    ghToken = await githubDeviceFlow(clientId);
+  }
+
+  divider();
+
+  // 2. Resolve region + relay URL
+  console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Relay')}`);
+  let relay: string;
+  let region: string | undefined;
+
+  const resolveSpinner = ora({ text: 'Finding best relay…', indent: 4 }).start();
+  try {
+    const resolveRes = await fetch(`${apiBase}/api/login/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth: { method: 'github_token', token: ghToken } }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const resolveData = await resolveRes.json() as {
+      ok?: boolean;
+      region?: string;
+      relayUrl?: string;
+      user?: { login?: string };
+    };
+
+    if (resolveData.ok && resolveData.relayUrl) {
+      relay = resolveData.relayUrl;
+      region = resolveData.region;
+      resolveSpinner.succeed(`Relay assigned${region ? ` (${region})` : ''}`);
+    } else {
+      resolveSpinner.info('Could not resolve relay — using default');
+      relay = OFFICIAL_RELAY;
+    }
+  } catch {
+    resolveSpinner.info('Could not reach API — using default relay');
+    relay = OFFICIAL_RELAY;
+  }
+
+  // Verify relay is reachable
+  const connSpinner = ora({ text: 'Verifying relay…', indent: 4 }).start();
+  try {
+    await queryRelayInfo(relay);
+    connSpinner.succeed('Relay is reachable');
+  } catch (err) {
+    connSpinner.fail(`Cannot reach relay: ${(err as Error).message}`);
+    // Fall back to manual input
+    relay = await promptRelayUrl(OFFICIAL_RELAY);
+  }
+
+  divider();
+
+  // 3. Agent check
+  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agent Verification')}`);
+  if (isSea()) {
+    const agentSpinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
+    const copilotResult = await withRetry(
+      checkCopilotCli,
+      'Copilot CLI',
+      'Install from https://docs.github.com/copilot/how-tos/copilot-cli',
+      agentSpinner,
+    );
+    agentSpinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
+
+    const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
+    const hasGhToken = checkGhAuth().authenticated;
+    const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
+    if (hasGhToken || hasEnvToken) {
+      authSpinner.succeed('Copilot authentication available');
+    } else {
+      authSpinner.succeed('Copilot authentication available (via Copilot login)');
+    }
+  } else {
+    const agentSpinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
+    agentSpinner.succeed('Copilot SDK available');
+  }
+
+  divider();
+
+  // 4. Device naming
+  console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Device Name')}`);
+  const defaultName = hostname().replace(/\.local$/, '');
+  const deviceName = await input({
+    message: 'Device name:',
+    theme: promptTheme,
+    default: defaultName,
+  });
+
+  // Build config
+  const deviceId = getOrCreateDeviceId();
+  const config: KrakiConfig = {
+    relay,
+    authMethod: 'github_token',
+    device: { name: deviceName, id: deviceId },
+    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
+  };
+
+  // Save
+  saveConfig(config);
+
+  // Install to PATH (silent — only for SEA binaries)
+  installToPath();
+
+  // Summary box
+  console.log('');
+  printBox([
+    `${chalk.green.bold('✔')} ${chalk.bold('Setup complete!')}`,
+    '',
+    `${chalk.dim('Relay')}    ${chalk.cyan(relay)}`,
+    ...(region ? [`${chalk.dim('Region')}   ${chalk.cyan(region)}`] : []),
+    `${chalk.dim('Auth')}     ${chalk.cyan('github_token')}`,
+    `${chalk.dim('Device')}   ${chalk.cyan(deviceName)}`,
+    `${chalk.dim('Logs')}     ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
+    '',
+    chalk.dim(`Config saved to ${getConfigPath()}`),
+  ]);
+
+  return config;
+}
+
+/**
+ * Direct setup — for self-hosted relays (KRAKI_RELAY_URL set).
+ * Connects to the relay, queries capabilities, does inline auth.
+ */
+async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
   const total = 4;
 
   // 1. Relay URL (with retry loop)
-  const defaultRelay = process.env.KRAKI_RELAY_URL ?? OFFICIAL_RELAY;
   let relay: string = defaultRelay;
   let relayInfo: RelayInfo = { methods: ['open'], pairing: true };
   let urlConfirmed = false;
@@ -290,10 +456,8 @@ export async function runSetup(): Promise<KrakiConfig> {
         return true;
       },
     });
-    // Add wss:// if no protocol given
     relay = relayHost.startsWith('wss://') || relayHost.startsWith('ws://') ? relayHost : `wss://${relayHost}`;
 
-    // Test relay connectivity and query auth info
     while (true) {
       const connSpinner = ora({ text: 'Querying relay…', indent: 4 }).start();
       try {
@@ -311,8 +475,7 @@ export async function runSetup(): Promise<KrakiConfig> {
             { name: '  Enter a different URL', value: 'change' },
           ],
         });
-        if (action === 'change') break; // back to URL input
-        // 'retry' continues the inner loop
+        if (action === 'change') break;
       }
     }
   }
@@ -320,8 +483,6 @@ export async function runSetup(): Promise<KrakiConfig> {
   divider();
 
   // 2. Auth method
-  // For GitHub-enabled relays: silently try gh CLI, fall back to device flow
-  // Only prompt if multiple non-GitHub methods are available
   const cliAuthLabels: Record<string, string> = {
     github_token: '  GitHub (recommended)',
     apikey: '  API key',
@@ -333,7 +494,6 @@ export async function runSetup(): Promise<KrakiConfig> {
   let authMethod: string;
 
   if (hasGitHub) {
-    // GitHub relay: auto-select, try CLI then device flow
     authMethod = 'github_token';
     console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
     const spinner = ora({ text: 'Checking GitHub CLI…', indent: 4 }).start();
@@ -364,19 +524,8 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   divider();
 
-  // 3. Device naming
-  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Device Name')}`);
-  const defaultName = hostname().replace(/\.local$/, '');
-  const deviceName = await input({
-    message: 'Device name:',
-    theme: promptTheme,
-    default: defaultName,
-  });
-
-  divider();
-
-  // 4. Agent check
-  console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Agent Verification')}`);
+  // 3. Agent check
+  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agent Verification')}`);
   if (isSea()) {
     const spinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
     const copilotResult = await withRetry(
@@ -387,9 +536,6 @@ export async function runSetup(): Promise<KrakiConfig> {
     );
     spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
 
-    // Check Copilot authentication — the adapter's own auth chain (SDK token
-    // store, copilot login, etc.) works even without gh auth or env vars, so
-    // we only show a soft hint rather than blocking on a false negative.
     const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
     const hasGhToken = checkGhAuth().authenticated;
     const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
@@ -402,7 +548,19 @@ export async function runSetup(): Promise<KrakiConfig> {
     const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
     spinner.succeed('Copilot SDK available');
   }
-  // 5. Build config
+
+  divider();
+
+  // 4. Device naming
+  console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Device Name')}`);
+  const defaultName = hostname().replace(/\.local$/, '');
+  const deviceName = await input({
+    message: 'Device name:',
+    theme: promptTheme,
+    default: defaultName,
+  });
+
+  // Build config
   const deviceId = getOrCreateDeviceId();
   const config: KrakiConfig = {
     relay,
@@ -411,13 +569,9 @@ export async function runSetup(): Promise<KrakiConfig> {
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 
-  // 6. Save
   saveConfig(config);
-
-  // 7. Install to PATH (silent — only for SEA binaries)
   installToPath();
 
-  // 8. Summary box
   console.log('');
   printBox([
     `${chalk.green.bold('✔')} ${chalk.bold('Setup complete!')}`,
@@ -431,6 +585,28 @@ export async function runSetup(): Promise<KrakiConfig> {
   ]);
 
   return config;
+}
+
+/**
+ * Prompt for relay URL with retry loop. Used as fallback when API is unreachable.
+ */
+async function promptRelayUrl(defaultRelay: string): Promise<string> {
+  while (true) {
+    const relayHost = await input({
+      message: 'Relay URL:',
+      default: defaultRelay.replace(/^wss?:\/\//, ''),
+      theme: promptTheme,
+    });
+    const relay = relayHost.startsWith('wss://') || relayHost.startsWith('ws://') ? relayHost : `wss://${relayHost}`;
+    const connSpinner = ora({ text: 'Verifying relay…', indent: 4 }).start();
+    try {
+      await queryRelayInfo(relay);
+      connSpinner.succeed('Relay is reachable');
+      return relay;
+    } catch (err) {
+      connSpinner.fail(`Cannot reach relay: ${(err as Error).message}`);
+    }
+  }
 }
 
 /**

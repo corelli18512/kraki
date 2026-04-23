@@ -202,6 +202,37 @@ describe('RelayClient auth negotiation', () => {
     const auth = JSON.parse(sockets[0].sent[0]);
     expect(auth.auth).toEqual({ method: 'open', sharedKey: 'shared-secret' });
   });
+
+  it('follows wrong_region redirects without surfacing a fatal auth error', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+
+    const fatal = vi.fn();
+    client.onFatalError = fatal;
+
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_error',
+      code: 'wrong_region',
+      message: 'Use the china relay',
+      redirect: 'ws://cn.example.com',
+    })));
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(fatal).not.toHaveBeenCalled();
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    expect(sockets.at(-1)?.url).toBe('ws://cn.example.com');
+  });
 });
 
 describe('RelayClient title generation', () => {

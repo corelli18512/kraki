@@ -121,15 +121,26 @@ export function processAuthOk(
 
 /** Process auth_error: return to login page with error message. */
 export function processAuthError(
+  authError: { code?: string; redirect?: string; message?: string },
   storedDeviceId: string | undefined,
   deps: {
     clearStoredDeviceId: () => void;
     disconnect: () => void;
     connect: () => void;
+    redirectToRelay: (url: string) => void;
   },
 ): void {
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
+  if (authError.code === 'wrong_region' && authError.redirect) {
+    if (storedDeviceId) {
+      saveStoredDevice({ relay: authError.redirect, deviceId: storedDeviceId });
+    }
+    store.setLastError('Switching to your assigned region...');
+    deps.redirectToRelay(authError.redirect);
+    return;
+  }
+
   if (storedDeviceId) {
     logger.warn('Auth failed for stored device, clearing credentials');
     localStorage.removeItem(STORAGE_KEY);
@@ -138,9 +149,9 @@ export function processAuthError(
       oauthAvailable
         ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
         : 'Authentication failed. Please scan a new pairing QR code.',
-    );
-    deps.disconnect();
-    deps.connect();
+      );
+      deps.disconnect();
+      deps.connect();
   } else {
     store.setReconnectState(0, null);
     store.setLastError(

@@ -4,7 +4,7 @@
  * Deleted on daemon shutdown.
  */
 
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getKrakiHome } from './config.js';
 
@@ -13,6 +13,7 @@ export interface DaemonStatusFile {
   relayState: 'disconnected' | 'connecting' | 'authenticating' | 'connected';
   relay: string;
   deviceName: string;
+  region?: string;
   updatedAt: number;
 }
 
@@ -38,8 +39,23 @@ export function updateRelayState(state: DaemonStatusFile['relayState']): void {
   writeStatus();
 }
 
+export function updateRegion(region: string): void {
+  _current = { ..._current, region, updatedAt: Date.now() };
+  writeStatus();
+}
+
 export function clearStatusFile(): void {
   try { unlinkSync(getStatusPath()); } catch { /* file may not exist */ }
+}
+
+export function readStatusFile(): DaemonStatusFile | null {
+  const path = getStatusPath();
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as DaemonStatusFile;
+  } catch {
+    return null;
+  }
 }
 
 function writeStatus(): void {

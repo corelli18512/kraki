@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockSelect = vi.fn();
 const mockInput = vi.fn();
@@ -87,65 +87,110 @@ vi.mock("../pair.js", () => ({
 
 import { runSetup } from "../setup.js";
 
+let originalFetch: typeof globalThis.fetch;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
+  originalFetch = globalThis.fetch;
+  // Remove KRAKI_RELAY_URL so login-first flow is used by default
+  delete process.env.KRAKI_RELAY_URL;
+  delete process.env.KRAKI_API_URL;
 });
 
-describe("runSetup — official relay + github", () => {
-  it("selects official → auto github auth → device name → saves", async () => {
-    mockInput.mockResolvedValueOnce("wss://kraki.corelli.cloud"); // relay URL (accept default)
-    // No auth select — GitHub is auto-detected from relay methods
-    mockInput.mockResolvedValueOnce("my-laptop");              // device name
-    mockWithRetry.mockResolvedValueOnce({ found: true, version: "1.0" });             // copilot check
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  delete process.env.KRAKI_RELAY_URL;
+  delete process.env.KRAKI_API_URL;
+});
+
+describe("runSetup — login-first flow (official relay)", () => {
+  it("authenticates → resolves region → verifies relay → device name → saves", async () => {
+    // Mock fetch for /api/login/resolve
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/login/resolve')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            ok: true,
+            region: 'us',
+            relayUrl: 'wss://relay-us.kraki.corelli.cloud',
+            user: { login: 'testuser' },
+          }),
+        });
+      }
+      if (typeof url === 'string' && url.includes('/api/config')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ githubClientId: 'test-client-id' }),
+        });
+      }
+      return Promise.reject(new Error(`unmocked fetch: ${url}`));
+    }) as typeof fetch;
+
+    // device name prompt
+    mockInput.mockResolvedValueOnce("my-laptop");
+    mockWithRetry.mockResolvedValueOnce({ found: true, version: "1.0" });
 
     const result = await runSetup();
     expect(result).toEqual({
-      relay: "wss://kraki.corelli.cloud",
+      relay: "wss://relay-us.kraki.corelli.cloud",
       authMethod: "github_token",
       device: { name: "my-laptop", id: "dev_test123" },
       logging: { verbosity: "normal" },
     });
     expect(mockSaveConfig).toHaveBeenCalledWith(result);
   });
+
+  it("falls back to default relay if API is unreachable", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error")) as typeof fetch;
+
+    // device name prompt
+    mockInput.mockResolvedValueOnce("my-laptop");
+    mockWithRetry.mockResolvedValueOnce({ found: true, version: "1.0" });
+
+    const result = await runSetup();
+    expect(result.relay).toBe("wss://kraki.corelli.cloud");
+    expect(result.authMethod).toBe("github_token");
+  });
 });
 
-describe("runSetup — apikey auth", () => {
-  it("selects custom → URL → apikey → saves", async () => {
-    mockRelayMethods = ['apikey', 'open']; // no github — forces select prompt
+describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
+  it("uses custom relay URL with apikey auth", async () => {
+    process.env.KRAKI_RELAY_URL = "ws://my-vps:4000";
+    mockRelayMethods = ['apikey', 'open'];
     mockInput.mockResolvedValueOnce("ws://my-vps:4000");       // relay URL
     mockSelect.mockResolvedValueOnce("apikey");                // auth method
     mockInput.mockResolvedValueOnce("server-1");               // device name
-    mockWithRetry.mockResolvedValueOnce({ found: true, version: "2.0" }); // copilot
+    mockWithRetry.mockResolvedValueOnce({ found: true, version: "2.0" });
 
     const result = await runSetup();
     expect(result.relay).toBe("ws://my-vps:4000");
     expect(result.authMethod).toBe("apikey");
-    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge']; // reset
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
   });
-});
 
-describe("runSetup — open auth", () => {
-  it("selects official → open → no key needed", async () => {
-    mockRelayMethods = ['open']; // only open — auto-selects
-    mockInput.mockResolvedValueOnce("wss://kraki.corelli.cloud");
+  it("uses custom relay with open auth (auto-selected)", async () => {
+    process.env.KRAKI_RELAY_URL = "wss://my-relay.example.com";
+    mockRelayMethods = ['open'];
+    mockInput.mockResolvedValueOnce("wss://my-relay.example.com");
     mockInput.mockResolvedValueOnce("dev-box");
     mockWithRetry.mockResolvedValueOnce({ found: true });
 
     const result = await runSetup();
     expect(result.authMethod).toBe("open");
-    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge']; // reset
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
   });
 });
 
 describe("runSetup — edge cases", () => {
   it("gracefully handles pairing failure", async () => {
+    process.env.KRAKI_RELAY_URL = "wss://kraki.corelli.cloud";
     mockRelayMethods = ['open'];
     mockInput.mockResolvedValueOnce("wss://kraki.corelli.cloud");
     mockInput.mockResolvedValueOnce("dev");
     mockWithRetry.mockResolvedValueOnce({ found: true });
 
-    // Should not throw even if pairing fails
     const result = await runSetup();
     expect(result).toBeTruthy();
     mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
