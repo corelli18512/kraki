@@ -169,16 +169,18 @@ describe('LocalAuthBackend', () => {
     }
   });
 
-  it('should request region selection for a new user in login-first flow', async () => {
+  it('should auto-assign region for a new user in login-first flow', async () => {
     const result = await backend.resolveLogin(
       { method: 'open', sharedKey: 'test' } as import("@kraki/protocol").AuthMethod,
     );
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.registered).toBe(false);
-      expect(result.needsRegionSelection).toBe(true);
-      expect(result.regions.map(r => r.code)).toEqual(expect.arrayContaining(['us', 'china']));
+      expect(result.registered).toBe(true);
+      expect(result.needsRegionSelection).toBe(false);
+      // Auto-assigned to first available region (us) since no IP provided
+      expect(result.region).toBe('us');
+      expect(result.relayUrl).toBe('wss://us.example.com');
     }
   });
 });

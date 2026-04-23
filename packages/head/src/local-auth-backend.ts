@@ -252,40 +252,44 @@ export class LocalAuthBackend implements AuthBackend {
       };
     }
 
-    if (preferredRegion) {
-      const regionInfo = this.storage.getRegion(preferredRegion);
-      if (!regionInfo?.enabled) {
-        return { ok: false, code: 'unknown_region', message: `Region "${preferredRegion}" is not available` };
-      }
+    // New user — auto-assign region from preferred, IP geo, or first available
+    let targetRegion = preferredRegion;
 
-      this.storage.upsertUser(resolved.id, resolved.login, resolved.provider, resolved.email, regionInfo.code);
-      this.storage.setUserRegion(resolved.id, regionInfo.code);
-      return {
-        ok: true,
-        registered: true,
-        needsRegionSelection: false,
-        user: this.buildUserProfile(resolved, storedUser?.preferences, regionInfo.code),
-        region: regionInfo.code,
-        relayUrl: regionInfo.relayUrl,
-        regions,
-      };
-    }
-
-    // Auto-detect region from client IP for new users
-    let suggestedRegion = regions[0]?.code;
-    if (clientIp) {
+    if (!targetRegion && clientIp) {
       const geoRegion = await suggestRegionForIp(clientIp);
       if (geoRegion && regions.some(r => r.code === geoRegion)) {
-        suggestedRegion = geoRegion;
+        targetRegion = geoRegion;
       }
     }
 
+    if (!targetRegion) {
+      targetRegion = this.region ?? regions[0]?.code;
+    }
+
+    if (targetRegion) {
+      const regionInfo = this.storage.getRegion(targetRegion);
+      if (regionInfo?.enabled) {
+        this.storage.upsertUser(resolved.id, resolved.login, resolved.provider, resolved.email, regionInfo.code);
+        this.storage.setUserRegion(resolved.id, regionInfo.code);
+        return {
+          ok: true,
+          registered: true,
+          needsRegionSelection: false,
+          user: this.buildUserProfile(resolved, storedUser?.preferences, regionInfo.code),
+          region: regionInfo.code,
+          relayUrl: regionInfo.relayUrl,
+          regions,
+        };
+      }
+    }
+
+    // Fallback: no regions configured — return without region assignment
+    this.storage.upsertUser(resolved.id, resolved.login, resolved.provider, resolved.email);
     return {
       ok: true,
-      registered: false,
-      needsRegionSelection: true,
+      registered: true,
+      needsRegionSelection: false,
       user: this.buildUserProfile(resolved, storedUser?.preferences),
-      suggestedRegion,
       regions,
     };
   }
