@@ -363,15 +363,23 @@ export async function performUpdate(currentVersion: string): Promise<void> {
     writeCache(latest);
 
     // Restart daemon if running
-    const { isDaemonRunning, stopDaemon, startDaemon } = await import('./daemon.js');
+    const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
     if (isDaemonRunning()) {
       console.log(chalk.dim('  Restarting daemon…'));
       stopDaemon();
       const { loadConfig } = await import('./config.js');
       const config = loadConfig();
       if (config) {
-        startDaemon(config);
-        console.log(chalk.green('  ✔ Daemon restarted'));
+        try {
+          await startDaemon(config);
+          console.log(chalk.green('  ✔ Daemon restarted'));
+        } catch (restartErr) {
+          if (restartErr instanceof MacOSCodeSignatureError) {
+            console.log(chalk.yellow('  ⚠ macOS blocked the daemon — run `kraki start` to launch in foreground'));
+          } else {
+            console.log(chalk.red(`  Failed to restart daemon: ${(restartErr as Error).message}`));
+          }
+        }
       }
     }
   } catch (err) {
