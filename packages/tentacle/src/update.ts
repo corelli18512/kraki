@@ -454,6 +454,12 @@ async function updateViaBinary(version: string): Promise<void> {
     chmodSync(tmpPath, 0o755);
   }
 
+  // macOS: strip quarantine/provenance xattrs on the temp file *before*
+  // copying so the installed binary is clean from the start.
+  if (process.platform === 'darwin') {
+    stripProvenance(tmpPath);
+  }
+
   // Replace current binary — try direct first, sudo fallback for system dirs
   replaceBinary(tmpPath, currentBinary);
 }
@@ -505,6 +511,13 @@ function replaceBinaryElevated(source: string, target: string): void {
 function isPermissionError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException).code;
   return code === 'EACCES' || code === 'EPERM';
+}
+
+/** Strip com.apple.provenance / quarantine xattrs so CSM 2 doesn't SIGKILL the binary. */
+function stripProvenance(filePath: string): void {
+  try {
+    execSync(`xattr -cr "${filePath}"`, { stdio: 'ignore' });
+  } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
 function hashFile(path: string): string {
