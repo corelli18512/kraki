@@ -4,18 +4,18 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Primary — Teal (logo body #067b79) */
-  --color-kraki-50: #f0fafa;
-  --color-kraki-100: #d4f1f0;
-  --color-kraki-200: #a8e4e3;
-  --color-kraki-300: #6fcfcd;
-  --color-kraki-400: #3ab5b3;
-  --color-kraki-500: #067b79;
-  --color-kraki-600: #056564;
-  --color-kraki-700: #054f4e;
-  --color-kraki-800: #063d3c;
-  --color-kraki-900: #062f2f;
-  --color-kraki-950: #041e1e;
+  /* Primary — Coral */
+  --color-kraki-50: #fef3f1;
+  --color-kraki-100: #fde5e0;
+  --color-kraki-200: #fccec6;
+  --color-kraki-300: #f9ad9f;
+  --color-kraki-400: #f4836e;
+  --color-kraki-500: #ea6046;
+  --color-kraki-600: #d74428;
+  --color-kraki-700: #b5361e;
+  --color-kraki-800: #96301d;
+  --color-kraki-900: #7d2d1e;
+  --color-kraki-950: #44130b;
 
   /* Secondary — Ocean teal */
   --color-ocean-50: #ecfeff;
@@ -30,18 +30,18 @@
   --color-ocean-900: #164e63;
   --color-ocean-950: #083344;
 
-  /* Accent — Coral (logo belly #e74867) */
-  --color-accent-50: #fef2f4;
-  --color-accent-100: #fde6ea;
-  --color-accent-200: #fbcdd6;
-  --color-accent-300: #f8a4b4;
-  --color-accent-400: #f2708a;
-  --color-accent-500: #e74867;
-  --color-accent-600: #d42a4e;
-  --color-accent-700: #b21e3f;
-  --color-accent-800: #951c38;
-  --color-accent-900: #7d1b34;
-  --color-accent-950: #450a19;
+  /* Accent — Violet */
+  --color-accent-50: #f5f3ff;
+  --color-accent-100: #ede9fe;
+  --color-accent-200: #ddd6fe;
+  --color-accent-300: #c4b5fd;
+  --color-accent-400: #a78bfa;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+  --color-accent-700: #6d28d9;
+  --color-accent-800: #5b21b6;
+  --color-accent-900: #4c1d95;
+  --color-accent-950: #2e1065;
 
   --color-surface-primary: var(--color-white);
   --color-surface-secondary: var(--color-slate-50);
@@ -172,14 +172,11 @@ html, body {
   text-decoration: underline;
 }
 
-/* Links inside user message bubbles (neutral bg — no special override needed) */
-
-/* Agent bubble — session-tinted pastel wash via --user-hue */
-.agent-bubble {
-  background-color: hsl(var(--user-hue) 50% 92%);
-}
-.dark .agent-bubble {
-  background-color: hsl(var(--user-hue) 25% 18%);
+/* Links inside user message bubbles (white text on coral bg) */
+.bg-kraki-500 .markdown-content a {
+  color: inherit;
+  text-decoration: underline;
+  opacity: 0.9;
 }
 
 .markdown-content blockquote {
