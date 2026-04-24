@@ -723,6 +723,27 @@ export class HeadServer {
       ip: state.ip,
     });
 
+    // Mirror user + devices into local storage so edge-local operations
+    // (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth
+    // is delegated to a remote backend.
+    try {
+      this.storage.upsertUser(
+        result.user.id, result.user.login, result.user.provider, result.user.email,
+      );
+      for (const d of result.devices) {
+        try {
+          this.storage.upsertDevice(
+            d.id, result.userId, d.name, d.role,
+            d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
+          );
+        } catch (err) {
+          logger.warn('Failed to mirror device locally', { deviceId: d.id, error: (err as Error).message });
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
+    }
+
     // Set correct online status on device summaries
     const devices = result.devices.map(d => ({
       ...d,
