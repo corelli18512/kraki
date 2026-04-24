@@ -298,6 +298,24 @@ export function useScrollController(
     c.prevStreamLen = streaming?.length ?? 0;
   }, [grouped, streaming, sessionIdle]);
 
+  // ── Effect 4: Auto gap-load when content fits viewport ─
+  // When all loaded messages fit on screen and older messages exist,
+  // keep loading batches until the spinner scrolls out of view
+  // (scrollHeight > clientHeight) or we reach the beginning (firstSeq ≤ 1).
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !sessionId || firstSeq <= 1) return;
+    if (el.scrollHeight > el.clientHeight) return;
+    if (grouped.length === 0) return;
+    if (messageProvider.isLoading(sessionId)) return;
+
+    const toSeq = firstSeq - 1;
+    const fromSeq = Math.max(1, toSeq - 99);
+    logger.info('scroll: auto gap-load (content fits)', { sessionId, fromSeq, toSeq });
+    messageProvider.fetchRange(sessionId, fromSeq, toSeq);
+  }, [sessionId, firstSeq, grouped.length]);
+
   // ── handleScroll (user gesture) ───────────────────────
 
   const handleScroll = useCallback(() => {
