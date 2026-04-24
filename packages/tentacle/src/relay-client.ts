@@ -694,7 +694,11 @@ export class RelayClient {
   private async handleImportSession(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'import_session') return;
 
-    const { requestId, localSessionId } = msg.payload;
+    const { requestId, localSessionId, meta: clientMeta } = msg.payload as {
+      requestId: string;
+      localSessionId: string;
+      meta?: { cwd?: string; summary?: string; source?: string; model?: string; branch?: string; startTime?: string };
+    };
 
     // Check if already linked
     const existing = this.sessionManager.getLink(localSessionId);
@@ -708,99 +712,60 @@ export class RelayClient {
     }
 
     try {
-      // Use localSessionId as Kraki session ID (shared identity)
       const krakiSessionId = localSessionId;
 
-      // Parse events.jsonl for backfill
-      const sessionStateDir = join(
-        homedir(), '.copilot', 'session-state', localSessionId,
-      );
+      // ── Phase 1: Fast response (~85ms) ────────────────────
+      // Parse events.jsonl for backfill + metadata
+      const sessionStateDir = join(homedir(), '.copilot', 'session-state', localSessionId);
       const { messages: backfilledMessages, meta: parsedMeta } = parseSessionHistory(sessionStateDir);
 
-      // Scan to get local session metadata
-      const scanResults = scanLocalSessions();
-      const localSession = scanResults.find(s => s.sessionId === localSessionId);
+      // Use metadata from the client (picker already has it) or parsed fallback
+      const source = (clientMeta?.source ?? parsedMeta.cwd === '/' ? 'copilot-cli' : 'copilot-cli') as import('@kraki/protocol').LocalSessionSource;
+      const model = parsedMeta.model ?? clientMeta?.model;
+      const autoTitle = clientMeta?.summary?.slice(0, 100);
+      const cwd = clientMeta?.cwd ?? parsedMeta.cwd ?? '/';
 
       // Create Kraki session
-      this.sessionManager.createSession(
-        'copilot',
-        parsedMeta.model ?? localSession?.model,
-        krakiSessionId,
-      );
+      this.sessionManager.createSession('copilot', model, krakiSessionId);
 
-      // Persist source, title, model, and original creation time
+      // Persist metadata
       this.sessionManager.updateMeta(krakiSessionId, {
-        source: localSession?.source ?? 'copilot-cli',
-        autoTitle: localSession?.summary?.slice(0, 100),
-        model: parsedMeta.model ?? localSession?.model,
-        createdAt: localSession?.startTime,
+        source,
+        autoTitle,
+        model,
+        createdAt: clientMeta?.startTime,
       });
 
-      // Backfill messages
-      for (const m of backfilledMessages) {
-        this.sessionManager.appendMessage(krakiSessionId, m.type, m.payload);
-      }
+      // Batch-write all backfilled messages (single write instead of N appends)
+      const lastSeq = this.sessionManager.appendMessagesBatch(krakiSessionId, backfilledMessages);
 
       // Write link table entry
       this.sessionManager.addLink({
         localSessionId,
         krakiSessionId,
-        source: localSession?.source ?? 'copilot-cli',
-        cwd: localSession?.cwd,
-        branch: localSession?.branch,
+        source,
+        cwd,
+        branch: clientMeta?.branch,
         linkedAt: new Date().toISOString(),
       });
 
-      // Map requestId for session_created correlation
-      if (requestId) {
-        this.pendingRequestIds.set(krakiSessionId, requestId);
-      }
+      // Send session_created immediately — don't wait for adapter
+      this.send({
+        type: 'session_created',
+        sessionId: krakiSessionId,
+        payload: { agent: 'copilot', model, requestId, lastSeq },
+      });
 
-      // Resume the session via SDK. Use createSession with the existing sessionId
-      // so the CLI server discovers the state on disk. resumeSession only works
-      // for sessions the CLI server has already loaded in memory.
-      const cwd = localSession?.cwd ?? parsedMeta.cwd ?? '/';
-      try {
-        await this.adapter.createSession({
-          sessionId: krakiSessionId,
-          model: parsedMeta.model,
-          cwd,
-        });
-      } catch (createErr) {
-        // SDK resume failed — still keep backfilled history, but manually
-        // send session_created so the web UI knows the session exists.
-        logger.warn({ err: (createErr as Error).message, krakiSessionId }, 'SDK resume failed — session imported as idle');
-        const meta = this.sessionManager.getMeta(krakiSessionId);
-        this.send({
-          type: 'session_created',
-          sessionId: krakiSessionId,
-          payload: {
-            agent: 'copilot',
-            model: parsedMeta.model ?? localSession?.model,
-            requestId,
-            lastSeq: meta?.lastSeq ?? 0,
-          },
-        });
-        if (requestId) this.pendingRequestIds.delete(krakiSessionId);
-      }
-
-      // Mark idle — will transition to active when user sends a message
-      this.sessionManager.markIdle(krakiSessionId);
-      this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
-
-      // Send title so the web UI displays it (session_created doesn't carry title)
-      const finalMeta = this.sessionManager.getMeta(krakiSessionId);
-      if (finalMeta?.autoTitle || finalMeta?.title) {
+      // Send title
+      if (autoTitle) {
         this.send({
           type: 'session_title_updated',
           sessionId: krakiSessionId,
-          payload: { title: finalMeta.title, autoTitle: finalMeta.autoTitle },
+          payload: { autoTitle },
         });
       }
 
-      // Proactively send backfilled history as a replay batch.
-      // Don't rely on the web requesting it — the encrypted request_session_replay
-      // may fail in some auth configurations.
+      // Send backfilled history as replay batch
       if (backfilledMessages.length > 0) {
         const replayMessages = this.sessionManager.getMessagesAfterSeq(krakiSessionId, 0, 500);
         const asProducerMessages = replayMessages.map(m => {
@@ -816,16 +781,31 @@ export class RelayClient {
           payload: {
             sessionId: krakiSessionId,
             messages: asProducerMessages,
-            lastSeq: finalMeta?.lastSeq ?? backfilledMessages.length,
-            totalLastSeq: finalMeta?.lastSeq ?? backfilledMessages.length,
+            lastSeq,
+            totalLastSeq: lastSeq,
           },
         });
       }
 
-      // Broadcast updated session list so web gets full metadata (model, source, etc.)
+      // Mark idle + broadcast session list
+      this.sessionManager.markIdle(krakiSessionId);
+      this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
       this.broadcastSessionList();
 
       logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length }, 'Session imported');
+
+      // ── Phase 2: Background SDK resume (non-blocking) ─────
+      // Clear the requestId so onSessionCreated doesn't send a duplicate session_created
+      if (requestId) this.pendingRequestIds.delete(krakiSessionId);
+
+      this.adapter.createSession({ sessionId: krakiSessionId, model: parsedMeta.model, cwd })
+        .then(() => {
+          logger.debug({ krakiSessionId }, 'SDK resume completed');
+        })
+        .catch((err) => {
+          logger.warn({ err: (err as Error).message, krakiSessionId }, 'SDK resume failed — session imported as idle');
+        });
+
     } catch (err) {
       logger.error({ err, localSessionId }, 'Import session failed');
       this.send({
@@ -873,6 +853,12 @@ export class RelayClient {
       // Look up requestId by sessionId (set in handleCreateSession before adapter call)
       const requestId = this.pendingRequestIds.get(event.sessionId);
       if (requestId) this.pendingRequestIds.delete(event.sessionId);
+
+      // Skip duplicate broadcast for imported sessions — handleImportSession
+      // already sent session_created and cleared the requestId.
+      if (!requestId && this.sessionManager.getLink(event.sessionId)) {
+        return;
+      }
 
       const meta = this.sessionManager.getMeta(event.sessionId);
       this.send({

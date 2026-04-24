@@ -488,6 +488,35 @@ export class SessionManager {
   }
 
   /**
+   * Batch-append messages to a session's log in a single write.
+   * Much faster than calling appendMessage() N times.
+   * Returns the final seq number.
+   */
+  appendMessagesBatch(sessionId: string, messages: Array<{ type: string; payload: string; ts?: string }>): number {
+    const meta = this.readMeta(sessionId);
+    if (!meta || messages.length === 0) return meta?.lastSeq ?? 0;
+
+    let seq = meta.lastSeq ?? 0;
+    const now = new Date().toISOString();
+    const lines: string[] = [];
+
+    for (const m of messages) {
+      seq++;
+      const entry: LoggedMessage = { seq, type: m.type, payload: m.payload, ts: m.ts ?? now };
+      lines.push(JSON.stringify(entry));
+    }
+
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    appendFileSync(logPath, lines.join('\n') + '\n', 'utf8');
+
+    meta.lastSeq = seq;
+    meta.updatedAt = now;
+    this.writeMeta(sessionId, meta);
+
+    return seq;
+  }
+
+  /**
    * Get messages for a session with seq > afterSeq.
    */
   getMessagesAfterSeq(sessionId: string, afterSeq: number, limit?: number): LoggedMessage[] {
