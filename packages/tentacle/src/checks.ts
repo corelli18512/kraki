@@ -6,6 +6,9 @@
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync, promises as fsp } from 'node:fs';
+import { homedir, platform } from 'node:os';
+import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
 
@@ -86,4 +89,84 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
     await input({ message: 'Press Enter to retry…' });
     spinner?.start();
   }
+}
+
+// ── macOS TCC warm-up ───────────────────────────────────
+
+export type TccProbeStatus = 'granted' | 'denied' | 'missing';
+
+export interface TccProbeResult {
+  /** Short label suitable for display, e.g. "~/Documents". */
+  label: string;
+  /** Absolute path that was probed. */
+  path: string;
+  status: TccProbeStatus;
+}
+
+/**
+ * Folders that macOS protects via TCC (Transparency, Consent, Control).
+ * Touching any of these for the first time triggers a system permission
+ * prompt attributed to the calling binary.
+ *
+ * Order matters — prompts appear in this order during setup.
+ */
+const TCC_PROTECTED_FOLDERS: Array<{ label: string; relPath: string }> = [
+  { label: '~/Documents', relPath: 'Documents' },
+  { label: '~/Desktop', relPath: 'Desktop' },
+  { label: '~/Downloads', relPath: 'Downloads' },
+  { label: '~/iCloud Drive', relPath: 'Library/Mobile Documents/com~apple~CloudDocs' },
+  { label: '~/Pictures', relPath: 'Pictures' },
+  { label: '~/Movies', relPath: 'Movies' },
+  { label: '~/Music', relPath: 'Music' },
+];
+
+/**
+ * Probe a single TCC-protected folder by attempting a tiny readdir.
+ * Resolves with the access status. Never throws.
+ */
+async function probeFolder(absPath: string): Promise<TccProbeStatus> {
+  if (!existsSync(absPath)) return 'missing';
+  try {
+    // Reading the directory is enough to trigger TCC. We don't need the
+    // entries themselves — the system call is what flips the permission bit.
+    await fsp.readdir(absPath);
+    return 'granted';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // EPERM / EACCES → user denied (or hasn't decided yet and dismissed).
+    if (code === 'EPERM' || code === 'EACCES') return 'denied';
+    // ENOENT shouldn't happen since we existsSync'd, but treat as missing.
+    if (code === 'ENOENT') return 'missing';
+    // Anything else — treat as denied so we don't lie about access.
+    return 'denied';
+  }
+}
+
+/**
+ * Probe each macOS TCC-protected folder in turn, triggering the system
+ * permission prompt on first run. Calls `onStart` before each probe so
+ * a UI can render the status line before the modal blocks, then
+ * `onResult` after the probe resolves so the UI can show the outcome.
+ *
+ * Returns one result per folder. On non-macOS platforms returns [].
+ */
+export async function warmupTccPermissions(
+  onStart?: (label: string) => void,
+  onResult?: (result: TccProbeResult) => void,
+): Promise<TccProbeResult[]> {
+  if (platform() !== 'darwin') return [];
+
+  const home = homedir();
+  const results: TccProbeResult[] = [];
+
+  for (const { label, relPath } of TCC_PROTECTED_FOLDERS) {
+    const absPath = join(home, relPath);
+    onStart?.(label);
+    const status = await probeFolder(absPath);
+    const result: TccProbeResult = { label, path: absPath, status };
+    results.push(result);
+    onResult?.(result);
+  }
+
+  return results;
 }

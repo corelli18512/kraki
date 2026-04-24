@@ -67,6 +67,7 @@ vi.mock("../config.js", () => ({
   saveChannelKey: (...args: unknown[]) => mockSaveChannelKey(...args),
   getOrCreateDeviceId: () => "dev_test123",
   getConfigPath: () => "/tmp/fake-kraki/config.json",
+  getConfigDir: () => "/tmp/fake-kraki",
   loadChannelKey: () => null,
 }));
 
@@ -76,6 +77,7 @@ vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   checkCopilotCli: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
+  warmupTccPermissions: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock pair module to avoid real WebSocket connection

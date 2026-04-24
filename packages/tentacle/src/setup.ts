@@ -8,7 +8,9 @@
 import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
-import { hostname } from 'node:os';
+import { hostname, platform } from 'node:os';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
 import {
@@ -18,8 +20,9 @@ import {
   saveChannelKey,
   getOrCreateDeviceId,
   getConfigPath,
+  getConfigDir,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, withRetry } from './checks.js';
+import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, type TccProbeResult } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 
@@ -84,6 +87,70 @@ function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
 const icon = '◈';
 function step(n: number, total: number) { return chalk.dim(`[${n}/${total}]`); }
 function divider() { console.log(chalk.dim('  ─────────────────────────────────')); }
+
+// ── macOS TCC warm-up ────────────────────────────────────
+
+const TCC_WARMED_MARKER = '.tcc-warmed';
+
+/**
+ * True when this is a fresh macOS install that hasn't done the TCC
+ * warm-up yet. We gate the warm-up to first-run only so existing users
+ * aren't re-prompted on re-runs of the wizard.
+ */
+function needsTccWarmup(): boolean {
+  if (platform() !== 'darwin') return false;
+  return !existsSync(join(getConfigDir(), TCC_WARMED_MARKER));
+}
+
+function markTccWarmed(): void {
+  try {
+    writeFileSync(join(getConfigDir(), TCC_WARMED_MARKER),
+      `${new Date().toISOString()}\n`, 'utf8');
+  } catch {
+    // Best-effort — if we can't write the marker, the worst case is that
+    // the warm-up runs again next time the wizard is invoked.
+  }
+}
+
+/**
+ * Render the TCC warm-up step. Probes each protected folder one at a
+ * time, printing a status line as we go. macOS surfaces the permission
+ * modal during each probe; the modal blocks until the user clicks.
+ */
+async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
+  console.log(`  ${icon} ${step(stepNum, total)} ${chalk.bold('macOS Privacy')}`);
+  console.log(chalk.dim('    macOS will ask kraki for permission to access folders where'));
+  console.log(chalk.dim('    your code lives. Click "Allow" on each prompt — this only'));
+  console.log(chalk.dim('    happens once.\n'));
+
+  const formatStatus = (r: TccProbeResult): string => {
+    switch (r.status) {
+      case 'granted': return chalk.green('✓ allowed');
+      case 'denied':  return chalk.yellow('⚠ denied');
+      case 'missing': return chalk.dim('— not present');
+    }
+  };
+
+  const results = await warmupTccPermissions(
+    (label) => {
+      // Print label + ellipsis on the same line; status overwrites it.
+      process.stdout.write(`    ${label.padEnd(22)} ${chalk.dim('checking…')}`);
+    },
+    (result) => {
+      // Carriage return + clear-line (ANSI EL), then re-print with status.
+      process.stdout.write(`\r\u001b[2K    ${result.label.padEnd(22)} ${formatStatus(result)}\n`);
+    },
+  );
+
+  const denied = results.filter(r => r.status === 'denied');
+  if (denied.length > 0) {
+    console.log('');
+    console.log(chalk.dim('    You can grant access later in System Settings →'));
+    console.log(chalk.dim('    Privacy & Security → Files and Folders → kraki.'));
+  }
+
+  markTccWarmed();
+}
 
 // Align inquirer prefix (✔/?) with ora spinners (4-space indent)
 const promptTheme = {
@@ -279,7 +346,8 @@ export async function runSetup(): Promise<KrakiConfig> {
     return runSetupDirect(customRelay);
   }
 
-  const total = 4;
+  const tccSteps = needsTccWarmup() ? 1 : 0;
+  const total = 4 + tccSteps;
   const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
 
   // 1. Authentication
@@ -402,6 +470,12 @@ export async function runSetup(): Promise<KrakiConfig> {
     default: defaultName,
   });
 
+  // 5. macOS Privacy (TCC warm-up) — fresh installs only
+  if (tccSteps > 0) {
+    console.log('');
+    await runTccWarmupStep(5, total);
+  }
+
   // Build config
   const deviceId = getOrCreateDeviceId();
   const config: KrakiConfig = {
@@ -439,7 +513,8 @@ export async function runSetup(): Promise<KrakiConfig> {
  * Connects to the relay, queries capabilities, does inline auth.
  */
 async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
-  const total = 4;
+  const tccSteps = needsTccWarmup() ? 1 : 0;
+  const total = 4 + tccSteps;
 
   // 1. Relay URL (with retry loop)
   let relay: string = defaultRelay;
@@ -559,6 +634,12 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     theme: promptTheme,
     default: defaultName,
   });
+
+  // 5. macOS Privacy (TCC warm-up) — fresh installs only
+  if (tccSteps > 0) {
+    console.log('');
+    await runTccWarmupStep(5, total);
+  }
 
   // Build config
   const deviceId = getOrCreateDeviceId();
