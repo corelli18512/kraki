@@ -493,6 +493,15 @@ export interface ImportSessionMessage extends BaseEnvelope {
     requestId: string;
     /** Must match a sessionId from a previous local_sessions_list. */
     localSessionId: string;
+    /** Metadata from the picker — avoids re-scanning filesystem on import. */
+    meta?: {
+      cwd?: string;
+      summary?: string;
+      source?: import('./sessions.js').LocalSessionSource;
+      model?: string;
+      branch?: string;
+      startTime?: string;
+    };
   };
 }
 

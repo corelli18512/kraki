@@ -277,8 +277,17 @@ export function ImportSessionDialog({ open, onClose }: Props) {
   const handleImport = useCallback((sessionId: string) => {
     if (!selectedDevice) return;
     setImportingIds(prev => new Set(prev).add(sessionId));
-    wsClient.importSession(sessionId, selectedDevice);
-  }, [selectedDevice]);
+    // Pass session metadata so the tentacle skips re-scanning the filesystem
+    const session = localSessions.find(s => s.sessionId === sessionId);
+    wsClient.importSession(sessionId, selectedDevice, session ? {
+      cwd: session.cwd,
+      summary: session.summary,
+      source: session.source,
+      model: session.model,
+      branch: session.branch,
+      startTime: session.startTime,
+    } : undefined);
+  }, [selectedDevice, localSessions]);
 
   // Dismiss dialog when import succeeds (session appears in main store)
   const sessions = useStore(s => s.sessions);

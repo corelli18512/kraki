@@ -157,8 +157,8 @@ export class KrakiWSClient {
     return commands.requestLocalSessions(targetDeviceId, (msg) => this.sendEncrypted(msg), filter);
   }
 
-  importSession(localSessionId: string, targetDeviceId: string) {
-    return commands.importSession(localSessionId, targetDeviceId, (msg) => this.sendEncrypted(msg), this.cmdState);
+  importSession(localSessionId: string, targetDeviceId: string, meta?: { cwd?: string; summary?: string; source?: string; model?: string; branch?: string; startTime?: string }) {
+    return commands.importSession(localSessionId, targetDeviceId, (msg) => this.sendEncrypted(msg), this.cmdState, meta);
   }
 
   markRead(sessionId: string, seq?: number): void {
