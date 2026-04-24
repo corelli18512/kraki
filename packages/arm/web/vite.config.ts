@@ -3,7 +3,12 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
 import { assertSafeProductionRelayUrl } from './src/lib/build-env';
+
+function getGitHash(): string {
+  try { return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim(); } catch { return 'unknown'; }
+}
 
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, __dirname, '');
@@ -32,6 +37,9 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
+    define: {
+      __GIT_HASH__: JSON.stringify(getGitHash()),
+    },
     plugins,
     server: {
       port: 3000,

@@ -165,7 +165,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
           About
         </h3>
         <div className="space-y-1 text-xs text-text-secondary">
-          <p>Client version: {version}{isBeta ? '-beta' : ''}</p>
+          <p>Client version: {version}{isBeta ? '-beta' : ''}{typeof __GIT_HASH__ === 'string' ? ` (${__GIT_HASH__})` : ''}</p>
           {relayVersion && <p>Relay version: {relayVersion}</p>}
           <p>Agent-agnostic relay for AI coding agents</p>
         </div>
