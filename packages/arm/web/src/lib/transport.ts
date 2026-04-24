@@ -139,7 +139,7 @@ export class KrakiTransport {
     const params = getUrlParams();
     const stored = loadStoredDevice();
 
-    this._url = url ?? params.relay ?? (import.meta.env.VITE_WS_URL || stored?.relay) ?? DEFAULT_RELAY;
+    this._url = url ?? params.relay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;
