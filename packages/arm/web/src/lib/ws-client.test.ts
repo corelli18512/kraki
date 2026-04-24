@@ -650,7 +650,7 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().lastError).toBe('Authentication failed. Please sign in again or scan a new pairing QR code.');
     });
 
-    it('redirects to the assigned relay on wrong_region', async () => {
+    it('saves relay URL and triggers reload on wrong_region', async () => {
       localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev-stale' }));
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
@@ -666,15 +666,16 @@ describe('KrakiWSClient', () => {
         redirect: 'ws://cn.example.com',
       });
 
+      // Verify relay URL saved to localStorage for post-reload connection
       await vi.waitFor(() => {
-        expect(lastWsInstance.url).toBe('ws://cn.example.com');
+        expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({
+          relay: 'ws://cn.example.com',
+          deviceId: 'dev-stale',
+        });
       });
 
-      expect(JSON.parse(localStorage.getItem('kraki_device') ?? '{}')).toMatchObject({
-        relay: 'ws://cn.example.com',
-        deviceId: 'dev-stale',
-      });
-      expect(useStore.getState().lastError).toBe('Switching to your assigned region...');
+      // No error banner — page reload handles the transition silently
+      expect(useStore.getState().lastError).toBeNull();
     });
   });
 

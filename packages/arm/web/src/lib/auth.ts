@@ -134,15 +134,15 @@ export function processAuthError(
   const store = getStore();
   const oauthAvailable = supportsOAuthLogin(store.githubClientId);
   if (authError.code === 'wrong_region' && authError.redirect) {
-    // Use deviceId from the response (server registers device before region check),
-    // falling back to any existing storedDeviceId
+    // Save new relay URL so the page reload connects to the correct region
     const deviceId = authError.deviceId ?? storedDeviceId;
     if (deviceId) {
       saveStoredDevice({ relay: authError.redirect, deviceId });
       deps.setStoredDeviceId(deviceId);
     }
-    store.setLastError('Switching to your assigned region...');
-    deps.redirectToRelay(authError.redirect);
+    // Full page reload for a clean initialization against the new relay
+    logger.info('Redirecting to assigned region', authError.redirect);
+    window.location.reload();
     return;
   }
 
