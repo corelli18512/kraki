@@ -368,12 +368,13 @@ export function importSession(
   targetDeviceId: string,
   send: (msg: Record<string, unknown>) => void,
   state: CommandState,
+  meta?: { cwd?: string; summary?: string; source?: string; model?: string; branch?: string; startTime?: string },
 ): string {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   state.pendingCreateRequests.add(requestId);
   send({
     type: 'import_session',
-    payload: { requestId, localSessionId, targetDeviceId },
+    payload: { requestId, localSessionId, targetDeviceId, ...(meta && { meta }) },
   });
   return requestId;
 }
