@@ -52,6 +52,9 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
               }
             }}
             placeholder="Type your answer…"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             className="flex-1 rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 sm:text-sm"
           />
           <button
