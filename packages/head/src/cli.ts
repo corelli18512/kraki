@@ -321,8 +321,51 @@ logger.info('Kraki Head starting...', { mode: IS_CONNECTED_MODE ? 'connected' : 
 let authBackend: AuthBackend | undefined;
 let accountApi: AccountApi | undefined;
 let storage: Storage | undefined;
-let pushManager: PushManager | undefined;
 let directAuthProviders: Map<string, AuthProvider> | undefined;
+
+// --- Push providers (all modes — edges need to deliver push to offline devices) ---
+let pushManager: PushManager | undefined;
+if (PUSH_PROVIDERS.length > 0) {
+  const pushProviderInstances: IPushProvider[] = [];
+  for (const provider of PUSH_PROVIDERS) {
+    switch (provider) {
+      case 'apns': {
+        const keyPath = process.env.APNS_KEY_PATH;
+        const keyId = process.env.APNS_KEY_ID;
+        const teamId = process.env.APNS_TEAM_ID;
+        const bundleId = process.env.APNS_BUNDLE_ID;
+        if (!keyPath || !keyId || !teamId || !bundleId) {
+          console.error('Error: APNs requires APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
+          process.exit(1);
+        }
+        pushProviderInstances.push(new ApnsProvider({
+          keyPath, keyId, teamId, bundleId,
+          environment: (process.env.APNS_ENVIRONMENT as 'production' | 'sandbox') ?? 'production',
+        }));
+        logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
+        break;
+      }
+      case 'web_push': {
+        const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+        const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+        const vapidEmail = process.env.VAPID_EMAIL;
+        if (!vapidPublicKey || !vapidPrivateKey || !vapidEmail) {
+          console.error('Error: Web Push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL');
+          process.exit(1);
+        }
+        pushProviderInstances.push(new WebPushProvider({ vapidPublicKey, vapidPrivateKey, vapidEmail }));
+        logger.info('Web Push provider configured', { email: vapidEmail });
+        break;
+      }
+      default:
+        console.error(`Error: Unknown push provider '${provider}'. Use: apns, web_push`);
+        process.exit(1);
+    }
+  }
+  // Storage needed for push token lookups — create early if not yet initialized
+  if (!storage) storage = new Storage(DB_PATH);
+  pushManager = new PushManager(storage, pushProviderInstances);
+}
 
 if (IS_CONNECTED_MODE) {
   // Connected mode: delegate auth to remote account service
@@ -337,56 +380,15 @@ if (IS_CONNECTED_MODE) {
   logger.info('Connected to account service', { url: ACCOUNT_URL, region: REGION });
 
   // Connected mode still needs local storage for devices, pending, push tokens
-  storage = new Storage(DB_PATH);
+  if (!storage) storage = new Storage(DB_PATH);
 } else {
   // Standalone mode: local auth + expose account API
   const authProviders = await createAuthProviders();
   directAuthProviders = authProviders;
-  storage = new Storage(DB_PATH);
+  if (!storage) storage = new Storage(DB_PATH);
 
   if (REGION && PUBLIC_RELAY_URL) {
     storage.upsertRegion(REGION, PUBLIC_RELAY_URL, REGION_DISPLAY_NAME || REGION, true);
-  }
-
-  // Push providers (standalone only — in connected mode, push is handled by the account service's head)
-  if (PUSH_PROVIDERS.length > 0) {
-    const pushProviderInstances: IPushProvider[] = [];
-    for (const provider of PUSH_PROVIDERS) {
-      switch (provider) {
-        case 'apns': {
-          const keyPath = process.env.APNS_KEY_PATH;
-          const keyId = process.env.APNS_KEY_ID;
-          const teamId = process.env.APNS_TEAM_ID;
-          const bundleId = process.env.APNS_BUNDLE_ID;
-          if (!keyPath || !keyId || !teamId || !bundleId) {
-            console.error('Error: APNs requires APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
-            process.exit(1);
-          }
-          pushProviderInstances.push(new ApnsProvider({
-            keyPath, keyId, teamId, bundleId,
-            environment: (process.env.APNS_ENVIRONMENT as 'production' | 'sandbox') ?? 'production',
-          }));
-          logger.info('APNs push provider configured', { bundleId, environment: process.env.APNS_ENVIRONMENT ?? 'production' });
-          break;
-        }
-        case 'web_push': {
-          const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-          const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-          const vapidEmail = process.env.VAPID_EMAIL;
-          if (!vapidPublicKey || !vapidPrivateKey || !vapidEmail) {
-            console.error('Error: Web Push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL');
-            process.exit(1);
-          }
-          pushProviderInstances.push(new WebPushProvider({ vapidPublicKey, vapidPrivateKey, vapidEmail }));
-          logger.info('Web Push provider configured', { email: vapidEmail });
-          break;
-        }
-        default:
-          console.error(`Error: Unknown push provider '${provider}'. Use: apns, web_push`);
-          process.exit(1);
-      }
-    }
-    pushManager = new PushManager(storage, pushProviderInstances);
   }
 
   const localBackend = new LocalAuthBackend({
