@@ -275,7 +275,6 @@ export function useScrollController(
       grouped[grouped.length - 1].type === 'standalone' || curHasFinal
     );
     const newBubbleAtEnd = hasBubbleAtEnd && (
-      grouped.length > c.prevGroupLen ||
       curLastSeq > c.prevLastSeq ||
       (curHasFinal && !c.prevHadFinal)
     );
