@@ -25,10 +25,11 @@ import type {
   MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { getKrakiHome } from '../config.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
 import {
@@ -146,6 +147,60 @@ export function resolveCopilotCliPath(): string | undefined {
 function isRecoverableSessionError(err: unknown): boolean {
   const message = getErrorMessage(err);
   return message.includes('Session not found:') || message.includes('Connection is disposed');
+}
+
+// ── Copilot configDir shadow ────────────────────────────
+//
+// The Copilot CLI loads persistent tool approval rules from
+// ~/.copilot/permissions-config.json. When those rules include
+// {kind:"write"}, the CLI auto-approves writes *without* calling
+// the SDK's onPermissionRequest handler — bypassing Kraki's mode
+// enforcement entirely.
+//
+// To ensure every permission flows through Kraki, we create a
+// shadow configDir that symlinks all user config (MCP, hooks, etc.)
+// but replaces permissions-config.json with an empty one.
+
+const PERMISSIONS_CONFIG_FILE = 'permissions-config.json';
+const EMPTY_PERMISSIONS = JSON.stringify({ locations: {} });
+let cachedCopilotConfigDir: string | null = null;
+
+function getCopilotConfigDir(): string {
+  if (cachedCopilotConfigDir && existsSync(cachedCopilotConfigDir)) {
+    return cachedCopilotConfigDir;
+  }
+
+  const realCopilotDir = join(homedir(), '.copilot');
+  const shadowDir = join(getKrakiHome(), 'copilot-config');
+  mkdirSync(shadowDir, { recursive: true });
+
+  // Symlink every entry from ~/.copilot except permissions-config*
+  if (existsSync(realCopilotDir)) {
+    try {
+      for (const entry of readdirSync(realCopilotDir)) {
+        if (entry.startsWith('permissions-config')) continue;
+        const src = join(realCopilotDir, entry);
+        const dest = join(shadowDir, entry);
+        try {
+          // Remove stale symlink / file (lstatSync doesn't follow symlinks)
+          lstatSync(dest);
+          unlinkSync(dest);
+        } catch { /* dest doesn't exist */ }
+        try {
+          symlinkSync(src, dest);
+        } catch { /* best effort */ }
+      }
+    } catch (err) {
+      logger.warn(`Failed to set up shadow copilot config: ${(err as Error).message}`);
+    }
+  }
+
+  // Write an empty permissions config so the CLI starts with no pre-approved rules
+  writeFileSync(join(shadowDir, PERMISSIONS_CONFIG_FILE), EMPTY_PERMISSIONS);
+
+  cachedCopilotConfigDir = shadowDir;
+  logger.debug({ shadowDir }, 'Using shadow copilot configDir (no stored tool approvals)');
+  return shadowDir;
 }
 
 export function patchCopilotSdkSessionImport(currentUrl: string = getRuntimeUrl()): boolean {
@@ -435,7 +490,7 @@ export class CopilotAdapter extends AgentAdapter {
       ...(config.model && { model: config.model }),
       ...(effort && { reasoningEffort: effort }),
       ...(config.cwd && { workingDirectory: config.cwd }),
-      configDir: join(homedir(), '.copilot'),
+      configDir: getCopilotConfigDir(),
       ...(mcpServers && { mcpServers }),
       systemMessage: { mode: 'append' as const, content: CopilotAdapter.SYSTEM_PROMPT },
       streaming: true,
@@ -794,7 +849,7 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     return {
-      configDir: join(homedir(), '.copilot'),
+      configDir: getCopilotConfigDir(),
       streaming: true,
       ...(mcpServers && { mcpServers }),
       systemMessage: { mode: 'append' as const, content: CopilotAdapter.SYSTEM_PROMPT },
@@ -1060,8 +1115,19 @@ export class CopilotAdapter extends AgentAdapter {
         return { kind: 'approved' };
       }
       if (mode === 'discuss' && toolKind !== 'write') {
-        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        // In discuss mode, shell commands that might write files need operator approval
+        if (toolKind === 'shell') {
+          const command = ((req.fullCommandText ?? req.command ?? req.cmd ?? req.script ?? '') as string).trim();
+          if (isShellWriteCommand(command)) {
+            // Fall through to permission request (don't auto-approve)
+          } else {
+            logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+            return { kind: 'approved' };
+          }
+        } else {
+          logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
+          return { kind: 'approved' };
+        }
       }
       if (mode === 'discuss' && toolKind === 'write') {
         const filePath = ((req.fileName ?? req.path ?? '') as string);
@@ -1190,7 +1256,7 @@ export class CopilotAdapter extends AgentAdapter {
     try {
       logger.debug('Creating throwaway session for title generation');
       session = await this.client.createSession({
-        configDir: join(homedir(), '.copilot'),
+        configDir: getCopilotConfigDir(),
         systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
         streaming: true,
         onPermissionRequest: () => ({ kind: 'approved' as const }),
@@ -1221,4 +1287,39 @@ export class CopilotAdapter extends AgentAdapter {
       }
     }
   }
+}
+
+// ── Shell write detection ──────────────────────────────
+
+/** Patterns that indicate a shell command may write/modify files. */
+const SHELL_WRITE_PATTERNS = [
+  // Redirects (> or >>) — with or without surrounding spaces
+  />+/,
+  // In-place edit
+  /\bsed\s+(-[a-zA-Z]*i|--in-place)/,
+  // Write commands
+  /\btee\b/,
+  /\bmv\b/,
+  /\bcp\b/,
+  /\brm\b/,
+  /\btouch\b/,
+  /\bmkdir\b/,
+  /\brmdir\b/,
+  /\bchmod\b/,
+  /\bchown\b/,
+  /\bdd\b/,
+  // Interpreters (can execute arbitrary write code)
+  /\bpython[23]?\b/,
+  /\bnode\b/,
+  /\bruby\b/,
+  /\bperl\b/,
+  /\bphp\b/,
+  // Git write operations
+  /\bgit\s+(checkout|reset|stash|clean|revert|cherry-pick|merge|rebase|pull|apply)\b/,
+  // Package manager installs
+  /\b(npm|pnpm|yarn|pip|pip3|cargo|go)\s+install\b/,
+];
+
+function isShellWriteCommand(command: string): boolean {
+  return SHELL_WRITE_PATTERNS.some(pattern => pattern.test(command));
 }
