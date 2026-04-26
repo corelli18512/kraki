@@ -313,6 +313,8 @@ export function useScrollController(
     const toSeq = firstSeq - 1;
     const fromSeq = Math.max(1, toSeq - 99);
     logger.info('scroll: auto gap-load (content fits)', { sessionId, fromSeq, toSeq });
+    // Re-arm entry so the next layout pass scrolls to bottom after prepend
+    ctx.current.entryPending = true;
     messageProvider.fetchRange(sessionId, fromSeq, toSeq);
   }, [sessionId, firstSeq, grouped.length]);
 
