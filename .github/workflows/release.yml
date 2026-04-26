@@ -92,7 +92,7 @@ jobs:
       - name: Ensure release source is main
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1
+          git fetch origin main
           git merge-base --is-ancestor "${{ steps.meta.outputs.release_sha }}" origin/main || {
             echo "Release target must point to a commit on main."
             exit 1
