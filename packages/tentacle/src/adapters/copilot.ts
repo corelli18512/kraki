@@ -351,6 +351,7 @@ export class CopilotAdapter extends AgentAdapter {
     '  Discuss proposed changes before attempting writes.',
     '  Do not use shell commands (sed, tee, echo >, scripts, etc.) to modify',
     '  files — use the edit/create tools instead.',
+    '  Shell commands, web fetches, and MCP tools are all allowed in discuss mode.',
     '- **execute**: All tool calls are auto-approved. Be efficient and execute',
     '  directly without asking for confirmation. If unsure about intent or',
     '  approach, ask the operator for clarification before proceeding.',
