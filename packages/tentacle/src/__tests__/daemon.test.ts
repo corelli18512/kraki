@@ -46,6 +46,7 @@ vi.mock('node:sea', () => ({
 }));
 
 vi.mock('../config.js', () => ({
+  getKrakiHome: vi.fn(() => '/tmp/fake-home/.kraki'),
   getLogsDir: vi.fn(() => '/tmp/fake-kraki/logs'),
   getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
