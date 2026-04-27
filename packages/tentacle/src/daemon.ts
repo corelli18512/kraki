@@ -19,6 +19,7 @@ import { homedir } from 'node:os';
 import { isSea } from 'node:sea';
 
 import {
+  getKrakiHome,
   getLogsDir,
   getLogVerbosity,
   type KrakiConfig,
@@ -28,10 +29,27 @@ import {
 } from './config.js';
 
 const STARTUP_GRACE_MS = 1500;
-const LAUNCHD_LABEL = 'cloud.corelli.kraki';
+const LAUNCHD_LABEL_BASE = 'cloud.corelli.kraki';
+
+/**
+ * Derive a launchd label scoped to the current KRAKI_HOME.
+ * The default home (~/.kraki) gets the base label; any override gets a
+ * suffix so multiple instances (e.g. dev-local worktrees) don't collide.
+ */
+function getLaunchdLabel(): string {
+  const home = getKrakiHome();
+  const defaultHome = join(homedir(), '.kraki');
+  if (resolve(home) === resolve(defaultHome)) return LAUNCHD_LABEL_BASE;
+  const suffix = home
+    .replace(/[^a-zA-Z0-9]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(-60);
+  return `${LAUNCHD_LABEL_BASE}.${suffix}`;
+}
 
 function getLaunchdPlistPath(): string {
-  return join(homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+  return join(homedir(), 'Library', 'LaunchAgents', `${getLaunchdLabel()}.plist`);
 }
 
 function unloadLaunchdAgent(): void {
@@ -231,7 +249,7 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${LAUNCHD_LABEL}</string>
+    <string>${getLaunchdLabel()}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${escapeXml(process.execPath)}</string>
