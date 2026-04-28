@@ -12,6 +12,28 @@ import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
 
+/**
+ * On Windows, refresh process.env.PATH from the registry so that
+ * newly-installed tools are visible without opening a new terminal.
+ * No-op on other platforms.
+ */
+function refreshPathOnWindows(): void {
+  if (platform() !== 'win32') return;
+  try {
+    const machinePath = execSync(
+      'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v Path',
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    ).replace(/.*REG_(?:EXPAND_)?SZ\s+/i, '').trim();
+
+    const userPath = execSync(
+      'reg query "HKCU\\Environment" /v Path',
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    ).replace(/.*REG_(?:EXPAND_)?SZ\s+/i, '').trim();
+
+    process.env.PATH = `${machinePath};${userPath}`;
+  } catch { /* best effort — fall through to stale PATH */ }
+}
+
 // ── Check results ───────────────────────────────────────
 
 export interface CliCheckResult {
@@ -87,6 +109,7 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
     console.log(chalk.yellow(`\n⚠  ${label} not found.`));
     console.log(chalk.dim(`   ${installHint}`));
     await input({ message: 'Press Enter to retry…' });
+    refreshPathOnWindows();
     spinner?.start();
   }
 }

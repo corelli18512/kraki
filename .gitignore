@@ -10,6 +10,7 @@ dist/
 *.db-shm
 *.db-wal
 *.log
+*.tgz
 *.tsbuildinfo
 coverage/
 .tmp/

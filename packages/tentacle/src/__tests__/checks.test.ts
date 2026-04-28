@@ -162,6 +162,26 @@ describe('withRetry()', () => {
     expect(check).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes PATH from Windows registry on retry (win32)', async () => {
+    mockPlatform.mockReturnValue('win32');
+
+    const check = vi.fn()
+      .mockReturnValueOnce({ found: false })
+      .mockReturnValueOnce({ found: true, version: '1.0' });
+
+    // Mock reg query calls that refreshPathOnWindows() makes
+    mockExecSync
+      .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Windows\\system32')
+      .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Users\\me\\bin');
+
+    mockInput.mockResolvedValueOnce('');
+
+    const origPath = process.env.PATH;
+    await withRetry(check, 'Test', 'install hint');
+    expect(process.env.PATH).toBe('C:\\Windows\\system32;C:\\Users\\me\\bin');
+    process.env.PATH = origPath; // restore
+  });
+
   it('keeps retrying until check passes', async () => {
     const check = vi.fn()
       .mockReturnValueOnce({ found: false })

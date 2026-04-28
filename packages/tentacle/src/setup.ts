@@ -441,7 +441,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     const copilotResult = await withRetry(
       checkCopilotCli,
       'Copilot CLI',
-      'Install from https://docs.github.com/copilot/how-tos/copilot-cli',
+      'Install from https://github.com/features/copilot/cli/',
       agentSpinner,
     );
     agentSpinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
@@ -606,7 +606,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     const copilotResult = await withRetry(
       checkCopilotCli,
       'Copilot CLI',
-      'Install from https://docs.github.com/copilot/how-tos/copilot-cli',
+      'Install from https://github.com/features/copilot/cli/',
       spinner,
     );
     spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
