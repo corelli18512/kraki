@@ -43,6 +43,12 @@ export function SessionPage() {
     return () => setActiveSessionId(null);
   }, [sessionId, setActiveSessionId]);
 
+  // Tier 2: on-demand message loading when user opens a session
+  useEffect(() => {
+    if (!sessionId) return;
+    import('../lib/message-provider').then(({ messageProvider }) => messageProvider.ensureLoaded(sessionId));
+  }, [sessionId]);
+
   // Clear unread when viewing session + notify server
   useEffect(() => {
     if (!sessionId) return;

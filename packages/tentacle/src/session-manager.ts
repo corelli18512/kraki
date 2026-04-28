@@ -6,10 +6,32 @@
  * This is the tentacle's local intelligence layer.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
+
+const PREVIEW_MAX = 80;
+
+/** Strip common markdown syntax for clean preview display. */
+function stripMarkdownForPreview(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PREVIEW_MAX);
+}
 
 // ── Types ───────────────────────────────────────────────
 
@@ -548,6 +570,7 @@ export class SessionManager {
     createdAt: string;
     usage?: import('@kraki/protocol').SessionUsage;
     source?: import('@kraki/protocol').LocalSessionSource | 'imported';
+    preview?: import('@kraki/protocol').SessionPreviewDigest;
   }> {
     const result: ReturnType<SessionManager['getSessionList']> = [];
     if (!existsSync(this.sessionsDir)) return result;
@@ -574,6 +597,7 @@ export class SessionManager {
         createdAt: meta.createdAt,
         usage: meta.usage,
         source: meta.source,
+        preview: this.getSessionPreview(meta.id),
       });
     }
     return result;
@@ -583,6 +607,93 @@ export class SessionManager {
 
   private sessionDir(sessionId: string): string {
     return join(this.sessionsDir, sessionId);
+  }
+
+  /**
+   * Read the last few lines of a session's JSONL and extract a sidebar preview.
+   * Scans backward to find the last agent_message, user_message, error, permission, or question.
+   */
+  private getSessionPreview(sessionId: string): import('@kraki/protocol').SessionPreviewDigest | undefined {
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    if (!existsSync(logPath)) return undefined;
+
+    // Read the tail of the file (last 32KB is plenty for the last few messages)
+    const TAIL_BYTES = 32 * 1024;
+    let tail: string;
+    try {
+      const fd = openSync(logPath, 'r');
+      try {
+        const { size } = fstatSync(fd);
+        const readStart = Math.max(0, size - TAIL_BYTES);
+        const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
+        readSync(fd, buf, 0, buf.length, readStart);
+        tail = buf.toString('utf8');
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return undefined;
+    }
+
+    // Parse lines from end to find the last previewable message
+    const lines = tail.split('\n');
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+      if (!lines[i]) continue;
+      try {
+        const entry = JSON.parse(lines[i]) as LoggedMessage;
+        const inner = JSON.parse(entry.payload);
+        const payload = inner.payload as Record<string, unknown> | undefined;
+        if (!payload) continue;
+
+        switch (inner.type) {
+          case 'agent_message': {
+            const content = payload.content;
+            if (typeof content === 'string' && content) {
+              return { text: stripMarkdownForPreview(content), type: 'agent', timestamp: entry.ts };
+            }
+            break;
+          }
+          case 'user_message': {
+            const content = payload.content;
+            if (typeof content === 'string' && content) {
+              return { text: stripMarkdownForPreview(content), type: 'user', timestamp: entry.ts };
+            }
+            break;
+          }
+          case 'error': {
+            const message = payload.message;
+            if (typeof message === 'string') {
+              return { text: stripMarkdownForPreview(message), type: 'error', timestamp: entry.ts };
+            }
+            break;
+          }
+          case 'permission': {
+            if (!payload.resolution) {
+              const tool = typeof payload.toolName === 'string' ? payload.toolName : 'permission';
+              return { text: tool.slice(0, 80), type: 'permission', timestamp: entry.ts };
+            }
+            break;
+          }
+          case 'question': {
+            if (!payload.answer) {
+              const q = typeof payload.question === 'string' ? payload.question : '';
+              return { text: stripMarkdownForPreview(q), type: 'question', timestamp: entry.ts };
+            }
+            break;
+          }
+          case 'answer': {
+            const answer = payload.answer;
+            if (typeof answer === 'string' && answer) {
+              return { text: stripMarkdownForPreview(answer), type: 'answer', timestamp: entry.ts };
+            }
+            break;
+          }
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return undefined;
   }
 
   private readMeta(sessionId: string): SessionMeta | null {

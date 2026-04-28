@@ -31,6 +31,16 @@ export interface SessionSummary {
   source?: LocalSessionSource | 'imported';
 }
 
+/** Sidebar preview — last meaningful message for list display and sort. */
+export interface SessionPreviewDigest {
+  /** Truncated plain-text preview (max ~80 chars, markdown stripped). */
+  text: string;
+  /** Message type that produced the preview. */
+  type: 'agent' | 'user' | 'error' | 'permission' | 'question' | 'answer';
+  /** ISO 8601 timestamp of the source message. Used for sidebar sort order. */
+  timestamp: string;
+}
+
 /** Compact session metadata sent in session_list for sync. */
 export interface SessionDigest {
   id: string;
@@ -48,6 +58,8 @@ export interface SessionDigest {
   pinned?: boolean;
   /** Origin of this session. Absent for sessions created natively in Kraki. */
   source?: LocalSessionSource | 'imported';
+  /** Sidebar preview computed by tentacle from the last few messages. */
+  preview?: SessionPreviewDigest;
 }
 
 // ------------------------------------------------------------

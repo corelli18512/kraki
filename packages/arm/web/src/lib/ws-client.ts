@@ -240,8 +240,13 @@ export class KrakiWSClient {
         store.setSessionMode(ts.id, ts.mode as 'safe' | 'discuss' | 'execute' | 'delegate');
       }
 
-      // Restore cumulative usage from tentacle
+      // Apply sidebar preview from tentacle (Tier 0: instant sidebar)
       const tsRecord = ts as Record<string, unknown>;
+      const preview = tsRecord.preview as { text: string; type: string; timestamp: string } | undefined;
+      if (preview?.text) {
+        store.setSessionPreview(ts.id, { text: preview.text, type: preview.type, timestamp: preview.timestamp });
+      }
+
       if (tsRecord.usage && typeof tsRecord.usage === 'object') {
         store.setSessionUsage(ts.id, tsRecord.usage as import('@kraki/protocol').SessionUsage);
       }
@@ -262,10 +267,8 @@ export class KrakiWSClient {
         store.clearUnread(ts.id);
       }
 
-      // Store tentacle info and fetch latest messages via provider
+      // Store tentacle info for later message loading
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
-      const fromSeq = Math.max(1, ts.lastSeq - 49);
-      messageProvider.fetchRange(ts.id, fromSeq, ts.lastSeq, { initial: true });
     }
 
     // Apply pin state from tentacle (replaces local pins for this tentacle's sessions)
@@ -278,6 +281,74 @@ export class KrakiWSClient {
       currentPinned.add(sid);
     }
     store.setPinnedSessions(currentPinned);
+
+    // Tier 1: Budget warm-up — pre-fetch messages for likely-needed sessions
+    this.runWarmup(tentacleSessions, pinnedFromTentacle);
+  }
+
+  // ── Budget warm-up constants ────────────────────────────
+  private static readonly WARMUP_BUDGET = 500;
+  private static readonly WARMUP_RECENCY_MS = 24 * 60 * 60 * 1000; // 24 hours
+  private static readonly WARMUP_PER_SESSION = 50;
+
+  /**
+   * Pre-fetch messages for active, pinned, and recent sessions.
+   * Runs async — does not block sidebar rendering.
+   *
+   * Pass 1: active + pinned + <24h → fetch last 50 (always, outside budget)
+   * Pass 2: if budget remains, fill next-most-recent with 50 each
+   */
+  private runWarmup(
+    sessions: import('@kraki/protocol').SessionDigest[],
+    pinnedIds: Set<string>,
+  ): void {
+    const now = Date.now();
+    const { WARMUP_BUDGET, WARMUP_RECENCY_MS, WARMUP_PER_SESSION } = KrakiWSClient;
+
+    // Classify sessions
+    type WarmupEntry = { id: string; lastSeq: number; previewTs: number };
+    const eager: WarmupEntry[] = [];
+    const rest: WarmupEntry[] = [];
+
+    for (const ts of sessions) {
+      if (ts.lastSeq <= 0) continue;
+      const tsRecord = ts as Record<string, unknown>;
+      const preview = tsRecord.preview as { timestamp?: string } | undefined;
+      const previewTs = preview?.timestamp ? new Date(preview.timestamp).getTime() : 0;
+
+      const entry: WarmupEntry = { id: ts.id, lastSeq: ts.lastSeq, previewTs };
+      const isEager = ts.state === 'active' || pinnedIds.has(ts.id) || (previewTs > 0 && now - previewTs < WARMUP_RECENCY_MS);
+
+      if (isEager) {
+        eager.push(entry);
+      } else {
+        rest.push(entry);
+      }
+    }
+
+    // Sort rest by recency (most recent first) for budget fill
+    rest.sort((a, b) => b.previewTs - a.previewTs);
+
+    // Pass 1: eager sessions (always fetch)
+    let used = 0;
+    for (const s of eager) {
+      const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
+      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      used += Math.min(s.lastSeq, WARMUP_PER_SESSION);
+    }
+
+    // Pass 2: fill remaining budget with next-most-recent
+    let budgetFilled = 0;
+    for (const s of rest) {
+      const cost = Math.min(s.lastSeq, WARMUP_PER_SESSION);
+      if (used + cost > WARMUP_BUDGET) break;
+      const fromSeq = Math.max(1, s.lastSeq - WARMUP_PER_SESSION + 1);
+      messageProvider.fetchRange(s.id, fromSeq, s.lastSeq, { initial: true });
+      used += cost;
+      budgetFilled++;
+    }
+
+    logger.info('warm-up scheduled', { eager: eager.length, budgetFill: budgetFilled, skipped: rest.length - budgetFilled, totalMsgs: used, budget: WARMUP_BUDGET });
   }
 
   /** Clear all in-progress tracking (used on disconnect/close). */
