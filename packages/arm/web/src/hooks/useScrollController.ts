@@ -230,7 +230,12 @@ export function useScrollController(
     }
     // ② PREPEND ADJUST
     else if (c.prepended) {
-      if (!c.sticky && c.prevHeight > 0 && el.scrollHeight > c.prevHeight) {
+      if (c.sticky) {
+        // User was at the bottom (e.g. fork/initial-load with near-empty content) —
+        // keep them there after older messages are prepended above.
+        scrollToMax(el);
+        logger.info('scroll: ② prepend → bottom (sticky)');
+      } else if (c.prevHeight > 0 && el.scrollHeight > c.prevHeight) {
         const delta = el.scrollHeight - c.prevHeight;
         el.scrollTop += delta;
         logger.info('scroll: ② prepend adjust', { delta });
