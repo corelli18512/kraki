@@ -24,14 +24,19 @@ export interface ParsedPermission {
  *   { kind: "url",   url: "https://example.com" }
  *
  * We normalise these into typed ToolArgs + a human-readable description.
+ *
+ * Note: The SDK PermissionRequest type only declares `kind` and `toolCallId`,
+ * but the runtime objects carry additional fields per-kind (fileName, command, etc.).
  */
 export function parsePermission(req: PermissionRequest): ParsedPermission {
-  const kind: string = req.kind ?? 'unknown';
-  const intention = (req.intention as string | undefined) ?? '';
+  // The runtime request carries extra fields beyond the TS type
+  const r = req as PermissionRequest & Record<string, unknown>;
+  const kind: string = r.kind ?? 'unknown';
+  const intention = (r.intention as string | undefined) ?? '';
 
   switch (kind) {
     case 'shell': {
-      const command = ((req.fullCommandText ?? req.command ?? req.cmd ?? req.script ?? '') as string);
+      const command = ((r.fullCommandText ?? r.command ?? r.cmd ?? r.script ?? '') as string);
       return {
         toolArgs: { toolName: 'shell', args: { command } },
         description: `Run: ${command}`,
@@ -39,7 +44,7 @@ export function parsePermission(req: PermissionRequest): ParsedPermission {
     }
 
     case 'write': {
-      const path = ((req.fileName ?? req.path ?? '') as string);
+      const path = ((r.fileName ?? r.path ?? '') as string);
       return {
         toolArgs: { toolName: 'write_file', args: { path, content: '' } },
         description: `${intention || 'Write'}: ${path}`,
@@ -47,7 +52,7 @@ export function parsePermission(req: PermissionRequest): ParsedPermission {
     }
 
     case 'read': {
-      const path = ((req.fileName ?? req.path ?? '') as string);
+      const path = ((r.fileName ?? r.path ?? '') as string);
       return {
         toolArgs: { toolName: 'read_file', args: { path } },
         description: `${intention || 'Read'}: ${path}`,
@@ -55,7 +60,7 @@ export function parsePermission(req: PermissionRequest): ParsedPermission {
     }
 
     case 'url': {
-      const url = ((req.url ?? '') as string);
+      const url = ((r.url ?? '') as string);
       return {
         toolArgs: { toolName: 'fetch_url', args: { url } },
         description: `Fetch: ${url}`,
@@ -63,16 +68,32 @@ export function parsePermission(req: PermissionRequest): ParsedPermission {
     }
 
     case 'mcp': {
-      const server = ((req.serverName ?? '') as string) || 'unknown';
-      const tool = ((req.toolName ?? '') as string) || 'unknown';
+      const server = ((r.serverName ?? '') as string) || 'unknown';
+      const tool = ((r.toolName ?? '') as string) || 'unknown';
       return {
         toolArgs: { toolName: 'mcp', args: { server, tool, params: {} } },
         description: `MCP tool: ${tool} on ${server}`,
       };
     }
 
+    case 'memory': {
+      const subject = ((r.subject ?? '') as string);
+      const fact = ((r.fact ?? '') as string);
+      return {
+        toolArgs: { toolName: 'memory', args: { subject, fact } },
+        description: `Memory: ${subject}`,
+      };
+    }
+
+    case 'hook': {
+      return {
+        toolArgs: { toolName: intention || 'hook', args: {} },
+        description: intention || 'Hook execution',
+      };
+    }
+
     default: {
-      const { kind: _, toolCallId: __, ...rest } = req;
+      const { kind: _, toolCallId: __, ...rest } = r;
       return {
         toolArgs: { toolName: intention || kind, args: rest as Record<string, unknown> },
         description: intention || `${kind}: ${JSON.stringify(rest).slice(0, 200)}`,

@@ -35,7 +35,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^0.1.32",
+    "@github/copilot-sdk": "^0.3.0",
     "@inquirer/prompts": "^8.3.2",
     "@kraki/crypto": "workspace:*",
     "@kraki/protocol": "workspace:*",

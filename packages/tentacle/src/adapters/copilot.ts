@@ -428,7 +428,7 @@ export class CopilotAdapter extends AgentAdapter {
     const opts = {
       // Use Copilot's own credential store when no gh token is available
       useLoggedInUser: !githubToken,
-      ...(githubToken && { githubToken }),
+      ...(githubToken && { gitHubToken: githubToken }),
       ...(cliPath && { cliPath }),
     };
 
@@ -660,7 +660,7 @@ export class CopilotAdapter extends AgentAdapter {
       // Auto-approve any OTHER pending permissions of the same tool kind in this session
       for (const [otherId, otherPending] of entry.pendingPermissions) {
         if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
-          otherPending.resolve({ kind: 'approved' });
+          otherPending.resolve({ kind: 'approve-once' });
           entry.pendingPermissions.delete(otherId);
           this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
           logger.debug({ permissionId: otherId, sessionId, toolKind: pending.toolKind }, 'permission auto-approved');
@@ -669,12 +669,12 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     const kindMap: Record<PermissionDecision, PermissionRequestResult> = {
-      approve: { kind: 'approved' },
-      deny: { kind: 'denied-interactively-by-user' },
-      always_allow: { kind: 'approved' },
+      approve: { kind: 'approve-once' },
+      deny: { kind: 'reject' },
+      always_allow: { kind: 'approve-once' },
     };
 
-    pending.resolve(kindMap[decision] ?? { kind: 'denied-interactively-by-user' });
+    pending.resolve(kindMap[decision] ?? { kind: 'reject' });
     entry.pendingPermissions.delete(permissionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
   }
@@ -819,7 +819,7 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     for (const [permId, p] of entry.pendingPermissions) {
-      p.resolve({ kind: 'denied-interactively-by-user' });
+      p.resolve({ kind: 'reject' });
       this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
     }
     entry.pendingPermissions.clear();
@@ -906,7 +906,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('tool.execution_start', (event) => {
       this.turnHasOutput.set(sessionId, true);
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
       }
@@ -921,7 +921,7 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('tool.execution_complete', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const rawResult = data.result;
       const toolCallId = data.toolCallId as string | undefined;
       // SDK sends result as { content: string, contents?: [...] } or as a plain string.
@@ -997,7 +997,7 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.error', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const message = (data.message as string) ?? 'Unknown session error';
       const errorType = data.errorType as string | undefined;
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
@@ -1009,9 +1009,10 @@ export class CopilotAdapter extends AgentAdapter {
 
     // session.tools_updated is ephemeral and not in the typed event union,
     // so we use the generic catch-all handler form.
-    session.on((event: { type: string; data?: Record<string, unknown> }) => {
+    session.on((event) => {
       if (event.type !== 'session.tools_updated') return;
-      const actualModel = event.data?.model as string | undefined;
+      const data = event.data as unknown as Record<string, unknown>;
+      const actualModel = data?.model as string | undefined;
       if (!actualModel) return;
 
       const expected = this.expectedModels.get(sessionId);
@@ -1036,7 +1037,7 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.info', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const category = data.category as string | undefined;
       if (category === 'mcp') {
         logger.info(`[MCP] ${data.message}`);
@@ -1046,13 +1047,13 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.warning', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const category = data.category as string | undefined;
       logger.warn(`[warning:${category}] ${data.message}`);
     });
 
     session.on('assistant.turn_end', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const reason = data?.reason;
       if (reason === 'error') {
         this.turnErrorReported.set(sessionId, true);
@@ -1082,7 +1083,7 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.title_changed', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const title = data?.title as string | undefined;
       if (title) {
         this.onTitleChanged?.(sessionId, title);
@@ -1090,7 +1091,7 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('assistant.usage', (event) => {
-      const data = event.data as Record<string, unknown>;
+      const data = event.data as unknown as Record<string, unknown>;
       const prev = this.sessionUsage.get(sessionId) ?? {
         inputTokens: 0, outputTokens: 0,
         cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -1120,14 +1121,15 @@ export class CopilotAdapter extends AgentAdapter {
       // Mode-based auto-approval
       if (mode === 'execute' || mode === 'delegate') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
       if (mode === 'discuss' && toolKind !== 'write') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
       if (mode === 'discuss' && toolKind === 'write') {
-        const filePath = ((req.fileName ?? req.path ?? '') as string);
+        const r = req as PermissionRequest & Record<string, unknown>;
+        const filePath = ((r.fileName ?? r.path ?? '') as string);
         // Allow list: files that can be written in Discuss mode
         const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
         const allowed = DISCUSS_MODE_WRITE_ALLOW_LIST.some(
@@ -1135,14 +1137,14 @@ export class CopilotAdapter extends AgentAdapter {
         );
         if (allowed) {
           logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (discuss mode allow list)');
-          return { kind: 'approved' };
+          return { kind: 'approve-once' };
         }
         logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (discuss mode)');
-        return { kind: 'denied-interactively-by-user', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
+        return { kind: 'reject', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
 
       // Not auto-approved — send to relay for user decision
@@ -1256,7 +1258,7 @@ export class CopilotAdapter extends AgentAdapter {
         configDir: getCopilotConfigDir(),
         systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
         streaming: true,
-        onPermissionRequest: () => ({ kind: 'approved' as const }),
+        onPermissionRequest: () => ({ kind: 'approve-once' as const }),
         onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
       });
       logger.debug({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');

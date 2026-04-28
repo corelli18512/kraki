@@ -223,7 +223,7 @@ describe('CopilotAdapter', () => {
       expect(capturedClientOptions[0]).toEqual(
         expect.objectContaining({
           useLoggedInUser: false,
-          githubToken: 'fake-gh-token',
+          gitHubToken: 'fake-gh-token',
           cliPath: fakeCopilotPath,
         }),
       );
@@ -773,7 +773,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'approve');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approved' });
+      expect(result).toEqual({ kind: 'approve-once' });
     });
 
     it('maps deny → denied', async () => {
@@ -793,7 +793,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'deny');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'denied-interactively-by-user' });
+      expect(result).toEqual({ kind: 'reject' });
     });
 
     it('maps always_allow → approved', async () => {
@@ -813,7 +813,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'always_allow');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approved' });
+      expect(result).toEqual({ kind: 'approve-once' });
     });
   });
 
@@ -890,7 +890,7 @@ describe('CopilotAdapter', () => {
       await adapter.killSession('mock-sess-1');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'denied-interactively-by-user' });
+      expect(result).toEqual({ kind: 'reject' });
     });
 
     it('resolves pending questions with empty on kill', async () => {
