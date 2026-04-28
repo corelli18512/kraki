@@ -37,9 +37,21 @@ vi.mock('node:fs', async (importActual) => {
   };
 });
 
+vi.mock('node:net', () => ({
+  createConnection: vi.fn(() => {
+    const { EventEmitter } = require('node:events');
+    const socket = new EventEmitter();
+    socket.destroy = vi.fn();
+    // Simulate successful connection attempt (ECONNREFUSED = network allowed)
+    setTimeout(() => socket.emit('error', Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 0);
+    return socket;
+  }),
+}));
+
 import { execSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
 import { existsSync, promises as fsp } from 'node:fs';
+import { createConnection } from 'node:net';
 import { platform, homedir } from 'node:os';
 import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions } from '../checks.js';
 
@@ -49,6 +61,7 @@ const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
 const mockReaddir = fsp.readdir as unknown as ReturnType<typeof vi.fn>;
 const mockPlatform = platform as unknown as ReturnType<typeof vi.fn>;
 const mockHomedir = homedir as unknown as ReturnType<typeof vi.fn>;
+const mockCreateConnection = createConnection as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -232,11 +245,13 @@ describe('warmupTccPermissions()', () => {
     expect(result).toEqual([]);
   });
 
-  it('probes all 7 protected folders on darwin', async () => {
+  it('probes all 7 protected folders plus Local Network on darwin', async () => {
     mockReaddir.mockResolvedValue([]);
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(7);
-    expect(result.every(r => r.status === 'granted')).toBe(true);
+    expect(result).toHaveLength(8);
+    // 7 folder probes + 1 network probe
+    expect(result.slice(0, 7).every(r => r.status === 'granted')).toBe(true);
+    expect(result[7]).toMatchObject({ label: 'Local Network', path: '(network)', status: 'granted' });
     expect(mockReaddir).toHaveBeenCalledTimes(7);
   });
 
@@ -244,20 +259,20 @@ describe('warmupTccPermissions()', () => {
     const eperm = Object.assign(new Error('eperm'), { code: 'EPERM' });
     mockReaddir.mockRejectedValue(eperm);
     const result = await warmupTccPermissions();
-    expect(result.every(r => r.status === 'denied')).toBe(true);
+    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
   });
 
   it('maps EACCES to denied', async () => {
     const eacces = Object.assign(new Error('eacces'), { code: 'EACCES' });
     mockReaddir.mockRejectedValue(eacces);
     const result = await warmupTccPermissions();
-    expect(result.every(r => r.status === 'denied')).toBe(true);
+    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
   });
 
   it('reports missing when folder does not exist', async () => {
     mockExistsSync.mockReturnValue(false);
     const result = await warmupTccPermissions();
-    expect(result.every(r => r.status === 'missing')).toBe(true);
+    expect(result.slice(0, 7).every(r => r.status === 'missing')).toBe(true);
     expect(mockReaddir).not.toHaveBeenCalled();
   });
 
@@ -265,7 +280,7 @@ describe('warmupTccPermissions()', () => {
     const eio = Object.assign(new Error('io'), { code: 'EIO' });
     mockReaddir.mockRejectedValue(eio);
     const result = await warmupTccPermissions();
-    expect(result.every(r => r.status === 'denied')).toBe(true);
+    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
   });
 
   it('invokes onStart before each probe and onResult after', async () => {
@@ -276,10 +291,12 @@ describe('warmupTccPermissions()', () => {
       (label) => { starts.push(label); },
       (r) => { results.push(`${r.label}:${r.status}`); },
     );
-    expect(starts).toHaveLength(7);
-    expect(results).toHaveLength(7);
+    expect(starts).toHaveLength(8);
+    expect(results).toHaveLength(8);
     expect(starts[0]).toBe('~/Documents');
     expect(results[0]).toBe('~/Documents:granted');
+    expect(starts[7]).toBe('Local Network');
+    expect(results[7]).toBe('Local Network:granted');
   });
 
   it('uses absolute paths under homedir', async () => {
@@ -301,9 +318,37 @@ describe('warmupTccPermissions()', () => {
       return [];
     });
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(7);
+    expect(result).toHaveLength(8);
     expect(result[1].status).toBe('denied');
     expect(result[0].status).toBe('granted');
     expect(result[2].status).toBe('granted');
+  });
+
+  it('reports Local Network denied when socket returns EPERM', async () => {
+    const { EventEmitter } = require('node:events');
+    mockCreateConnection.mockImplementation(() => {
+      const socket = new EventEmitter();
+      socket.destroy = vi.fn();
+      setTimeout(() => socket.emit('error', Object.assign(new Error('perm'), { code: 'EPERM' })), 0);
+      return socket;
+    });
+    mockReaddir.mockResolvedValue([]);
+    const result = await warmupTccPermissions();
+    const net = result.find(r => r.label === 'Local Network');
+    expect(net).toMatchObject({ label: 'Local Network', status: 'denied' });
+  });
+
+  it('reports Local Network granted on ECONNREFUSED (network allowed, host unreachable)', async () => {
+    const { EventEmitter } = require('node:events');
+    mockCreateConnection.mockImplementation(() => {
+      const socket = new EventEmitter();
+      socket.destroy = vi.fn();
+      setTimeout(() => socket.emit('error', Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 0);
+      return socket;
+    });
+    mockReaddir.mockResolvedValue([]);
+    const result = await warmupTccPermissions();
+    const net = result.find(r => r.label === 'Local Network');
+    expect(net).toMatchObject({ label: 'Local Network', status: 'granted' });
   });
 });

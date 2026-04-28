@@ -120,8 +120,8 @@ function markTccWarmed(): void {
 async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
   console.log(`  ${icon} ${step(stepNum, total)} ${chalk.bold('macOS Privacy')}`);
   console.log(chalk.dim('    macOS will ask kraki for permission to access folders where'));
-  console.log(chalk.dim('    your code lives. Click "Allow" on each prompt — this only'));
-  console.log(chalk.dim('    happens once.\n'));
+  console.log(chalk.dim('    your code lives and your local network. Click "Allow" on'));
+  console.log(chalk.dim('    each prompt — this only happens once.\n'));
 
   const formatStatus = (r: TccProbeResult): string => {
     switch (r.status) {
@@ -146,7 +146,7 @@ async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
   if (denied.length > 0) {
     console.log('');
     console.log(chalk.dim('    You can grant access later in System Settings →'));
-    console.log(chalk.dim('    Privacy & Security → Files and Folders → kraki.'));
+    console.log(chalk.dim('    Privacy & Security → Files and Folders / Local Network → kraki.'));
   }
 
   markTccWarmed();

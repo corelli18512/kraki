@@ -1227,6 +1227,37 @@ describe('CopilotAdapter', () => {
       expect(spy).toHaveBeenCalledWith(sessionId, { toolName: 'test', result: '' });
     });
 
+    it('tool_complete extracts error message when result is absent (failed tool)', async () => {
+      const spy = vi.fn();
+      adapter.onToolComplete = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0]._emit('tool.execution_complete', {
+        data: { toolName: 'web_fetch', toolCallId: 'tc1', success: false, error: { message: 'Failed to fetch https://example.com: timeout' } },
+      });
+      expect(spy).toHaveBeenCalledWith(sessionId, {
+        toolName: 'web_fetch',
+        result: 'Failed to fetch https://example.com: timeout',
+        toolCallId: 'tc1',
+        success: false,
+      });
+    });
+
+    it('tool_complete extracts string error when result is absent', async () => {
+      const spy = vi.fn();
+      adapter.onToolComplete = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0]._emit('tool.execution_complete', {
+        data: { toolName: 'web_fetch', success: false, error: 'Connection refused' },
+      });
+      expect(spy).toHaveBeenCalledWith(sessionId, {
+        toolName: 'web_fetch',
+        result: 'Connection refused',
+        success: false,
+      });
+    });
+
     it('tool_complete reads image file when telemetry indicates viewType=image', async () => {
       const spy = vi.fn();
       adapter.onToolComplete = spy;

@@ -924,11 +924,18 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as Record<string, unknown>;
       const rawResult = data.result;
       const toolCallId = data.toolCallId as string | undefined;
-      // SDK sends result as { content: string, contents?: [...] } or as a plain string
+      // SDK sends result as { content: string, contents?: [...] } or as a plain string.
+      // On failure, result is undefined and the error is in data.error ({ message } or string).
       const resultObj = typeof rawResult === 'object' && rawResult !== null
         ? rawResult as Record<string, unknown>
         : null;
-      const result = resultObj?.content as string ?? (typeof rawResult === 'string' ? rawResult : (data.output as string ?? ''));
+      let result = resultObj?.content as string ?? (typeof rawResult === 'string' ? rawResult : (data.output as string ?? ''));
+      if (!result && data.error) {
+        const errObj = typeof data.error === 'object' && data.error !== null
+          ? data.error as Record<string, unknown>
+          : null;
+        result = (errObj?.message as string) ?? (typeof data.error === 'string' ? data.error : '');
+      }
 
       // Extract image attachments from structured content blocks (result.contents)
       const attachments: import('@kraki/protocol').Attachment[] = [];

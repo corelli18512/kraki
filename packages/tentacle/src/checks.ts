@@ -7,6 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, promises as fsp } from 'node:fs';
+import { createConnection } from 'node:net';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -166,12 +167,56 @@ async function probeFolder(absPath: string): Promise<TccProbeStatus> {
 }
 
 /**
- * Probe each macOS TCC-protected folder in turn, triggering the system
- * permission prompt on first run. Calls `onStart` before each probe so
- * a UI can render the status line before the modal blocks, then
- * `onResult` after the probe resolves so the UI can show the outcome.
+ * Probe macOS Local Network TCC by making a brief TCP connection to a
+ * LAN-routable address. macOS surfaces the "Local Network" permission
+ * prompt when a signed binary first attempts a local-network operation.
  *
- * Returns one result per folder. On non-macOS platforms returns [].
+ * We connect to 224.0.0.1:0 (the all-hosts multicast group) which is
+ * guaranteed to be unroutable but still triggers the TCC check in the
+ * kernel's network stack before the connection attempt fails. The
+ * socket is destroyed immediately after the TCC decision.
+ */
+async function probeLocalNetwork(): Promise<TccProbeStatus> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      // Timed out waiting for the TCC dialog — treat as granted (the
+      // dialog blocks the kernel call, so a timeout means it wasn't shown).
+      resolve('granted');
+    }, 10_000);
+
+    const socket = createConnection({ host: '224.0.0.1', port: 9 });
+
+    socket.on('connect', () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve('granted');
+    });
+
+    socket.on('error', (err) => {
+      clearTimeout(timeout);
+      socket.destroy();
+      const code = (err as NodeJS.ErrnoException).code;
+      // ENETUNREACH / ECONNREFUSED / EHOSTUNREACH are normal — they mean
+      // macOS allowed the network call but the destination is unreachable.
+      // EPERM means the user denied the Local Network prompt.
+      if (code === 'EPERM' || code === 'EACCES') {
+        resolve('denied');
+      } else {
+        resolve('granted');
+      }
+    });
+  });
+}
+
+/**
+ * Probe each macOS TCC-protected resource in turn, triggering the system
+ * permission prompt on first run. Probes folders first, then Local
+ * Network. Calls `onStart` before each probe so a UI can render the
+ * status line before the modal blocks, then `onResult` after the probe
+ * resolves so the UI can show the outcome.
+ *
+ * Returns one result per resource. On non-macOS platforms returns [].
  */
 export async function warmupTccPermissions(
   onStart?: (label: string) => void,
@@ -190,6 +235,15 @@ export async function warmupTccPermissions(
     results.push(result);
     onResult?.(result);
   }
+
+  // Local Network — probe after folders so the network dialog doesn't
+  // interleave with folder dialogs.
+  const netLabel = 'Local Network';
+  onStart?.(netLabel);
+  const netStatus = await probeLocalNetwork();
+  const netResult: TccProbeResult = { label: netLabel, path: '(network)', status: netStatus };
+  results.push(netResult);
+  onResult?.(netResult);
 
   return results;
 }
