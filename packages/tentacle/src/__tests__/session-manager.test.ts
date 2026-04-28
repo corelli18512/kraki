@@ -520,4 +520,102 @@ describe('SessionManager', () => {
       expect(entry).toBeTruthy();
     });
   });
+
+  // ── Preview extraction ─────────────────────────────────
+
+  describe('getSessionList preview', () => {
+    it('should extract agent_message preview from session', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      // Append messages including a final agent_message
+      sm.appendMessage(sessionId, 'active', JSON.stringify({
+        type: 'active', sessionId, payload: {},
+      }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: 'Hello **world**, this is a test.' },
+      }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({
+        type: 'idle', sessionId, payload: {},
+      }));
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry?.preview).toBeTruthy();
+      expect(entry!.preview!.type).toBe('agent');
+      expect(entry!.preview!.text).toBe('Hello world, this is a test.');
+      expect(entry!.preview!.timestamp).toBeTruthy();
+    });
+
+    it('should extract user_message preview when it is the last previewable', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Can you fix this bug?' },
+      }));
+      sm.appendMessage(sessionId, 'active', JSON.stringify({
+        type: 'active', sessionId, payload: {},
+      }));
+      sm.appendMessage(sessionId, 'tool_start', JSON.stringify({
+        type: 'tool_start', sessionId, payload: { toolName: 'bash', args: {} },
+      }));
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry?.preview).toBeTruthy();
+      expect(entry!.preview!.type).toBe('user');
+      expect(entry!.preview!.text).toBe('Can you fix this bug?');
+    });
+
+    it('should strip markdown in preview text', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: {
+          content: '# Heading\n\n**Bold** and `code` with [link](http://x.com)\n\n```\nblock\n```\n\nDone.',
+        },
+      }));
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry!.preview!.text).toBe('Heading Bold and code with link Done.');
+    });
+
+    it('should truncate preview to 80 chars', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      const longContent = 'A'.repeat(200);
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: longContent },
+      }));
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry!.preview!.text.length).toBeLessThanOrEqual(80);
+    });
+
+    it('should return undefined preview for session with no messages', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      expect(entry?.preview).toBeUndefined();
+    });
+
+    it('should skip resolved permissions and find earlier message', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: 'I will run a command.' },
+      }));
+      sm.appendMessage(sessionId, 'permission', JSON.stringify({
+        type: 'permission', sessionId, payload: { id: 'p1', toolName: 'bash', resolution: 'approved' },
+      }));
+
+      const list = sm.getSessionList();
+      const entry = list.find(s => s.id === sessionId);
+      // Should skip the resolved permission and find the agent_message
+      expect(entry!.preview!.type).toBe('agent');
+      expect(entry!.preview!.text).toContain('I will run a command');
+    });
+  });
 });
