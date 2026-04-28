@@ -116,7 +116,7 @@ describe("runSetup — login-first flow (official relay)", () => {
           json: () => Promise.resolve({
             ok: true,
             region: 'us',
-            relayUrl: 'wss://relay-us.kraki.corelli.cloud',
+            relayUrl: 'wss://kraki-us.corelli.cloud',
             user: { login: 'testuser' },
           }),
         });
@@ -136,7 +136,7 @@ describe("runSetup — login-first flow (official relay)", () => {
 
     const result = await runSetup();
     expect(result).toEqual({
-      relay: "wss://relay-us.kraki.corelli.cloud",
+      relay: "wss://kraki-us.corelli.cloud",
       authMethod: "github_token",
       device: { name: "my-laptop", id: "dev_test123" },
       logging: { verbosity: "normal" },
