@@ -60,6 +60,7 @@ export class MockRelayServer {
     options: {
       deviceId?: string;
       devices?: Record<string, unknown>[];
+      sessions?: Record<string, unknown>[];
       readState?: Record<string, number>;
       e2e?: boolean;
     } = {},
@@ -67,6 +68,7 @@ export class MockRelayServer {
     const {
       deviceId = 'test-device',
       devices = [],
+      sessions,
       readState = {},
       e2e = false,
     } = options;
@@ -82,6 +84,26 @@ export class MockRelayServer {
         e2e,
       }),
     );
+
+    // Send session_list as a separate message (like the real tentacle does)
+    if (sessions && sessions.length > 0) {
+      const tentacleDevice = devices.find(d => (d as Record<string, unknown>).role === 'tentacle');
+      const tentacleDeviceId = (tentacleDevice as Record<string, unknown> | undefined)?.id ?? 'tentacle-1';
+      this.sendMessage(ws, {
+        type: 'session_list',
+        deviceId: tentacleDeviceId,
+        payload: {
+          sessions: sessions.map(s => ({
+            mode: 'discuss',
+            lastSeq: 0,
+            readSeq: 0,
+            messageCount: 0,
+            createdAt: new Date().toISOString(),
+            ...s,
+          })),
+        },
+      });
+    }
   }
 
   /**

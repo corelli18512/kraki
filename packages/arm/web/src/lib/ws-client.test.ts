@@ -1169,4 +1169,92 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().devices.get('dev-1')?.online).toBe(false);
     });
   });
+
+  describe('session_list with preview and warm-up', () => {
+    async function connectAndAuth(client: KrakiWSClient) {
+      client.connect();
+      await vi.waitFor(() => {
+        expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0);
+      });
+      lastWsInstance._receive({
+        type: 'auth_ok',
+        deviceId: 'dev-web-123',
+        devices: [
+          { id: 'dev-t1', name: 'MacBook', role: 'tentacle', online: true, encryptionKey: 'mock-key' },
+        ],
+      });
+    }
+
+    it('applies preview from session_list to store', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      receiveInner({
+        type: 'session_list',
+        deviceId: 'dev-t1',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: {
+          sessions: [{
+            id: 'sess-1',
+            agent: 'copilot',
+            state: 'idle',
+            mode: 'discuss',
+            lastSeq: 50,
+            readSeq: 50,
+            messageCount: 50,
+            createdAt: new Date().toISOString(),
+            preview: { text: 'Hello world', type: 'agent', timestamp: '2026-04-28T10:00:00Z' },
+          }],
+        },
+      });
+
+      const preview = useStore.getState().sessionPreviews.get('sess-1');
+      expect(preview).toBeTruthy();
+      expect(preview!.text).toBe('Hello world');
+      expect(preview!.type).toBe('agent');
+    });
+
+    it('only warms up sessions within 24h or active/pinned', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      const now = new Date();
+      const recentTs = new Date(now.getTime() - 2 * 3600_000).toISOString(); // 2h ago
+      const oldTs = new Date(now.getTime() - 72 * 3600_000).toISOString(); // 3 days ago
+
+      receiveInner({
+        type: 'session_list',
+        deviceId: 'dev-t1',
+        seq: 1,
+        timestamp: now.toISOString(),
+        payload: {
+          sessions: [
+            { id: 'sess-recent', agent: 'copilot', state: 'idle', mode: 'discuss',
+              lastSeq: 100, readSeq: 100, messageCount: 100, createdAt: recentTs,
+              preview: { text: 'Recent', type: 'agent', timestamp: recentTs } },
+            { id: 'sess-active', agent: 'copilot', state: 'active', mode: 'discuss',
+              lastSeq: 50, readSeq: 50, messageCount: 50, createdAt: oldTs,
+              preview: { text: 'Active old', type: 'agent', timestamp: oldTs } },
+            { id: 'sess-old', agent: 'copilot', state: 'idle', mode: 'discuss',
+              lastSeq: 200, readSeq: 200, messageCount: 200, createdAt: oldTs,
+              preview: { text: 'Very old', type: 'agent', timestamp: oldTs } },
+          ],
+        },
+      });
+
+      // All sessions get metadata + preview applied
+      const store = useStore.getState();
+      expect(store.sessions.has('sess-recent')).toBe(true);
+      expect(store.sessions.has('sess-active')).toBe(true);
+      expect(store.sessions.has('sess-old')).toBe(true);
+      expect(store.sessionPreviews.get('sess-old')?.text).toBe('Very old');
+
+      // The old idle session should NOT have messages loaded (warm-up skips it)
+      // Wait a tick for any async warm-up to settle
+      await new Promise(r => setTimeout(r, 50));
+      const oldMsgs = store.messages.get('sess-old');
+      expect(oldMsgs?.length ?? 0).toBe(0);
+    });
+  });
 });

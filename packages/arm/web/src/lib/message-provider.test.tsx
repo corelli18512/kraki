@@ -132,3 +132,46 @@ describe('message-provider: replayed permissions', () => {
     expect(useStore.getState().pendingPermissions.size).toBe(1);
   });
 });
+
+describe('message-provider: ensureLoaded', () => {
+  it('triggers fetchRange when store has no messages', () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    // setSend to prevent "cannot request from tentacle" path
+    messageProvider.setSend(() => {});
+
+    const spy = vi.spyOn(messageProvider, 'fetchRange');
+    messageProvider.ensureLoaded('s1');
+
+    expect(spy).toHaveBeenCalledWith('s1', 51, 100, { initial: true });
+    spy.mockRestore();
+  });
+
+  it('does not fetch when store already has messages', () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+
+    // Put a message into the store
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 99, timestamp: '',
+      payload: { content: 'hello' },
+    });
+
+    const spy = vi.spyOn(messageProvider, 'fetchRange');
+    messageProvider.ensureLoaded('s1');
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('does not fetch when no tentacle info available', () => {
+    setupSession();
+    // Don't set tentacle info
+
+    const spy = vi.spyOn(messageProvider, 'fetchRange');
+    messageProvider.ensureLoaded('s1');
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});

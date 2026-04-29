@@ -26,3 +26,4 @@ packages/toolbar/src-tauri/Cargo.lock
 packages/toolbar/src-tauri/gen/
 packages/toolbar/src-tauri/icons/tray-*.png
 packages/toolbar/src-tauri/sidecar/
+packages/arm/web/e2e-*.png

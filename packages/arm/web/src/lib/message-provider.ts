@@ -207,6 +207,25 @@ class MessageProvider {
   }
 
   /**
+   * Ensure a session's messages are loaded — called when user opens a session.
+   * If store already has messages, this is a no-op.
+   * Otherwise, fetches the last 50 messages (IDB first, then tentacle).
+   */
+  ensureLoaded(sessionId: string): void {
+    const store = getStore();
+    const existing = store.messages.get(sessionId);
+    if (existing && existing.length > 0) return;
+    if (this.loadingSessions.has(sessionId)) return;
+
+    const lastSeq = this.tentacleLastSeq.get(sessionId);
+    if (!lastSeq || lastSeq <= 0) return;
+
+    const fromSeq = Math.max(1, lastSeq - 49);
+    logger.info('ensureLoaded: triggering on-demand fetch', { sessionId, fromSeq, lastSeq });
+    this.fetchRange(sessionId, fromSeq, lastSeq, { initial: true });
+  }
+
+  /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
    * Puts the complete result into the store in one write.
    */
