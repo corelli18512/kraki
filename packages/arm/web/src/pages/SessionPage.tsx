@@ -5,6 +5,7 @@ import { ChatView } from '../components/chat/ChatView';
 import { agentInfo } from '../lib/format';
 import { AgentAvatar } from '../components/common/AgentAvatar';
 import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
+import { messageProvider } from '../lib/message-provider';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -46,7 +47,7 @@ export function SessionPage() {
   // Tier 2: on-demand message loading when user opens a session
   useEffect(() => {
     if (!sessionId) return;
-    import('../lib/message-provider').then(({ messageProvider }) => messageProvider.ensureLoaded(sessionId));
+    messageProvider.ensureLoaded(sessionId);
   }, [sessionId]);
 
   // Clear unread when viewing session + notify server
