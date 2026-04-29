@@ -66,7 +66,7 @@ export async function startWorker(): Promise<WorkerResult> {
     process.exit(1);
   }
 
-  // 2. Resolve auth token
+  // 2. Resolve relay auth token
   let token: string | undefined;
 
   if (config.authMethod === 'github_token') {
@@ -111,17 +111,28 @@ export async function startWorker(): Promise<WorkerResult> {
     try { await adapter.stop(); } catch { /* already dead */ }
   }
 
-  // 5. Fetch available models for device capabilities
+  // 5. Fetch available models for device capabilities (retry once after delay
+  //    in case the SDK connection isn't fully ready immediately after start)
   let models: string[] = [];
   let modelDetails: import('@kraki/protocol').ModelDetail[] = [];
   if (adapterReady) {
-    try {
-      modelDetails = await adapter.listModelDetails();
-      models = modelDetails.map(m => m.id);
-      logger.debug({ count: models.length }, 'Fetched available models');
-    } catch {
-      logger.warn('Could not fetch available models');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        modelDetails = await adapter.listModelDetails();
+        models = modelDetails.map(m => m.id);
+        if (models.length > 0) break;
+        if (attempt === 0) {
+          logger.debug('Model list empty, retrying after delay…');
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      } catch {
+        logger.warn('Could not fetch available models');
+        if (attempt === 0) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
     }
+    logger.debug({ count: models.length }, 'Fetched available models');
   }
 
   // 6. Connect to relay via RelayClient

@@ -373,11 +373,20 @@ export class CopilotAdapter extends AgentAdapter {
 
   async start(): Promise<void> {
     // Resolve GitHub token from `gh` CLI to bypass macOS Keychain prompts.
+    // Skip gho_ (OAuth) tokens — they are session-scoped Copilot CLI tokens
+    // that can't authenticate a separately spawned copilot process.
     let githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+    if (githubToken?.startsWith('gho_')) {
+      logger.debug('Ignoring session-scoped gho_ token from environment');
+      githubToken = undefined;
+    }
     if (!githubToken) {
       try {
-        githubToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-        if (githubToken) logger.debug('Using GitHub token from `gh auth token`');
+        const cliToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
+        if (cliToken && !cliToken.startsWith('gho_')) {
+          githubToken = cliToken;
+          logger.debug('Using GitHub token from `gh auth token`');
+        }
       } catch {
         // gh CLI unavailable — SDK will use its own auth chain
       }
@@ -735,17 +744,24 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async listModels(): Promise<string[]> {
-    if (!this.client) return [];
+    if (!this.client) {
+      logger.debug('listModels: client not initialized');
+      return [];
+    }
     try {
       const models = await this.client.listModels();
       return models.map((m: { id: string }) => m.id);
-    } catch {
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'listModels failed');
       return [];
     }
   }
 
   async listModelDetails(): Promise<import('@kraki/protocol').ModelDetail[]> {
-    if (!this.client) return [];
+    if (!this.client) {
+      logger.debug('listModelDetails: client not initialized');
+      return [];
+    }
     try {
       const models = await this.client.listModels();
       return models.map((m) => ({
@@ -755,7 +771,8 @@ export class CopilotAdapter extends AgentAdapter {
         ...(m.supportedReasoningEfforts && { supportedReasoningEfforts: m.supportedReasoningEfforts }),
         ...(m.defaultReasoningEffort && { defaultReasoningEffort: m.defaultReasoningEffort }),
       }));
-    } catch {
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'listModelDetails failed');
       return [];
     }
   }
