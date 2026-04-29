@@ -82,12 +82,22 @@ export function resolveDaemonLaunch(
   seaMode = isSea(),
 ): DaemonLaunchSpec {
   if (seaMode) {
+    const {
+      COPILOT_SDK_AUTH_TOKEN: _,
+      COPILOT_AGENT_SESSION_ID: _2,
+      COPILOT_CLI: _3,
+      GITHUB_TOKEN: seaInheritedGhToken,
+      ...seaCleanEnv
+    } = process.env;
+    if (seaInheritedGhToken && !seaInheritedGhToken.startsWith('gho_')) {
+      seaCleanEnv.GITHUB_TOKEN = seaInheritedGhToken;
+    }
     return {
       runtime: process.execPath,
       args: [INTERNAL_DAEMON_WORKER_COMMAND],
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...seaCleanEnv,
         NODE_ENV: 'production',
       },
       workerPath: process.execPath,
@@ -108,6 +118,25 @@ export function resolveDaemonLaunch(
     ? [join(workspaceRoot, 'node_modules', '.bin'), join(packageRoot, 'node_modules', '.bin')]
     : [join(packageRoot, 'node_modules', '.bin')];
 
+  // Strip Copilot-specific env vars so the daemon's Copilot SDK instance
+  // uses its own auth chain instead of inheriting a session-scoped token
+  // from a parent Copilot CLI process (which can't be used for models.list).
+  const {
+    COPILOT_SDK_AUTH_TOKEN: _,
+    COPILOT_AGENT_SESSION_ID: _2,
+    COPILOT_CLI: _3,
+    // GITHUB_TOKEN from a parent Copilot CLI is a session-scoped gho_ token
+    // that won't work for a separately spawned copilot process. The daemon's
+    // adapter resolves its own token via `gh auth token` or the SDK's creds.
+    GITHUB_TOKEN: inheritedGhToken,
+    ...cleanEnv
+  } = process.env;
+  // Only strip GITHUB_TOKEN if it looks session-scoped (gho_ prefix).
+  // A real PAT (ghp_) or fine-grained token (github_pat_) should pass through.
+  if (inheritedGhToken && !inheritedGhToken.startsWith('gho_')) {
+    cleanEnv.GITHUB_TOKEN = inheritedGhToken;
+  }
+
   return {
     runtime: process.execPath,
     args: isTsSource
@@ -115,9 +144,9 @@ export function resolveDaemonLaunch(
       : [entryPath, INTERNAL_DAEMON_WORKER_COMMAND],
     cwd: isTsSource ? workspaceRoot : packageRoot,
     env: {
-      ...process.env,
+      ...cleanEnv,
       NODE_ENV: 'production',
-      PATH: [...binPaths, process.env.PATH ?? ''].filter(Boolean).join(delimiter),
+      PATH: [...binPaths, cleanEnv.PATH ?? ''].filter(Boolean).join(delimiter),
     },
     workerPath: entryPath,
   };

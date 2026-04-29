@@ -297,6 +297,10 @@ export class KrakiWSClient {
    *
    * Pass 1: active + pinned + <24h → fetch last 50 (always, outside budget)
    * Pass 2: if budget remains, fill next-most-recent with 50 each
+   *
+   * When no sessions have preview timestamps (tentacle hasn't sent them),
+   * recency can't be determined — fall back to loading all sessions so
+   * session state, pending permissions, and unread counts stay correct.
    */
   private runWarmup(
     sessions: import('@kraki/protocol').SessionDigest[],
@@ -304,6 +308,22 @@ export class KrakiWSClient {
   ): void {
     const now = Date.now();
     const { WARMUP_BUDGET, WARMUP_RECENCY_MS, WARMUP_PER_SESSION } = KrakiWSClient;
+
+    // If no session has a preview, we can't determine recency — load all.
+    const hasPreviewTimestamps = sessions.some(ts => {
+      const p = (ts as Record<string, unknown>).preview as { timestamp?: string } | undefined;
+      return !!p?.timestamp;
+    });
+
+    if (!hasPreviewTimestamps) {
+      for (const ts of sessions) {
+        if (ts.lastSeq <= 0) continue;
+        const fromSeq = Math.max(1, ts.lastSeq - WARMUP_PER_SESSION + 1);
+        messageProvider.fetchRange(ts.id, fromSeq, ts.lastSeq, { initial: true });
+      }
+      logger.info('warm-up: no preview timestamps, loading all', { sessions: sessions.filter(s => s.lastSeq > 0).length });
+      return;
+    }
 
     // Classify sessions
     type WarmupEntry = { id: string; lastSeq: number; previewTs: number };
