@@ -221,7 +221,7 @@ const meta = {
   model: MODEL,
   title: `Seed session (${MESSAGE_COUNT} messages)`,
   state: 'idle',
-  mode: 'plan',
+  mode: 'discuss',
   currentRunId: 'run_001',
   totalRuns: 1,
   lastSeq,
