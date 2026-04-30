@@ -773,7 +773,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'approve');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approve-once' });
+      expect(result).toEqual({ kind: 'approved' });
     });
 
     it('maps deny → denied', async () => {
@@ -793,7 +793,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'deny');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'reject' });
+      expect(result).toEqual({ kind: 'denied-interactively-by-user' });
     });
 
     it('maps always_allow → approved', async () => {
@@ -813,7 +813,7 @@ describe('CopilotAdapter', () => {
       await adapter.respondToPermission('mock-sess-1', permId, 'always_allow');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approve-once' });
+      expect(result).toEqual({ kind: 'approved' });
     });
   });
 
@@ -890,7 +890,7 @@ describe('CopilotAdapter', () => {
       await adapter.killSession('mock-sess-1');
 
       const result = await resultPromise;
-      expect(result).toEqual({ kind: 'reject' });
+      expect(result).toEqual({ kind: 'denied-interactively-by-user' });
     });
 
     it('resolves pending questions with empty on kill', async () => {
