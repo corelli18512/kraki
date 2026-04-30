@@ -669,7 +669,7 @@ export class CopilotAdapter extends AgentAdapter {
       // Auto-approve any OTHER pending permissions of the same tool kind in this session
       for (const [otherId, otherPending] of entry.pendingPermissions) {
         if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
-          otherPending.resolve({ kind: 'approved' });
+          otherPending.resolve({ kind: 'approve-once' });
           entry.pendingPermissions.delete(otherId);
           this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
           logger.debug({ permissionId: otherId, sessionId, toolKind: pending.toolKind }, 'permission auto-approved');
@@ -678,12 +678,12 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     const kindMap: Record<PermissionDecision, PermissionRequestResult> = {
-      approve: { kind: 'approved' },
-      deny: { kind: 'denied-interactively-by-user' },
-      always_allow: { kind: 'approved' },
+      approve: { kind: 'approve-once' },
+      deny: { kind: 'reject' },
+      always_allow: { kind: 'approve-once' },
     };
 
-    pending.resolve(kindMap[decision] ?? { kind: 'denied-interactively-by-user' });
+    pending.resolve(kindMap[decision] ?? { kind: 'reject' });
     entry.pendingPermissions.delete(permissionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
   }
@@ -836,7 +836,7 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     for (const [permId, p] of entry.pendingPermissions) {
-      p.resolve({ kind: 'denied-interactively-by-user' });
+      p.resolve({ kind: 'reject' });
       this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
     }
     entry.pendingPermissions.clear();
@@ -1138,11 +1138,11 @@ export class CopilotAdapter extends AgentAdapter {
       // Mode-based auto-approval
       if (mode === 'execute' || mode === 'delegate') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
       if (mode === 'discuss' && toolKind !== 'write') {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
       if (mode === 'discuss' && toolKind === 'write') {
         const r = req as PermissionRequest & Record<string, unknown>;
@@ -1154,14 +1154,14 @@ export class CopilotAdapter extends AgentAdapter {
         );
         if (allowed) {
           logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (discuss mode allow list)');
-          return { kind: 'approved' };
+          return { kind: 'approve-once' };
         }
         logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (discuss mode)');
-        return { kind: 'denied-interactively-by-user', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
+        return { kind: 'reject', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
-        return { kind: 'approved' };
+        return { kind: 'approve-once' };
       }
 
       // Not auto-approved — send to relay for user decision
@@ -1275,7 +1275,7 @@ export class CopilotAdapter extends AgentAdapter {
         configDir: getCopilotConfigDir(),
         systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
         streaming: true,
-        onPermissionRequest: () => ({ kind: 'approved' as const }),
+        onPermissionRequest: () => ({ kind: 'approve-once' as const }),
         onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
       });
       logger.debug({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');
