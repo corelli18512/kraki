@@ -22,6 +22,7 @@ import type { SessionManager, SessionContext } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
+import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
@@ -115,6 +116,9 @@ export class RelayClient {
   onAuthenticated: ((info: AuthOkMessage) => void) | null = null;
   /** Called on fatal error (won't reconnect) */
   onFatalError: ((message: string) => void) | null = null;
+
+  /** Watches imported sessions' events.jsonl for external changes */
+  private eventsWatcher: EventsWatcher | null = null;
 
   constructor(
     adapter: AgentAdapter,
@@ -286,6 +290,10 @@ export class RelayClient {
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.stopStaleCheck();
+    if (this.eventsWatcher) {
+      this.eventsWatcher.close();
+      this.eventsWatcher = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -323,6 +331,8 @@ export class RelayClient {
       }
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
+      // Initialize events watcher for imported sessions
+      this.initEventsWatcher();
       // Process queued messages from the relay BEFORE broadcasting session list
       // so that deletes/mode changes are applied first
       this.processPendingMessages(this.authInfo.pendingMessages);
@@ -604,6 +614,7 @@ export class RelayClient {
           this.purgeSessionToolState(sessionId);
           this.broadcastedAttachmentIds.delete(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
+          this.eventsWatcher?.unwatch(sessionId);
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           break;
@@ -919,6 +930,9 @@ export class RelayClient {
 
       logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length }, 'Session imported');
 
+      // Start watching events.jsonl for external changes (CLI, VS Code)
+      this.eventsWatcher?.watch(krakiSessionId);
+
       // ── Phase 2: Background SDK resume (non-blocking) ─────
       // Clear the requestId so onSessionCreated doesn't send a duplicate session_created
       if (requestId) this.pendingRequestIds.delete(krakiSessionId);
@@ -938,6 +952,30 @@ export class RelayClient {
         sessionId: '',
         payload: { message: `Failed to import session: ${(err as Error).message} (requestId: ${requestId})` },
       });
+    }
+  }
+
+  // ── Events watcher for imported sessions ──────────────
+
+  private initEventsWatcher(): void {
+    if (this.eventsWatcher) this.eventsWatcher.close();
+
+    this.eventsWatcher = new EventsWatcher(
+      (msg) => {
+        // Broadcast external events to all arms + append to SessionManager
+        const sessionId = msg.sessionId;
+        this.sessionManager.appendMessage(sessionId, msg.type, JSON.stringify(msg.payload));
+        this.send({
+          ...msg,
+          deviceId: this.authInfo?.deviceId ?? '',
+        } as unknown as Partial<ProducerMessage>);
+      },
+      this.authInfo?.deviceId ?? '',
+    );
+
+    // Start watching all currently linked sessions
+    for (const link of this.sessionManager.getAllLinks()) {
+      this.eventsWatcher.watch(link.localSessionId);
     }
   }
 
