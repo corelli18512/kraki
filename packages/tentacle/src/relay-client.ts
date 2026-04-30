@@ -1215,6 +1215,9 @@ export class RelayClient {
       if (usage) this.sessionManager.setUsage(sessionId, usage);
       this.send({ type: 'idle', sessionId, payload: { usage } });
       this.maybeGenerateTitle(sessionId);
+      // Resume file watcher after a short delay to let the SDK finish
+      // flushing remaining events to disk (usage, idle, etc.)
+      setTimeout(() => this.eventsWatcher?.resume(sessionId), 1000);
     };
 
     this.adapter.onUsageUpdate = (sessionId, usage) => {
@@ -1534,6 +1537,13 @@ export class RelayClient {
     const sessionId = enriched.sessionId as string | undefined;
     if (sessionId && !RelayClient.TRANSIENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
+    }
+
+    // Advance the events watcher past any events the adapter just wrote,
+    // so the watcher only picks up external changes (CLI, VS Code).
+    // Only for data messages — transient metadata (title, pin, etc.) doesn't touch events.jsonl.
+    if (sessionId && this.eventsWatcher && !RelayClient.TRANSIENT_TYPES.has(type)) {
+      this.eventsWatcher.skipToEnd(sessionId);
     }
 
     if (this.keyManager) {

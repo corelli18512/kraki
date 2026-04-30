@@ -32,6 +32,8 @@ interface WatchedSession {
   watcher: FSWatcher;
   offset: number;
   debounceTimer: ReturnType<typeof setTimeout> | null;
+  /** When true, file changes are ignored (Kraki's own adapter is writing). */
+  paused: boolean;
 }
 
 export class EventsWatcher {
@@ -81,6 +83,7 @@ export class EventsWatcher {
       watcher,
       offset,
       debounceTimer: null,
+      paused: false,
     });
 
     logger.debug({ sessionId, offset }, 'Watching events.jsonl');
@@ -104,9 +107,41 @@ export class EventsWatcher {
     }
   }
 
-  private onFileChange(sessionId: string): void {
+  /**
+   * Pause watching — Kraki's adapter is actively writing to events.jsonl.
+   * All file change events are ignored and offset advances to end of file.
+   */
+  skipToEnd(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
+    entry.paused = true;
+    if (entry.debounceTimer) {
+      clearTimeout(entry.debounceTimer);
+      entry.debounceTimer = null;
+    }
+    try {
+      entry.offset = statSync(entry.filePath).size;
+    } catch { /* file may not exist yet */ }
+  }
+
+  /**
+   * Resume watching after Kraki's adapter turn completes.
+   * Advances offset to current end of file, then proactively checks
+   * for any external events that arrived while paused.
+   */
+  resume(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    // Advance past Kraki's own writes
+    try {
+      entry.offset = statSync(entry.filePath).size;
+    } catch { /* ignore */ }
+    entry.paused = false;
+  }
+
+  private onFileChange(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry || entry.paused) return;
 
     // Debounce: the CLI may write multiple lines in rapid succession
     if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
