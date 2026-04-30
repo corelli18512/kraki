@@ -375,10 +375,22 @@ export async function performUpdate(currentVersion: string): Promise<void> {
           console.log(chalk.green('  ✔ Daemon restarted'));
         } catch (restartErr) {
           if (restartErr instanceof MacOSCodeSignatureError) {
-            console.log(chalk.yellow('  ⚠ macOS blocked the daemon — run `kraki start` to launch in foreground'));
-          } else {
-            console.log(chalk.red(`  Failed to restart daemon: ${(restartErr as Error).message}`));
+            // startDaemon spawns a child process, which CSM blocks.
+            // Fall back to running the daemon in the current process
+            // (already Gatekeeper-approved since the user invoked it).
+            console.log(chalk.dim('  Starting in foreground (macOS code signature restriction)…'));
+            process.on('SIGHUP', () => {});
+            const { saveDaemonPid, getLogVerbosity: getLogV } = await import('./config.js');
+            saveDaemonPid(process.pid);
+            process.env.LOG_LEVEL = getLogV(config) === 'verbose' ? 'debug' : 'info';
+            process.env.NODE_ENV = 'production';
+            console.log(chalk.green(`  🦑 Kraki started (PID ${process.pid})`));
+            console.log(chalk.dim('  Running in foreground — press Ctrl+C or run `kraki stop` to quit'));
+            const { startWorker } = await import('./daemon-worker.js');
+            await startWorker();
+            return;
           }
+          console.log(chalk.red(`  Failed to restart daemon: ${(restartErr as Error).message}`));
         }
       }
     }
