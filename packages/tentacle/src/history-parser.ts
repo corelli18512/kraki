@@ -107,9 +107,9 @@ export function parseSessionHistory(sessionDir: string): {
   return parseEventsFile(join(sessionDir, 'events.jsonl'));
 }
 
-// ── Event conversion ────────────────────────────────────
+// ── Event conversion (exported for use by events-watcher) ───
 
-function convertEvent(
+export function convertEvent(
   event: SdkEvent,
   ts: string,
   meta: ParsedSessionMeta,
