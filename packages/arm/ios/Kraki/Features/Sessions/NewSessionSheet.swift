@@ -1,12 +1,10 @@
 #if os(iOS)
-/// NewSessionSheet — Modal sheet for creating a new session.
+/// NewSessionSheet — Compact glass dialog for creating a new session.
 ///
-/// Mirrors NewSessionDialog.tsx:
-/// - Device picker (tentacle devices only)
-/// - Model picker from selected device's capabilities
-/// - Reasoning effort picker (when model supports it)
-/// - Optional initial prompt and working directory
-/// - Create button → calls commandSender.createSession()
+/// - Liquid glass material on iOS 26 (translucent floating sheet)
+/// - No Cancel button — drag-down to dismiss (system gesture)
+/// - Device + Model pickers, plus Reasoning Effort when supported
+/// - Initial prompt and working directory are not shown (not used)
 
 import SwiftUI
 
@@ -17,8 +15,6 @@ struct NewSessionSheet: View {
     @State private var selectedDeviceId: String = ""
     @State private var selectedModel: String = ""
     @State private var reasoningEffort: ReasoningEffort?
-    @State private var initialPrompt: String = ""
-    @State private var workingDirectory: String = ""
 
     private var deviceStore: DeviceStore { appState.deviceStore }
 
@@ -55,105 +51,110 @@ struct NewSessionSheet: View {
             form
                 .navigationTitle("New Session")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                }
                 .onAppear { selectDefaults() }
                 .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
                 .onChange(of: selectedModel) { _, _ in onModelChanged() }
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
     }
 
     // MARK: - Form
 
+    @ViewBuilder
     private var form: some View {
-        Form {
-            if tentacles.isEmpty {
-                noDevicesSection
-            } else {
-                deviceSection
-                modelSection
+        if tentacles.isEmpty {
+            noDevicesView
+        } else {
+            ScrollView {
+                VStack(spacing: 16) {
+                    deviceRow
+                    modelRow
 
-                if let efforts = supportedEfforts, !efforts.isEmpty {
-                    effortSection(efforts)
+                    if let efforts = supportedEfforts, !efforts.isEmpty {
+                        effortRow(efforts)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    createButton
+                        .padding(.top, 8)
                 }
-
-                promptSection
-                cwdSection
-                createButton
+                .padding(20)
             }
         }
     }
 
     // MARK: - Sections
 
-    private var noDevicesSection: some View {
-        Section {
-            VStack(spacing: 8) {
-                Text("No devices online")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("Connect a tentacle to create sessions")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Text("npx @kraki/tentacle")
-                    .font(.caption2)
-                    .monospaced()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
+    private var noDevicesView: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Text("No devices online")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Connect a tentacle to create sessions")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text("npx @kraki/tentacle")
+                .font(.caption2)
+                .monospaced()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var deviceSection: some View {
-        Section("Device") {
+    private var deviceRow: some View {
+        HStack {
+            Text("Device")
+                .foregroundStyle(.secondary)
+            Spacer()
             Picker("Device", selection: $selectedDeviceId) {
-                Text("Select a device").tag("")
                 ForEach(tentacles) { device in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(device.online ? Color.green : Color.gray)
-                            .frame(width: 6, height: 6)
-                        Text(device.name)
-                    }
-                    .tag(device.id)
+                    Text(device.name).tag(device.id)
                 }
             }
             .pickerStyle(.menu)
+            .labelsHidden()
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var modelSection: some View {
-        Section("Model") {
+    @ViewBuilder
+    private var modelRow: some View {
+        HStack {
+            Text("Model")
+                .foregroundStyle(.secondary)
+            Spacer()
             if models.isEmpty {
-                if selectedDeviceId.isEmpty {
-                    Text("Select a device first")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    TextField("e.g. claude-sonnet-4", text: $selectedModel)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
+                Text("Waiting for device…")
+                    .foregroundStyle(.tertiary)
             } else {
                 Picker("Model", selection: $selectedModel) {
-                    Text("Select a model").tag("")
                     ForEach(models, id: \.self) { model in
                         Text(model).tag(model)
                     }
                 }
                 .pickerStyle(.menu)
+                .labelsHidden()
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func effortSection(_ efforts: [ReasoningEffort]) -> some View {
-        Section("Thinking") {
+    private func effortRow(_ efforts: [ReasoningEffort]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Thinking")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Picker("Reasoning Effort", selection: $reasoningEffort) {
                 ForEach(efforts, id: \.self) { effort in
                     Text(effortLabel(effort)).tag(Optional(effort))
@@ -161,55 +162,35 @@ struct NewSessionSheet: View {
             }
             .pickerStyle(.segmented)
         }
-    }
-
-    private var promptSection: some View {
-        Section {
-            TextEditor(text: $initialPrompt)
-                .frame(minHeight: 80)
-                .textInputAutocapitalization(.sentences)
-        } header: {
-            Text("Initial Prompt")
-        } footer: {
-            Text("Optional. Send an initial message when the session starts.")
-        }
-    }
-
-    private var cwdSection: some View {
-        Section {
-            TextField("/path/to/project", text: $workingDirectory)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-        } header: {
-            Text("Working Directory")
-        } footer: {
-            Text("Optional. The working directory for the agent on the device.")
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var createButton: some View {
-        Section {
-            Button {
-                createSession()
-            } label: {
-                Text("Create Session")
-                    .frame(maxWidth: .infinity)
-                    .fontWeight(.semibold)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canSubmit)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
+        Button {
+            createSession()
+        } label: {
+            Text("Create Session")
+                .frame(maxWidth: .infinity)
+                .fontWeight(.semibold)
+                .padding(.vertical, 12)
         }
+        .buttonStyle(.borderedProminent)
+        .tint(.krakiPrimary)
+        .disabled(!canSubmit)
     }
 
     // MARK: - Actions
 
     private func selectDefaults() {
-        guard selectedDeviceId.isEmpty else { return }
-        if let first = tentacles.first {
+        if selectedDeviceId.isEmpty, let first = tentacles.first {
             selectedDeviceId = first.id
+        }
+        // Auto-select first model when device's models become available
+        let available = deviceStore.deviceModels[selectedDeviceId] ?? []
+        if selectedModel.isEmpty || !available.contains(selectedModel) {
+            selectedModel = available.first ?? ""
         }
     }
 
@@ -238,8 +219,8 @@ struct NewSessionSheet: View {
             targetDeviceId: selectedDeviceId,
             model: selectedModel,
             reasoningEffort: reasoningEffort,
-            prompt: initialPrompt.isEmpty ? nil : initialPrompt,
-            cwd: workingDirectory.isEmpty ? nil : workingDirectory
+            prompt: nil,
+            cwd: nil
         )
         dismiss()
     }

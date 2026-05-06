@@ -270,6 +270,10 @@ struct MessageBubbleView: View {
             ToolLineView(message: item)
         case "error":
             ErrorLineView(message: item)
+        case "question":
+            QuestionLineView(message: item)
+        case "question_resolved", "answer", "approve", "deny", "always_allow":
+            EmptyView() // These are structural — the tool_complete carries the visible result
         default:
             EmptyView()
         }
@@ -649,45 +653,95 @@ private struct ToolLineView: View {
     private var isComplete: Bool { message.type == "tool_complete" }
     private var isError: Bool { message.result?.hasPrefix("Error") == true }
 
+    private var isAskUser: Bool {
+        toolName == "ask_user" || toolName == "ask"
+    }
+
+    private var questionText: String? {
+        message.payload["questionText"]?.stringValue
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    statusIcon
-                    Text(toolName)
-                        .font(.system(size: 12, design: .monospaced))
-                        .fontWeight(.medium)
-                        .foregroundStyle(.blue)
-
-                    if let detail = toolDetail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    if hasExpandableContent {
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(expanded ? 0 : -90))
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if expanded {
-                expandedBody
+            if isAskUser {
+                askUserBody
+            } else {
+                regularToolBody
             }
         }
         .padding(showPill ? 8 : 0)
         .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Ask User (question/answer)
+
+    @ViewBuilder
+    private var askUserBody: some View {
+        HStack(spacing: 6) {
+            if isComplete {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(questionText ?? "Question")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.primary.opacity(0.7))
+
+                if isComplete, let result = message.result, !result.isEmpty {
+                    Text(result)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Regular Tool
+
+    @ViewBuilder
+    private var regularToolBody: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                statusIcon
+                Text(toolName)
+                    .font(.system(size: 12, design: .monospaced))
+                    .fontWeight(.medium)
+                    .foregroundStyle(.blue)
+
+                if let detail = toolDetail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 0)
+
+                if hasExpandableContent {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 0 : -90))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if expanded {
+            expandedBody
+        }
     }
 
     @ViewBuilder
@@ -709,6 +763,7 @@ private struct ToolLineView: View {
     }
 
     private var toolDetail: String? {
+        if isAskUser { return nil } // question text shown inline instead
         guard let args = message.args else { return nil }
         if let cmd = args["command"]?.stringValue { return "$ \(cmd)" }
         if let path = args["path"]?.stringValue { return path }
@@ -716,42 +771,54 @@ private struct ToolLineView: View {
     }
 
     private var hasExpandableContent: Bool {
-        message.args != nil || (message.result != nil && !message.result!.isEmpty)
+        if isAskUser { return message.result != nil }
+        return message.args != nil || (message.result != nil && !message.result!.isEmpty)
     }
 
     @ViewBuilder
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let args = message.args {
-                let oldStr = args["old_str"]?.stringValue ?? ""
-                let newStr = args["new_str"]?.stringValue ?? ""
-                if !oldStr.isEmpty || !newStr.isEmpty {
-                    SimpleDiffView(oldText: oldStr, newText: newStr)
-                } else {
-                    let detail = args.sorted { $0.key < $1.key }
-                        .map { "\($0.key): \($0.value)" }
-                        .joined(separator: "\n")
-                    Text(detail)
+            if isAskUser {
+                // Show answer for ask_user
+                if let result = message.result, !result.isEmpty {
+                    Text(result)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-            }
-
-            if let result = message.result, !result.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Result")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    ScrollView {
-                        Text(result)
+            } else {
+                // Regular tool: show args + result
+                if let args = message.args {
+                    let oldStr = args["old_str"]?.stringValue ?? ""
+                    let newStr = args["new_str"]?.stringValue ?? ""
+                    if !oldStr.isEmpty || !newStr.isEmpty {
+                        SimpleDiffView(oldText: oldStr, newText: newStr)
+                    } else {
+                        let detail = args.sorted { $0.key < $1.key }
+                            .map { "\($0.key): \($0.value)" }
+                            .joined(separator: "\n")
+                        Text(detail)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 200)
+                }
+
+                if let result = message.result, !result.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Result")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                        ScrollView {
+                            Text(result)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 200)
+                    }
                 }
             }
         }
@@ -786,6 +853,27 @@ private struct ErrorLineView: View {
         .buttonStyle(.plain)
         .padding(showPill ? 8 : 0)
         .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct QuestionLineView: View {
+    let message: ChatMessage
+
+    private var questionText: String {
+        message.payload["question"]?.stringValue ?? message.question ?? "Question"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "questionmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.purple)
+            Text(questionText)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary.opacity(0.7))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
     }
 }
 
