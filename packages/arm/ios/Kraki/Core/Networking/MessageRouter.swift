@@ -269,13 +269,13 @@ final class MessageRouter {
             appState.messageStore.appendMessage(sessionId, json: json)
             if let qId = payload?["id"] as? String,
                let question = payload?["question"] as? String {
-                appState.sessionStore.addQuestion(
+                appState.messageStore.addQuestion(PendingQuestion(
                     id: qId,
                     sessionId: sessionId,
                     question: question,
                     choices: payload?["choices"] as? [String],
-                    timestamp: timestamp
-                )
+                    timestamp: Date()
+                ))
                 updatePreview(sessionId, text: question, type: "question",
                               timestamp: timestamp, notify: true)
             }
@@ -283,7 +283,7 @@ final class MessageRouter {
         case "question_resolved":
             if let qId = payload?["questionId"] as? String {
                 let answer = payload?["answer"] as? String
-                appState.sessionStore.removeQuestion(qId)
+                appState.messageStore.removeQuestion(qId)
                 appState.messageStore.resolveQuestionMessage(
                     sessionId, questionId: qId, answer: answer
                 )
@@ -352,12 +352,9 @@ final class MessageRouter {
             }
 
         case "session_title_updated":
-            if let title = payload?["title"] as? String {
-                let autoTitle = payload?["autoTitle"] as? Bool ?? false
-                appState.sessionStore.setSessionTitle(
-                    sessionId, title: title, autoTitle: autoTitle
-                )
-            }
+            let title = payload?["title"] as? String
+            let autoTitle = payload?["autoTitle"] as? String
+            appState.sessionStore.setTitle(sessionId, title: title, autoTitle: autoTitle)
 
         case "session_pinned":
             let pinned = payload?["pinned"] as? Bool ?? false

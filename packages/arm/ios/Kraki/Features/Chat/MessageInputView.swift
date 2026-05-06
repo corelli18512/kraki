@@ -34,27 +34,29 @@ struct MessageInputView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Pending permission/question cards
+            // Top row: context-dependent
             if let permission = pendingPermission {
-                PermissionCardView(permission: permission)
+                // Permission: 3 action buttons
+                permissionActionRow(permission)
                     .padding(.horizontal, 12)
-            } else if let question = pendingQuestion {
-                QuestionCardView(question: question)
+            } else if let question = pendingQuestion, let choices = question.choices, !choices.isEmpty {
+                // Question: choice buttons stacked
+                questionChoicesRow(question, choices: choices)
                     .padding(.horizontal, 12)
+            } else {
+                // Normal: image attach + mode picker
+                HStack {
+                    imageAttachButton
+                    Spacer()
+                    ModePickerView(sessionId: sessionId)
+                }
+                .padding(.horizontal, 12)
             }
 
-            // Row 1: image attach + mode picker
-            HStack {
-                imageAttachButton
-                Spacer()
-                ModePickerView(sessionId: sessionId)
-            }
-            .padding(.horizontal, 12)
-
-            // Row 2: text input + send/stop
+            // Bottom row: text input + send/action
             HStack(alignment: .bottom, spacing: 8) {
-                textField
-                sendStopButton
+                textFieldForMode
+                actionButtonForMode
             }
             .padding(.horizontal, 12)
             .padding(.bottom, max(12, UIApplication.shared.connectedScenes
@@ -95,19 +97,35 @@ struct MessageInputView: View {
                     .offset(x: 4, y: -4)
                 }
             } else {
-                LucideIcon(.imagePlus, size: 18, color: .secondary)
-                    .frame(width: 36, height: 36)
-                    .background(.ultraThinMaterial, in: Circle())
+                if #available(iOS 26.0, *) {
+                    LucideIcon(.imagePlus, size: 18, color: .secondary)
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.regular)
+                } else {
+                    LucideIcon(.imagePlus, size: 18, color: .secondary)
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
             }
         }
         .disabled(!isIdle)
         .opacity(isIdle ? 1 : 0.4)
     }
 
-    // MARK: - Text Field
+    // MARK: - Mode-Aware Text Field
 
-    private var textField: some View {
-        TextField("Send a message…", text: Binding(
+    private var textFieldForMode: some View {
+        let placeholder: String = {
+            if pendingPermission != nil { return "Deny with reason…" }
+            if pendingQuestion != nil { return "Type your answer…" }
+            return "Send a message…"
+        }()
+        let isEnabled: Bool = {
+            if pendingPermission != nil || pendingQuestion != nil { return true }
+            return isIdle
+        }()
+
+        return TextField(placeholder, text: Binding(
             get: { text },
             set: { sessionStore.setDraft(sessionId, $0) }
         ), axis: .vertical)
@@ -116,12 +134,135 @@ struct MessageInputView: View {
         .font(.system(size: 16))
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .modifier(GlassTextFieldModifier())
         .focused($isFocused)
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.6)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.6)
         .submitLabel(.send)
-        .onSubmit { handleSend() }
+        .onSubmit { handleModeSubmit() }
+    }
+
+    // MARK: - Mode-Aware Action Button
+
+    @ViewBuilder
+    private var actionButtonForMode: some View {
+        if pendingPermission != nil {
+            // Deny with reason — only active when text is non-empty
+            Button { handlePermissionDenyWithReason() } label: {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.red.opacity(hasText ? 0.85 : 0.3))
+                    )
+            }
+            .disabled(!hasText)
+        } else if pendingQuestion != nil {
+            // Submit freeform answer
+            Button { handleQuestionAnswer() } label: {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.krakiPrimary.opacity(hasText ? 0.85 : 0.3))
+                    )
+            }
+            .disabled(!hasText)
+        } else {
+            sendStopButton
+        }
+    }
+
+    // MARK: - Permission Action Row
+
+    private func permissionActionRow(_ perm: PendingPermission) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                appState.commandSender?.approve(sessionId: sessionId, permissionId: perm.id)
+            } label: {
+                Text("Approve")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.green)
+
+            Button {
+                appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: perm.id, toolKind: perm.toolName)
+            } label: {
+                Text("Always Allow")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.blue)
+
+            Button {
+                appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
+            } label: {
+                Text("Deny")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+        }
+    }
+
+    // MARK: - Question Choices Row
+
+    private func questionChoicesRow(_ question: PendingQuestion, choices: [String]) -> some View {
+        VStack(spacing: 6) {
+            ForEach(choices, id: \.self) { choice in
+                Button {
+                    appState.commandSender?.answer(sessionId: sessionId, questionId: question.id, answer: choice)
+                    sessionStore.setDraft(sessionId, "")
+                    isFocused = false
+                } label: {
+                    Text(choice)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(.krakiPrimary)
+            }
+        }
+    }
+
+    // MARK: - Mode Submit Handlers
+
+    private func handleModeSubmit() {
+        if pendingPermission != nil {
+            handlePermissionDenyWithReason()
+        } else if pendingQuestion != nil {
+            handleQuestionAnswer()
+        } else {
+            handleSend()
+        }
+    }
+
+    private func handlePermissionDenyWithReason() {
+        guard hasText, let perm = pendingPermission else { return }
+        appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
+        sessionStore.setDraft(sessionId, "")
+        isFocused = false
+    }
+
+    private func handleQuestionAnswer() {
+        guard hasText, let q = pendingQuestion else { return }
+        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.commandSender?.answer(sessionId: sessionId, questionId: q.id, answer: answer)
+        sessionStore.setDraft(sessionId, "")
+        isFocused = false
     }
 
     // MARK: - Send / Stop Button
@@ -132,14 +273,12 @@ struct MessageInputView: View {
             else { appState.commandSender?.abortSession(sessionId: sessionId) }
         } label: {
             ZStack {
-                // Send arrow
                 Image(systemName: "arrow.right")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundColor(.white)
                     .scaleEffect(isIdle ? 1 : 0)
                     .opacity(isIdle ? 1 : 0)
 
-                // Stop square
                 LucideIcon(.square, size: 14, strokeWidth: 0, color: .white)
                     .frame(width: 14, height: 14)
                     .background(Color.white)
@@ -148,16 +287,10 @@ struct MessageInputView: View {
                     .opacity(isIdle ? 0 : 1)
             }
             .frame(width: 36, height: 36)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.krakiPrimary)
-                    .opacity(canSend || !isIdle ? 0.85 : 0.3)
-            }
             .animation(.easeInOut(duration: 0.5), value: isIdle)
         }
+        .modifier(GlassSendButtonModifier(tint: Color.krakiPrimary, enabled: canSend || !isIdle))
         .disabled(isIdle && !canSend)
-        .opacity(!isIdle ? 1 : 1) // Pulse handled by animation
     }
 
     // MARK: - Actions
@@ -205,6 +338,39 @@ struct MessageInputView: View {
             imageData = compressed; imageMimeType = "image/jpeg"
         } else if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
             imageData = compressed; imageMimeType = "image/jpeg"
+        }
+    }
+}
+
+// MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
+
+private struct GlassTextFieldModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular)
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+}
+
+private struct GlassSendButtonModifier: ViewModifier {
+    let tint: Color
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .buttonStyle(.glass(.regular.tint(tint)))
+                .opacity(enabled ? 1 : 0.4)
+        } else {
+            content
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(tint)
+                        .opacity(enabled ? 1 : 0.4)
+                )
         }
     }
 }

@@ -147,8 +147,8 @@ final class SessionStore {
     }
 
     func setTitle(_ id: String, title: String?, autoTitle: String?) {
-        if let title { sessions[id]?.title = title }
-        if let autoTitle { sessions[id]?.autoTitle = autoTitle }
+        if let title { sessions[id]?.title = title.isEmpty ? nil : title }
+        if let autoTitle { sessions[id]?.autoTitle = autoTitle.isEmpty ? nil : autoTitle }
     }
 
     func setState(_ id: String, _ state: SessionState) {
@@ -285,15 +285,6 @@ final class SessionStore {
     /// Set session model (alias).
     func setSessionModel(_ id: String, model: String) {
         setModel(id, model)
-    }
-
-    /// Set session title from a string title and autoTitle flag.
-    func setSessionTitle(_ id: String, title: String, autoTitle: Bool) {
-        if autoTitle {
-            setTitle(id, title: nil, autoTitle: title)
-        } else {
-            setTitle(id, title: title, autoTitle: nil)
-        }
     }
 
     /// Set session pinned state (alias).

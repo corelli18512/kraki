@@ -35,7 +35,6 @@ private let standaloneTypes: Set<String> = [
     "user_message",
     "send_input",
     "pending_input",
-    "answer",
     "session_created",
     "session_ended",
     "kill_session",
@@ -49,6 +48,8 @@ private let thinkingTypes: Set<String> = [
     "agent_message",
     "permission",
     "question",
+    "question_resolved",
+    "answer",
     "error",
     "approve",
     "deny",
@@ -139,20 +140,28 @@ func groupMessagesIntoTurns(
         } else if turnCompleteTypes.contains(msg.type) {
             flushTurn(turnComplete: true)
         } else if thinkingTypes.contains(msg.type) {
-            // Questions: always standalone, split the turn
+            // Questions: merge into the preceding ask_user tool_start
             if msg.type == "question" {
-                // Strip the preceding tool event that triggered the question
-                if !currentThinking.isEmpty {
-                    let last = currentThinking[currentThinking.count - 1]
-                    if last.type == "tool_start" || last.type == "tool_complete" {
-                        currentThinking.removeLast()
-                        if last.type == "tool_start" {
-                            skipNextToolComplete = true
-                        }
-                    }
+                // Find the preceding tool_start for ask_user and attach question text
+                if let startIdx = currentThinking.lastIndex(where: {
+                    $0.type == "tool_start" && ($0.toolName == "ask_user" || $0.toolName == "ask")
+                }) {
+                    var updatedPayload = currentThinking[startIdx].payload
+                    updatedPayload["questionText"] = AnyCodable(msg.payload["question"]?.stringValue ?? "")
+                    updatedPayload["questionChoices"] = msg.payload["choices"] ?? AnyCodable(nil)
+                    updatedPayload["questionId"] = AnyCodable(msg.payload["id"]?.stringValue ?? "")
+                    currentThinking[startIdx] = ChatMessage(
+                        type: currentThinking[startIdx].type,
+                        seq: currentThinking[startIdx].seq,
+                        sessionId: currentThinking[startIdx].sessionId,
+                        deviceId: currentThinking[startIdx].deviceId,
+                        timestamp: currentThinking[startIdx].timestamp,
+                        payload: updatedPayload
+                    )
                 }
-                flushTurn(turnComplete: true)
-                result.append(.standalone(msg))
+                // Don't append — question is now merged into the tool entry
+            } else if msg.type == "question_resolved" || msg.type == "answer" {
+                // Structural — skip, the tool_complete carries the answer
             } else if msg.type == "tool_complete" && skipNextToolComplete {
                 skipNextToolComplete = false
             } else if msg.type == "tool_complete" {
@@ -167,6 +176,10 @@ func groupMessagesIntoTurns(
                         let completeArgs = msg.args ?? [:]
                         var mergedPayload = msg.payload
                         mergedPayload["toolName"] = msg.payload["toolName"] ?? startMsg.payload["toolName"]
+                        // Carry over question metadata from tool_start (merged from question message)
+                        if let qt = startMsg.payload["questionText"] { mergedPayload["questionText"] = qt }
+                        if let qc = startMsg.payload["questionChoices"] { mergedPayload["questionChoices"] = qc }
+                        if let qi = startMsg.payload["questionId"] { mergedPayload["questionId"] = qi }
                         var mergedArgs: [String: AnyCodable] = [:]
                         for (k, v) in startArgs { mergedArgs[k] = v }
                         for (k, v) in completeArgs { mergedArgs[k] = v }
