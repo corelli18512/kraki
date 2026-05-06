@@ -10,20 +10,11 @@ struct SessionListView: View {
 
     @Binding var navigationPath: NavigationPath
     @State private var showNewSession = false
-    @State private var deleteCandidate: SessionInfo?
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var deviceStore: DeviceStore { appState.deviceStore }
 
     private var sorted: [SessionInfo] { sessionStore.sortedSessions }
-
-    private var pinnedList: [SessionInfo] {
-        sorted.filter(\.pinned)
-    }
-
-    private var unpinnedList: [SessionInfo] {
-        sorted.filter { !$0.pinned }
-    }
 
     private var hasTentacle: Bool {
         deviceStore.tentacleDevices.contains { $0.online }
@@ -45,22 +36,6 @@ struct SessionListView: View {
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
-        }
-        .alert(
-            "Delete Session?",
-            isPresented: .init(
-                get: { deleteCandidate != nil },
-                set: { if !$0 { deleteCandidate = nil } }
-            ),
-            presenting: deleteCandidate
-        ) { session in
-            Button("Cancel", role: .cancel) { deleteCandidate = nil }
-            Button("Delete", role: .destructive) {
-                appState.commandSender?.deleteSession(sessionId: session.id)
-                deleteCandidate = nil
-            }
-        } message: { _ in
-            Text("This will permanently delete this session and all its messages. This cannot be undone.")
         }
     }
 
@@ -101,114 +76,13 @@ struct SessionListView: View {
         .background(Color.surfacePrimary)
     }
 
-    // MARK: - Session List
+    // MARK: - Session List (UIKit-backed for smooth row reorder)
 
     private var sessionList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if !pinnedList.isEmpty {
-                    sectionHeader(icon: .pin, title: "Pinned")
-                    ForEach(pinnedList) { session in
-                        sessionRow(session)
-                    }
-                    if !unpinnedList.isEmpty {
-                        sectionHeader(title: "Recent")
-                    }
-                }
-                ForEach(unpinnedList) { session in
-                    sessionRow(session)
-                }
-            }
+        SessionTable(appState: appState) { sessionId in
+            navigationPath.append(SessionNavID(id: sessionId))
         }
-        .contentMargins(.top, 0)
         .background(Color.surfacePrimary)
-    }
-
-    private func sectionHeader(icon: LucideIconType? = nil, title: String) -> some View {
-        HStack(spacing: 4) {
-            if let icon {
-                LucideIcon(icon, size: 10, color: .secondary)
-            }
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.top, 16)
-        .padding(.bottom, 6)
-    }
-
-    private func sessionRow(_ session: SessionInfo) -> some View {
-        VStack(spacing: 0) {
-            Button {
-                navigationPath.append(SessionNavID(id: session.id))
-            } label: {
-                SessionCardView(session: session)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button {
-                    appState.commandSender?.forkSession(sessionId: session.id)
-                } label: {
-                    Label("Fork", systemImage: "arrow.triangle.branch")
-                }
-                .tint(Color(hex: 0xC08A2F)) // warm amber
-
-                let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
-                Button {
-                    if isUnread {
-                        appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
-                    } else {
-                        appState.commandSender?.markUnread(sessionId: session.id)
-                    }
-                } label: {
-                    Label(isUnread ? "Read" : "Unread", systemImage: isUnread ? "envelope.open" : "envelope.badge")
-                }
-                .tint(Color(hex: 0x6B7D94)) // soft slate
-
-                Button {
-                    appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
-                } label: {
-                    Label(session.pinned ? "Unpin" : "Pin", systemImage: session.pinned ? "pin.slash" : "pin")
-                }
-                .tint(Color(hex: 0x2F9C8B)) // muted teal
-            }
-            .contextMenu {
-            Button {
-                appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
-            } label: {
-                Label(session.pinned ? "Unpin" : "Pin", systemImage: session.pinned ? "pin.slash" : "pin")
-            }
-
-            let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
-            Button {
-                if isUnread {
-                    appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
-                } else {
-                    appState.commandSender?.markUnread(sessionId: session.id)
-                }
-            } label: {
-                Label(isUnread ? "Mark as Read" : "Mark as Unread", systemImage: isUnread ? "envelope.open" : "envelope.badge")
-            }
-
-            Button {
-                appState.commandSender?.forkSession(sessionId: session.id)
-            } label: {
-                Label("Fork", systemImage: "arrow.triangle.branch")
-            }
-        }
-
-            Color.borderPrimary
-                .frame(height: 1.0 / UIScreen.main.scale)
-                .padding(.leading, 46)
-        }
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0))
-        .listRowSeparator(.hidden)
     }
 
     // MARK: - Empty State

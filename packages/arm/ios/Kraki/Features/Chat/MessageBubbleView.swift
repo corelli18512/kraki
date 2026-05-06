@@ -16,6 +16,7 @@ struct MessageBubbleView: View {
     var streamingText: String?
     @State private var solidCharCount: Int = 0
     @State private var batchTimestamp: Date = .distantPast
+    @State private var toolSectionExpanded = false
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -25,21 +26,23 @@ struct MessageBubbleView: View {
         thinkingHistory.filter { $0.type != "active" }
     }
 
-    private var hasHistory: Bool { !visibleHistory.isEmpty }
+    /// Items before the final message (top history section)
+    private var preMessageHistory: [ChatMessage] {
+        visibleHistory.filter { $0.seq <= message.seq }
+    }
+
+    /// Items after the final message (bottom tool section)
+    private var postMessageActivity: [ChatMessage] {
+        guard streamingText == nil || streamingText?.isEmpty == true else { return [] }
+        return visibleHistory.filter { $0.seq > message.seq }
+    }
+
+    private var hasHistory: Bool { !preMessageHistory.isEmpty }
 
     private var latestMessageText: String? {
         if let s = streamingText, !s.isEmpty { return s }
         if let c = message.content, !c.isEmpty { return c }
         return nil
-    }
-
-    private var trailingActivity: ChatMessage? {
-        guard streamingText == nil || streamingText?.isEmpty == true else { return nil }
-        guard let activity = visibleHistory.last(where: {
-            $0.type == "tool_start" || $0.type == "tool_complete" || $0.type == "error"
-        }) else { return nil }
-        if activity.seq <= message.seq { return nil }
-        return activity
     }
 
     private var agentBubbleColor: Color {
@@ -128,11 +131,6 @@ struct MessageBubbleView: View {
                         .textSelection(.enabled)
                 }
                 imageGrid(attachments: attachments)
-                if let timestamp {
-                    Text(formatTime(timestamp))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -179,50 +177,39 @@ struct MessageBubbleView: View {
     // MARK: - Agent Bubble
 
     private var agentBubble: some View {
-        HStack(alignment: .top, spacing: 8) {
-            agentAvatar
+        HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                // Main content
-                VStack(alignment: .leading, spacing: 4) {
-                    if historyExpanded {
-                        expandedContent
-                    } else {
-                        collapsedMessageContent
+                // ① History section (top) — pre-message items, collapsed by default
+                if historyExpanded && !preMessageHistory.isEmpty {
+                    bubbleSection(position: .top) {
+                        ForEach(Array(preMessageHistory.enumerated()), id: \.element.id) { _, item in
+                            historyItemView(item)
+                        }
                     }
+                }
+
+                // ② Message section (middle) — always visible
+                VStack(alignment: .leading, spacing: 4) {
+                    messageContent
                     imageGrid(attachments: message.attachments)
                     if let turnImages, !turnImages.isEmpty {
                         imageGrid(attachments: turnImages)
-                    }
-                    if let timestamp = message.timestamp {
-                        Text(formatTime(timestamp))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
 
-                // Trailing activity (when collapsed, if present)
-                if !historyExpanded, let activity = trailingActivity {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if activity.type == "error" {
-                            ErrorLineView(message: activity, showPill: true)
+                // ③ Tool section (bottom) — post-message activity
+                if !postMessageActivity.isEmpty {
+                    bubbleSection(position: .bottom) {
+                        if toolSectionExpanded {
+                            ForEach(Array(postMessageActivity.enumerated()), id: \.element.id) { _, item in
+                                historyItemView(item)
+                            }
                         } else {
-                            ToolLineView(message: activity, showPill: true)
+                            historyItemView(postMessageActivity.last!)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: 0,
-                            bottomLeadingRadius: 16,
-                            bottomTrailingRadius: 16,
-                            topTrailingRadius: 0
-                        )
-                        .fill(.black.opacity(colorScheme == .dark ? 0.2 : 0.06))
-                    )
                 }
             }
             .background(agentBubbleColor, in: bubbleShape(isUser: false))
@@ -249,14 +236,14 @@ struct MessageBubbleView: View {
                     }
                 }
             }
-            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.05)
         }
     }
 
-    // MARK: - Collapsed Message Content
+    // MARK: - Message Content
 
     @ViewBuilder
-    private var collapsedMessageContent: some View {
+    private var messageContent: some View {
         if let streaming = streamingText, !streaming.isEmpty {
             streamingTextView(streaming)
         } else if let content = message.content {
@@ -267,43 +254,47 @@ struct MessageBubbleView: View {
         }
     }
 
-    // MARK: - Expanded Content
+    // MARK: - History Item View (shared renderer for tool/error/agent_message)
 
     @ViewBuilder
-    private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(visibleHistory.enumerated()), id: \.element.id) { _, item in
-                    switch item.type {
-                    case "agent_message":
-                        if let content = item.content, !content.isEmpty {
-                            Text(markdownContent(content))
-                                .font(.subheadline)
-                                .foregroundStyle(.primary.opacity(0.7))
-                                .textSelection(.enabled)
-                        }
-                    case "tool_start", "tool_complete":
-                        ToolLineView(message: item, showPill: true)
-                    case "error":
-                        ErrorLineView(message: item, showPill: true)
-                    default:
-                        EmptyView()
-                    }
-                }
-            }
-            .padding(10)
-            .background(.black.opacity(colorScheme == .dark ? 0.2 : 0.06), in: RoundedRectangle(cornerRadius: 8))
-
-            // Final message
-            if let streaming = streamingText, !streaming.isEmpty {
-                streamingTextView(streaming)
-            } else if let content = message.content, !content.isEmpty {
+    private func historyItemView(_ item: ChatMessage) -> some View {
+        switch item.type {
+        case "agent_message":
+            if let content = item.content, !content.isEmpty {
                 Text(markdownContent(content))
                     .font(.subheadline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.primary.opacity(0.7))
                     .textSelection(.enabled)
             }
+        case "tool_start", "tool_complete":
+            ToolLineView(message: item)
+        case "error":
+            ErrorLineView(message: item)
+        default:
+            EmptyView()
         }
+    }
+
+    // MARK: - Bubble Section (top or bottom darker area)
+
+    private enum SectionPosition { case top, bottom }
+
+    private func bubbleSection<Content: View>(position: SectionPosition, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            UnevenRoundedRectangle(
+                topLeadingRadius: position == .top ? 4 : 0,
+                bottomLeadingRadius: position == .bottom ? 16 : 0,
+                bottomTrailingRadius: position == .bottom ? 16 : 0,
+                topTrailingRadius: position == .top ? 16 : 0
+            )
+            .fill(.black.opacity(colorScheme == .dark ? 0.2 : 0.06))
+        )
     }
 
     // MARK: - Streaming Text (cascade word fade)
@@ -352,7 +343,7 @@ struct MessageBubbleView: View {
         let model = message.payload["model"]?.stringValue
         return HStack(spacing: 4) {
             Spacer()
-            AgentAvatar(agent: agentName, sessionId: message.sessionId, size: .sm)
+            AgentAvatar(agent: agentName, sessionId: message.sessionId, size: .xs)
             Text("\(agentLabel(agentName)) session \(forked ? "forked" : "started")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -572,10 +563,10 @@ struct MessageBubbleView: View {
 
     private func bubbleShape(isUser: Bool) -> UnevenRoundedRectangle {
         UnevenRoundedRectangle(
-            topLeadingRadius: 16,
-            bottomLeadingRadius: isUser ? 16 : 4,
-            bottomTrailingRadius: isUser ? 4 : 16,
-            topTrailingRadius: 16
+            topLeadingRadius: isUser ? 16 : 4,
+            bottomLeadingRadius: 16,
+            bottomTrailingRadius: 16,
+            topTrailingRadius: isUser ? 4 : 16
         )
     }
 

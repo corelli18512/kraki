@@ -45,7 +45,9 @@ final class SessionStore {
 
     // MARK: - Computed
 
-    /// Sessions sorted: pinned first, then by preview timestamp descending, then by createdAt.
+    /// Sessions sorted: pinned first, then by preview timestamp descending,
+    /// then by createdAt. Pinned items float to the top in a single flat list
+    /// (no section header — pin status is shown as an inline badge).
     var sortedSessions: [SessionInfo] {
         sessions.values.sorted { a, b in
             if a.pinned != b.pinned { return a.pinned }

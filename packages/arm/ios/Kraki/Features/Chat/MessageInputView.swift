@@ -33,45 +33,33 @@ struct MessageInputView: View {
     private var canSend: Bool { isIdle && (hasText || hasImage) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Gradient fade from chat
-            LinearGradient(
-                colors: [Color.surfacePrimary.opacity(0), Color.surfacePrimary],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 16)
-
+        VStack(spacing: 8) {
             // Pending permission/question cards
             if let permission = pendingPermission {
                 PermissionCardView(permission: permission)
                     .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
             } else if let question = pendingQuestion {
                 QuestionCardView(question: question)
                     .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
             }
 
-            VStack(spacing: 6) {
-                // Row 1: image attach + mode picker
-                HStack {
-                    imageAttachButton
-                    Spacer()
-                    ModePickerView(sessionId: sessionId)
-                }
-
-                // Row 2: text input + send/stop
-                HStack(alignment: .bottom, spacing: 8) {
-                    textField
-                    sendStopButton
-                }
+            // Row 1: image attach + mode picker
+            HStack {
+                imageAttachButton
+                Spacer()
+                ModePickerView(sessionId: sessionId)
             }
             .padding(.horizontal, 12)
-            .padding(.top, 4)
+
+            // Row 2: text input + send/stop
+            HStack(alignment: .bottom, spacing: 8) {
+                textField
+                sendStopButton
+            }
+            .padding(.horizontal, 12)
             .padding(.bottom, max(12, UIApplication.shared.connectedScenes
                 .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
                 .first ?? 0))
-            .background(Color.surfacePrimary)
         }
         .onChange(of: sessionActive) { _, active in
             if active { awaitingActive = false }
@@ -98,18 +86,18 @@ struct MessageInputView: View {
                         .frame(height: 32)
                         .frame(maxWidth: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderPrimary, lineWidth: 1))
 
                     Button { clearImage() } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(.secondary, Color.surfacePrimary)
+                            .foregroundStyle(.secondary, .ultraThinMaterial)
                     }
                     .offset(x: 4, y: -4)
                 }
             } else {
                 LucideIcon(.imagePlus, size: 18, color: .secondary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 36, height: 36)
+                    .background(.ultraThinMaterial, in: Circle())
             }
         }
         .disabled(!isIdle)
@@ -128,11 +116,7 @@ struct MessageInputView: View {
         .font(.system(size: 16))
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color.surfaceSecondary, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(isFocused ? Color.krakiPrimary : Color.borderPrimary, lineWidth: isFocused ? 1.5 : 1)
-        )
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .focused($isFocused)
         .disabled(!isIdle)
         .opacity(isIdle ? 1 : 0.6)
@@ -164,11 +148,12 @@ struct MessageInputView: View {
                     .opacity(isIdle ? 0 : 1)
             }
             .frame(width: 36, height: 36)
-            .background(
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.krakiPrimary)
-                    .opacity(canSend || !isIdle ? 1 : 0.4)
-            )
+                    .opacity(canSend || !isIdle ? 0.85 : 0.3)
+            }
             .animation(.easeInOut(duration: 0.5), value: isIdle)
         }
         .disabled(isIdle && !canSend)

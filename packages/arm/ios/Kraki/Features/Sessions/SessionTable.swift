@@ -90,7 +90,14 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         guard isViewLoaded, let appState else { return }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        snapshot.appendItems(appState.sessionStore.sortedSessions.map(\.id))
+        let ids = appState.sessionStore.sortedSessions.map(\.id)
+        snapshot.appendItems(ids)
+
+        // Reconfigure all items so cells re-render their SwiftUI content
+        // (UIHostingConfiguration captures session state at config-creation
+        // time; without reconfiguring, pin badge & other props won't update
+        // when the underlying SessionInfo changes but the order does not).
+        snapshot.reconfigureItems(ids)
 
         // First snapshot is non-animated; subsequent ones animate moves.
         let shouldAnimate = animated && didApplyInitialSnapshot
@@ -112,26 +119,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
               let sessionId = dataSource.itemIdentifier(for: indexPath),
               let session = appState.sessionStore.sessions[sessionId] else { return nil }
 
-        // Order in array = right to left visually. Visual: Unread | Fork | Pin
+        // Order in array = right to left visually. Visual: Pin | Fork | Unread
 
-        // Pin (rightmost)
-        let pinned = session.pinned
-        let pinAction = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, completion in
-            appState.commandSender?.pinSession(sessionId: sessionId, pinned: !pinned)
-            completion(true)
-        }
-        pinAction.image = renderLucideIconForSwipe(pinned ? .pinOff : .pin)
-        pinAction.backgroundColor = UIColor(red: 0x2F/255.0, green: 0x9C/255.0, blue: 0x8B/255.0, alpha: 1) // muted teal
-
-        // Fork (middle)
-        let forkAction = UIContextualAction(style: .normal, title: "Fork") { _, _, completion in
-            appState.commandSender?.forkSession(sessionId: sessionId)
-            completion(true)
-        }
-        forkAction.image = renderLucideIconForSwipe(.gitFork)
-        forkAction.backgroundColor = UIColor(red: 0xC0/255.0, green: 0x8A/255.0, blue: 0x2F/255.0, alpha: 1) // warm amber
-
-        // Unread (leftmost)
+        // Unread (rightmost — closest to swipe edge)
         let isUnread = (appState.sessionStore.unreadCounts[sessionId] ?? 0) > 0
         let unreadAction = UIContextualAction(style: .normal, title: isUnread ? "Read" : "Unread") { _, _, completion in
             if isUnread {
@@ -144,7 +134,24 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         unreadAction.image = renderLucideIconForSwipe(isUnread ? .bellOff : .bellRing)
         unreadAction.backgroundColor = UIColor(red: 0x6B/255.0, green: 0x7D/255.0, blue: 0x94/255.0, alpha: 1) // soft slate
 
-        let config = UISwipeActionsConfiguration(actions: [pinAction, forkAction, unreadAction])
+        // Fork (middle)
+        let forkAction = UIContextualAction(style: .normal, title: "Fork") { _, _, completion in
+            appState.commandSender?.forkSession(sessionId: sessionId)
+            completion(true)
+        }
+        forkAction.image = renderLucideIconForSwipe(.gitFork)
+        forkAction.backgroundColor = UIColor(red: 0xC0/255.0, green: 0x8A/255.0, blue: 0x2F/255.0, alpha: 1) // warm amber
+
+        // Pin (leftmost)
+        let pinned = session.pinned
+        let pinAction = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, completion in
+            appState.commandSender?.pinSession(sessionId: sessionId, pinned: !pinned)
+            completion(true)
+        }
+        pinAction.image = renderLucideIconForSwipe(pinned ? .pinOff : .pin)
+        pinAction.backgroundColor = UIColor(red: 0x2F/255.0, green: 0x9C/255.0, blue: 0x8B/255.0, alpha: 1) // muted teal
+
+        let config = UISwipeActionsConfiguration(actions: [unreadAction, forkAction, pinAction])
         config.performsFirstActionWithFullSwipe = false
         return config
     }

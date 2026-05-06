@@ -81,15 +81,13 @@ struct ChatView: View {
 
     var body: some View {
         let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
-        VStack(spacing: 0) {
-            scrollableMessages
-
-            // Bottom input area
-            if isDeviceOnline {
-                bottomInputArea
+        scrollableMessages
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isDeviceOnline {
+                    bottomInputArea
+                }
             }
-        }
-        .background(Color.surfacePrimary)
+            .background(Color.surfacePrimary)
     }
 
     // MARK: - Scrollable Messages
