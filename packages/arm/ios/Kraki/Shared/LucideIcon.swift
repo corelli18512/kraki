@@ -24,7 +24,7 @@ struct LucideIcon: View {
     var body: some View {
         Canvas { context, canvasSize in
             let scale = canvasSize.width / 24
-            let scaledStroke = strokeWidth * (20 / canvasSize.width)
+            let scaledStroke = strokeWidth * scale
 
             for element in icon.elements {
                 var path: Path
@@ -73,6 +73,12 @@ extension LucideIconType {
             return Image(uiImage: uiImage.withRenderingMode(.alwaysTemplate))
         }
         return Image(systemName: "questionmark")
+    }
+
+    /// Renders the icon as a template-mode `Image` for swipe action labels.
+    @MainActor
+    func swipeImage(size: CGFloat = 22) -> Image {
+        tabImage(size: size)
     }
 }
 

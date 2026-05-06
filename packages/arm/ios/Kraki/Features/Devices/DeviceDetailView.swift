@@ -11,6 +11,7 @@ struct DeviceDetailView: View {
     let device: DeviceSummary
 
     @State private var showRemoveConfirmation = false
+    @State private var modelsExpanded = false
 
     private var isCurrentDevice: Bool {
         device.id == appState.deviceId
@@ -47,18 +48,93 @@ struct DeviceDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                headerSection
-                infoSection
-                modelsSection
-                sessionsSection
-                removeSection
+        List {
+            // Info rows
+            Section {
+                infoRow("Status", value: statusLabel, valueColor: statusColor)
+                infoRow("Added", value: formatDate(device.createdAt))
+                infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
+                if let version {
+                    infoRow("Version", value: version)
+                }
+                if isCurrentDevice {
+                    infoRow("This device", value: "Yes", valueColor: Color.krakiPrimary)
+                }
             }
-            .padding()
+
+            // Models (expandable)
+            if let models, !models.isEmpty {
+                Section {
+                    DisclosureGroup(isExpanded: $modelsExpanded) {
+                        FlowLayout(spacing: 6) {
+                            ForEach(models, id: \.self) { model in
+                                Text(model)
+                                    .font(.caption)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color(.systemGray6))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } label: {
+                        Text("Supported Models (\(models.count))")
+                            .font(.subheadline)
+                    }
+                }
+            }
+
+            // Sessions (native list rows, no title)
+            Section {
+                if deviceSessions.isEmpty {
+                    Text("No sessions on this device")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(deviceSessions) { session in
+                        NavigationLink(value: SessionNavID(id: session.id)) {
+                            HStack {
+                                AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm, status: session.state)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.displayTitle)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                    Text(relativeTimestamp(session.createdAt))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+
+            // Remove
+            if canRemove {
+                Section {
+                    Button(role: .destructive) {
+                        showRemoveConfirmation = true
+                    } label: {
+                        Label("Remove Device", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
         }
+        .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 0)
+        .background(Color.surfacePrimary)
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.inline)
+        .hidesTabBar()
+        .navigationDestination(for: SessionNavID.self) { nav in
+            SessionDetailView(sessionId: nav.id)
+                .environment(appState)
+        }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
@@ -69,134 +145,17 @@ struct DeviceDetailView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Info Row
 
-    private var headerSection: some View {
-        HStack(spacing: 10) {
-            Text(device.name)
-                .font(.title2.weight(.semibold))
-
-            Text(statusLabel)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(statusColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(statusColor.opacity(0.12))
-                .clipShape(Capsule())
-
-            Spacer()
-
-            if isCurrentDevice {
-                Text("This device")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.krakiPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.krakiPrimary.opacity(0.12))
-                    .clipShape(Capsule())
-            }
-        }
-    }
-
-    // MARK: - Info
-
-    private var infoSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Info")
-                .font(.caption.weight(.semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(.secondary)
-
-            infoRow("Added", value: formatDate(device.createdAt))
-            infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
-            if let version {
-                infoRow("Version", value: version)
-            }
-        }
-    }
-
-    private func infoRow(_ label: String, value: String) -> some View {
+    private func infoRow(_ label: String, value: String, valueColor: Color = .primary) -> some View {
         HStack {
             Text(label)
                 .foregroundStyle(.secondary)
             Spacer()
             Text(value)
-                .foregroundStyle(.primary)
+                .foregroundStyle(valueColor)
         }
         .font(.subheadline)
-    }
-
-    // MARK: - Models
-
-    @ViewBuilder
-    private var modelsSection: some View {
-        if let models, !models.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Supported Models")
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
-
-                FlowLayout(spacing: 6) {
-                    ForEach(models, id: \.self) { model in
-                        Text(model)
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(Color(.systemGray6))
-                            .clipShape(Capsule())
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Sessions
-
-    private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Sessions\(deviceSessions.isEmpty ? "" : " (\(deviceSessions.count))")")
-                .font(.caption.weight(.semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(.secondary)
-
-            if deviceSessions.isEmpty {
-                Text("No sessions on this device")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(deviceSessions) { session in
-                    NavigationLink(value: SessionNavID(id: session.id)) {
-                        HStack {
-                            Text(session.displayTitle)
-                                .font(.subheadline)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(relativeTimestamp(session.createdAt))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Remove
-
-    @ViewBuilder
-    private var removeSection: some View {
-        if canRemove {
-            Button(role: .destructive) {
-                showRemoveConfirmation = true
-            } label: {
-                Label("Remove Device", systemImage: "trash")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-        }
     }
 
     // MARK: - Helpers
