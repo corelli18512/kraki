@@ -98,9 +98,17 @@ struct SettingsView: View {
         } header: {
             Text("Relay")
         } footer: {
-            Text("Kraki for iOS \(appVersion)")
-                .frame(maxWidth: .infinity)
-                .padding(.top, 12)
+            HStack(spacing: 8) {
+                Image("KrakiLogo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text("Kraki for iOS \(appVersion)")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 12)
         }
     }
 

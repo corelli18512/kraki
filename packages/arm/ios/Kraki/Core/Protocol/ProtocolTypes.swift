@@ -28,8 +28,16 @@ struct AnyCodable: Codable, Equatable, @unchecked Sendable, CustomStringConverti
     }
     var doubleValue: Double? { value as? Double }
     var boolValue: Bool? { value as? Bool }
-    var arrayValue: [AnyCodable]? { value as? [AnyCodable] }
-    var dictValue: [String: AnyCodable]? { value as? [String: AnyCodable] }
+    var arrayValue: [AnyCodable]? {
+        if let arr = value as? [AnyCodable] { return arr }
+        if let arr = value as? [Any] { return arr.map { AnyCodable($0) } }
+        return nil
+    }
+    var dictValue: [String: AnyCodable]? {
+        if let dict = value as? [String: AnyCodable] { return dict }
+        if let dict = value as? [String: Any] { return dict.mapValues { AnyCodable($0) } }
+        return nil
+    }
 
     // MARK: Codable
 

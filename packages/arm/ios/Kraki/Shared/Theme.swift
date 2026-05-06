@@ -14,36 +14,20 @@ extension Color {
     }
 }
 
-// MARK: - Brand Palette: Kraki
+// MARK: - Brand Palette: Kraki (navy, derived from logo)
 
 extension Color {
-    static let kraki50  = Color(red: 0xFE / 255, green: 0xF3 / 255, blue: 0xF1 / 255)
-    static let kraki100 = Color(red: 0xFD / 255, green: 0xE5 / 255, blue: 0xE0 / 255)
-    static let kraki200 = Color(red: 0xFC / 255, green: 0xCE / 255, blue: 0xC6 / 255)
-    static let kraki300 = Color(red: 0xF9 / 255, green: 0xAD / 255, blue: 0x9F / 255)
-    static let kraki400 = Color(red: 0xF4 / 255, green: 0x83 / 255, blue: 0x6E / 255)
-    static let kraki500 = Color(red: 0xEA / 255, green: 0x60 / 255, blue: 0x46 / 255)
-    static let kraki600 = Color(red: 0xD7 / 255, green: 0x44 / 255, blue: 0x28 / 255)
-    static let kraki700 = Color(red: 0xB5 / 255, green: 0x36 / 255, blue: 0x1E / 255)
-    static let kraki800 = Color(red: 0x96 / 255, green: 0x30 / 255, blue: 0x1D / 255)
-    static let kraki900 = Color(red: 0x7D / 255, green: 0x2D / 255, blue: 0x1E / 255)
-    static let kraki950 = Color(red: 0x44 / 255, green: 0x13 / 255, blue: 0x0B / 255)
-}
-
-// MARK: - Brand Palette: Ocean
-
-extension Color {
-    static let ocean50  = Color(red: 0xEC / 255, green: 0xFE / 255, blue: 0xFF / 255)
-    static let ocean100 = Color(red: 0xCF / 255, green: 0xFA / 255, blue: 0xFE / 255)
-    static let ocean200 = Color(red: 0xA5 / 255, green: 0xF3 / 255, blue: 0xFC / 255)
-    static let ocean300 = Color(red: 0x67 / 255, green: 0xE8 / 255, blue: 0xF9 / 255)
-    static let ocean400 = Color(red: 0x22 / 255, green: 0xD3 / 255, blue: 0xEE / 255)
-    static let ocean500 = Color(red: 0x06 / 255, green: 0xB6 / 255, blue: 0xD4 / 255)
-    static let ocean600 = Color(red: 0x08 / 255, green: 0x91 / 255, blue: 0xB2 / 255)
-    static let ocean700 = Color(red: 0x0E / 255, green: 0x74 / 255, blue: 0x90 / 255)
-    static let ocean800 = Color(red: 0x15 / 255, green: 0x5E / 255, blue: 0x75 / 255)
-    static let ocean900 = Color(red: 0x16 / 255, green: 0x4E / 255, blue: 0x63 / 255)
-    static let ocean950 = Color(red: 0x08 / 255, green: 0x33 / 255, blue: 0x44 / 255)
+    static let kraki50  = Color(red: 0xEB / 255, green: 0xF3 / 255, blue: 0xFB / 255)
+    static let kraki100 = Color(red: 0xD2 / 255, green: 0xE4 / 255, blue: 0xF6 / 255)
+    static let kraki200 = Color(red: 0xA5 / 255, green: 0xC9 / 255, blue: 0xED / 255)
+    static let kraki300 = Color(red: 0x5E / 255, green: 0xA0 / 255, blue: 0xD7 / 255)
+    static let kraki400 = Color(red: 0x2F / 255, green: 0x80 / 255, blue: 0xC0 / 255)
+    static let kraki500 = Color(red: 0x0B / 255, green: 0x5B / 255, blue: 0x9C / 255)
+    static let kraki600 = Color(red: 0x09 / 255, green: 0x4A / 255, blue: 0x80 / 255)
+    static let kraki700 = Color(red: 0x07 / 255, green: 0x3A / 255, blue: 0x65 / 255)
+    static let kraki800 = Color(red: 0x05 / 255, green: 0x28 / 255, blue: 0x47 / 255)
+    static let kraki900 = Color(red: 0x03 / 255, green: 0x1A / 255, blue: 0x30 / 255)
+    static let kraki950 = Color(red: 0x01 / 255, green: 0x0E / 255, blue: 0x1E / 255)
 }
 
 // MARK: - Semantic Colors (adaptive light/dark)
@@ -77,13 +61,21 @@ extension Color {
         light: UIColor(red: 0x94/255, green: 0xA3/255, blue: 0xB8/255, alpha: 1), // slate-400
         dark: UIColor(red: 0x64/255, green: 0x74/255, blue: 0x8B/255, alpha: 1)  // slate-500
     )
+    /// Title text — very slightly navy-tinted for brand warmth.
+    static let textTitle = Color(
+        light: UIColor(red: 0x05/255, green: 0x28/255, blue: 0x47/255, alpha: 1), // kraki800
+        dark: UIColor(red: 0xDB/255, green: 0xE8/255, blue: 0xF4/255, alpha: 1)   // navy-tinted white
+    )
 }
 
 // MARK: - Legacy Aliases
 
 extension Color {
-    static let krakiPrimary = Color.kraki500
-    static let krakiSecondary = Color.ocean500
+    static let krakiPrimary = Color(
+        light: UIColor(red: 0x0B/255, green: 0x5B/255, blue: 0x9C/255, alpha: 1), // kraki500
+        dark: UIColor(red: 0x5E/255, green: 0xA0/255, blue: 0xD7/255, alpha: 1)   // kraki300
+    )
+    static let krakiSecondary = Color.kraki300
 }
 
 // MARK: - Mode Colors
@@ -92,7 +84,7 @@ extension Color {
     static func modeColor(_ mode: SessionMode) -> Color {
         switch mode {
         case .safe:     return .green
-        case .discuss:  return .ocean500
+        case .discuss:  return .kraki300
         case .execute:  return .orange
         case .delegate: return .kraki500
         }

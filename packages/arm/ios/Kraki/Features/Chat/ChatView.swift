@@ -11,11 +11,7 @@ struct ChatView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
-    @State private var showScrollButton = false
-    @State private var unreadCount = 0
-    @State private var isAtBottom = true
-    @State private var previousGroupCount = 0
-    @State private var previousLastSeq = 0
+    @State private var expandedTurns: Set<String> = []
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
@@ -86,35 +82,14 @@ struct ChatView: View {
     var body: some View {
         let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
         VStack(spacing: 0) {
-            // Messages area
-            ZStack(alignment: .bottomTrailing) {
-                scrollableMessages
-
-                // Dim overlay when blocking cards are shown
-                if !permissions.isEmpty || !questions.isEmpty {
-                    Color.black.opacity(0.05)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-
-                // Scroll to bottom button
-                if showScrollButton {
-                    scrollToBottomButton
-                        .padding(12)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
+            scrollableMessages
 
             // Bottom input area
             if isDeviceOnline {
                 bottomInputArea
             }
         }
-        .onChange(of: sessionId) {
-            showScrollButton = false
-            unreadCount = 0
-            isAtBottom = true
-        }
+        .background(Color.surfacePrimary)
     }
 
     // MARK: - Scrollable Messages
@@ -150,29 +125,51 @@ struct ChatView: View {
                         case .standalone(let msg):
                             MessageBubbleView(
                                 message: msg,
-                                agent: session?.agent ?? ""
+                                agent: session?.agent ?? "",
+                                historyExpanded: .constant(false)
                             )
 
                         case .turn(let turn):
                             let isLastTurn = idx == grouped.count - 1
                             let hasStreaming = isLastTurn && streaming != nil
-                            let isActive = isLastTurn && !sessionIdle && (turn.finalMessage == nil || hasStreaming)
+                            let turnId = turn.id
 
-                            VStack(spacing: 8) {
-                                if !turn.thinkingMessages.isEmpty || hasStreaming {
-                                    ThinkingBoxView(
-                                        messages: turn.thinkingMessages,
-                                        isActive: isActive,
-                                        agent: session?.agent ?? "",
-                                        streamingText: hasStreaming ? streaming : nil
+                            if let final = turn.finalMessage, !hasStreaming {
+                                // Turn complete: final bubble with thinking history inside
+                                MessageBubbleView(
+                                    message: final,
+                                    agent: session?.agent ?? "",
+                                    turnImages: collectTurnImages(turn.thinkingMessages),
+                                    thinkingHistory: turn.thinkingMessages,
+                                    historyExpanded: Binding(
+                                        get: { expandedTurns.contains(turnId) },
+                                        set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
                                     )
-                                }
+                                )
+                            } else if !turn.thinkingMessages.isEmpty || hasStreaming {
+                                // Turn in progress
+                                let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
+                                let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
+                                let hasStreamingContent = hasStreaming && streaming?.isEmpty == false
+                                let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
 
-                                if let final = turn.finalMessage, !hasStreaming {
+                                if hasMessage || hasStreamingContent || hasTools {
                                     MessageBubbleView(
-                                        message: final,
+                                        message: latestMsg ?? ChatMessage(
+                                            type: "agent_message",
+                                            seq: 0,
+                                            sessionId: sessionId,
+                                            deviceId: nil,
+                                            timestamp: nil,
+                                            payload: [:]
+                                        ),
                                         agent: session?.agent ?? "",
-                                        turnImages: collectTurnImages(turn.thinkingMessages)
+                                        thinkingHistory: turn.thinkingMessages,
+                                        historyExpanded: Binding(
+                                            get: { expandedTurns.contains(turnId) },
+                                            set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
+                                        ),
+                                        streamingText: hasStreaming ? streaming : nil
                                     )
                                 }
                             }
@@ -188,91 +185,26 @@ struct ChatView: View {
                 .padding(.vertical, 16)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.bottom)
             .onAppear {
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
-            .onChange(of: grouped.count) { oldCount, newCount in
-                handleNewMessages(proxy: proxy, oldCount: oldCount, newCount: newCount)
-            }
-            .onChange(of: streaming) {
-                if isAtBottom {
-                    withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
-                }
-            }
         }
-    }
-
-    // MARK: - Scroll to Bottom Button
-
-    private var scrollToBottomButton: some View {
-        Button {
-            // Trigger scroll by resetting state
-            showScrollButton = false
-            unreadCount = 0
-            isAtBottom = true
-        } label: {
-            HStack(spacing: 6) {
-                if unreadCount > 0 {
-                    Text("\(unreadCount)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor, in: Capsule())
-                }
-                Image(systemName: "arrow.down")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Bottom Input Area
 
     @ViewBuilder
     private var bottomInputArea: some View {
-        if !permissions.isEmpty {
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(permissions) { perm in
-                        PermissionCardView(permission: perm)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.4)
-        } else if let question = questions.first {
-            QuestionCardView(question: question)
-        } else {
-            MessageInputView(sessionId: sessionId)
-        }
+        MessageInputView(
+            sessionId: sessionId,
+            pendingPermission: permissions.first,
+            pendingQuestion: permissions.isEmpty ? questions.first : nil
+        )
     }
 
     // MARK: - Helpers
-
-    private func handleNewMessages(proxy: ScrollViewProxy, oldCount: Int, newCount: Int) {
-        guard newCount > oldCount else { return }
-
-        // Check if user sent the message (auto-scroll regardless)
-        if let last = grouped.last, case .standalone(let msg) = last,
-           ["user_message", "pending_input", "answer", "send_input"].contains(msg.type) {
-            withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
-            return
-        }
-
-        if isAtBottom {
-            withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
-        } else {
-            unreadCount += (newCount - oldCount)
-            showScrollButton = true
-        }
-    }
 
     /// Collect image attachments from tool_complete messages in a turn's thinking.
     private func collectTurnImages(_ thinkingMessages: [ChatMessage]) -> [ImageAttachment] {

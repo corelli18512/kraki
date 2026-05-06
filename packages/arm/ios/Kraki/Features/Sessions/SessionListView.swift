@@ -68,20 +68,10 @@ struct SessionListView: View {
 
     private var brandHeader: some View {
         HStack(spacing: 6) {
-            Image("KrakiLogo")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 28, height: 28)
-
-            HStack(spacing: 0.5) {
-                Text("K").foregroundColor(Color(hex: 0x00c9a7))
-                Text("R").foregroundColor(Color(hex: 0x00b4d8))
-                Text("A").foregroundColor(Color(hex: 0x06b6d4))
-                Text("K").foregroundColor(Color(hex: 0xea6046))
-                Text("I").foregroundColor(Color(hex: 0x0891b2))
-            }
-            .font(.system(size: 18, weight: .heavy, design: .monospaced))
-            .tracking(2.5)
+            Text("KRAKI")
+                .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                .tracking(2.5)
+                .foregroundColor(.krakiPrimary)
 
             Text("Preview")
                 .font(.system(size: 10, weight: .semibold))
@@ -105,7 +95,8 @@ struct SessionListView: View {
                 .if_available_glass()
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 20)
+        .padding(.trailing, 16)
         .padding(.vertical, 10)
         .background(Color.surfacePrimary)
     }
@@ -160,6 +151,33 @@ struct SessionListView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button {
+                    appState.commandSender?.forkSession(sessionId: session.id)
+                } label: {
+                    Label("Fork", systemImage: "arrow.triangle.branch")
+                }
+                .tint(Color(hex: 0xC08A2F)) // warm amber
+
+                let isUnread = (sessionStore.unreadCounts[session.id] ?? 0) > 0
+                Button {
+                    if isUnread {
+                        appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
+                    } else {
+                        appState.commandSender?.markUnread(sessionId: session.id)
+                    }
+                } label: {
+                    Label(isUnread ? "Read" : "Unread", systemImage: isUnread ? "envelope.open" : "envelope.badge")
+                }
+                .tint(Color(hex: 0x6B7D94)) // soft slate
+
+                Button {
+                    appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
+                } label: {
+                    Label(session.pinned ? "Unpin" : "Pin", systemImage: session.pinned ? "pin.slash" : "pin")
+                }
+                .tint(Color(hex: 0x2F9C8B)) // muted teal
+            }
             .contextMenu {
             Button {
                 appState.commandSender?.pinSession(sessionId: session.id, pinned: !session.pinned)
@@ -183,19 +201,14 @@ struct SessionListView: View {
             } label: {
                 Label("Fork", systemImage: "arrow.triangle.branch")
             }
-
-            Divider()
-
-            Button(role: .destructive) {
-                deleteCandidate = session
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
         }
 
-            Divider()
-                .padding(.leading, 72)
+            Color.borderPrimary
+                .frame(height: 1.0 / UIScreen.main.scale)
+                .padding(.leading, 46)
         }
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0))
+        .listRowSeparator(.hidden)
     }
 
     // MARK: - Empty State
