@@ -26,10 +26,6 @@ struct MainTabView: View {
 
             NavigationStack {
                 DeviceListView()
-                    .navigationDestination(for: SessionNavID.self) { nav in
-                        SessionDetailView(sessionId: nav.id)
-                            .environment(appState)
-                    }
             }
             .tabItem {
                 Label {

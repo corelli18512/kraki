@@ -72,6 +72,7 @@ struct DeviceListView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .contentMargins(.top, 0)
     }
 
     // MARK: - Empty State
