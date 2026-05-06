@@ -125,16 +125,17 @@ struct SessionCardView: View {
             // Device + model
             HStack(spacing: 4) {
                 if let name = machineName {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 6, height: 6)
-
-                    Text(name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.surfaceTertiary, in: Capsule())
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 6, height: 6)
+                        Text(name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.surfaceTertiary, in: Capsule())
                 }
 
                 if let model = session.model {
@@ -148,15 +149,10 @@ struct SessionCardView: View {
                 }
 
                 if session.pinned {
-                    HStack(spacing: 2) {
-                        LucideIcon(.pin, size: 9, strokeWidth: 2.2, color: .krakiPrimary)
-                        Text("Pinned")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.krakiPrimary)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
+                    LucideIcon(.pin, size: 10, strokeWidth: 2.2, color: .krakiPrimary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
                 }
             }
 

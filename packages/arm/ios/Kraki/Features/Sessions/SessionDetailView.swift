@@ -68,7 +68,7 @@ struct SessionDetailView: View {
     private func sessionContent(_ session: SessionInfo) -> some View {
         ChatView(sessionId: sessionId)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarVisibility(.hidden, for: .tabBar)
+            .hidesTabBar()
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     toolbarTitle(session)
