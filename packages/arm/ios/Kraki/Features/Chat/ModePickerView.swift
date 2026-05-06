@@ -4,7 +4,7 @@
 /// Collapsed: glass button with mode name + mode-colored tint. Tap to expand.
 /// Expanded: GlassEffectContainer with 4 modes. Active mode gets a tinted
 /// glass pill that slides between positions via glassEffectID.
-/// Glass tint changes color as you switch modes (green→cyan→orange→coral).
+/// Glass tint changes color as you switch modes (green→cyan→orange→navy).
 /// Auto-collapses after 3s.
 
 import SwiftUI
@@ -107,9 +107,9 @@ struct ModePickerView: View {
     private func modeColor(_ mode: SessionMode) -> Color {
         switch mode {
         case .safe:     return Color(hex: 0x34D399) // emerald
-        case .discuss:  return Color.ocean500
+        case .discuss:  return Color.kraki300
         case .execute:  return Color(hex: 0xFBBF24) // amber
-        case .delegate: return Color.krakiPrimary    // coral
+        case .delegate: return Color.krakiPrimary    // navy
         }
     }
 
@@ -122,7 +122,7 @@ struct ModePickerView: View {
     private func modeTextColorDark(_ mode: SessionMode) -> Color {
         switch mode {
         case .safe:     return Color(hex: 0x064E3B)
-        case .discuss:  return Color.ocean900
+        case .discuss:  return Color.kraki900
         case .execute:  return Color(hex: 0x78350F)
         case .delegate: return Color.kraki900
         }

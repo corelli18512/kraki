@@ -93,30 +93,15 @@ struct SessionDetailView: View {
         let info = AgentInfo.from(session.agent)
         let displayTitle = session.displayTitle
 
-        return HStack(spacing: 8) {
-            ZStack {
-                AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(displayTitle)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .lineLimit(1)
 
-                if isReconnecting {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.black.opacity(0.3))
-                        .frame(width: 28, height: 28)
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .tint(.orange)
-                }
-            }
-
-            // Title + subtitle
-            VStack(alignment: .leading, spacing: 0) {
-                Text(displayTitle)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-
-                subtitleRow(session, info: info)
-            }
+            subtitleRow(session, info: info)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func subtitleRow(_ session: SessionInfo, info: AgentInfo) -> some View {

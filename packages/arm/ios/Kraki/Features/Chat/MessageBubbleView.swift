@@ -11,6 +11,40 @@ struct MessageBubbleView: View {
     let message: ChatMessage
     var agent: String = ""
     var turnImages: [ImageAttachment]?
+    var thinkingHistory: [ChatMessage] = []
+    @Binding var historyExpanded: Bool
+    var streamingText: String?
+    @State private var solidCharCount: Int = 0
+    @State private var batchTimestamp: Date = .distantPast
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    // MARK: - Computed Properties
+
+    private var visibleHistory: [ChatMessage] {
+        thinkingHistory.filter { $0.type != "active" }
+    }
+
+    private var hasHistory: Bool { !visibleHistory.isEmpty }
+
+    private var latestMessageText: String? {
+        if let s = streamingText, !s.isEmpty { return s }
+        if let c = message.content, !c.isEmpty { return c }
+        return nil
+    }
+
+    private var trailingActivity: ChatMessage? {
+        guard streamingText == nil || streamingText?.isEmpty == true else { return nil }
+        guard let activity = visibleHistory.last(where: {
+            $0.type == "tool_start" || $0.type == "tool_complete" || $0.type == "error"
+        }) else { return nil }
+        if activity.seq <= message.seq { return nil }
+        return activity
+    }
+
+    private var agentBubbleColor: Color {
+        .secondary.opacity(0.1)
+    }
 
     var body: some View {
         switch message.type {
@@ -85,7 +119,7 @@ struct MessageBubbleView: View {
     private func userBubble(content: String?, attachments: [ImageAttachment]?, timestamp: String?) -> some View {
         let showText = content != nil && content != "[image]"
         HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let content {
                     Text(markdownContent(content))
@@ -119,7 +153,7 @@ struct MessageBubbleView: View {
         let text = message.payload["text"]?.stringValue
         let showText = text != nil && text != "[image]"
         return HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let text {
                     Text(text)
@@ -147,26 +181,67 @@ struct MessageBubbleView: View {
     private var agentBubble: some View {
         HStack(alignment: .top, spacing: 8) {
             agentAvatar
-            VStack(alignment: .leading, spacing: 4) {
-                if let content = message.content {
-                    Text(markdownContent(content))
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 0) {
+                // Main content
+                VStack(alignment: .leading, spacing: 4) {
+                    if historyExpanded {
+                        expandedContent
+                    } else {
+                        collapsedMessageContent
+                    }
+                    imageGrid(attachments: message.attachments)
+                    if let turnImages, !turnImages.isEmpty {
+                        imageGrid(attachments: turnImages)
+                    }
+                    if let timestamp = message.timestamp {
+                        Text(formatTime(timestamp))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                imageGrid(attachments: message.attachments)
-                if let turnImages, !turnImages.isEmpty {
-                    imageGrid(attachments: turnImages)
-                }
-                if let timestamp = message.timestamp {
-                    Text(formatTime(timestamp))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+
+                // Trailing activity (when collapsed, if present)
+                if !historyExpanded, let activity = trailingActivity {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if activity.type == "error" {
+                            ErrorLineView(message: activity, showPill: true)
+                        } else {
+                            ToolLineView(message: activity, showPill: true)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 0,
+                            bottomLeadingRadius: 16,
+                            bottomTrailingRadius: 16,
+                            topTrailingRadius: 0
+                        )
+                        .fill(.black.opacity(colorScheme == .dark ? 0.2 : 0.06))
+                    )
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.secondary.opacity(0.1), in: bubbleShape(isUser: false))
+            .background(agentBubbleColor, in: bubbleShape(isUser: false))
+            .overlay(alignment: .topLeading) {
+                if hasHistory {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { historyExpanded.toggle() }
+                    } label: {
+                        Text("···")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 8, y: -12)
+                }
+            }
             .contextMenu {
                 if let content = message.content {
                     Button { UIPasteboard.general.string = content } label: {
@@ -175,6 +250,91 @@ struct MessageBubbleView: View {
                 }
             }
             Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+        }
+    }
+
+    // MARK: - Collapsed Message Content
+
+    @ViewBuilder
+    private var collapsedMessageContent: some View {
+        if let streaming = streamingText, !streaming.isEmpty {
+            streamingTextView(streaming)
+        } else if let content = message.content {
+            Text(markdownContent(content))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
+    }
+
+    // MARK: - Expanded Content
+
+    @ViewBuilder
+    private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(visibleHistory.enumerated()), id: \.element.id) { _, item in
+                    switch item.type {
+                    case "agent_message":
+                        if let content = item.content, !content.isEmpty {
+                            Text(markdownContent(content))
+                                .font(.subheadline)
+                                .foregroundStyle(.primary.opacity(0.7))
+                                .textSelection(.enabled)
+                        }
+                    case "tool_start", "tool_complete":
+                        ToolLineView(message: item, showPill: true)
+                    case "error":
+                        ErrorLineView(message: item, showPill: true)
+                    default:
+                        EmptyView()
+                    }
+                }
+            }
+            .padding(10)
+            .background(.black.opacity(colorScheme == .dark ? 0.2 : 0.06), in: RoundedRectangle(cornerRadius: 8))
+
+            // Final message
+            if let streaming = streamingText, !streaming.isEmpty {
+                streamingTextView(streaming)
+            } else if let content = message.content, !content.isEmpty {
+                Text(markdownContent(content))
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    // MARK: - Streaming Text (cascade word fade)
+
+    private func streamingTextView(_ text: String) -> some View {
+        TimelineView(.animation) { timeline in
+            let words = text.splitKeepingSpaces()
+            let now = timeline.date
+            let elapsed = now.timeIntervalSince(batchTimestamp)
+            let totalSolid = min(words.count, solidCharCount + Int(elapsed * 30))
+
+            Text(words.enumerated().reduce(AttributedString()) { result, pair in
+                let (i, word) = pair
+                var attr = AttributedString(word)
+                if i >= totalSolid {
+                    let fadeIndex = i - totalSolid
+                    let opacity = max(0, min(1, 1.0 - Double(fadeIndex) / 3.0))
+                    attr.foregroundColor = .primary.opacity(opacity)
+                } else {
+                    attr.foregroundColor = .primary
+                }
+                return result + attr
+            })
+            .font(.subheadline)
+            .textSelection(.enabled)
+            .onChange(of: text.count) { oldCount, newCount in
+                if newCount > oldCount {
+                    solidCharCount = max(0, words.count - 3)
+                    batchTimestamp = .now
+                }
+            }
         }
     }
 
@@ -462,6 +622,198 @@ struct MessageBubbleView: View {
         if let cmd = args["command"]?.stringValue, !cmd.isEmpty { return cmd }
         if let path = args["path"]?.stringValue, !path.isEmpty { return path }
         return ""
+    }
+}
+
+// MARK: - String helpers
+
+extension String {
+    /// Splits a string into words while keeping trailing spaces attached.
+    func splitKeepingSpaces() -> [String] {
+        var words: [String] = []
+        var current = ""
+        for char in self {
+            if char == " " {
+                current.append(char)
+                words.append(current)
+                current = ""
+            } else {
+                current.append(char)
+            }
+        }
+        if !current.isEmpty { words.append(current) }
+        return words
+    }
+}
+
+// MARK: - ToolLineView
+
+private struct ToolLineView: View {
+    let message: ChatMessage
+    var showPill: Bool = false
+
+    @State private var expanded = false
+
+    private var toolName: String { message.toolName ?? "tool" }
+    private var isComplete: Bool { message.type == "tool_complete" }
+    private var isError: Bool { message.result?.hasPrefix("Error") == true }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    statusIcon
+                    Text(toolName)
+                        .font(.system(size: 12, design: .monospaced))
+                        .fontWeight(.medium)
+                        .foregroundStyle(.blue)
+
+                    if let detail = toolDetail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if hasExpandableContent {
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(expanded ? 0 : -90))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                expandedBody
+            }
+        }
+        .padding(showPill ? 8 : 0)
+        .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if isComplete {
+            if isError {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        } else {
+            ProgressView()
+                .controlSize(.mini)
+        }
+    }
+
+    private var toolDetail: String? {
+        guard let args = message.args else { return nil }
+        if let cmd = args["command"]?.stringValue { return "$ \(cmd)" }
+        if let path = args["path"]?.stringValue { return path }
+        return nil
+    }
+
+    private var hasExpandableContent: Bool {
+        message.args != nil || (message.result != nil && !message.result!.isEmpty)
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let args = message.args {
+                let oldStr = args["old_str"]?.stringValue ?? ""
+                let newStr = args["new_str"]?.stringValue ?? ""
+                if !oldStr.isEmpty || !newStr.isEmpty {
+                    SimpleDiffView(oldText: oldStr, newText: newStr)
+                } else {
+                    let detail = args.sorted { $0.key < $1.key }
+                        .map { "\($0.key): \($0.value)" }
+                        .joined(separator: "\n")
+                    Text(detail)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            if let result = message.result, !result.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Result")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(result)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 200)
+                }
+            }
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+// MARK: - ErrorLineView
+
+private struct ErrorLineView: View {
+    let message: ChatMessage
+    var showPill: Bool = false
+
+    @State private var expanded = false
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Text(message.errorMessage ?? "Error")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.red.opacity(0.8))
+                    .lineLimit(expanded ? nil : 1)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(showPill ? 8 : 0)
+        .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - PulseModifier
+
+struct PulseModifier: ViewModifier {
+    @State private var isPulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isPulsing ? 0.4 : 1.0)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
+            .onAppear { isPulsing = true }
+    }
+}
+
+extension View {
+    func pulse() -> some View {
+        modifier(PulseModifier())
     }
 }
 

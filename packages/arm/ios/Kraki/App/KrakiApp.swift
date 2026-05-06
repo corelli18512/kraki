@@ -6,6 +6,11 @@ struct KrakiApp: App {
     @State private var appState = AppState()
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
 
+    init() {
+        UIScrollView.appearance().showsVerticalScrollIndicator = false
+        UIScrollView.appearance().showsHorizontalScrollIndicator = false
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

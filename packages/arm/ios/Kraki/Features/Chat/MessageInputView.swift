@@ -13,6 +13,8 @@ import PhotosUI
 
 struct MessageInputView: View {
     let sessionId: String
+    var pendingPermission: PendingPermission? = nil
+    var pendingQuestion: PendingQuestion? = nil
 
     @Environment(AppState.self) private var appState
     @State private var selectedPhoto: PhotosPickerItem?
@@ -38,6 +40,17 @@ struct MessageInputView: View {
                 startPoint: .top, endPoint: .bottom
             )
             .frame(height: 16)
+
+            // Pending permission/question cards
+            if let permission = pendingPermission {
+                PermissionCardView(permission: permission)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            } else if let question = pendingQuestion {
+                QuestionCardView(question: question)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
 
             VStack(spacing: 6) {
                 // Row 1: image attach + mode picker

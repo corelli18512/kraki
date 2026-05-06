@@ -58,9 +58,8 @@ struct SessionCardView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             avatarView
+                .padding(.top, 3)
             centerContent
-            Spacer(minLength: 0)
-            timestampView
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -106,6 +105,7 @@ struct SessionCardView: View {
             HStack(spacing: 4) {
                 Text(session.displayTitle)
                     .font(.headline)
+                    .foregroundStyle(Color.textTitle)
                     .lineLimit(1)
 
                 if !isDeviceOnline {
@@ -116,9 +116,13 @@ struct SessionCardView: View {
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
                 }
+
+                Spacer(minLength: 0)
+
+                timestampView
             }
 
-            // Device + agent + model
+            // Device + model
             HStack(spacing: 4) {
                 if let name = machineName {
                     Circle()
@@ -128,29 +132,37 @@ struct SessionCardView: View {
                     Text(name)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-
-                if session.title != nil || session.autoTitle != nil {
-                    if machineName != nil {
-                        Text("·")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(agentLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.surfaceTertiary, in: Capsule())
                 }
 
                 if let model = session.model {
                     Text(model)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.surfaceTertiary, in: Capsule())
                         .lineLimit(1)
+                }
+
+                if session.pinned {
+                    HStack(spacing: 2) {
+                        LucideIcon(.pin, size: 9, strokeWidth: 2.2, color: .krakiPrimary)
+                        Text("Pinned")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.krakiPrimary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
                 }
             }
 
             // Preview / draft
             previewText
+                .padding(.top, 2)
         }
     }
 
@@ -173,10 +185,10 @@ struct SessionCardView: View {
                     .lineLimit(2)
             }
         } else if let preview, !preview.text.isEmpty {
-            Text(String(preview.text.prefix(50)))
+            Text(String(preview.text.prefix(50)).collapseWhitespace())
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .lineLimit(1)
         }
     }
 
@@ -193,6 +205,15 @@ struct SessionCardView: View {
 }
 
 // MARK: - Time Formatting
+
+/// Collapse runs of whitespace/newlines into a single space.
+extension String {
+    func collapseWhitespace() -> String {
+        self.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
 
 /// Mirrors web `sessionTime()` — shows HH:mm if today, "yesterday", or "Xd ago".
 enum SessionTimeFormatter {
