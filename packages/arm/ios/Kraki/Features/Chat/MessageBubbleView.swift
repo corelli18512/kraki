@@ -1003,19 +1003,40 @@ private struct TypingDotsView: View {
 
 // MARK: - ListChevronsDownUpIcon (lucide style)
 
+/// Real lucide `list-chevrons-down-up` icon, rendered as a SwiftUI Shape.
+/// Source: https://lucide.dev/icons/list-chevrons-down-up (24x24 viewBox)
 private struct ListChevronsDownUpIcon: View {
+    var size: CGFloat = 16
+
     var body: some View {
-        VStack(spacing: 1) {
-            Capsule()
-                .frame(width: 14, height: 1.5)
-            Image(systemName: "chevron.compact.down")
-                .font(.system(size: 9, weight: .heavy))
-            Image(systemName: "chevron.compact.up")
-                .font(.system(size: 9, weight: .heavy))
-            Capsule()
-                .frame(width: 14, height: 1.5)
+        ListChevronsDownUpShape()
+            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            .frame(width: size, height: size)
+    }
+}
+
+private struct ListChevronsDownUpShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        // Lucide uses a 24x24 viewBox; scale uniformly.
+        let s = min(rect.width, rect.height) / 24
+        let ox = rect.minX + (rect.width  - 24 * s) / 2
+        let oy = rect.minY + (rect.height - 24 * s) / 2
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: ox + x * s, y: oy + y * s)
         }
-        .frame(width: 16, height: 18)
+
+        var path = Path()
+        // M3 5h8
+        path.move(to: p(3, 5));  path.addLine(to: p(11, 5))
+        // M3 12h8
+        path.move(to: p(3, 12)); path.addLine(to: p(11, 12))
+        // M3 19h8
+        path.move(to: p(3, 19)); path.addLine(to: p(11, 19))
+        // m15 5 3 3 3-3   (chevron pointing down, on top)
+        path.move(to: p(15, 5));  path.addLine(to: p(18, 8));  path.addLine(to: p(21, 5))
+        // m15 19 3-3 3 3  (chevron pointing up, on bottom)
+        path.move(to: p(15, 19)); path.addLine(to: p(18, 16)); path.addLine(to: p(21, 19))
+        return path
     }
 }
 
