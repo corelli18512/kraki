@@ -13,6 +13,8 @@ import Observation
 final class CommandSender {
     /// requestId → initial prompt for session creation correlation.
     var pendingCreateRequests: [String: String] = [:]
+    /// requestId → title to apply after session is created.
+    var pendingCreateTitles: [String: String] = [:]
     /// Count of in-flight mode changes per session (for echo suppression).
     private var pendingModeChanges: [String: Int] = [:]
 
@@ -187,7 +189,8 @@ final class CommandSender {
         model: String,
         reasoningEffort: ReasoningEffort? = nil,
         prompt: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        title: String? = nil
     ) -> String {
         let requestId = "req_\(Int(Date().timeIntervalSince1970 * 1000))_\(String(Int.random(in: 0...999999), radix: 36))"
 
@@ -195,6 +198,10 @@ final class CommandSender {
             pendingCreateRequests[requestId] = prompt
         } else {
             pendingCreateRequests[requestId] = ""
+        }
+
+        if let title, !title.isEmpty {
+            pendingCreateTitles[requestId] = title
         }
 
         var payload: [String: Any] = [
@@ -275,6 +282,10 @@ final class CommandSender {
     /// Resolve a create request — correlate the requestId with the created sessionId.
     func resolveCreateRequest(_ requestId: String, sessionId: String) {
         guard let appState else { return }
+        // Apply pending title (if any) before sending input
+        if let title = pendingCreateTitles.removeValue(forKey: requestId), !title.isEmpty {
+            renameSession(sessionId: sessionId, title: title)
+        }
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
             // Auto-navigate to the new session
             appState.sessionStore.navigateToSession = sessionId
@@ -287,6 +298,7 @@ final class CommandSender {
 
     func reset() {
         pendingCreateRequests.removeAll()
+        pendingCreateTitles.removeAll()
         pendingModeChanges.removeAll()
     }
 }

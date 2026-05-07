@@ -15,6 +15,7 @@ struct NewSessionSheet: View {
     @State private var selectedDeviceId: String = ""
     @State private var selectedModel: String = ""
     @State private var reasoningEffort: ReasoningEffort?
+    @State private var sessionTitle: String = ""
 
     private var deviceStore: DeviceStore { appState.deviceStore }
 
@@ -55,7 +56,7 @@ struct NewSessionSheet: View {
                 .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
                 .onChange(of: selectedModel) { _, _ in onModelChanged() }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .presentationContentInteraction(.scrolls)
     }
@@ -69,6 +70,9 @@ struct NewSessionSheet: View {
         } else {
             Form {
                 Section {
+                    TextField("Title (optional)", text: $sessionTitle)
+                        .textInputAutocapitalization(.sentences)
+
                     Picker("Device", selection: $selectedDeviceId) {
                         ForEach(tentacles) { device in
                             Text(device.name).tag(device.id)
@@ -103,23 +107,27 @@ struct NewSessionSheet: View {
                         .pickerStyle(.segmented)
                     }
                 }
-
-                Section {
-                    Button {
-                        createSession()
-                    } label: {
-                        Text("Create Session")
-                            .frame(maxWidth: .infinity)
-                            .fontWeight(.semibold)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.krakiPrimary)
-                    .disabled(!canSubmit)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                createButton
             }
         }
+    }
+
+    private var createButton: some View {
+        Button {
+            createSession()
+        } label: {
+            Text("Create Session")
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+        }
+        .modifier(CreateButtonStyleModifier())
+        .tint(.krakiPrimary)
+        .disabled(!canSubmit)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
     }
 
     private var noDevicesView: some View {
@@ -176,12 +184,14 @@ struct NewSessionSheet: View {
 
     private func createSession() {
         guard canSubmit else { return }
+        let trimmed = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.commandSender?.createSession(
             targetDeviceId: selectedDeviceId,
             model: selectedModel,
             reasoningEffort: reasoningEffort,
             prompt: nil,
-            cwd: nil
+            cwd: nil,
+            title: trimmed.isEmpty ? nil : trimmed
         )
         dismiss()
     }
@@ -194,6 +204,16 @@ struct NewSessionSheet: View {
         case .medium: return "Medium"
         case .high:   return "High"
         case .xhigh:  return "Max"
+        }
+    }
+}
+
+private struct CreateButtonStyleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content.buttonStyle(.borderedProminent)
         }
     }
 }
