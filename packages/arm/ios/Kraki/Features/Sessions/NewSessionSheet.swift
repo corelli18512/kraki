@@ -73,26 +73,60 @@ struct NewSessionSheet: View {
         if tentacles.isEmpty {
             noDevicesView
         } else {
-            ScrollView {
-                VStack(spacing: 16) {
-                    deviceRow
-                    modelRow
-
-                    if let efforts = supportedEfforts, !efforts.isEmpty {
-                        effortRow(efforts)
+            Form {
+                Section {
+                    Picker("Device", selection: $selectedDeviceId) {
+                        ForEach(tentacles) { device in
+                            Text(device.name).tag(device.id)
+                        }
                     }
+                    .pickerStyle(.navigationLink)
 
-                    Spacer(minLength: 0)
-
-                    createButton
-                        .padding(.top, 8)
+                    if models.isEmpty {
+                        HStack {
+                            Text("Model")
+                            Spacer()
+                            Text("Waiting…")
+                                .foregroundStyle(.tertiary)
+                        }
+                    } else {
+                        Picker("Model", selection: $selectedModel) {
+                            ForEach(models, id: \.self) { model in
+                                Text(model).tag(model)
+                            }
+                        }
+                        .pickerStyle(.navigationLink)
+                    }
                 }
-                .padding(20)
+
+                if let efforts = supportedEfforts, !efforts.isEmpty {
+                    Section("Thinking") {
+                        Picker("Reasoning Effort", selection: $reasoningEffort) {
+                            ForEach(efforts, id: \.self) { effort in
+                                Text(effortLabel(effort)).tag(Optional(effort))
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+
+                Section {
+                    Button {
+                        createSession()
+                    } label: {
+                        Text("Create Session")
+                            .frame(maxWidth: .infinity)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.krakiPrimary)
+                    .disabled(!canSubmit)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
             }
         }
     }
-
-    // MARK: - Sections
 
     private var noDevicesView: some View {
         VStack(spacing: 12) {
@@ -112,98 +146,6 @@ struct NewSessionSheet: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var deviceRow: some View {
-        Button {
-            showDevicePicker = true
-        } label: {
-            HStack {
-                Text("Device")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(selectedDeviceName)
-                    .foregroundStyle(.tint)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .confirmationDialog("Select Device", isPresented: $showDevicePicker, titleVisibility: .visible) {
-            ForEach(tentacles) { device in
-                Button(device.name) { selectedDeviceId = device.id }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var modelRow: some View {
-        Button {
-            if !models.isEmpty { showModelPicker = true }
-        } label: {
-            HStack {
-                Text("Model")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if models.isEmpty {
-                    Text("Waiting for device…")
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text(selectedModel.isEmpty ? "Select" : selectedModel)
-                        .foregroundStyle(.tint)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .confirmationDialog("Select Model", isPresented: $showModelPicker, titleVisibility: .visible) {
-            ForEach(models, id: \.self) { model in
-                Button(model) { selectedModel = model }
-            }
-        }
-    }
-
-    private func effortRow(_ efforts: [ReasoningEffort]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Thinking")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker("Reasoning Effort", selection: $reasoningEffort) {
-                ForEach(efforts, id: \.self) { effort in
-                    Text(effortLabel(effort)).tag(Optional(effort))
-                }
-            }
-            .pickerStyle(.segmented)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var createButton: some View {
-        Button {
-            createSession()
-        } label: {
-            Text("Create Session")
-                .frame(maxWidth: .infinity)
-                .fontWeight(.semibold)
-                .padding(.vertical, 12)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.krakiPrimary)
-        .disabled(!canSubmit)
     }
 
     // MARK: - Actions
