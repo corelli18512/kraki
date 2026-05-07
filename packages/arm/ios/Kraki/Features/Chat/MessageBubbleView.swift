@@ -230,7 +230,7 @@ struct MessageBubbleView: View {
                                 historyItemView(item)
                             }
                         } else {
-                            historyItemView(postMessageActivity.last!, interactive: false)
+                            historyItemView(postMessageActivity.last!)
                         }
                     }
                 }
@@ -277,7 +277,7 @@ struct MessageBubbleView: View {
     // MARK: - History Item View (shared renderer for tool/error/agent_message)
 
     @ViewBuilder
-    private func historyItemView(_ item: ChatMessage, interactive: Bool = true) -> some View {
+    private func historyItemView(_ item: ChatMessage) -> some View {
         switch item.type {
         case "agent_message":
             if let content = item.content, !content.isEmpty {
@@ -287,9 +287,9 @@ struct MessageBubbleView: View {
                     .textSelection(.enabled)
             }
         case "tool_start", "tool_complete":
-            ToolLineView(message: item, interactive: interactive)
+            ToolLineView(message: item)
         case "error":
-            ErrorLineView(message: item, interactive: interactive)
+            ErrorLineView(message: item)
         case "question":
             QuestionLineView(message: item)
         case "question_resolved", "answer", "approve", "deny", "always_allow":
@@ -666,7 +666,6 @@ extension String {
 private struct ToolLineView: View {
     let message: ChatMessage
     var showPill: Bool = false
-    var interactive: Bool = true
 
     @State private var expanded = false
 
@@ -729,19 +728,15 @@ private struct ToolLineView: View {
 
     @ViewBuilder
     private var regularToolBody: some View {
-        if interactive {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                regularToolRow
-            }
-            .buttonStyle(.plain)
-
-            if expanded {
-                expandedBody
-            }
-        } else {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
             regularToolRow
+        }
+        .buttonStyle(.plain)
+
+        if expanded {
+            expandedBody
         }
     }
 
@@ -764,7 +759,7 @@ private struct ToolLineView: View {
 
             Spacer(minLength: 0)
 
-            if interactive && hasExpandableContent {
+            if hasExpandableContent {
                 Image(systemName: "chevron.down")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -861,40 +856,28 @@ private struct ToolLineView: View {
 private struct ErrorLineView: View {
     let message: ChatMessage
     var showPill: Bool = false
-    var interactive: Bool = true
 
     @State private var expanded = false
 
     var body: some View {
-        Group {
-            if interactive {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-                } label: {
-                    errorRow
-                }
-                .buttonStyle(.plain)
-            } else {
-                errorRow
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Text(message.errorMessage ?? "Error")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.red.opacity(0.8))
+                    .lineLimit(expanded ? nil : 1)
+                Spacer(minLength: 0)
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .padding(showPill ? 8 : 0)
         .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    @ViewBuilder
-    private var errorRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "xmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
-            Text(message.errorMessage ?? "Error")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.red.opacity(0.8))
-                .lineLimit(interactive && expanded ? nil : 1)
-            Spacer(minLength: 0)
-        }
-        .contentShape(Rectangle())
     }
 }
 
