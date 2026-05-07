@@ -241,15 +241,37 @@ struct MessageBubbleView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { historyExpanded.toggle() }
                     } label: {
-                        Text("···")
-                            .font(.system(size: 14, weight: .bold))
+                        Group {
+                            if historyExpanded {
+                                ListChevronsDownUpIcon()
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("···")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 8, y: -16)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if toolSectionExpanded && !postMessageActivity.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { toolSectionExpanded = false }
+                    } label: {
+                        ListChevronsDownUpIcon()
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(.ultraThinMaterial, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .offset(x: 8, y: -12)
+                    .offset(x: 8, y: 16)
                 }
             }
             .contextMenu {
@@ -976,6 +998,24 @@ private struct TypingDotsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - ListChevronsDownUpIcon (lucide style)
+
+private struct ListChevronsDownUpIcon: View {
+    var body: some View {
+        VStack(spacing: 1) {
+            Capsule()
+                .frame(width: 14, height: 1.5)
+            Image(systemName: "chevron.compact.down")
+                .font(.system(size: 9, weight: .heavy))
+            Image(systemName: "chevron.compact.up")
+                .font(.system(size: 9, weight: .heavy))
+            Capsule()
+                .frame(width: 14, height: 1.5)
+        }
+        .frame(width: 16, height: 18)
     }
 }
 
