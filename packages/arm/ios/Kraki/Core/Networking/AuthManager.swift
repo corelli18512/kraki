@@ -46,6 +46,15 @@ final class AuthManager {
 
     private static let deviceIdKey = "kraki.deviceId"
 
+    /// Suite name for the app group UserDefaults shared with the NSE.
+    private static let appGroupSuite = "group.cloud.corelli.kraki"
+
+    /// UserDefaults shared between the app and KrakiNotification extension.
+    /// The NSE reads `deviceId` from here when decrypting push payloads.
+    private static var sharedDefaults: UserDefaults {
+        UserDefaults(suiteName: appGroupSuite) ?? .standard
+    }
+
     // MARK: State
 
     /// The device ID saved from a prior successful auth, loaded from UserDefaults.
@@ -60,7 +69,15 @@ final class AuthManager {
         self.keychain = keychain
         self.crypto = crypto
         self.appState = appState
-        self.storedDeviceId = UserDefaults.standard.string(forKey: Self.deviceIdKey)
+        // Prefer app group; migrate from standard defaults on first run.
+        if let id = Self.sharedDefaults.string(forKey: Self.deviceIdKey) {
+            self.storedDeviceId = id
+        } else if let legacy = UserDefaults.standard.string(forKey: Self.deviceIdKey) {
+            self.storedDeviceId = legacy
+            Self.sharedDefaults.set(legacy, forKey: Self.deviceIdKey)
+        } else {
+            self.storedDeviceId = nil
+        }
     }
 
     // MARK: - Auth Flow
@@ -175,8 +192,9 @@ final class AuthManager {
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
 
-        // Persist device credentials
+        // Persist device credentials (write to BOTH so NSE can read via app group)
         storedDeviceId = deviceId
+        Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
         UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
 
         // Mark transport as authenticated
@@ -216,6 +234,7 @@ final class AuthManager {
 
     func clearStoredCredentials() {
         storedDeviceId = nil
+        Self.sharedDefaults.removeObject(forKey: Self.deviceIdKey)
         UserDefaults.standard.removeObject(forKey: Self.deviceIdKey)
         try? keychain.deleteAllKeys()
     }

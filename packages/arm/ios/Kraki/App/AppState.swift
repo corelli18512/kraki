@@ -15,6 +15,7 @@ final class AppState {
     private(set) var messageRouter: MessageRouter?
     private(set) var commandSender: CommandSender?
     private(set) var messageProvider: MessageProvider?
+    private(set) var pushManager: PushManager?
 
     // MARK: - Connection
     var connectionStatus: ConnectionStatus = .awaitingLogin
@@ -48,6 +49,7 @@ final class AppState {
         )
         let sender = CommandSender(appState: self)
         let provider = MessageProvider(appState: self)
+        let push = PushManager(appState: self)
 
         client.onMessage = { [weak router] data in
             router?.handleRawMessage(data)
@@ -61,6 +63,7 @@ final class AppState {
         self.messageRouter = router
         self.commandSender = sender
         self.messageProvider = provider
+        self.pushManager = push
     }
 
     func connect() {
@@ -112,6 +115,9 @@ final class AppState {
 
         // Drain any queued encrypted messages
         messageRouter?.drainQueue()
+
+        // Re-register push token if user has it enabled
+        pushManager?.onAuthenticated()
     }
 
     func onAuthFailed(error: String) {

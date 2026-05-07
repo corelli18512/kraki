@@ -2,12 +2,14 @@
 /// SettingsView — App settings matching the web sidebar settings panel.
 
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
 
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
-    @AppStorage("notificationsEnabled") private var notificationsEnabled = true
+    @State private var pushToggle: Bool = false
+    @State private var pushBusy: Bool = false
 
     var body: some View {
         Form {
@@ -23,6 +25,13 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(Color.surfacePrimary)
         .environment(\.defaultMinListHeaderHeight, 0)
+        .task {
+            await appState.pushManager?.refreshPermissionStatus()
+            pushToggle = (appState.pushManager?.userEnabled ?? false)
+                && (appState.pushManager?.permissionStatus == .authorized
+                    || appState.pushManager?.permissionStatus == .provisional
+                    || appState.pushManager?.permissionStatus == .ephemeral)
+        }
     }
 
     // MARK: - Account
@@ -60,8 +69,73 @@ struct SettingsView: View {
     // MARK: - Notifications
 
     private var notificationsSection: some View {
-        Section("Notifications") {
-            Toggle("Push Notifications", isOn: $notificationsEnabled)
+        Section {
+            Toggle("Push Notifications", isOn: Binding(
+                get: { pushToggle },
+                set: { newValue in handlePushToggle(newValue) }
+            ))
+            .disabled(pushBusy)
+
+            if let status = appState.pushManager?.permissionStatus {
+                pushStatusRow(status)
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text("Push notifications are end-to-end encrypted. The relay forwards an opaque blob; this device decrypts and shows it locally.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func pushStatusRow(_ status: UNAuthorizationStatus) -> some View {
+        switch status {
+        case .denied:
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                HStack {
+                    Text("Permission denied")
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Text("Open Settings")
+                        .foregroundStyle(Color.krakiPrimary)
+                }
+            }
+        case .authorized, .provisional, .ephemeral:
+            if pushToggle, appState.pushManager?.registered == true {
+                LabeledContent("Status") {
+                    Text("Registered")
+                        .foregroundStyle(.green)
+                }
+            } else if pushToggle {
+                LabeledContent("Status") {
+                    Text("Registering…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .notDetermined:
+            EmptyView()
+        @unknown default:
+            EmptyView()
+        }
+    }
+
+    private func handlePushToggle(_ newValue: Bool) {
+        guard let push = appState.pushManager else { return }
+        pushBusy = true
+        Task {
+            if newValue {
+                let granted = await push.enable()
+                pushToggle = granted
+            } else {
+                push.disable()
+                pushToggle = false
+            }
+            pushBusy = false
         }
     }
 

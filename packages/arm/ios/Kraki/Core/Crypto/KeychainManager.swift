@@ -6,6 +6,17 @@
 ///
 /// Uses `kSecAttrAccessibleAfterFirstUnlock` so the Notification Service Extension
 /// can access keys in the background without requiring device unlock.
+///
+/// Sharing with the NSE: when `accessGroup` is nil (default), iOS uses the FIRST
+/// entry in the `keychain-access-groups` entitlement. Both the host app and
+/// `KrakiNotification` declare `$(AppIdentifierPrefix)cloud.corelli.kraki`, so
+/// keys are placed in that shared group automatically — the NSE can read them
+/// without specifying the group either.
+///
+/// Note: keys that were stored BEFORE the entitlement was added live in the
+/// app's default (private) group and are NOT visible to the NSE. Call
+/// `deleteAllKeys()` once after enabling the entitlement to migrate; new keys
+/// will be generated in the shared group on next access.
 
 import Foundation
 import Security
