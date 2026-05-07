@@ -635,6 +635,30 @@ describe('CopilotAdapter', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
+    it('detects empty cycle in second user message even after first cycle errored', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+
+      // Cycle 1: user message → session.error fires
+      await adapter.sendMessage(sessionId, 'first');
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'rate_limit', message: 'Rate limited' },
+      });
+      mockSessions[0]._emit('session.idle', {});
+      spy.mockClear();
+
+      // Cycle 2: user message → session goes idle with no output (silent fail)
+      await adapter.sendMessage(sessionId, 'second');
+      mockSessions[0]._emit('session.idle', {});
+      // Should fire empty-cycle error — not suppressed by previous cycle's error flag
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('no output') }),
+      );
+    });
+
     it('does not throw when callbacks are null', async () => {
       await adapter.start();
       await adapter.createSession({});

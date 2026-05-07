@@ -576,8 +576,9 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
-    // Reset cycle output tracking — a new user message starts a fresh cycle
+    // Reset per-cycle tracking — a new user message starts a fresh cycle
     this.cycleHasOutput.set(sessionId, false);
+    this.turnErrorReported.set(sessionId, false);
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -915,6 +916,16 @@ export class CopilotAdapter extends AgentAdapter {
   // ── SDK → callback wiring ─────────────────────────
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
+    // Initialize per-cycle state for this session. Without this, resumed/forked
+    // sessions (where sendMessage hasn't been called yet) would have undefined
+    // cycleHasOutput and skip empty-cycle detection.
+    if (!this.cycleHasOutput.has(sessionId)) {
+      this.cycleHasOutput.set(sessionId, false);
+    }
+    if (!this.turnErrorReported.has(sessionId)) {
+      this.turnErrorReported.set(sessionId, false);
+    }
+
     session.on('assistant.message_delta', (event) => {
       this.onMessageDelta?.(sessionId, { content: event.data.deltaContent });
     });
