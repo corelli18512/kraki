@@ -15,6 +15,8 @@ struct NewSessionSheet: View {
     @State private var selectedDeviceId: String = ""
     @State private var selectedModel: String = ""
     @State private var reasoningEffort: ReasoningEffort?
+    @State private var showDevicePicker = false
+    @State private var showModelPicker = false
 
     private var deviceStore: DeviceStore { appState.deviceStore }
 
@@ -42,6 +44,10 @@ struct NewSessionSheet: View {
 
     private var canSubmit: Bool {
         !selectedDeviceId.isEmpty && !selectedModel.isEmpty
+    }
+
+    private var selectedDeviceName: String {
+        tentacles.first(where: { $0.id == selectedDeviceId })?.name ?? "Select"
     }
 
     // MARK: - Body
@@ -109,45 +115,64 @@ struct NewSessionSheet: View {
     }
 
     private var deviceRow: some View {
-        HStack {
-            Text("Device")
-                .foregroundStyle(.secondary)
-            Spacer()
-            Picker("Device", selection: $selectedDeviceId) {
-                ForEach(tentacles) { device in
-                    Text(device.name).tag(device.id)
-                }
+        Button {
+            showDevicePicker = true
+        } label: {
+            HStack {
+                Text("Device")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(selectedDeviceName)
+                    .foregroundStyle(.tint)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .buttonStyle(.plain)
+        .confirmationDialog("Select Device", isPresented: $showDevicePicker, titleVisibility: .visible) {
+            ForEach(tentacles) { device in
+                Button(device.name) { selectedDeviceId = device.id }
+            }
+        }
     }
 
     @ViewBuilder
     private var modelRow: some View {
-        HStack {
-            Text("Model")
-                .foregroundStyle(.secondary)
-            Spacer()
-            if models.isEmpty {
-                Text("Waiting for device…")
-                    .foregroundStyle(.tertiary)
-            } else {
-                Picker("Model", selection: $selectedModel) {
-                    ForEach(models, id: \.self) { model in
-                        Text(model).tag(model)
-                    }
+        Button {
+            if !models.isEmpty { showModelPicker = true }
+        } label: {
+            HStack {
+                Text("Model")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if models.isEmpty {
+                    Text("Waiting for device…")
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(selectedModel.isEmpty ? "Select" : selectedModel)
+                        .foregroundStyle(.tint)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .confirmationDialog("Select Model", isPresented: $showModelPicker, titleVisibility: .visible) {
+            ForEach(models, id: \.self) { model in
+                Button(model) { selectedModel = model }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func effortRow(_ efforts: [ReasoningEffort]) -> some View {

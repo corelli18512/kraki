@@ -113,6 +113,10 @@ final class MessageRouter {
         case "ping":
             appState?.wsClient?.sendRaw("{\"type\":\"pong\"}")
 
+        case "push_token_registered":
+            appState?.pushManager?.registered = true
+            KLog.d("✅ push_token_registered")
+
         // ── Encrypted envelopes ──────────────────────────────────────────
         case "unicast", "broadcast":
             handleEncryptedEnvelope(data)

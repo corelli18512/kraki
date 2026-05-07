@@ -46,7 +46,23 @@ struct MessageBubbleView: View {
     }
 
     private var agentBubbleColor: Color {
-        .secondary.opacity(0.1)
+        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.35 : 0.40,
+            l: colorScheme == .dark ? 0.18 : 0.93
+        )
+        return Color(hue: h, saturation: s, brightness: b)
+    }
+
+    private var sectionTintColor: Color {
+        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.40 : 0.30,
+            l: colorScheme == .dark ? 0.13 : 0.97
+        )
+        return Color(hue: h, saturation: s, brightness: b)
     }
 
     var body: some View {
@@ -207,7 +223,14 @@ struct MessageBubbleView: View {
                                 historyItemView(item)
                             }
                         } else {
-                            historyItemView(postMessageActivity.last!)
+                            // Collapsed: latest item as preview; tap expands the whole section
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) { toolSectionExpanded = true }
+                            } label: {
+                                historyItemView(postMessageActivity.last!, interactive: false)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -246,18 +269,20 @@ struct MessageBubbleView: View {
     private var messageContent: some View {
         if let streaming = streamingText, !streaming.isEmpty {
             streamingTextView(streaming)
-        } else if let content = message.content {
+        } else if let content = message.content, !content.isEmpty {
             Text(markdownContent(content))
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
+        } else {
+            TypingDotsView()
         }
     }
 
     // MARK: - History Item View (shared renderer for tool/error/agent_message)
 
     @ViewBuilder
-    private func historyItemView(_ item: ChatMessage) -> some View {
+    private func historyItemView(_ item: ChatMessage, interactive: Bool = true) -> some View {
         switch item.type {
         case "agent_message":
             if let content = item.content, !content.isEmpty {
@@ -267,9 +292,9 @@ struct MessageBubbleView: View {
                     .textSelection(.enabled)
             }
         case "tool_start", "tool_complete":
-            ToolLineView(message: item)
+            ToolLineView(message: item, interactive: interactive)
         case "error":
-            ErrorLineView(message: item)
+            ErrorLineView(message: item, interactive: interactive)
         case "question":
             QuestionLineView(message: item)
         case "question_resolved", "answer", "approve", "deny", "always_allow":
@@ -297,7 +322,7 @@ struct MessageBubbleView: View {
                 bottomTrailingRadius: position == .bottom ? 16 : 0,
                 topTrailingRadius: position == .top ? 16 : 0
             )
-            .fill(.black.opacity(colorScheme == .dark ? 0.2 : 0.06))
+            .fill(sectionTintColor)
         )
     }
 
@@ -646,6 +671,7 @@ extension String {
 private struct ToolLineView: View {
     let message: ChatMessage
     var showPill: Bool = false
+    var interactive: Bool = true
 
     @State private var expanded = false
 
@@ -708,40 +734,49 @@ private struct ToolLineView: View {
 
     @ViewBuilder
     private var regularToolBody: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-        } label: {
-            HStack(spacing: 6) {
-                statusIcon
-                Text(toolName)
-                    .font(.system(size: 12, design: .monospaced))
-                    .fontWeight(.medium)
-                    .foregroundStyle(.blue)
-
-                if let detail = toolDetail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer(minLength: 0)
-
-                if hasExpandableContent {
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(expanded ? 0 : -90))
-                }
+        if interactive {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                regularToolRow
             }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            .buttonStyle(.plain)
 
-        if expanded {
-            expandedBody
+            if expanded {
+                expandedBody
+            }
+        } else {
+            regularToolRow
         }
+    }
+
+    @ViewBuilder
+    private var regularToolRow: some View {
+        HStack(spacing: 6) {
+            statusIcon
+            Text(toolName)
+                .font(.system(size: 12, design: .monospaced))
+                .fontWeight(.medium)
+                .foregroundStyle(.blue)
+
+            if let detail = toolDetail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+
+            if interactive && hasExpandableContent {
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(expanded ? 0 : -90))
+            }
+        }
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -831,28 +866,40 @@ private struct ToolLineView: View {
 private struct ErrorLineView: View {
     let message: ChatMessage
     var showPill: Bool = false
+    var interactive: Bool = true
 
     @State private var expanded = false
 
     var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Text(message.errorMessage ?? "Error")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.red.opacity(0.8))
-                    .lineLimit(expanded ? nil : 1)
-                Spacer(minLength: 0)
+        Group {
+            if interactive {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    errorRow
+                }
+                .buttonStyle(.plain)
+            } else {
+                errorRow
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .padding(showPill ? 8 : 0)
         .background(showPill ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var errorRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+            Text(message.errorMessage ?? "Error")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.red.opacity(0.8))
+                .lineLimit(interactive && expanded ? nil : 1)
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -893,6 +940,42 @@ struct PulseModifier: ViewModifier {
 extension View {
     func pulse() -> some View {
         modifier(PulseModifier())
+    }
+}
+
+// MARK: - TypingDotsView
+
+private struct TypingDotsView: View {
+    @State private var phase: Int = 0
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(.primary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(phase == i ? 1.3 : 0.8)
+                    .opacity(phase == i ? 1.0 : 0.5)
+            }
+        }
+        .frame(height: 18, alignment: .leading)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: false)) {
+                // Drive a TimelineView-free pulse via a Timer-style animation
+            }
+            startCycle()
+        }
+    }
+
+    private func startCycle() {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    phase = (phase + 1) % 3
+                }
+            }
+        }
     }
 }
 
