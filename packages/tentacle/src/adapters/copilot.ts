@@ -318,6 +318,8 @@ export class CopilotAdapter extends AgentAdapter {
   private userRequestedModels = new Map<string, string>();
   /** Whether the current turn has produced any output (message or tool call) */
   private turnHasOutput = new Map<string, boolean>();
+  /** Whether the current user-message-to-idle cycle had any output */
+  private cycleHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
   private turnErrorReported = new Map<string, boolean>();
   /**
@@ -574,6 +576,10 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
+    // Reset per-cycle tracking — a new user message starts a fresh cycle
+    this.cycleHasOutput.set(sessionId, false);
+    this.turnErrorReported.set(sessionId, false);
+
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
@@ -819,6 +825,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.expectedModels.delete(sessionId);
     this.userRequestedModels.delete(sessionId);
     this.turnHasOutput.delete(sessionId);
+    this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
     this.clearIdleTimer(sessionId);
   }
@@ -909,6 +916,16 @@ export class CopilotAdapter extends AgentAdapter {
   // ── SDK → callback wiring ─────────────────────────
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
+    // Initialize per-cycle state for this session. Without this, resumed/forked
+    // sessions (where sendMessage hasn't been called yet) would have undefined
+    // cycleHasOutput and skip empty-cycle detection.
+    if (!this.cycleHasOutput.has(sessionId)) {
+      this.cycleHasOutput.set(sessionId, false);
+    }
+    if (!this.turnErrorReported.has(sessionId)) {
+      this.turnErrorReported.set(sessionId, false);
+    }
+
     session.on('assistant.message_delta', (event) => {
       this.onMessageDelta?.(sessionId, { content: event.data.deltaContent });
     });
@@ -917,12 +934,14 @@ export class CopilotAdapter extends AgentAdapter {
       // Skip empty messages (SDK sends these before tool calls)
       if (event.data.content) {
         this.turnHasOutput.set(sessionId, true);
+        this.cycleHasOutput.set(sessionId, true);
         this.onMessage?.(sessionId, { content: event.data.content });
       }
     });
 
     session.on('tool.execution_start', (event) => {
       this.turnHasOutput.set(sessionId, true);
+      this.cycleHasOutput.set(sessionId, true);
       const data = event.data as unknown as Record<string, unknown>;
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
@@ -1000,6 +1019,20 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('session.idle', () => {
       this.clearIdleTimer(sessionId);
+
+      // Detect empty cycles — the entire user-message-to-idle cycle had no output
+      // and no error was reported. This catches silent SDK failures (e.g. CLI bug
+      // github/copilot-sdk#794) without false-firing when the agent intentionally
+      // stays silent (e.g. user said "don't say anything").
+      const hasOutput = this.cycleHasOutput.get(sessionId);
+      const hadError = this.turnErrorReported.get(sessionId);
+      if (hasOutput === false && !hadError) {
+        logger.warn({ sessionId }, 'Empty cycle detected — agent produced no output for entire user message');
+        this.onError?.(sessionId, {
+          message: 'Agent produced no output. The session may need to be restarted or the model may be unavailable.',
+        });
+      }
+
       this.onIdle?.(sessionId);
     });
 
@@ -1079,14 +1112,9 @@ export class CopilotAdapter extends AgentAdapter {
         });
       }
 
-      // Detect empty turns — the agent started a turn but produced no output
-      // and no error was reported via session.error or turn_end.reason
-      if (!this.turnHasOutput.get(sessionId) && !this.turnErrorReported.get(sessionId)) {
-        logger.warn({ sessionId }, 'Empty turn detected — agent produced no output');
-        this.onError?.(sessionId, {
-          message: 'Agent produced no output. The session may need to be restarted or the model may be unavailable.',
-        });
-      }
+      // Empty-cycle detection moved to session.idle — see handler above.
+      // Per-turn detection over-fires when agent intentionally stays silent
+      // (e.g. user said "don't say anything" after a tool ran in a prior turn).
 
       // Fallback: schedule idle in case the SDK doesn't emit session.idle
       // (known CLI bug — github/copilot-sdk#794). Cancelled if turn_start

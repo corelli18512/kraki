@@ -598,16 +598,61 @@ describe('CopilotAdapter', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('fires onError for empty turn (no output)', async () => {
+    it('fires onError for empty cycle (no output until idle)', async () => {
       const spy = vi.fn();
       adapter.onError = spy;
       await adapter.start();
-      await adapter.createSession({});
-      // Simulate an empty turn: start → end with no message or tool
+      const { sessionId } = await adapter.createSession({});
+      // Simulate user sending a message that produces nothing through to idle
+      await adapter.sendMessage(sessionId, 'hi');
       mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
       mockSessions[0]._emit('assistant.turn_end', {
         data: { reason: 'complete' },
       });
+      mockSessions[0]._emit('session.idle', {});
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('no output') }),
+      );
+    });
+
+    it('does not fire onError for empty turn when previous turn in same cycle had output', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      // User sends a message that triggers a tool, then agent stays silent
+      await adapter.sendMessage(sessionId, 'silently run echo');
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
+      mockSessions[0]._emit('tool.execution_start', { data: { toolName: 'bash', toolCallId: 't1' } });
+      mockSessions[0]._emit('tool.execution_complete', { data: { toolName: 'bash', toolCallId: 't1' } });
+      mockSessions[0]._emit('assistant.turn_end', { data: { reason: 'complete' } });
+      // Second turn: model decides to stay silent (no output)
+      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '2' } });
+      mockSessions[0]._emit('assistant.turn_end', { data: { reason: 'complete' } });
+      mockSessions[0]._emit('session.idle', {});
+      // No error — the cycle had output (the tool ran)
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('detects empty cycle in second user message even after first cycle errored', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+
+      // Cycle 1: user message → session.error fires
+      await adapter.sendMessage(sessionId, 'first');
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'rate_limit', message: 'Rate limited' },
+      });
+      mockSessions[0]._emit('session.idle', {});
+      spy.mockClear();
+
+      // Cycle 2: user message → session goes idle with no output (silent fail)
+      await adapter.sendMessage(sessionId, 'second');
+      mockSessions[0]._emit('session.idle', {});
+      // Should fire empty-cycle error — not suppressed by previous cycle's error flag
       expect(spy).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ message: expect.stringContaining('no output') }),
