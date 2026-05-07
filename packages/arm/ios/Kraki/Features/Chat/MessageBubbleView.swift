@@ -72,6 +72,19 @@ struct MessageBubbleView: View {
         return Color(hue: h, saturation: s, brightness: b)
     }
 
+    /// Higher-contrast variant of the bubble hue for context-menu icon tint.
+    /// The bubble itself uses a soft wash that's nearly invisible against
+    /// menu blur material; this version is saturated/lifted enough to read.
+    private var agentAccentColor: Color {
+        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.75 : 0.70,
+            l: colorScheme == .dark ? 0.65 : 0.45
+        )
+        return Color(hue: h, saturation: s, brightness: b)
+    }
+
     var body: some View {
         switch message.type {
         case "user_message":
@@ -164,8 +177,6 @@ struct MessageBubbleView: View {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
                 }
-            } preview: {
-                bubblePreview(text: content, tint: .accentColor, foreground: .white)
             }
             .tint(.accentColor)
         }
@@ -256,10 +267,8 @@ struct MessageBubbleView: View {
                         }
                     }
                 }
-            } preview: {
-                bubblePreview(text: latestMessageText, tint: agentBubbleColor, foreground: .primary)
             }
-            .tint(agentBubbleColor)
+            .tint(agentAccentColor)
             Spacer(minLength: UIScreen.main.bounds.width * 0.05)
         }
     }
@@ -598,24 +607,6 @@ struct MessageBubbleView: View {
             bottomTrailingRadius: 16,
             topTrailingRadius: isUser ? 4 : 16
         )
-    }
-
-    /// Compact long-press preview. Shows just the first line(s) of the
-    /// message in a small tinted capsule, so the system "lifted thumbnail"
-    /// stays small and the overall context-menu popup feels lighter.
-    @ViewBuilder
-    private func bubblePreview(text: String?, tint: Color, foreground: Color) -> some View {
-        let snippet = (text?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { s in
-            s.isEmpty ? nil : s
-        } ?? "•••"
-        Text(snippet)
-            .font(.subheadline)
-            .foregroundStyle(foreground)
-            .lineLimit(2)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: 240, alignment: .leading)
-            .background(tint, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func formatTime(_ timestamp: String) -> String {
