@@ -28,7 +28,16 @@ import {
   clearDaemonPid,
 } from './config.js';
 
-const STARTUP_GRACE_MS = 1500;
+// How long to wait for a regular spawned child to finish bootstrapping
+// before declaring success. No signature verification involved.
+const SPAWN_GRACE_MS = 1500;
+
+// How long to wait for a launchctl-spawned daemon to write its PID file.
+// Cold-launching a freshly-installed SEA binary on macOS takes ~2s for
+// signature verification + Node SEA bundle parse. Empirically a fresh
+// binary's first launch is ~1.9s, so we keep comfortable headroom for
+// slower machines / busy disks. After this, a CSM block is plausible.
+const LAUNCHCTL_GRACE_MS = 8000;
 const LAUNCHD_LABEL_BASE = 'cloud.corelli.kraki';
 
 /**
@@ -155,7 +164,7 @@ export function resolveDaemonLaunch(
 function waitForDaemonBootstrap(
   child: ChildProcess,
   bootstrapLogPath: string,
-  timeoutMs = STARTUP_GRACE_MS,
+  timeoutMs = SPAWN_GRACE_MS,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -224,7 +233,7 @@ export function getDaemonStatus(): DaemonStatus {
 export class MacOSCodeSignatureError extends Error {
   constructor(bootstrapLogPath: string) {
     super(
-      `macOS blocked the daemon process (code signature provenance). ` +
+      `Daemon did not start within ${LAUNCHCTL_GRACE_MS}ms (CSM block or slow first-launch verify). ` +
       `Falling back to in-process daemon. Check ${bootstrapLogPath}`,
     );
     this.name = 'MacOSCodeSignatureError';
@@ -307,7 +316,7 @@ ${envXml}
   execSync(`launchctl load "${plistPath}"`, { stdio: 'ignore' });
 
   // The daemon-worker writes its own PID on startup. Poll for it.
-  const deadline = Date.now() + STARTUP_GRACE_MS;
+  const deadline = Date.now() + LAUNCHCTL_GRACE_MS;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 200));
     const pid = loadDaemonPid();
