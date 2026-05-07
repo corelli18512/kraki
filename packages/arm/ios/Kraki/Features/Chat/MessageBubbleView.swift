@@ -16,7 +16,6 @@ struct MessageBubbleView: View {
     var streamingText: String?
     @State private var solidCharCount: Int = 0
     @State private var batchTimestamp: Date = .distantPast
-    @State private var toolSectionExpanded = false
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -38,6 +37,14 @@ struct MessageBubbleView: View {
     }
 
     private var hasHistory: Bool { !preMessageHistory.isEmpty }
+
+    /// Whether the bubble has anything that can be expanded/collapsed via the
+    /// context menu: either pre-message history (hidden when collapsed) or
+    /// more than one post-message activity item (only the latest shows when
+    /// collapsed).
+    private var canToggleSteps: Bool {
+        hasHistory || postMessageActivity.count > 1
+    }
 
     private var latestMessageText: String? {
         if let s = streamingText, !s.isEmpty { return s }
@@ -218,66 +225,32 @@ struct MessageBubbleView: View {
                 // ③ Tool section (bottom) — post-message activity
                 if !postMessageActivity.isEmpty {
                     bubbleSection(position: .bottom) {
-                        if toolSectionExpanded {
+                        if historyExpanded {
                             ForEach(Array(postMessageActivity.enumerated()), id: \.element.id) { _, item in
                                 historyItemView(item)
                             }
                         } else {
-                            // Collapsed: latest item as preview; tap expands the whole section
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) { toolSectionExpanded = true }
-                            } label: {
-                                historyItemView(postMessageActivity.last!, interactive: false)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            historyItemView(postMessageActivity.last!, interactive: false)
                         }
                     }
                 }
             }
             .background(agentBubbleColor, in: bubbleShape(isUser: false))
-            .overlay(alignment: .topLeading) {
-                if hasHistory {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { historyExpanded.toggle() }
-                    } label: {
-                        Group {
-                            if historyExpanded {
-                                ListChevronsDownUpIcon()
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("···")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: 8, y: -16)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if toolSectionExpanded && !postMessageActivity.isEmpty {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { toolSectionExpanded = false }
-                    } label: {
-                        ListChevronsDownUpIcon()
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: 8, y: 16)
-                }
-            }
             .contextMenu {
                 if let content = message.content {
                     Button { UIPasteboard.general.string = content } label: {
                         Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
+                if canToggleSteps {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { historyExpanded.toggle() }
+                    } label: {
+                        if historyExpanded {
+                            Label("Collapse Steps", systemImage: "chevron.up.circle")
+                        } else {
+                            Label("Expand Steps", systemImage: "chevron.down.circle")
+                        }
                     }
                 }
             }
@@ -998,45 +971,6 @@ private struct TypingDotsView: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - ListChevronsDownUpIcon (lucide style)
-
-/// Real lucide `list-chevrons-down-up` icon, rendered as a SwiftUI Shape.
-/// Source: https://lucide.dev/icons/list-chevrons-down-up (24x24 viewBox)
-private struct ListChevronsDownUpIcon: View {
-    var size: CGFloat = 16
-
-    var body: some View {
-        ListChevronsDownUpShape()
-            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            .frame(width: size, height: size)
-    }
-}
-
-private struct ListChevronsDownUpShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        // Lucide uses a 24x24 viewBox; scale uniformly.
-        let s = min(rect.width, rect.height) / 24
-        let ox = rect.minX + (rect.width  - 24 * s) / 2
-        let oy = rect.minY + (rect.height - 24 * s) / 2
-        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: ox + x * s, y: oy + y * s)
-        }
-
-        var path = Path()
-        // M3 5h8
-        path.move(to: p(3, 5));  path.addLine(to: p(11, 5))
-        // M3 12h8
-        path.move(to: p(3, 12)); path.addLine(to: p(11, 12))
-        // M3 19h8
-        path.move(to: p(3, 19)); path.addLine(to: p(11, 19))
-        // m15 5 3 3 3-3   (chevron pointing down, on top)
-        path.move(to: p(15, 5));  path.addLine(to: p(18, 8));  path.addLine(to: p(21, 5))
-        // m15 19 3-3 3 3  (chevron pointing up, on bottom)
-        path.move(to: p(15, 19)); path.addLine(to: p(18, 16)); path.addLine(to: p(21, 19))
-        return path
     }
 }
 
