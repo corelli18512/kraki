@@ -144,7 +144,7 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private func userBubble(content: String?, attachments: [ImageAttachment]?, timestamp: String?) -> some View {
         let showText = content != nil && content != "[image]"
-        HStack {
+        return HStack {
             Spacer(minLength: UIScreen.main.bounds.width * 0.25)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let content {
@@ -164,7 +164,10 @@ struct MessageBubbleView: View {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
                 }
+            } preview: {
+                bubblePreview(text: content, tint: .accentColor, foreground: .white)
             }
+            .tint(.accentColor)
         }
     }
 
@@ -253,7 +256,10 @@ struct MessageBubbleView: View {
                         }
                     }
                 }
+            } preview: {
+                bubblePreview(text: latestMessageText, tint: agentBubbleColor, foreground: .primary)
             }
+            .tint(agentBubbleColor)
             Spacer(minLength: UIScreen.main.bounds.width * 0.05)
         }
     }
@@ -592,6 +598,24 @@ struct MessageBubbleView: View {
             bottomTrailingRadius: 16,
             topTrailingRadius: isUser ? 4 : 16
         )
+    }
+
+    /// Compact long-press preview. Shows just the first line(s) of the
+    /// message in a small tinted capsule, so the system "lifted thumbnail"
+    /// stays small and the overall context-menu popup feels lighter.
+    @ViewBuilder
+    private func bubblePreview(text: String?, tint: Color, foreground: Color) -> some View {
+        let snippet = (text?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { s in
+            s.isEmpty ? nil : s
+        } ?? "•••"
+        Text(snippet)
+            .font(.subheadline)
+            .foregroundStyle(foreground)
+            .lineLimit(2)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 240, alignment: .leading)
+            .background(tint, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func formatTime(_ timestamp: String) -> String {
