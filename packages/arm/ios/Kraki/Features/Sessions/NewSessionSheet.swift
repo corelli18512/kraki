@@ -15,8 +15,6 @@ struct NewSessionSheet: View {
     @State private var selectedDeviceId: String = ""
     @State private var selectedModel: String = ""
     @State private var reasoningEffort: ReasoningEffort?
-    @State private var showDevicePicker = false
-    @State private var showModelPicker = false
 
     private var deviceStore: DeviceStore { appState.deviceStore }
 
@@ -44,10 +42,6 @@ struct NewSessionSheet: View {
 
     private var canSubmit: Bool {
         !selectedDeviceId.isEmpty && !selectedModel.isEmpty
-    }
-
-    private var selectedDeviceName: String {
-        tentacles.first(where: { $0.id == selectedDeviceId })?.name ?? "Select"
     }
 
     // MARK: - Body
