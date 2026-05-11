@@ -54,6 +54,30 @@ struct ChatView: View {
     /// the current sessionId. Reset when sessionId changes.
     @State private var didInitialScroll = false
 
+    // MARK: - R1 Growing-Reply State
+    //
+    // After the user sends a message we drive the scroll through three
+    // phases:
+    //   .followBottom  — defaultScrollAnchor=.bottom; as the agent reply
+    //                    grows, content stays pinned to bottom and the
+    //                    user bubble drifts up the viewport.
+    //   .lockedAtTop   — once the user bubble reaches the viewport top,
+    //                    we flip the anchor off and proxy-scroll the
+    //                    bubble to the top. Further growth extends the
+    //                    agent reply off the bottom of the viewport.
+    //   .idle          — no automatic anchoring. Triggered by manual
+    //                    scroll, session going idle, or session switch.
+
+    enum GrowMode { case idle, followBottom, lockedAtTop }
+
+    @State private var growMode: GrowMode = .idle
+    /// ChatMessage.id of the user bubble currently being tracked by R1.
+    @State private var lockedMsgId: String? = nil
+    /// Baseline of the largest user-message seq seen so far. R1 only
+    /// triggers when a STRICTLY greater seq appears (i.e., the user just
+    /// sent a new message — not on session switch / replay).
+    @State private var lockedUserSeq: Int = 0
+
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
@@ -217,7 +241,7 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(currentScrollAnchor)
             .coordinateSpace(name: "chat")
             .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
                 ChatScrollMetrics(
@@ -228,14 +252,51 @@ struct ChatView: View {
             } action: { _, m in
                 scrollOffsetY = m.offsetY
                 viewportHeight = m.viewportHeight
+                checkLockTransition(proxy: proxy)
+            }
+            .onScrollPhaseChange { _, newPhase in
+                // Any direct user contact with the scroll view ends R1.
+                if newPhase == .interacting && growMode != .idle {
+                    growMode = .idle
+                }
             }
             .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
                 userBubbleFrames = newFrames
+                checkLockTransition(proxy: proxy)
+            }
+            .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
+                handleNewUserMessage(seq: newSeq)
+            }
+            .onChange(of: filteredMessages.count) { _, _ in
+                checkLockTransition(proxy: proxy)
+            }
+            .onChange(of: streaming) { _, _ in
+                checkLockTransition(proxy: proxy)
+            }
+            .onChange(of: sessionIdle) { _, idle in
+                // Turn complete — release the lock so the next user
+                // message can trigger a fresh followBottom phase.
+                if idle && growMode != .idle {
+                    growMode = .idle
+                }
             }
             .task(id: sessionId) {
                 await performEntryScroll(proxy: proxy)
             }
         }
+    }
+
+    /// Default scroll anchor for the message list.
+    /// - `.bottom` during R1 followBottom (content auto-pins to bottom
+    ///   so the locked user bubble drifts upward as the reply grows).
+    /// - `.bottom` before R3 has run so a cold launch lands at the
+    ///   bottom for read sessions (R3 overrides for unread).
+    /// - `nil` otherwise so the scroll position is preserved across
+    ///   content changes (no auto-following while the user is reading).
+    private var currentScrollAnchor: UnitPoint? {
+        if !didInitialScroll { return .bottom }
+        if growMode == .followBottom { return .bottom }
+        return nil
     }
 
     // MARK: - Row Builders
@@ -288,6 +349,12 @@ struct ChatView: View {
         didInitialScroll = false
         userBubbleFrames = [:]
         scrollOffsetY = 0
+        growMode = .idle
+        lockedMsgId = nil
+        // Baseline R1 trigger to the current last user-message seq so
+        // that the act of opening a session (which exposes existing
+        // messages) does not look like a "user just sent a new message".
+        lockedUserSeq = lastUserMessage?.seq ?? 0
 
         // Snapshot unread BEFORE any await so SessionDetailView's deferred
         // markRead can't race ahead of us.
@@ -310,12 +377,54 @@ struct ChatView: View {
             return
         }
 
+        // Refresh baseline now that messages are actually loaded.
+        lockedUserSeq = lastUserMessage?.seq ?? 0
+
         if wasUnread, let target = lastUserMessage {
             proxy.scrollTo(userScrollId(target), anchor: .top)
         } else {
             proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
         didInitialScroll = true
+    }
+
+    // MARK: - R1: Growing-Reply
+
+    /// Called when `lastUserMessage.seq` changes. We only enter R1 if the
+    /// new seq is strictly greater than our baseline, which uniquely
+    /// identifies a freshly-sent user message (vs. backfill or session
+    /// switch, which don't increase past baseline).
+    private func handleNewUserMessage(seq: Int) {
+        guard didInitialScroll, seq > lockedUserSeq else { return }
+        guard let msg = lastUserMessage else { return }
+        lockedUserSeq = seq
+        lockedMsgId = msg.id
+        growMode = .followBottom
+        // No explicit scrollTo here — currentScrollAnchor flips to .bottom
+        // and the next content-size change re-anchors at the bottom,
+        // bringing the new user bubble into view.
+    }
+
+    /// In followBottom mode, check whether the locked user bubble has
+    /// drifted up to the viewport top. If so, transition to lockedAtTop:
+    /// proxy-scroll the bubble to the top edge and flip the default
+    /// anchor off so further reply growth extends below the viewport
+    /// instead of pushing the bubble off the top.
+    private func checkLockTransition(proxy: ScrollViewProxy) {
+        guard growMode == .followBottom,
+              let mid = lockedMsgId,
+              let frame = userBubbleFrames[mid] else { return }
+        let topInViewport = frame.minY - scrollOffsetY
+        if topInViewport <= 0 {
+            proxy.scrollTo(userScrollId(forMsgId: mid), anchor: .top)
+            growMode = .lockedAtTop
+        }
+    }
+
+    /// Scroll-target id for a known ChatMessage.id (mirror of
+    /// `userScrollId(_:)` for callers that only have the id).
+    private func userScrollId(forMsgId mid: String) -> String {
+        "user-\(mid)"
     }
 
     // MARK: - Bottom Input Area
