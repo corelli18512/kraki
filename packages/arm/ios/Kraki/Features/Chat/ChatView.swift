@@ -32,20 +32,10 @@ struct ChatView: View {
         messageStore.questionsForSession(sessionId)
     }
 
-    /// IDs of pending permissions so we can filter them from the message list.
-    private var pendingPermissionIds: Set<String> {
-        Set(permissions.map(\.id))
-    }
-
-    /// Messages for this session, filtering out pending permission bubbles.
+    /// Messages for this session. Pending permissions stay inline so the user
+    /// sees the request in chat history, mirroring how pending questions behave.
     private var filteredMessages: [ChatMessage] {
-        let messages = messageStore.messages[sessionId] ?? []
-        return messages.filter { msg in
-            if msg.type == "permission", let pid = msg.permissionId, pendingPermissionIds.contains(pid) {
-                return false
-            }
-            return true
-        }
+        messageStore.messages[sessionId] ?? []
     }
 
     /// Whether older messages exist (first seq > 1).

@@ -248,34 +248,6 @@ final class SessionStore {
         }
     }
 
-    /// Add a pending permission to the message store via this convenience method.
-    func addPermission(
-        id: String,
-        sessionId: String,
-        toolName: String,
-        args: [String: Any],
-        description: String?,
-        timestamp: String?
-    ) {
-        // Permissions are stored on MessageStore, but this is a routing convenience.
-        // Not implemented here — caller should use MessageStore directly.
-    }
-
-    /// Remove a pending permission (no-op on SessionStore, permissions live on MessageStore).
-    func removePermission(_ id: String) {}
-
-    /// Add a pending question (no-op on SessionStore, questions live on MessageStore).
-    func addQuestion(
-        id: String,
-        sessionId: String,
-        question: String,
-        choices: [String]?,
-        timestamp: String?
-    ) {}
-
-    /// Remove a pending question (no-op on SessionStore, questions live on MessageStore).
-    func removeQuestion(_ id: String) {}
-
     /// Set session mode from a string value.
     func setSessionMode(_ id: String, mode: String) {
         guard let m = SessionMode(rawValue: mode) else { return }
