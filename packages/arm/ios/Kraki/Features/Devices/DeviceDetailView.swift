@@ -77,6 +77,8 @@ struct DeviceDetailView: View {
                             }
                         }
                         .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, -16)
                     } label: {
                         Text("Supported Models (\(models.count))")
                             .font(.subheadline)
