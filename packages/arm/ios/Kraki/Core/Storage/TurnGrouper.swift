@@ -138,6 +138,14 @@ func groupMessagesIntoTurns(
             flushTurn(turnComplete: true)
             result.append(.standalone(msg))
         } else if turnCompleteTypes.contains(msg.type) {
+            // Defer the flush if the current turn has a permission that
+            // hasn't been resolved yet — agents typically emit `idle`
+            // while waiting on user approval, but the activity that
+            // follows the approval is conceptually part of the same
+            // turn (one agent thought = one bubble).
+            if hasUnresolvedPermission(in: currentThinking) {
+                continue
+            }
             flushTurn(turnComplete: true)
         } else if thinkingTypes.contains(msg.type) {
             // Questions: merge into the preceding ask_user tool_start
@@ -226,4 +234,14 @@ func groupMessagesIntoTurns(
     flushTurn(turnComplete: false)
 
     return result
+}
+
+/// True if the message list contains a `permission` whose `resolution` field
+/// is not yet set. Used by the turn grouper to keep a turn open across an
+/// `idle` that fires while waiting on user approval.
+private func hasUnresolvedPermission(in msgs: [ChatMessage]) -> Bool {
+    for m in msgs where m.type == "permission" {
+        if m.resolution == nil { return true }
+    }
+    return false
 }
