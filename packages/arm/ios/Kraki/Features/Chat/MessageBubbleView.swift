@@ -307,8 +307,10 @@ struct MessageBubbleView: View {
             ErrorLineView(message: item)
         case "question":
             QuestionLineView(message: item)
-        case "question_resolved", "answer", "approve", "deny", "always_allow":
-            EmptyView() // These are structural — the tool_complete carries the visible result
+        case "permission":
+            PermissionLineView(message: item)
+        case "question_resolved", "answer", "approve", "deny", "always_allow", "permission_resolved":
+            EmptyView() // These are structural — the original message carries the visible result
         default:
             EmptyView()
         }
@@ -461,73 +463,48 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private var permissionBubble: some View {
-        let resolution = message.resolution
+        // Standalone permission bubble (used when a permission message isn't
+        // bundled inside a turn). Same agent-aligned shape for pending and
+        // resolved states so the resolve doesn't flip sides — visually it
+        // morphs in place, mirroring how questionBubble handles answers.
         let toolName = message.toolName ?? "tool"
         let desc = permissionDescription(toolName: toolName, args: message.args, desc: message.toolDescription)
+        let resolution = message.resolution
+        let palette = permissionPalette(for: resolution)
 
-        if let resolution {
-            // Resolved permission
-            let isApproved = resolution == "approved" || resolution == "always_allowed"
-            let isCancelled = resolution == "cancelled"
-            let bgColor: Color = isApproved ? .green : isCancelled ? .gray : .red
-            let label = resolution == "approved" ? "Approved"
-                : resolution == "always_allowed" ? "Allowed for session"
-                : resolution == "cancelled" ? "Cancelled"
-                : "Denied"
-            let resolvedIcon: LucideIconType = resolution == "always_allowed" ? .lockOpen
-                : isCancelled ? .circleStop
-                : isApproved ? .check : .x
-
-            HStack {
-                Spacer(minLength: UIScreen.main.bounds.width * 0.15)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        LucideIcon(resolvedIcon, size: 12, color: isApproved ? .green : isCancelled ? .secondary : .red)
-                        Text(label)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                        Text("·")
-                        Text(toolName)
-                            .font(.caption)
-                            .fontDesign(.monospaced)
-                    }
-                    .foregroundStyle(isApproved ? .green : isCancelled ? .secondary : .red)
-
-                    Text(desc)
-                        .font(.subheadline)
+        HStack(alignment: .top, spacing: 8) {
+            LucideIcon(palette.icon, size: 14, color: palette.color)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Text(palette.label)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text("·")
+                    Text(toolName)
+                        .font(.caption)
                         .fontDesign(.monospaced)
-                        .foregroundStyle(.primary)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(bgColor.opacity(0.1), in: bubbleShape(isUser: true))
+                .foregroundStyle(palette.color)
+                Text(desc)
+                    .font(.subheadline)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.primary)
             }
-        } else {
-            // Pending permission (normally hidden behind blocking card)
-            HStack(alignment: .top, spacing: 8) {
-                LucideIcon(.lock, size: 14, color: .orange)
-                    .padding(.top, 2)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text("Permission requested")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                        Text("·")
-                        Text(toolName)
-                            .font(.caption)
-                            .fontDesign(.monospaced)
-                    }
-                    .foregroundStyle(.orange)
-                    Text(desc)
-                        .font(.subheadline)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.primary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.orange.opacity(0.1), in: bubbleShape(isUser: false))
-                Spacer(minLength: UIScreen.main.bounds.width * 0.15)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(palette.color.opacity(0.1), in: bubbleShape(isUser: false))
+            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+        }
+    }
+
+    private func permissionPalette(for resolution: String?) -> (icon: LucideIconType, color: Color, label: String) {
+        switch resolution {
+        case "approved":        return (.check,      .green,     "Approved")
+        case "always_allowed":  return (.lockOpen,   .green,     "Allowed for session")
+        case "denied":          return (.x,          .red,       "Denied")
+        case "cancelled":       return (.circleStop, .secondary, "Cancelled")
+        default:                return (.lock,       .orange,    "Permission requested")
         }
     }
 
@@ -914,6 +891,95 @@ private struct QuestionLineView: View {
                 .lineLimit(2)
             Spacer(minLength: 0)
         }
+    }
+}
+
+// MARK: - PermissionLineView
+
+/// Compact, inline rendering of a permission ask used inside an agent
+/// bubble's bottom activity section. Shape matches QuestionLineView /
+/// ToolLineView so the row sits cleanly alongside other tool calls.
+/// The same view handles every state — pending and resolved — by
+/// swapping only the leading icon's color/glyph and the trailing status
+/// pill, so a resolve never produces a separate bubble.
+private struct PermissionLineView: View {
+    let message: ChatMessage
+
+    private var toolName: String { message.toolName ?? "tool" }
+    private var resolution: String? { message.resolution }
+
+    private var detail: String {
+        if let desc = message.toolDescription,
+           !desc.isEmpty, desc != "Run:", desc != "Run: " {
+            return desc
+        }
+        guard let args = message.args else { return "" }
+        if (toolName == "shell" || toolName == "bash"),
+           let cmd = args["command"]?.stringValue, !cmd.isEmpty {
+            return "$ \(cmd)"
+        }
+        if let cmd = args["command"]?.stringValue, !cmd.isEmpty { return "$ \(cmd)" }
+        if let path = args["path"]?.stringValue, !path.isEmpty { return path }
+        return ""
+    }
+
+    private var icon: String {
+        switch resolution {
+        case "approved":        return "checkmark.circle.fill"
+        case "always_allowed":  return "lock.open.fill"
+        case "denied":          return "xmark.circle.fill"
+        case "cancelled":       return "stop.circle.fill"
+        default:                return "lock.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch resolution {
+        case "approved", "always_allowed": return .green
+        case "denied":                     return .red
+        case "cancelled":                  return .secondary
+        default:                           return .orange
+        }
+    }
+
+    private var statusBadge: String? {
+        switch resolution {
+        case "approved":        return "Approved"
+        case "always_allowed":  return "Allowed"
+        case "denied":          return "Denied"
+        case "cancelled":       return "Cancelled"
+        default:                return nil
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(iconColor)
+
+            Text(toolName)
+                .font(.system(size: 12, design: .monospaced))
+                .fontWeight(.medium)
+                .foregroundStyle(.blue)
+
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+
+            if let statusBadge {
+                Text(statusBadge)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(iconColor)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
