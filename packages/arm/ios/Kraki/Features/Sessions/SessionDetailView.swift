@@ -49,7 +49,11 @@ struct SessionDetailView: View {
         }
         .onAppear {
             sessionStore.activeSessionId = sessionId
-            markReadIfFocused()
+            // Defer markRead one runloop turn so ChatView's entry-scroll
+            // task can snapshot the unread state before it's cleared.
+            Task { @MainActor in
+                markReadIfFocused()
+            }
         }
         .onDisappear {
             if sessionStore.activeSessionId == sessionId {

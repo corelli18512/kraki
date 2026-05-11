@@ -7,11 +7,52 @@
 
 import SwiftUI
 
+/// PreferenceKey that aggregates the content-space frame of every user
+/// message bubble. Keys are ChatMessage.id; values are CGRect in the
+/// "chat" coordinate space (the ScrollView's content space).
+///
+/// Used by the scroll helpers to decide:
+///   - R1: when the locked user bubble has reached the viewport top
+///   - R2: which user bubble (if any) should be sticky-pinned at the top
+private struct UserBubbleFramesKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Compact, Equatable snapshot of the metrics we care about from the
+/// ScrollView. Used as the change-trigger value for
+/// `.onScrollGeometryChange`.
+private struct ChatScrollMetrics: Equatable {
+    var offsetY: CGFloat
+    var viewportHeight: CGFloat
+}
+
 struct ChatView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
     @State private var expandedTurns: Set<String> = []
+
+    // MARK: - Scroll Tracers
+    //
+    // Foundation for the three scroll helpers (R1 growing-reply, R2 sticky
+    // user bubble, R3 entry positioning). Populated lazily as the view
+    // lays out; never touched directly by user input.
+
+    /// User-bubble frames in the "chat" content coordinate space.
+    @State private var userBubbleFrames: [String: CGRect] = [:]
+    /// Content-space y of the viewport top (after content insets).
+    @State private var scrollOffsetY: CGFloat = 0
+    /// Visible viewport height (after content insets).
+    @State private var viewportHeight: CGFloat = 0
+
+    // MARK: - R3 Entry State
+
+    /// True once the entry-time scroll positioning has been performed for
+    /// the current sessionId. Reset when sessionId changes.
+    @State private var didInitialScroll = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
@@ -69,6 +110,12 @@ struct ChatView: View {
         return last.type == "idle"
     }
 
+    /// Last user-side message (user_message or send_input), used as the
+    /// scroll target for R3-unread and R1/R2 anchoring.
+    private var lastUserMessage: ChatMessage? {
+        filteredMessages.last(where: { $0.type == "user_message" || $0.type == "send_input" })
+    }
+
     var body: some View {
         let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
         scrollableMessages
@@ -111,11 +158,7 @@ struct ChatView: View {
                     ForEach(Array(grouped.enumerated()), id: \.element.id) { idx, item in
                         switch item {
                         case .standalone(let msg):
-                            MessageBubbleView(
-                                message: msg,
-                                agent: session?.agent ?? "",
-                                historyExpanded: .constant(false)
-                            )
+                            standaloneRow(msg)
 
                         case .turn(let turn):
                             let isLastTurn = idx == grouped.count - 1
@@ -175,10 +218,104 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .scrollIndicators(.hidden)
             .defaultScrollAnchor(.bottom)
-            .onAppear {
-                proxy.scrollTo("chat-bottom", anchor: .bottom)
+            .coordinateSpace(name: "chat")
+            .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
+                ChatScrollMetrics(
+                    offsetY: geo.contentOffset.y + geo.contentInsets.top,
+                    viewportHeight: geo.containerSize.height
+                        - geo.contentInsets.top - geo.contentInsets.bottom
+                )
+            } action: { _, m in
+                scrollOffsetY = m.offsetY
+                viewportHeight = m.viewportHeight
+            }
+            .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
+                userBubbleFrames = newFrames
+            }
+            .task(id: sessionId) {
+                await performEntryScroll(proxy: proxy)
             }
         }
+    }
+
+    // MARK: - Row Builders
+
+    /// Standalone row. User-side messages publish their frame and a stable
+    /// scroll-target id so the scroll helpers can locate them.
+    @ViewBuilder
+    private func standaloneRow(_ msg: ChatMessage) -> some View {
+        let bubble = MessageBubbleView(
+            message: msg,
+            agent: session?.agent ?? "",
+            historyExpanded: .constant(false)
+        )
+
+        if msg.type == "user_message" || msg.type == "send_input" {
+            bubble
+                .id(userScrollId(msg))
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: UserBubbleFramesKey.self,
+                            value: [msg.id: geo.frame(in: .named("chat"))]
+                        )
+                    }
+                )
+        } else {
+            bubble
+        }
+    }
+
+    /// Stable ScrollView target id for a user message bubble.
+    private func userScrollId(_ msg: ChatMessage) -> String {
+        "user-\(msg.id)"
+    }
+
+    // MARK: - R3: Entry Positioning
+    //
+    // On first non-empty render of a session:
+    //   - if unread → scroll to last user message at viewport top
+    //   - else      → scroll to bottom (keeps existing behavior)
+    //
+    // Race note: SessionDetailView.onAppear calls markRead which clears
+    // unreadCounts. SessionDetailView dispatches markRead inside a
+    // `Task { @MainActor in ... }` so this .task captures the unread
+    // value first. The capture itself is synchronous at the top of this
+    // function before any awaits.
+
+    private func performEntryScroll(proxy: ScrollViewProxy) async {
+        // Reset on session switch (.task(id:) re-runs when sessionId changes)
+        didInitialScroll = false
+        userBubbleFrames = [:]
+        scrollOffsetY = 0
+
+        // Snapshot unread BEFORE any await so SessionDetailView's deferred
+        // markRead can't race ahead of us.
+        let wasUnread = (sessionStore.unreadCounts[sessionId] ?? 0) > 0
+
+        // Wait for messages + initial layout. We poll briefly because the
+        // first non-empty render may arrive after this task starts.
+        var attempts = 0
+        while filteredMessages.isEmpty && attempts < 20 {
+            try? await Task.sleep(for: .milliseconds(25))
+            attempts += 1
+        }
+
+        // One extra layout tick so LazyVStack has built the rows we want
+        // to target.
+        try? await Task.sleep(for: .milliseconds(30))
+
+        guard !filteredMessages.isEmpty else {
+            didInitialScroll = true
+            return
+        }
+
+        if wasUnread, let target = lastUserMessage {
+            proxy.scrollTo(userScrollId(target), anchor: .top)
+        } else {
+            proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
+        didInitialScroll = true
     }
 
     // MARK: - Bottom Input Area
