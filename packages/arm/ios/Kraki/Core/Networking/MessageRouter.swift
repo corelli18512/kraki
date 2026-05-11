@@ -232,14 +232,19 @@ final class MessageRouter {
             appState.messageStore.appendMessage(sessionId, json: json)
             if let permId = payload?["id"] as? String {
                 let toolName = payload?["toolName"] as? String ?? ""
-                appState.sessionStore.addPermission(
+                let rawArgs = payload?["args"] as? [String: Any]
+                let codedArgs = rawArgs.map { dict in
+                    dict.mapValues { AnyCodable($0) }
+                }
+                let perm = PendingPermission(
                     id: permId,
                     sessionId: sessionId,
-                    toolName: toolName,
-                    args: payload?["args"] as? [String: Any] ?? [:],
-                    description: payload?["description"] as? String,
-                    timestamp: timestamp
+                    description: payload?["description"] as? String ?? "",
+                    toolName: toolName.isEmpty ? nil : toolName,
+                    args: codedArgs,
+                    timestamp: Date()
                 )
+                appState.messageStore.addPermission(perm)
                 updatePreview(sessionId, text: toolName, type: "permission",
                               timestamp: timestamp, notify: true)
             }
@@ -247,7 +252,7 @@ final class MessageRouter {
         case "permission_resolved":
             if let permId = payload?["permissionId"] as? String,
                let resolution = payload?["resolution"] as? String {
-                appState.sessionStore.removePermission(permId)
+                appState.messageStore.removePermission(permId)
                 appState.messageStore.resolvePermissionMessage(
                     sessionId, permissionId: permId, resolution: resolution
                 )
@@ -256,7 +261,7 @@ final class MessageRouter {
 
         case "approve", "deny", "always_allow":
             if let permId = payload?["permissionId"] as? String {
-                appState.sessionStore.removePermission(permId)
+                appState.messageStore.removePermission(permId)
                 let resolution: String = switch type {
                 case "approve": "approved"
                 case "deny": "denied"
@@ -301,7 +306,7 @@ final class MessageRouter {
         case "answer":
             if let qId = payload?["questionId"] as? String {
                 let answer = payload?["answer"] as? String
-                appState.sessionStore.removeQuestion(qId)
+                appState.messageStore.removeQuestion(qId)
                 appState.messageStore.resolveQuestionMessage(
                     sessionId, questionId: qId, answer: answer
                 )

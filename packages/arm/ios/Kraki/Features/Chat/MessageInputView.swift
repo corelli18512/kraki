@@ -180,13 +180,14 @@ struct MessageInputView: View {
     // MARK: - Permission Action Row
 
     private func permissionActionRow(_ perm: PendingPermission) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button {
                 appState.commandSender?.approve(sessionId: sessionId, permissionId: perm.id)
             } label: {
                 Text("Approve")
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
             .buttonStyle(.bordered)
@@ -196,8 +197,9 @@ struct MessageInputView: View {
                 appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: perm.id, toolKind: perm.toolName)
             } label: {
                 Text("Always Allow")
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
             .buttonStyle(.bordered)
@@ -207,8 +209,9 @@ struct MessageInputView: View {
                 appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
             } label: {
                 Text("Deny")
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
             .buttonStyle(.bordered)
