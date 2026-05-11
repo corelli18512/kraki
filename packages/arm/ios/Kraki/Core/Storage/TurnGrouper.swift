@@ -47,6 +47,7 @@ private let thinkingTypes: Set<String> = [
     "tool_complete",
     "agent_message",
     "permission",
+    "permission_resolved",
     "question",
     "question_resolved",
     "answer",
@@ -82,10 +83,19 @@ func groupMessagesIntoTurns(
 ) -> [TurnItem] {
     var result: [TurnItem] = []
     var currentThinking: [ChatMessage] = []
+    /// Permission IDs that have been asked but not yet resolved, tracked in
+    /// stream order. We can't rely on `ChatMessage.resolution` because
+    /// `MessageStore.resolvePermissionMessage` stamps that field
+    /// retroactively — by the time the grouper re-runs after the user
+    /// approves, the original permission message already looks "resolved",
+    /// which would cause the `idle` that fired *during* the wait to flush
+    /// the turn. Stream-order tracking avoids that.
+    var unresolvedPermIds: Set<String> = []
     var skipNextToolComplete = false
     var turnCounter = 0
 
     func flushTurn(turnComplete: Bool) {
+        defer { unresolvedPermIds.removeAll() }
         guard !currentThinking.isEmpty else { return }
         turnCounter += 1
         let turnId = "turn:\(turnCounter):\(currentThinking.first?.id ?? "unknown")"
@@ -134,6 +144,19 @@ func groupMessagesIntoTurns(
     }
 
     for msg in messages {
+        // Track permission lifecycle in stream order so a deferred `idle`
+        // fires correctly even after MessageStore retroactively stamps
+        // `resolution` on the original permission message.
+        switch msg.type {
+        case "permission":
+            if let pid = msg.permissionId { unresolvedPermIds.insert(pid) }
+        case "approve", "deny", "always_allow", "permission_resolved":
+            if let pid = msg.payload["permissionId"]?.stringValue {
+                unresolvedPermIds.remove(pid)
+            }
+        default: break
+        }
+
         if standaloneTypes.contains(msg.type) {
             flushTurn(turnComplete: true)
             result.append(.standalone(msg))
@@ -143,7 +166,7 @@ func groupMessagesIntoTurns(
             // while waiting on user approval, but the activity that
             // follows the approval is conceptually part of the same
             // turn (one agent thought = one bubble).
-            if hasUnresolvedPermission(in: currentThinking) {
+            if !unresolvedPermIds.isEmpty {
                 continue
             }
             flushTurn(turnComplete: true)
@@ -168,8 +191,8 @@ func groupMessagesIntoTurns(
                     )
                 }
                 // Don't append — question is now merged into the tool entry
-            } else if msg.type == "question_resolved" || msg.type == "answer" {
-                // Structural — skip, the tool_complete carries the answer
+            } else if msg.type == "question_resolved" || msg.type == "answer" || msg.type == "permission_resolved" {
+                // Structural — skip, the originating message carries the visible result
             } else if msg.type == "tool_complete" && skipNextToolComplete {
                 skipNextToolComplete = false
             } else if msg.type == "tool_complete" {
@@ -234,14 +257,4 @@ func groupMessagesIntoTurns(
     flushTurn(turnComplete: false)
 
     return result
-}
-
-/// True if the message list contains a `permission` whose `resolution` field
-/// is not yet set. Used by the turn grouper to keep a turn open across an
-/// `idle` that fires while waiting on user approval.
-private func hasUnresolvedPermission(in msgs: [ChatMessage]) -> Bool {
-    for m in msgs where m.type == "permission" {
-        if m.resolution == nil { return true }
-    }
-    return false
 }
