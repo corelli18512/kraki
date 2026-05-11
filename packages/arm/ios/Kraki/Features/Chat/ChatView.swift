@@ -142,147 +142,150 @@ struct ChatView: View {
 
     var body: some View {
         let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
-        scrollableMessages
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isDeviceOnline {
-                    bottomInputArea
+        ScrollViewReader { proxy in
+            scrollableMessages(proxy: proxy)
+                .overlay(alignment: .top) {
+                    stickyUserOverlay(proxy: proxy)
                 }
-            }
-            .background(Color.surfacePrimary)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if isDeviceOnline {
+                        bottomInputArea
+                    }
+                }
+                .background(Color.surfacePrimary)
+        }
     }
 
     // MARK: - Scrollable Messages
 
-    private var scrollableMessages: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    // Load older messages button
-                    if hasOlderMessages {
-                        Button {
-                            let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? 1
-                            appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.up.circle")
-                                    .font(.caption)
-                                Text("Load older messages")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                // Load older messages button
+                if hasOlderMessages {
+                    Button {
+                        let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? 1
+                        appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.circle")
+                                .font(.caption)
+                            Text("Load older messages")
+                                .font(.caption)
+                                .fontWeight(.medium)
                         }
-                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                     }
+                    .buttonStyle(.plain)
+                }
 
-                    // Message items
-                    ForEach(Array(grouped.enumerated()), id: \.element.id) { idx, item in
-                        switch item {
-                        case .standalone(let msg):
-                            standaloneRow(msg)
+                // Message items
+                ForEach(Array(grouped.enumerated()), id: \.element.id) { idx, item in
+                    switch item {
+                    case .standalone(let msg):
+                        standaloneRow(msg)
 
-                        case .turn(let turn):
-                            let isLastTurn = idx == grouped.count - 1
-                            let hasStreaming = isLastTurn && streaming != nil
-                            let turnId = turn.id
+                    case .turn(let turn):
+                        let isLastTurn = idx == grouped.count - 1
+                        let hasStreaming = isLastTurn && streaming != nil
+                        let turnId = turn.id
 
-                            if let final = turn.finalMessage, !hasStreaming {
-                                // Turn complete: final bubble with thinking history inside
+                        if let final = turn.finalMessage, !hasStreaming {
+                            // Turn complete: final bubble with thinking history inside
+                            MessageBubbleView(
+                                message: final,
+                                agent: session?.agent ?? "",
+                                turnImages: collectTurnImages(turn.thinkingMessages),
+                                thinkingHistory: turn.thinkingMessages,
+                                historyExpanded: Binding(
+                                    get: { expandedTurns.contains(turnId) },
+                                    set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
+                                )
+                            )
+                        } else if !turn.thinkingMessages.isEmpty || hasStreaming {
+                            // Turn in progress
+                            let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
+                            let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
+                            let hasStreamingContent = hasStreaming && streaming?.isEmpty == false
+                            let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
+
+                            if hasMessage || hasStreamingContent || hasTools {
                                 MessageBubbleView(
-                                    message: final,
+                                    message: latestMsg ?? ChatMessage(
+                                        type: "agent_message",
+                                        seq: 0,
+                                        sessionId: sessionId,
+                                        deviceId: nil,
+                                        timestamp: nil,
+                                        payload: [:]
+                                    ),
                                     agent: session?.agent ?? "",
-                                    turnImages: collectTurnImages(turn.thinkingMessages),
                                     thinkingHistory: turn.thinkingMessages,
                                     historyExpanded: Binding(
                                         get: { expandedTurns.contains(turnId) },
                                         set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
-                                    )
+                                    ),
+                                    streamingText: hasStreaming ? streaming : nil
                                 )
-                            } else if !turn.thinkingMessages.isEmpty || hasStreaming {
-                                // Turn in progress
-                                let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
-                                let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
-                                let hasStreamingContent = hasStreaming && streaming?.isEmpty == false
-                                let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
-
-                                if hasMessage || hasStreamingContent || hasTools {
-                                    MessageBubbleView(
-                                        message: latestMsg ?? ChatMessage(
-                                            type: "agent_message",
-                                            seq: 0,
-                                            sessionId: sessionId,
-                                            deviceId: nil,
-                                            timestamp: nil,
-                                            payload: [:]
-                                        ),
-                                        agent: session?.agent ?? "",
-                                        thinkingHistory: turn.thinkingMessages,
-                                        historyExpanded: Binding(
-                                            get: { expandedTurns.contains(turnId) },
-                                            set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
-                                        ),
-                                        streamingText: hasStreaming ? streaming : nil
-                                    )
-                                }
                             }
                         }
                     }
+                }
 
-                    // Bottom anchor
-                    Color.clear
-                        .frame(height: 1)
-                        .id("chat-bottom")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 16)
+                // Bottom anchor
+                Color.clear
+                    .frame(height: 1)
+                    .id("chat-bottom")
             }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollIndicators(.hidden)
-            .defaultScrollAnchor(currentScrollAnchor)
-            .coordinateSpace(name: "chat")
-            .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
-                ChatScrollMetrics(
-                    offsetY: geo.contentOffset.y + geo.contentInsets.top,
-                    viewportHeight: geo.containerSize.height
-                        - geo.contentInsets.top - geo.contentInsets.bottom
-                )
-            } action: { _, m in
-                scrollOffsetY = m.offsetY
-                viewportHeight = m.viewportHeight
-                checkLockTransition(proxy: proxy)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 16)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .scrollIndicators(.hidden)
+        .defaultScrollAnchor(currentScrollAnchor)
+        .coordinateSpace(name: "chat")
+        .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
+            ChatScrollMetrics(
+                offsetY: geo.contentOffset.y + geo.contentInsets.top,
+                viewportHeight: geo.containerSize.height
+                    - geo.contentInsets.top - geo.contentInsets.bottom
+            )
+        } action: { _, m in
+            scrollOffsetY = m.offsetY
+            viewportHeight = m.viewportHeight
+            checkLockTransition(proxy: proxy)
+        }
+        .onScrollPhaseChange { _, newPhase in
+            // Any direct user contact with the scroll view ends R1.
+            if newPhase == .interacting && growMode != .idle {
+                growMode = .idle
             }
-            .onScrollPhaseChange { _, newPhase in
-                // Any direct user contact with the scroll view ends R1.
-                if newPhase == .interacting && growMode != .idle {
-                    growMode = .idle
-                }
+        }
+        .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
+            userBubbleFrames = newFrames
+            checkLockTransition(proxy: proxy)
+        }
+        .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
+            handleNewUserMessage(seq: newSeq)
+        }
+        .onChange(of: filteredMessages.count) { _, _ in
+            checkLockTransition(proxy: proxy)
+        }
+        .onChange(of: streaming) { _, _ in
+            checkLockTransition(proxy: proxy)
+        }
+        .onChange(of: sessionIdle) { _, idle in
+            // Turn complete — release the lock so the next user
+            // message can trigger a fresh followBottom phase.
+            if idle && growMode != .idle {
+                growMode = .idle
             }
-            .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
-                userBubbleFrames = newFrames
-                checkLockTransition(proxy: proxy)
-            }
-            .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
-                handleNewUserMessage(seq: newSeq)
-            }
-            .onChange(of: filteredMessages.count) { _, _ in
-                checkLockTransition(proxy: proxy)
-            }
-            .onChange(of: streaming) { _, _ in
-                checkLockTransition(proxy: proxy)
-            }
-            .onChange(of: sessionIdle) { _, idle in
-                // Turn complete — release the lock so the next user
-                // message can trigger a fresh followBottom phase.
-                if idle && growMode != .idle {
-                    growMode = .idle
-                }
-            }
-            .task(id: sessionId) {
-                await performEntryScroll(proxy: proxy)
-            }
+        }
+        .task(id: sessionId) {
+            await performEntryScroll(proxy: proxy)
         }
     }
 
@@ -297,6 +300,90 @@ struct ChatView: View {
         if !didInitialScroll { return .bottom }
         if growMode == .followBottom { return .bottom }
         return nil
+    }
+
+    // MARK: - R2: Sticky User Bubble Overlay
+    //
+    // When the user scrolls back through a long agent reply, pin a
+    // compact, glass-backed copy of the most recent user message that
+    // has scrolled above the viewport top. Re-uses the same frame
+    // tracers that R1 populates.
+    //
+    // Exclusions:
+    //   - R1's lockedMsgId during .lockedAtTop is already at the top
+    //     of the viewport — don't double-render.
+    //   - Strict `<` test (frame top must be ABOVE viewport top) so a
+    //     bubble pinned exactly at the viewport top isn't also stickied.
+
+    /// Maximum height for the sticky overlay (caps a long user msg).
+    fileprivate static let stickyMaxHeight: CGFloat = 88
+    /// Outer margin around the sticky overlay.
+    fileprivate static let stickyMargin: CGFloat = 8
+
+    /// User messages currently above the viewport top, ordered ascending
+    /// by content y. The sticky candidate is the LAST element.
+    private var stickyAboveCandidates: [ChatMessage] {
+        let userMsgs = filteredMessages.filter {
+            $0.type == "user_message" || $0.type == "send_input"
+        }
+        let scrolledAbove = userMsgs.filter { msg in
+            guard let f = userBubbleFrames[msg.id] else { return false }
+            // R1 owns this bubble — don't sticky it.
+            if growMode == .lockedAtTop, msg.id == lockedMsgId { return false }
+            return f.minY < scrollOffsetY
+        }
+        return scrolledAbove.sorted { (a, b) in
+            (userBubbleFrames[a.id]?.minY ?? 0) < (userBubbleFrames[b.id]?.minY ?? 0)
+        }
+    }
+
+    /// The user message to render in the sticky overlay (most recent
+    /// one above the viewport top).
+    private var stickyCandidate: ChatMessage? {
+        stickyAboveCandidates.last
+    }
+
+    /// Vertical handoff offset: when the NEXT user bubble approaches
+    /// the viewport top, slide the current sticky overlay up by the
+    /// overlap so the next bubble pushes it out instead of overlapping.
+    /// Negative value moves the overlay upward.
+    private var stickyHandoffOffset: CGFloat {
+        guard let _ = stickyCandidate else { return 0 }
+        let userMsgs = filteredMessages.filter {
+            $0.type == "user_message" || $0.type == "send_input"
+        }
+        let belowOrAt = userMsgs.compactMap { msg -> CGFloat? in
+            guard let f = userBubbleFrames[msg.id] else { return nil }
+            let topInViewport = f.minY - scrollOffsetY
+            // Looking only at bubbles still in or below the viewport.
+            return topInViewport >= 0 ? topInViewport : nil
+        }
+        guard let nearest = belowOrAt.min() else { return 0 }
+        let band = Self.stickyMaxHeight + Self.stickyMargin
+        if nearest < band {
+            return -(band - nearest)
+        }
+        return 0
+    }
+
+    @ViewBuilder
+    private func stickyUserOverlay(proxy: ScrollViewProxy) -> some View {
+        if let msg = stickyCandidate {
+            StickyUserBubble(message: msg)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 12)
+                .padding(.top, Self.stickyMargin)
+                .offset(y: stickyHandoffOffset)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(userScrollId(msg), anchor: .top)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .animation(.easeOut(duration: 0.18), value: msg.id)
+                .allowsHitTesting(true)
+        }
     }
 
     // MARK: - Row Builders
@@ -452,6 +539,74 @@ struct ChatView: View {
             }
         }
         return images
+    }
+}
+
+// MARK: - Sticky User Bubble
+
+/// Compact, glass-backed copy of a user message used by R2 to pin the
+/// most recent user turn at the top of the viewport when the user
+/// scrolls back through a long agent reply. Style mirrors the regular
+/// user bubble (right-aligned, accent fill, white text) but with:
+///   - a 2-line truncation cap
+///   - thin material backdrop behind the row to separate from content
+///   - tappable (handled by parent overlay) to scroll back to source
+private struct StickyUserBubble: View {
+    let message: ChatMessage
+
+    private var content: String? {
+        if message.type == "send_input" {
+            return message.payload["text"]?.stringValue
+        }
+        return message.content
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 60)
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                if let text = content, !text.isEmpty, text != "[image]" {
+                    Text(text)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                } else {
+                    Text("Photo")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        }
+        .padding(.bottom, 4)
+        .background(alignment: .top) {
+            // Soft glass haze behind the chip so chat content reading
+            // through it stays legible.
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .frame(height: ChatView.stickyMaxHeight + ChatView.stickyMargin * 2)
+                .mask(
+                    LinearGradient(
+                        colors: [.black, .black.opacity(0.85), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .padding(.horizontal, -12)
+                .padding(.top, -ChatView.stickyMargin)
+                .allowsHitTesting(false)
+        }
     }
 }
 
