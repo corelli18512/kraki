@@ -52,6 +52,16 @@ struct MessageBubbleView: View {
         return nil
     }
 
+    /// True when the agent has produced any text yet (streaming or final).
+    private var hasMessageContent: Bool { latestMessageText != nil }
+
+    /// When the agent hasn't said anything yet but already has tool activity,
+    /// hide the empty "..." message section and let the tool section fill the
+    /// bubble.
+    private var hideMessageSection: Bool {
+        !hasMessageContent && !postMessageActivity.isEmpty
+    }
+
     private var agentBubbleColor: Color {
         let hue = stringToHue(message.sessionId ?? agent) / 360
         let (h, s, b) = hslToHSB(
@@ -225,20 +235,26 @@ struct MessageBubbleView: View {
                     }
                 }
 
-                // ② Message section (middle) — always visible
-                VStack(alignment: .leading, spacing: 4) {
-                    messageContent
-                    imageGrid(attachments: message.attachments)
-                    if let turnImages, !turnImages.isEmpty {
-                        imageGrid(attachments: turnImages)
+                // ② Message section (middle) — hidden when the agent has no text
+                //    yet but already has tool activity, so the tool section can
+                //    fill the bubble cleanly instead of an animated "...".
+                if !hideMessageSection {
+                    VStack(alignment: .leading, spacing: 4) {
+                        messageContent
+                        imageGrid(attachments: message.attachments)
+                        if let turnImages, !turnImages.isEmpty {
+                            imageGrid(attachments: turnImages)
+                        }
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
 
                 // ③ Tool section (bottom) — post-message activity
                 if !postMessageActivity.isEmpty {
-                    bubbleSection(position: .bottom) {
+                    let topSectionShown = historyExpanded && !preMessageHistory.isEmpty
+                    let bottomAtBubbleTop = hideMessageSection && !topSectionShown
+                    bubbleSection(position: .bottom, atBubbleTop: bottomAtBubbleTop) {
                         if historyExpanded {
                             ForEach(Array(postMessageActivity.enumerated()), id: \.element.id) { _, item in
                                 historyItemView(item)
@@ -250,6 +266,11 @@ struct MessageBubbleView: View {
                 }
             }
             .background(agentBubbleColor, in: bubbleShape(isUser: false))
+            .contentShape(bubbleShape(isUser: false))
+            .onTapGesture(count: 2) {
+                guard canToggleSteps else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { historyExpanded.toggle() }
+            }
             .contextMenu {
                 if let content = message.content {
                     Button { UIPasteboard.general.string = content } label: {
@@ -320,7 +341,15 @@ struct MessageBubbleView: View {
 
     private enum SectionPosition { case top, bottom }
 
-    private func bubbleSection<Content: View>(position: SectionPosition, @ViewBuilder content: () -> Content) -> some View {
+    /// `atBubbleTop` is only meaningful for `.bottom`: when the bottom section
+    /// is the *only* thing in the bubble (no message above), its top corners
+    /// must match the agent bubble shape (4 leading / 16 trailing) instead of
+    /// being sharp.
+    private func bubbleSection<Content: View>(
+        position: SectionPosition,
+        atBubbleTop: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             content()
         }
@@ -329,10 +358,10 @@ struct MessageBubbleView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             UnevenRoundedRectangle(
-                topLeadingRadius: position == .top ? 4 : 0,
+                topLeadingRadius: position == .top ? 4 : (atBubbleTop ? 4 : 0),
                 bottomLeadingRadius: position == .bottom ? 16 : 0,
                 bottomTrailingRadius: position == .bottom ? 16 : 0,
-                topTrailingRadius: position == .top ? 16 : 0
+                topTrailingRadius: position == .top ? 16 : (atBubbleTop ? 16 : 0)
             )
             .fill(sectionTintColor)
         )
