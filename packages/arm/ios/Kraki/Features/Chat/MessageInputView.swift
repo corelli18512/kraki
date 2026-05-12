@@ -190,8 +190,7 @@ struct MessageInputView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
-            .buttonStyle(.bordered)
-            .tint(.green)
+            .modifier(GlassChoiceButtonModifier(tint: .green))
 
             Button {
                 appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: perm.id, toolKind: perm.toolName)
@@ -202,8 +201,7 @@ struct MessageInputView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
-            .buttonStyle(.bordered)
-            .tint(.blue)
+            .modifier(GlassChoiceButtonModifier(tint: .blue))
 
             Button {
                 appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
@@ -214,8 +212,7 @@ struct MessageInputView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
-            .buttonStyle(.bordered)
-            .tint(.red)
+            .modifier(GlassChoiceButtonModifier(tint: .red))
         }
     }
 
@@ -235,8 +232,7 @@ struct MessageInputView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                 }
-                .buttonStyle(.bordered)
-                .tint(.krakiPrimary)
+                .modifier(GlassChoiceButtonModifier(tint: .krakiPrimary))
             }
         }
     }
@@ -374,6 +370,23 @@ private struct GlassSendButtonModifier: ViewModifier {
                         .fill(tint)
                         .opacity(enabled ? 1 : 0.4)
                 )
+        }
+    }
+}
+
+/// Liquid-glass button style for choice rows (question options, permission
+/// actions). Falls back to `.bordered` on iOS < 26 so semantic tints still
+/// read correctly.
+private struct GlassChoiceButtonModifier: ViewModifier {
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.buttonStyle(.glass(.regular.tint(tint)))
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .tint(tint)
         }
     }
 }

@@ -269,7 +269,7 @@ struct ChatView: View {
             checkLockTransition(proxy: proxy)
         }
         .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
-            handleNewUserMessage(seq: newSeq)
+            handleNewUserMessage(proxy: proxy, seq: newSeq)
         }
         .onChange(of: filteredMessages.count) { _, _ in
             checkLockTransition(proxy: proxy)
@@ -481,25 +481,39 @@ struct ChatView: View {
     /// new seq is strictly greater than our baseline, which uniquely
     /// identifies a freshly-sent user message (vs. backfill or session
     /// switch, which don't increase past baseline).
-    private func handleNewUserMessage(seq: Int) {
+    private func handleNewUserMessage(proxy: ScrollViewProxy, seq: Int) {
         guard didInitialScroll, seq > lockedUserSeq else { return }
         guard let msg = lastUserMessage else { return }
         lockedUserSeq = seq
         lockedMsgId = msg.id
         growMode = .followBottom
-        // No explicit scrollTo here — currentScrollAnchor flips to .bottom
-        // and the next content-size change re-anchors at the bottom,
-        // bringing the new user bubble into view.
+        // Explicit initial scroll: get the new user bubble fully into the
+        // viewport and pin the bottom edge. Subsequent streaming growth
+        // keeps the bottom pinned via checkLockTransition.
+        proxy.scrollTo("chat-bottom", anchor: .bottom)
     }
 
-    /// In followBottom mode, check whether the locked user bubble has
-    /// drifted up to the viewport top. If so, transition to lockedAtTop:
-    /// proxy-scroll the bubble to the top edge and flip the default
-    /// anchor off so further reply growth extends below the viewport
-    /// instead of pushing the bubble off the top.
+    /// Drives R1's follow-bottom and lock-at-top behavior on every
+    /// layout tick (preference change, scroll geometry change, message
+    /// count change, streaming text change).
+    ///
+    /// While in .followBottom: explicitly pin the scroll position to the
+    /// "chat-bottom" sentinel so streaming-driven content growth visually
+    /// drifts the locked user bubble up the viewport (instead of being
+    /// appended below an unmoving scroll offset).
+    ///
+    /// Once the locked user bubble's content-space top has reached the
+    /// viewport top, snap it to the top edge once and switch to
+    /// .lockedAtTop. From there we stop auto-scrolling — further reply
+    /// growth extends below the viewport instead of pushing the bubble off.
     private func checkLockTransition(proxy: ScrollViewProxy) {
-        guard growMode == .followBottom,
-              let mid = lockedMsgId,
+        guard growMode == .followBottom else { return }
+
+        // Pin the bottom edge as content grows. Idempotent when already
+        // at the bottom, so safe to call on every tick.
+        proxy.scrollTo("chat-bottom", anchor: .bottom)
+
+        guard let mid = lockedMsgId,
               let frame = userBubbleFrames[mid] else { return }
         let topInViewport = frame.minY - scrollOffsetY
         if topInViewport <= 0 {
