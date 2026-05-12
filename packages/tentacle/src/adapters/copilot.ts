@@ -940,9 +940,11 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('tool.execution_start', (event) => {
+      const data = event.data as unknown as Record<string, unknown>;
+      // report_intent is a UI hint only — drop it from the message stream.
+      if (data.toolName === 'report_intent') return;
       this.turnHasOutput.set(sessionId, true);
       this.cycleHasOutput.set(sessionId, true);
-      const data = event.data as unknown as Record<string, unknown>;
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
       }
@@ -958,6 +960,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('tool.execution_complete', (event) => {
       const data = event.data as unknown as Record<string, unknown>;
+      if (data.toolName === 'report_intent') return;
       const rawResult = data.result;
       const toolCallId = data.toolCallId as string | undefined;
       // SDK sends result as { content: string, contents?: [...] } or as a plain string.
