@@ -92,18 +92,7 @@ struct MessageInputView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(composeCardBackground)
-    }
-
-    @ViewBuilder
-    private var composeCardBackground: some View {
-        if #available(iOS 26.0, *) {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(.regularMaterial.opacity(0.6))
-        } else {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(.regularMaterial)
-        }
+        .modifier(ComposeCardGlassModifier())
     }
 
     // MARK: - Bottom Toolbar
@@ -176,14 +165,7 @@ struct MessageInputView: View {
         if #available(iOS 26.0, *) {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(isPressing ? tint.opacity(0.18) : Color.clear)
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(.regularMaterial.opacity(0.7))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke((isPressing ? tint : .secondary).opacity(0.25), lineWidth: 1)
-                )
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         } else {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(isPressing ? tint.opacity(0.18) : Color(.tertiarySystemBackground))
@@ -268,12 +250,8 @@ struct MessageInputView: View {
     private var recordingOverlayBackground: some View {
         if #available(iOS 26.0, *) {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.regularMaterial)
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(Color.clear)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                )
+                .fill(Color.clear)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         } else {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThickMaterial)
@@ -574,6 +552,18 @@ private struct WaveformBar: View {
 }
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
+
+private struct ComposeCardGlassModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        }
+    }
+}
 
 private struct GlassTextFieldModifier: ViewModifier {
     func body(content: Content) -> some View {
