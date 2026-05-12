@@ -25,6 +25,15 @@ function verifySignature(nonce: string, signature: string, publicKeyPem: string)
   return verify.verify(publicKeyPem, signature, 'base64');
 }
 
+interface InFlightEntry {
+  relaySeq: number;
+  /** Pre-serialized JSON payload, ready to re-send. */
+  payload: string;
+  /** Date.now() when first sent. Updated on each retry. */
+  sentAt: number;
+  retries: number;
+}
+
 interface ClientState {
   deviceId?: string;
   userId?: string;
@@ -36,6 +45,26 @@ interface ClientState {
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+
+  // ── Delivery assurance (per-connection, head→peer direction) ──
+  /** Monotonic counter for relaySeq head stamps on outbound tracked sends. */
+  relaySeqCounter: number;
+  /** In-flight buffer: messages sent but not yet acked by this peer. */
+  inFlight: InFlightEntry[];
+  /** Highest relaySeq this peer has acknowledged. */
+  lastAckedSeq: number;
+  /** Set true once peer demonstrates ack support by sending an `ack` field. */
+  ackSupported: boolean;
+  /** Last `now` value when retry pass ran for this client (for debug only). */
+  lastRetryAt?: number;
+
+  // ── Delivery assurance (per-connection, peer→head direction) ──
+  /** Highest relaySeq head has received from this peer. Sent back as `ack`
+   *  in outbound messages so the peer can prune its own in-flight buffer. */
+  lastReceivedRelaySeq: number;
+  /** Set of recently-processed peer relaySeqs (bounded ~MAX_IN_FLIGHT) so head
+   *  silently drops duplicate retries from the peer. */
+  seenRelaySeqs: Set<number>;
 }
 
 interface PairingToken {
@@ -58,6 +87,18 @@ export interface HeadServerOptions {
 }
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
+
+// ── Delivery assurance tuning ──────────────────────────────
+/** Max in-flight (unacked) messages per connection before forcing reconnect. */
+const MAX_IN_FLIGHT = 200;
+/** How long to wait for an ack before re-sending a message (ms). */
+const RETRY_AFTER_MS = 5_000;
+/** Max retries before closing the connection (forces clean reconnect). */
+const MAX_RETRIES = 3;
+/** How often the retry pass runs (ms). Independent of the slower 30s ping timer
+ *  so detection latency tracks the recipient's ping cadence (~10s), not the
+ *  liveness check cadence. */
+const RETRY_CHECK_INTERVAL_MS = 2_500;
 
 function isValidMessage(msg: unknown): msg is { type: string; [key: string]: unknown } {
   if (typeof msg !== 'object' || msg === null) return false;
@@ -99,6 +140,7 @@ export class HeadServer {
   private userByDevice = new Map<string, string>();
   private clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private retryTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
     this.storage = storage;
@@ -109,6 +151,7 @@ export class HeadServer {
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.startPingInterval();
+    this.startRetryInterval();
 
     // Expire old pending messages on startup
     const expired = this.storage.expirePending();
@@ -119,7 +162,6 @@ export class HeadServer {
 
   private startPingInterval(): void {
     this.pingTimer = setInterval(() => {
-      const jsonPing = JSON.stringify({ type: 'ping' });
       for (const [deviceId, ws] of this.connections) {
         const state = this.clients.get(ws);
         if (state && !state.isAlive) {
@@ -131,8 +173,14 @@ export class HeadServer {
         if (state) state.isAlive = false;
         try {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.ping();        // protocol-level ping (browsers auto-respond)
-            ws.send(jsonPing); // JSON ping for proxy keepalive
+            ws.ping(); // protocol-level ping (browsers auto-respond)
+            // JSON ping for proxy keepalive — include ack so the peer can
+            // prune its in-flight buffer even when no other traffic flows.
+            const pingMsg: Record<string, unknown> = { type: 'ping' };
+            if (state && state.lastReceivedRelaySeq > 0) {
+              pingMsg.ack = state.lastReceivedRelaySeq;
+            }
+            ws.send(JSON.stringify(pingMsg));
           }
         } catch {
           this.removeConnection(deviceId);
@@ -146,6 +194,177 @@ export class HeadServer {
       }
     }, HeadServer.PING_INTERVAL);
   }
+
+  // ── Delivery assurance ───────────────────────────────────
+
+  /** Run the retry pass at a fixed cadence, independent of the slower liveness
+   *  ping. Detection latency for a dropped message is bounded by the recipient's
+   *  ping cadence (~10s) + this interval. */
+  private startRetryInterval(): void {
+    this.retryTimer = setInterval(() => {
+      this.runRetryPass();
+    }, RETRY_CHECK_INTERVAL_MS);
+  }
+
+  /** Stamp a message with relaySeq, buffer for retry, and send. Use this for
+   *  any post-auth message head expects the peer to receive reliably. Skip for
+   *  pings, pongs, errors, and pre-auth handshake messages.
+   *
+   *  If the message has incoming `relaySeq`/`ack` fields from another hop
+   *  (e.g. a forwarded unicast/broadcast), they are stripped — these are
+   *  per-hop and not end-to-end. */
+  private trackedSend(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    state.relaySeqCounter += 1;
+    const relaySeq = state.relaySeqCounter;
+    // Strip any per-hop tracking fields from the source message, then stamp ours.
+    const { relaySeq: _ignoredSeq, ack: _ignoredAck, ...rest } = msg as Record<string, unknown>;
+    const stamped: Record<string, unknown> = { ...rest, relaySeq };
+    // Piggyback our own ack of what we've received from this peer on this connection.
+    if (state.lastReceivedRelaySeq > 0) {
+      stamped.ack = state.lastReceivedRelaySeq;
+    }
+    const payload = JSON.stringify(stamped);
+
+    // Evict oldest if buffer full. With MAX_RETRIES=3 and 5s retry, hitting
+    // MAX_IN_FLIGHT means the peer is pathologically slow — force reconnect.
+    if (state.inFlight.length >= MAX_IN_FLIGHT) {
+      getLogger().warn('In-flight buffer full, forcing reconnect', {
+        deviceId: state.deviceId,
+        inFlight: state.inFlight.length,
+      });
+      if (state.deviceId) {
+        this.removeConnection(state.deviceId);
+      } else {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    state.inFlight.push({
+      relaySeq,
+      payload,
+      sentAt: Date.now(),
+      retries: 0,
+    });
+
+    try {
+      ws.send(payload);
+    } catch {
+      // Send failed — connection is likely dead. Drop the connection so
+      // the client can reconnect cleanly. Retry pass will not re-send to
+      // a dead connection.
+      if (state.deviceId) this.removeConnection(state.deviceId);
+    }
+  }
+
+  /** Track an incoming relaySeq from peer. Returns true if message is a
+   *  duplicate that should be dropped silently. */
+  private trackInboundRelaySeq(state: ClientState, msg: Record<string, unknown>): boolean {
+    if (!('relaySeq' in msg)) return false;
+    const seq = msg.relaySeq;
+    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
+
+    if (state.seenRelaySeqs.has(seq)) {
+      return true; // duplicate
+    }
+
+    // Bound the set so it doesn't grow unbounded. Drop the oldest tracked
+    // ack window when full — at this point any duplicate older than the
+    // window would have been delivered long ago.
+    if (state.seenRelaySeqs.size >= MAX_IN_FLIGHT) {
+      const iter = state.seenRelaySeqs.values().next();
+      if (!iter.done) state.seenRelaySeqs.delete(iter.value);
+    }
+    state.seenRelaySeqs.add(seq);
+    if (seq > state.lastReceivedRelaySeq) {
+      state.lastReceivedRelaySeq = seq;
+    }
+    return false;
+  }
+
+  /** Process an incoming ack field from any message type. Prunes the in-flight
+   *  buffer and flips ackSupported on first sighting. */
+  private processAck(state: ClientState, msg: Record<string, unknown>): void {
+    if (!('ack' in msg)) return;
+    const ack = msg.ack;
+    if (typeof ack !== 'number' || !Number.isFinite(ack)) return;
+
+    // Presence of the field at all marks the peer as ack-capable, even if
+    // ack: 0. Once flipped, it stays true for the lifetime of the connection.
+    state.ackSupported = true;
+
+    if (ack > state.lastAckedSeq) {
+      state.lastAckedSeq = ack;
+      // Prune everything ≤ ack from the in-flight buffer.
+      if (state.inFlight.length > 0) {
+        let firstUnacked = 0;
+        while (firstUnacked < state.inFlight.length && state.inFlight[firstUnacked].relaySeq <= ack) {
+          firstUnacked += 1;
+        }
+        if (firstUnacked > 0) {
+          state.inFlight.splice(0, firstUnacked);
+        }
+      }
+    }
+  }
+
+  /** Walk all connections; re-send unacked messages that have aged past
+   *  RETRY_AFTER_MS. Close connections whose oldest unacked message has
+   *  exceeded MAX_RETRIES (forces clean reconnect via existing replay path). */
+  private runRetryPass(): void {
+    const logger = getLogger();
+    const now = Date.now();
+
+    for (const [deviceId, ws] of this.connections) {
+      const state = this.clients.get(ws);
+      if (!state) continue;
+      if (!state.ackSupported) continue; // Old client — skip retry
+      if (state.inFlight.length === 0) continue;
+      if (ws.readyState !== WebSocket.OPEN) continue;
+
+      state.lastRetryAt = now;
+      let killConnection = false;
+
+      for (const entry of state.inFlight) {
+        // Already acked? (Shouldn't normally happen — processAck prunes —
+        // but guard against races.)
+        if (entry.relaySeq <= state.lastAckedSeq) continue;
+        if (now - entry.sentAt < RETRY_AFTER_MS) continue;
+
+        if (entry.retries >= MAX_RETRIES) {
+          logger.warn('Max retries exceeded, closing connection', {
+            deviceId,
+            relaySeq: entry.relaySeq,
+            retries: entry.retries,
+          });
+          killConnection = true;
+          break;
+        }
+
+        entry.retries += 1;
+        entry.sentAt = now;
+        try {
+          ws.send(entry.payload);
+          logger.debug('Retried unacked message', {
+            deviceId,
+            relaySeq: entry.relaySeq,
+            attempt: entry.retries,
+          });
+        } catch {
+          killConnection = true;
+          break;
+        }
+      }
+
+      if (killConnection) {
+        this.removeConnection(deviceId);
+      }
+    }
+  }
+
+  // ── End delivery assurance ──────────────────────────────
 
   // --- Auth provider helpers ---
 
@@ -199,7 +418,17 @@ export class HeadServer {
 
   private onConnection(ws: WebSocket, req?: HttpIncomingMessage): void {
     const ip = req?.socket?.remoteAddress ?? req?.headers['x-forwarded-for']?.toString() ?? 'unknown';
-    const state: ClientState = { authenticated: false, isAlive: true, ip };
+    const state: ClientState = {
+      authenticated: false,
+      isAlive: true,
+      ip,
+      relaySeqCounter: 0,
+      inFlight: [],
+      lastAckedSeq: 0,
+      ackSupported: false,
+      lastReceivedRelaySeq: 0,
+      seenRelaySeqs: new Set(),
+    };
     const logger = getLogger();
 
     this.clients.set(ws, state);
@@ -252,6 +481,15 @@ export class HeadServer {
   }
 
   private async onMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): Promise<void> {
+    // Process ack field on every incoming message (post or pre-auth, doesn't matter —
+    // ack just prunes our outbound buffer for this peer).
+    this.processAck(state, msg);
+
+    // Track inbound relaySeq for sending acks back. Duplicates are dropped silently.
+    if (this.trackInboundRelaySeq(state, msg)) {
+      return;
+    }
+
     // One-shot pairing token request — before auth
     if (msg.type === 'request_pairing_token') {
       await this.handleRequestPairingToken(ws, state, msg as { token?: string });
@@ -335,9 +573,9 @@ export class HeadServer {
           // Read back the full merged preferences
           const fullUser = this.storage.getUser(state.userId);
           const merged = fullUser?.preferences ?? prefs;
-          const confirmation = JSON.stringify({ type: 'preferences_updated', preferences: merged });
-          // Send confirmation to sender
-          ws.send(confirmation);
+          const confirmation = { type: 'preferences_updated', preferences: merged };
+          // Send confirmation to sender (tracked — peer should see it)
+          this.trackedSend(ws, state, confirmation);
           // Broadcast to all other devices of the same user
           const userDevices = (() => {
             try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
@@ -345,9 +583,10 @@ export class HeadServer {
           for (const d of userDevices) {
             if (d.id === state.deviceId) continue;
             const other = this.connections.get(d.id);
-            if (other && other.readyState === WebSocket.OPEN) {
-              try { other.send(confirmation); } catch { /* best effort */ }
-            }
+            if (!other || other.readyState !== WebSocket.OPEN) continue;
+            const otherState = this.clients.get(other);
+            if (!otherState) continue;
+            this.trackedSend(other, otherState, confirmation);
           }
         }
       }
@@ -370,7 +609,11 @@ export class HeadServer {
     }
 
     if (msg.type === 'ping') {
-      ws.send(JSON.stringify({ type: 'pong' }));
+      const pongMsg: Record<string, unknown> = { type: 'pong' };
+      if (state.lastReceivedRelaySeq > 0) {
+        pongMsg.ack = state.lastReceivedRelaySeq;
+      }
+      ws.send(JSON.stringify(pongMsg));
       return;
     }
 
@@ -399,20 +642,20 @@ export class HeadServer {
 
     const targetWs = this.connections.get(msg.to);
     if (!targetWs) {
-      // Target offline — queue for delivery on reconnect
-      this.storage.insertPending(msg.to, senderUserId, JSON.stringify(msg));
+      // Target offline — queue for delivery on reconnect.
+      // Strip per-hop tracking fields before persisting so the queued payload
+      // doesn't carry stale relaySeq/ack from this sender→head hop.
+      const { relaySeq: _s, ack: _a, ...clean } = msg as unknown as Record<string, unknown>;
+      this.storage.insertPending(msg.to, senderUserId, JSON.stringify(clean));
       logger.debug('Unicast queued for offline device', { from: state.deviceId, to: msg.to });
       return;
     }
 
-    try {
-      if (targetWs.readyState === WebSocket.OPEN) {
-        targetWs.send(JSON.stringify(msg));
-      }
-    } catch {
-      logger.warn('Unicast send failed, removing connection', { to: msg.to });
-      this.removeConnection(msg.to);
-    }
+    const targetState = this.clients.get(targetWs);
+    if (!targetState) return;
+
+    // Forward via tracked path so we retry if the recipient doesn't ack.
+    this.trackedSend(targetWs, targetState, msg as unknown as Record<string, unknown>);
   }
 
   private handleBroadcast(state: ClientState, msg: BroadcastEnvelope): void {
@@ -432,14 +675,10 @@ export class HeadServer {
       if (!targetWs) continue;
 
       onlineDeviceIds.push(device.id);
-      try {
-        if (targetWs.readyState === WebSocket.OPEN) {
-          targetWs.send(JSON.stringify(msg));
-        }
-      } catch {
-        logger.warn('Broadcast send failed, removing connection', { to: device.id });
-        this.removeConnection(device.id);
-      }
+      const targetState = this.clients.get(targetWs);
+      if (!targetState) continue;
+
+      this.trackedSend(targetWs, targetState, msg as unknown as Record<string, unknown>);
     }
 
     // Send push notifications to offline devices with registered tokens
@@ -451,10 +690,19 @@ export class HeadServer {
 
   private removeConnection(deviceId: string): void {
     const ws = this.connections.get(deviceId);
+    const userId = this.userByDevice.get(deviceId);
     this.connections.delete(deviceId);
     this.userByDevice.delete(deviceId);
     if (ws) {
       try { ws.close(); } catch { /* best effort */ }
+    }
+    // Programmatic removal — the ws.on('close') handler's reconnect-guard
+    // check will fail (we already deleted from the map), so notify other
+    // devices ourselves. Idempotent: if the close handler does run later it
+    // sees the map empty and skips.
+    if (userId) {
+      try { this.storage.touchDeviceLastSeen(deviceId); } catch { /* storage may be closed */ }
+      this.broadcastDeviceLeft(userId, deviceId);
     }
   }
 
@@ -1011,16 +1259,16 @@ export class HeadServer {
   }
 
   private broadcastDeviceRemoved(userId: string, removedDeviceId: string): void {
-    const msg = JSON.stringify({ type: 'device_removed', deviceId: removedDeviceId });
     let userDevices;
     try {
       userDevices = this.storage.getDevicesByUser(userId);
     } catch { return; }
     for (const d of userDevices) {
       const ws = this.connections.get(d.id);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.send(msg); } catch { /* best effort */ }
-      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      const targetState = this.clients.get(ws);
+      if (!targetState) continue;
+      this.trackedSend(ws, targetState, { type: 'device_removed', deviceId: removedDeviceId });
     }
   }
 
@@ -1043,7 +1291,6 @@ export class HeadServer {
       createdAt: device.createdAt,
     };
 
-    const msg = JSON.stringify({ type: 'device_joined', device: summary });
     let userDevices;
     try {
       userDevices = this.storage.getDevicesByUser(userId);
@@ -1051,14 +1298,14 @@ export class HeadServer {
     for (const d of userDevices) {
       if (d.id === newDeviceId) continue;
       const ws = this.connections.get(d.id);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.send(msg); } catch { /* best effort */ }
-      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      const targetState = this.clients.get(ws);
+      if (!targetState) continue;
+      this.trackedSend(ws, targetState, { type: 'device_joined', device: summary });
     }
   }
 
   private broadcastDeviceLeft(userId: string, leftDeviceId: string): void {
-    const msg = JSON.stringify({ type: 'device_left', deviceId: leftDeviceId });
     let userDevices;
     try {
       userDevices = this.storage.getDevicesByUser(userId);
@@ -1066,9 +1313,10 @@ export class HeadServer {
     for (const d of userDevices) {
       if (d.id === leftDeviceId) continue;
       const ws = this.connections.get(d.id);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.send(msg); } catch { /* best effort */ }
-      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      const targetState = this.clients.get(ws);
+      if (!targetState) continue;
+      this.trackedSend(ws, targetState, { type: 'device_left', deviceId: leftDeviceId });
     }
   }
 
@@ -1209,10 +1457,40 @@ export class HeadServer {
     };
   }
 
+  /** Test hook: inspect delivery state for an online device. Not used in prod. */
+  getDeliveryState(deviceId: string): {
+    inFlightCount: number;
+    relaySeqCounter: number;
+    lastAckedSeq: number;
+    ackSupported: boolean;
+    lastReceivedRelaySeq: number;
+  } | undefined {
+    const ws = this.connections.get(deviceId);
+    if (!ws) return undefined;
+    const state = this.clients.get(ws);
+    if (!state) return undefined;
+    return {
+      inFlightCount: state.inFlight.length,
+      relaySeqCounter: state.relaySeqCounter,
+      lastAckedSeq: state.lastAckedSeq,
+      ackSupported: state.ackSupported,
+      lastReceivedRelaySeq: state.lastReceivedRelaySeq,
+    };
+  }
+
+  /** Test hook: force a retry pass without waiting for the timer. */
+  forceRetryPass(): void {
+    this.runRetryPass();
+  }
+
   close(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
     }
     for (const ws of this.clients.keys()) {
       ws.close();
