@@ -39,7 +39,6 @@ struct SessionDetailView: View {
     }
 
     var body: some View {
-        let _ = KLog.d("🖥️ SessionDetailView: sessionId=\(sessionId.prefix(12)), session=\(session != nil ? "found" : "nil")")
         Group {
             if let session {
                 sessionContent(session)
@@ -49,6 +48,12 @@ struct SessionDetailView: View {
         }
         .onAppear {
             sessionStore.activeSessionId = sessionId
+            // Snapshot unread state SYNCHRONOUSLY (before scheduling any
+            // Task) so ChatView's R3 entry-scroll sees the original value
+            // even though markRead's Task may run before ChatView's .task
+            // body fires.
+            let liveUnread = sessionStore.unreadCounts[sessionId] ?? 0
+            sessionStore.entryUnreadSnapshots[sessionId] = liveUnread > 0
             // Defer markRead one runloop turn so ChatView's entry-scroll
             // task can snapshot the unread state before it's cleared.
             Task { @MainActor in

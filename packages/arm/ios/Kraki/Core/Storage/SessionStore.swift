@@ -43,6 +43,16 @@ final class SessionStore {
     var navigateToSession: String?
     var streamingContent: [String: String] = [:]
 
+    /// Snapshot of `unreadCounts` at the moment a session was opened, captured
+    /// synchronously by SessionDetailView before it schedules markRead. Lets
+    /// ChatView's R3 entry-scroll see the original unread state even though
+    /// markRead may run before its `.task` body fires (both are MainActor
+    /// Tasks scheduled FIFO; SessionDetailView.onAppear runs first, so its
+    /// scheduled Task wins the race against ChatView.task).
+    /// ChatView consumes (and clears) the entry it owns at the start of
+    /// `performEntryScroll`.
+    var entryUnreadSnapshots: [String: Bool] = [:]
+
     // MARK: - Computed
 
     /// Sessions sorted: pinned first, then by preview timestamp descending,
