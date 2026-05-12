@@ -21,6 +21,17 @@ private struct UserBubbleFramesKey: PreferenceKey {
     }
 }
 
+/// PreferenceKey for the measured height of the R2 sticky overlay
+/// (including its outer top margin). Used by stickyHandoffOffset so
+/// the handoff band matches the actual rendered chip — short messages
+/// don't over-correct, long messages don't under-correct.
+private struct StickyOverlayHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// Compact, Equatable snapshot of the metrics we care about from the
 /// ScrollView. Used as the change-trigger value for
 /// `.onScrollGeometryChange`.
@@ -77,6 +88,16 @@ struct ChatView: View {
     /// triggers when a STRICTLY greater seq appears (i.e., the user just
     /// sent a new message — not on session switch / replay).
     @State private var lockedUserSeq: Int = 0
+    /// During R1 .followBottom, set true the first tick we observe the
+    /// new user bubble actually inside the viewport (topInViewport > 0).
+    /// LOCK is gated on this so a stale scroll position carried over
+    /// from a previous .lockedAtTop session can't trigger an immediate
+    /// re-LOCK before the bubble has grown into view.
+    @State private var sawBubbleBelowTop: Bool = false
+    /// Measured height of the rendered R2 sticky overlay (chip + top
+    /// margin). Used by `stickyHandoffOffset` so the handoff band
+    /// matches reality regardless of message length.
+    @State private var stickyOverlayHeight: CGFloat = 0
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
@@ -305,47 +326,61 @@ struct ChatView: View {
     }
 
     /// Default scroll anchor for the message list.
-    /// - `.bottom` during R1 followBottom (content auto-pins to bottom
-    ///   so the locked user bubble drifts upward as the reply grows).
     /// - `.bottom` before R3 has run so a cold launch lands at the
     ///   bottom for read sessions (R3 overrides for unread).
     /// - `nil` otherwise so the scroll position is preserved across
     ///   content changes (no auto-following while the user is reading).
+    ///
+    /// Note: we deliberately do NOT toggle this to `.bottom` during
+    /// R1 followBottom. Toggling it mid-session causes SwiftUI to
+    /// re-anchor scroll position, which in combination with the
+    /// keyboard dismissal animation produces a jarring 1500-2000pt
+    /// upward jump (user bubble vanishes off-screen). R1 instead
+    /// drives the scroll explicitly via `proxy.scrollTo("chat-bottom")`
+    /// on every layout/streaming tick, with animations disabled so
+    /// the bottom stays pinned visually.
     private var currentScrollAnchor: UnitPoint? {
         if !didInitialScroll { return .bottom }
-        if growMode == .followBottom { return .bottom }
         return nil
     }
 
     // MARK: - R2: Sticky User Bubble Overlay
     //
     // When the user scrolls back through a long agent reply, pin a
-    // compact, glass-backed copy of the most recent user message that
-    // has scrolled above the viewport top. Re-uses the same frame
-    // tracers that R1 populates.
+    // glass-backed copy of the most recent user message that has
+    // scrolled above the viewport top. Re-uses the same frame tracers
+    // that R1 populates.
     //
-    // Exclusions:
-    //   - R1's lockedMsgId during .lockedAtTop is already at the top
-    //     of the viewport — don't double-render.
-    //   - Strict `<` test (frame top must be ABOVE viewport top) so a
-    //     bubble pinned exactly at the viewport top isn't also stickied.
+    // Visibility is driven by how far the candidate's original position
+    // has scrolled ABOVE the viewport top (`aboveAmount`):
+    //   - aboveAmount <= stickyFadeStart → opacity 0 (pill hidden)
+    //   - aboveAmount in (stickyFadeStart, stickyFadeEnd) → linear ramp
+    //   - aboveAmount >= stickyFadeEnd → opacity 1 (fully visible)
+    //
+    // This keeps the R1-LOCKED state clean (the locked bubble has
+    // aboveAmount=0, so no pill renders on top of it) and only "lifts
+    // off" once the user scrolls further past the bubble's own row.
 
-    /// Maximum height for the sticky overlay (caps a long user msg).
-    fileprivate static let stickyMaxHeight: CGFloat = 88
     /// Outer margin around the sticky overlay.
     fileprivate static let stickyMargin: CGFloat = 8
+    /// Pill stays hidden until the candidate has scrolled this many
+    /// points above the viewport top.
+    fileprivate static let stickyFadeStart: CGFloat = 80
+    /// Pill reaches full opacity once the candidate is this far above.
+    fileprivate static let stickyFadeEnd: CGFloat = 160
 
-    /// User messages currently above the viewport top, ordered ascending
-    /// by content y. The sticky candidate is the LAST element.
+    /// User messages currently at-or-above the viewport top, ordered
+    /// ascending by content y. The sticky candidate is the LAST element
+    /// (most recent above-or-at). We use `<=` so the R1-locked bubble
+    /// (sitting exactly at viewport top) is included; opacity then
+    /// suppresses rendering until it actually moves above.
     private var stickyAboveCandidates: [ChatMessage] {
         let userMsgs = filteredMessages.filter {
             $0.type == "user_message" || $0.type == "send_input"
         }
         let scrolledAbove = userMsgs.filter { msg in
             guard let f = userBubbleFrames[msg.id] else { return false }
-            // R1 owns this bubble — don't sticky it.
-            if growMode == .lockedAtTop, msg.id == lockedMsgId { return false }
-            return f.minY < scrollOffsetY
+            return f.minY <= scrollOffsetY
         }
         return scrolledAbove.sorted { (a, b) in
             (userBubbleFrames[a.id]?.minY ?? 0) < (userBubbleFrames[b.id]?.minY ?? 0)
@@ -353,42 +388,37 @@ struct ChatView: View {
     }
 
     /// The user message to render in the sticky overlay (most recent
-    /// one above the viewport top).
+    /// at-or-above the viewport top).
     private var stickyCandidate: ChatMessage? {
         stickyAboveCandidates.last
     }
 
-    /// Vertical handoff offset: when the NEXT user bubble approaches
-    /// the viewport top, slide the current sticky overlay up by the
-    /// overlap so the next bubble pushes it out instead of overlapping.
-    /// Negative value moves the overlay upward.
-    private var stickyHandoffOffset: CGFloat {
-        guard let _ = stickyCandidate else { return 0 }
-        let userMsgs = filteredMessages.filter {
-            $0.type == "user_message" || $0.type == "send_input"
-        }
-        let belowOrAt = userMsgs.compactMap { msg -> CGFloat? in
-            guard let f = userBubbleFrames[msg.id] else { return nil }
-            let topInViewport = f.minY - scrollOffsetY
-            // Looking only at bubbles still in or below the viewport.
-            return topInViewport >= 0 ? topInViewport : nil
-        }
-        guard let nearest = belowOrAt.min() else { return 0 }
-        let band = Self.stickyMaxHeight + Self.stickyMargin
-        if nearest < band {
-            return -(band - nearest)
-        }
-        return 0
+    /// Distance-driven opacity. 0 while the candidate is still at or
+    /// near its natural position; ramps to 1 once the user has scrolled
+    /// the candidate at least `stickyFadeEnd` pt above viewport top.
+    private var stickyOpacity: Double {
+        guard let candidate = stickyCandidate,
+              let frame = userBubbleFrames[candidate.id] else { return 0 }
+        let aboveAmount = scrollOffsetY - frame.minY
+        let span = Self.stickyFadeEnd - Self.stickyFadeStart
+        let progress = (aboveAmount - Self.stickyFadeStart) / span
+        return Double(max(0, min(1, progress)))
     }
 
     @ViewBuilder
     private func stickyUserOverlay(proxy: ScrollViewProxy) -> some View {
         if let msg = stickyCandidate {
             StickyUserBubble(message: msg)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 12)
                 .padding(.top, Self.stickyMargin)
-                .offset(y: stickyHandoffOffset)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: StickyOverlayHeightKey.self,
+                            value: geo.size.height
+                        )
+                    }
+                )
+                .opacity(stickyOpacity)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.25)) {
@@ -397,7 +427,10 @@ struct ChatView: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .animation(.easeOut(duration: 0.18), value: msg.id)
-                .allowsHitTesting(true)
+                .allowsHitTesting(stickyOpacity > 0.5)
+                .onPreferenceChange(StickyOverlayHeightKey.self) { h in
+                    stickyOverlayHeight = h
+                }
         }
     }
 
@@ -416,6 +449,7 @@ struct ChatView: View {
         if msg.type == "user_message" || msg.type == "send_input" {
             bubble
                 .id(userScrollId(msg))
+                .opacity(msg.id == stickyCandidate?.id ? (1 - stickyOpacity) : 1)
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(
@@ -511,16 +545,21 @@ struct ChatView: View {
         lockedUserSeq = seq
         lockedMsgId = msg.id
         growMode = .followBottom
+        // Reset the visibility gate. LOCK in checkLockTransition is only
+        // permitted after we've seen the new bubble inside the viewport
+        // at least once — this prevents an immediate re-LOCK when a
+        // previous .lockedAtTop session left scrollOffsetY high.
+        sawBubbleBelowTop = false
         // Drop any stale GeometryReader sample so checkLockTransition
         // waits for a real, post-layout frame before deciding to lock.
         userBubbleFrames.removeValue(forKey: msg.id)
-        proxy.scrollTo("chat-bottom", anchor: .bottom)
+        scrollToBottomInstant(proxy: proxy)
     }
 
     private func checkLockTransition(proxy: ScrollViewProxy) {
         guard growMode == .followBottom else { return }
 
-        proxy.scrollTo("chat-bottom", anchor: .bottom)
+        scrollToBottomInstant(proxy: proxy)
 
         guard let mid = lockedMsgId,
               let frame = userBubbleFrames[mid] else {
@@ -530,11 +569,37 @@ struct ChatView: View {
         // user bubble always has a positive height once SwiftUI has placed
         // it; before that, minY can be a small negative sentinel which
         // would falsely satisfy the "reached top" condition below.
-        guard frame.height > 0 else { return }
+        guard frame.height > 0 else {
+            return
+        }
         let topInViewport = frame.minY - scrollOffsetY
+        // Visibility gate: don't allow LOCK until the bubble has actually
+        // been seen inside the viewport. Without this, a stale scroll
+        // position from a previous .lockedAtTop session can present a
+        // negative topInViewport on the first tick, causing an immediate
+        // re-LOCK before R1 ever runs.
+        if topInViewport > 0 {
+            sawBubbleBelowTop = true
+        }
+        guard sawBubbleBelowTop else { return }
         if topInViewport <= 0 {
             proxy.scrollTo(userScrollId(forMsgId: mid), anchor: .top)
             growMode = .lockedAtTop
+        }
+    }
+
+    /// Scroll to the chat-bottom sentinel WITHOUT any spring animation.
+    /// During R1 followBottom this needs to keep up with text streaming
+    /// in real time; the default spring animation lags far behind the
+    /// content growth and causes the user bubble + new reply to slide
+    /// off the bottom of the viewport. Disabling the transaction's
+    /// animation makes the scroll snap each tick so the bottom edge
+    /// stays visually pinned.
+    private func scrollToBottomInstant(proxy: ScrollViewProxy) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
     }
 
@@ -574,13 +639,13 @@ struct ChatView: View {
 
 // MARK: - Sticky User Bubble
 
-/// Compact, glass-backed copy of a user message used by R2 to pin the
-/// most recent user turn at the top of the viewport when the user
-/// scrolls back through a long agent reply. Style mirrors the regular
-/// user bubble (right-aligned, accent fill, white text) but with:
-///   - a 2-line truncation cap
-///   - thin material backdrop behind the row to separate from content
-///   - tappable (handled by parent overlay) to scroll back to source
+/// Floating "glass" copy of a user message used by R2 to pin the most
+/// recent user turn at the top of the viewport when it scrolls above
+/// the fold. Layout intentionally mirrors `MessageBubbleView.userBubble`
+/// (same Spacer minLength, padding, font, and shape) so the bubble does
+/// NOT visually resize during the in-chat → floating handoff. Background
+/// is swapped for liquid glass with a faint accent tint so chat content
+/// stays readable through the chip.
 private struct StickyUserBubble: View {
     let message: ChatMessage
 
@@ -592,50 +657,58 @@ private struct StickyUserBubble: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 60)
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+        HStack {
+            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
+            VStack(alignment: .trailing, spacing: 4) {
                 if let text = content, !text.isEmpty, text != "[image]" {
-                    Text(text)
+                    Text(markdown(text))
                         .font(.subheadline)
                         .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
                 } else {
                     Text("Photo")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .modifier(StickyGlassPillModifier(tint: Color.accentColor))
+            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
         }
-        .padding(.bottom, 4)
-        .background(alignment: .top) {
-            // Soft glass haze behind the chip so chat content reading
-            // through it stays legible.
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .frame(height: ChatView.stickyMaxHeight + ChatView.stickyMargin * 2)
-                .mask(
-                    LinearGradient(
-                        colors: [.black, .black.opacity(0.85), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .padding(.horizontal, -12)
-                .padding(.top, -ChatView.stickyMargin)
-                .allowsHitTesting(false)
+        .padding(.horizontal, 12)
+    }
+
+    private func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        ))) ?? AttributedString(text)
+    }
+}
+
+/// Liquid-glass pill backing for the R2 sticky user bubble. Uses the
+/// same `UnevenRoundedRectangle` shape as the regular user bubble so
+/// the float-in keeps the same silhouette. Tints the regular glass
+/// material with a low-opacity accent on iOS 26+, falls back to a
+/// semi-translucent accent fill on older iOS.
+private struct StickyGlassPillModifier: ViewModifier {
+    let tint: Color
+
+    private var shape: some Shape {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 16,
+            bottomLeadingRadius: 16,
+            bottomTrailingRadius: 16,
+            topTrailingRadius: 4
+        )
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular.tint(tint.opacity(0.25)), in: shape)
+        } else {
+            content
+                .background(tint.opacity(0.6), in: shape)
         }
     }
 }
