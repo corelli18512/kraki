@@ -63,6 +63,7 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
+            .ignoresSafeArea(.container, edges: .bottom)
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -106,7 +107,7 @@ struct MessageInputView: View {
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
-        .padding(.bottom, max(10, safeBottom))
+        .padding(.bottom, 10)
         .frame(maxWidth: .infinity)
         .modifier(ComposeCardGlassModifier())
         .animation(.easeInOut(duration: 0.2), value: modePickerExpanded)
@@ -548,20 +549,6 @@ struct MessageInputView: View {
             imageData = compressed; imageMimeType = "image/jpeg"
         }
     }
-
-    // MARK: - Helpers
-
-    /// Bottom safe-area inset (home indicator height). Used so we can pull
-    /// the compose card down into that region — the parent already wraps us
-    /// in `.safeAreaInset(edge: .bottom)`, which would otherwise leave a
-    /// large 34pt gap between the card and the screen edge. Subtracting
-    /// `safeBottom` from a 12pt padding lands the card 12pt from the very
-    /// bottom of the screen, matching the horizontal padding.
-    private var safeBottom: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .first ?? 0
-    }
 }
 
 // MARK: - Waveform Bar (recording overlay)
@@ -590,9 +577,11 @@ private struct WaveformBar: View {
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
 
-/// Edge-to-edge bottom bar of liquid glass: rounds only the top corners and
-/// extends through the home-indicator safe area. Pre-iOS 26 falls back to
-/// .ultraThinMaterial in the same shape.
+/// Edge-to-edge bottom bar of liquid glass: rounds only the top corners.
+/// The view that uses this modifier should also call
+/// `.ignoresSafeArea(.container, edges: .bottom)` on its outer body so the
+/// glass actually slides under the home indicator. Pre-iOS 26 falls back
+/// to .ultraThinMaterial in the same shape.
 private struct ComposeCardGlassModifier: ViewModifier {
     private static let topRadius: CGFloat = 22
 
@@ -608,13 +597,9 @@ private struct ComposeCardGlassModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular, in: shape)
-                .ignoresSafeArea(.container, edges: .bottom)
+            content.glassEffect(.regular, in: shape)
         } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .ignoresSafeArea(.container, edges: .bottom)
+            content.background(.ultraThinMaterial, in: shape)
         }
     }
 }
