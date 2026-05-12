@@ -11,9 +11,9 @@ import SwiftUI
 
 struct ModePickerView: View {
     let sessionId: String
+    @Binding var expanded: Bool
 
     @Environment(AppState.self) private var appState
-    @State private var expanded = false
     @State private var collapseTask: Task<Void, Never>?
 
     private var currentMode: SessionMode {
@@ -78,7 +78,7 @@ struct ModePickerView: View {
     // MARK: - Actions
 
     private func expand() {
-        expanded = true
+        withAnimation { expanded = true }
         scheduleCollapse()
     }
 
