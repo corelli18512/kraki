@@ -63,7 +63,7 @@ struct MessageInputView: View {
     var body: some View {
         composeCard
             .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(.bottom, 12 - safeBottom)
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -546,6 +546,20 @@ struct MessageInputView: View {
         } else if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
             imageData = compressed; imageMimeType = "image/jpeg"
         }
+    }
+
+    // MARK: - Helpers
+
+    /// Bottom safe-area inset (home indicator height). Used so we can pull
+    /// the compose card down into that region — the parent already wraps us
+    /// in `.safeAreaInset(edge: .bottom)`, which would otherwise leave a
+    /// large 34pt gap between the card and the screen edge. Subtracting
+    /// `safeBottom` from a 12pt padding lands the card 12pt from the very
+    /// bottom of the screen, matching the horizontal padding.
+    private var safeBottom: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first ?? 0
     }
 }
 
