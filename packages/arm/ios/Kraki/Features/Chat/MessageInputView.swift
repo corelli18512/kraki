@@ -3,13 +3,20 @@
 ///
 /// Layout: one liquid-glass card containing
 ///   ① Optional pending action row (permission buttons / question choices)
-///   ② Input zone: text field OR WeChat/Doubao-style "Hold to Talk" pill
-///   ③ Bottom toolbar: voice toggle, image attach, mode picker, send/stop
+///   ② Input row: voice toggle (left) + text field OR hold-to-talk pill
+///   ③ Optional expanded mode picker (its own row when expanded)
+///   ④ Bottom toolbar: image attach, collapsed mode pill, send/stop
 ///
-/// Voice mode swaps the text field for a press-and-hold button. Holding
-/// starts on-device transcription via SpeechRecognizer. Drag-up while
-/// holding arms cancellation. Release with text fills the draft and
-/// auto-switches back to text mode for review/send.
+/// The mic toggle lives inline at the leading edge of the input row so it
+/// stays right next to the typing cursor (WeChat/Doubao style). Tapping it
+/// swaps the text field for a press-and-hold "Hold to Talk" pill that drives
+/// on-device transcription via SpeechRecognizer. Drag-up while holding arms
+/// cancellation. Release with text fills the draft and auto-switches back to
+/// text mode for review/send.
+///
+/// The mode picker's expanded segmented control is too wide to share a row
+/// with the image-attach + send buttons, so when expanded it flows onto its
+/// own dedicated row above the bottom toolbar.
 
 import SwiftUI
 import PhotosUI
@@ -32,6 +39,11 @@ struct MessageInputView: View {
     @State private var isPressing = false
     @State private var cancelArmed = false
 
+    // Mode picker expansion is lifted here so the expanded picker can flow
+    // onto its own row inside the compose card (it's too wide to share a
+    // row with the image-attach + send buttons).
+    @State private var modePickerExpanded = false
+
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
     private var sessionActive: Bool { session?.state == .active }
@@ -51,7 +63,7 @@ struct MessageInputView: View {
     var body: some View {
         composeCard
             .padding(.horizontal, 12)
-            .padding(.bottom, max(12, safeBottom))
+            .padding(.bottom, 12)
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -80,31 +92,47 @@ struct MessageInputView: View {
                 questionChoicesRow(q, choices: choices)
             }
 
-            // ② Input zone
-            if voiceMode {
-                holdToTalkPill
-            } else {
-                textFieldForMode
+            // ② Input zone (mic toggle + text field, OR hold-to-talk pill)
+            inputRow
+
+            // ③ Expanded mode picker on its own row (too wide for bottom toolbar)
+            if canShowModePicker && modePickerExpanded {
+                ModePickerView(sessionId: sessionId, expanded: $modePickerExpanded)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            // ③ Bottom toolbar
+            // ④ Bottom toolbar
             bottomToolbar
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .modifier(ComposeCardGlassModifier())
+        .animation(.easeInOut(duration: 0.2), value: modePickerExpanded)
+    }
+
+    // MARK: - Input Row (mic toggle + text field / hold-to-talk pill)
+
+    private var inputRow: some View {
+        HStack(spacing: 4) {
+            if canShowVoiceToggle {
+                voiceToggleButton
+            }
+            if voiceMode {
+                holdToTalkPill
+            } else {
+                textFieldForMode
+            }
+        }
     }
 
     // MARK: - Bottom Toolbar
 
     private var bottomToolbar: some View {
         HStack(spacing: 8) {
-            if canShowVoiceToggle {
-                voiceToggleButton
-            }
             imageAttachButton
-            if canShowModePicker {
-                ModePickerView(sessionId: sessionId)
+            if canShowModePicker && !modePickerExpanded {
+                ModePickerView(sessionId: sessionId, expanded: $modePickerExpanded)
             }
             Spacer(minLength: 0)
             if !voiceMode {
@@ -114,7 +142,7 @@ struct MessageInputView: View {
         .animation(.easeInOut(duration: 0.2), value: voiceMode)
     }
 
-    // MARK: - Voice Toggle
+    // MARK: - Voice Toggle (lives inside the input row, leading edge)
 
     private var voiceToggleButton: some View {
         Button {
@@ -124,10 +152,10 @@ struct MessageInputView: View {
             }
         } label: {
             Image(systemName: voiceMode ? "keyboard" : "mic.fill")
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 36, height: 36)
-                .modifier(GlassCircleModifier())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -287,6 +315,8 @@ struct MessageInputView: View {
                 LucideIcon(.imagePlus, size: 18, color: .secondary)
                     .frame(width: 36, height: 36)
                     .modifier(GlassCircleModifier())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
         }
         .disabled(!isIdle)
@@ -516,14 +546,6 @@ struct MessageInputView: View {
         } else if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
             imageData = compressed; imageMimeType = "image/jpeg"
         }
-    }
-
-    // MARK: - Helpers
-
-    private var safeBottom: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .first ?? 0
     }
 }
 
