@@ -268,13 +268,18 @@ struct ChatView: View {
             userBubbleFrames = newFrames
             checkLockTransition(proxy: proxy)
         }
-        .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
+        .onChange(of: lastUserMessage?.seq ?? 0) { old, newSeq in
+            KLog.d("📜 R1 onChange(lastUserSeq) old=\(old) → new=\(newSeq)")
             handleNewUserMessage(proxy: proxy, seq: newSeq)
         }
-        .onChange(of: filteredMessages.count) { _, _ in
+        .onChange(of: filteredMessages.count) { _, n in
+            KLog.d("📜 R1 onChange(msgCount)=\(n) mode=\(String(describing: growMode))")
             checkLockTransition(proxy: proxy)
         }
-        .onChange(of: streaming) { _, _ in
+        .onChange(of: streaming) { _, s in
+            if growMode == .followBottom {
+                KLog.d("📜 R1 onChange(streaming) len=\(s?.count ?? 0)")
+            }
             checkLockTransition(proxy: proxy)
         }
         .onChange(of: sessionIdle) { _, idle in
@@ -482,41 +487,37 @@ struct ChatView: View {
     /// identifies a freshly-sent user message (vs. backfill or session
     /// switch, which don't increase past baseline).
     private func handleNewUserMessage(proxy: ScrollViewProxy, seq: Int) {
-        guard didInitialScroll, seq > lockedUserSeq else { return }
-        guard let msg = lastUserMessage else { return }
+        let msgId = lastUserMessage?.id ?? "nil"
+        KLog.d("📜 R1 newUserSeq=\(seq) baseline=\(lockedUserSeq) didInitial=\(didInitialScroll) msg=\(msgId.prefix(20))")
+        guard didInitialScroll, seq > lockedUserSeq else {
+            KLog.d("📜 R1 → skip (gate failed)")
+            return
+        }
+        guard let msg = lastUserMessage else {
+            KLog.d("📜 R1 → skip (no lastUserMessage)")
+            return
+        }
         lockedUserSeq = seq
         lockedMsgId = msg.id
         growMode = .followBottom
-        // Explicit initial scroll: get the new user bubble fully into the
-        // viewport and pin the bottom edge. Subsequent streaming growth
-        // keeps the bottom pinned via checkLockTransition.
+        KLog.d("📜 R1 → ENTER followBottom, scrollTo chat-bottom")
         proxy.scrollTo("chat-bottom", anchor: .bottom)
     }
 
-    /// Drives R1's follow-bottom and lock-at-top behavior on every
-    /// layout tick (preference change, scroll geometry change, message
-    /// count change, streaming text change).
-    ///
-    /// While in .followBottom: explicitly pin the scroll position to the
-    /// "chat-bottom" sentinel so streaming-driven content growth visually
-    /// drifts the locked user bubble up the viewport (instead of being
-    /// appended below an unmoving scroll offset).
-    ///
-    /// Once the locked user bubble's content-space top has reached the
-    /// viewport top, snap it to the top edge once and switch to
-    /// .lockedAtTop. From there we stop auto-scrolling — further reply
-    /// growth extends below the viewport instead of pushing the bubble off.
     private func checkLockTransition(proxy: ScrollViewProxy) {
         guard growMode == .followBottom else { return }
 
-        // Pin the bottom edge as content grows. Idempotent when already
-        // at the bottom, so safe to call on every tick.
         proxy.scrollTo("chat-bottom", anchor: .bottom)
 
         guard let mid = lockedMsgId,
-              let frame = userBubbleFrames[mid] else { return }
+              let frame = userBubbleFrames[mid] else {
+            KLog.d("📜 R1 tick: scroll→bottom (no frame yet, mid=\(lockedMsgId?.prefix(20) ?? "nil"))")
+            return
+        }
         let topInViewport = frame.minY - scrollOffsetY
+        KLog.d("📜 R1 tick: scroll→bottom, frameY=\(Int(frame.minY)) offsetY=\(Int(scrollOffsetY)) topInVP=\(Int(topInViewport))")
         if topInViewport <= 0 {
+            KLog.d("📜 R1 → LOCK at top")
             proxy.scrollTo(userScrollId(forMsgId: mid), anchor: .top)
             growMode = .lockedAtTop
         }
