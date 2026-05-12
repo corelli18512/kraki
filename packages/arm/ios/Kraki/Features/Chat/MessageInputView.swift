@@ -1,7 +1,8 @@
 #if os(iOS)
-/// MessageInputView — Compose card with text + voice modes.
+/// MessageInputView — Edge-to-edge bottom bar with text + voice modes.
 ///
-/// Layout: one liquid-glass card containing
+/// Layout: a single full-width liquid-glass surface that rounds only the
+/// top corners and extends through the home-indicator safe area, containing
 ///   ① Optional pending action row (permission buttons / question choices)
 ///   ② Input row: voice toggle (left) + text field OR hold-to-talk pill
 ///   ③ Optional expanded mode picker (its own row when expanded)
@@ -62,8 +63,6 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12 - safeBottom)
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -92,7 +91,7 @@ struct MessageInputView: View {
                 questionChoicesRow(q, choices: choices)
             }
 
-            // ② Input zone (mic toggle + text field, OR hold-to-talk pill)
+            // ② Input row (mic toggle + text field, OR hold-to-talk pill)
             inputRow
 
             // ③ Expanded mode picker on its own row (too wide for bottom toolbar)
@@ -105,8 +104,10 @@ struct MessageInputView: View {
             // ④ Bottom toolbar
             bottomToolbar
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, max(10, safeBottom))
+        .frame(maxWidth: .infinity)
         .modifier(ComposeCardGlassModifier())
         .animation(.easeInOut(duration: 0.2), value: modePickerExpanded)
     }
@@ -589,14 +590,31 @@ private struct WaveformBar: View {
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
 
+/// Edge-to-edge bottom bar of liquid glass: rounds only the top corners and
+/// extends through the home-indicator safe area. Pre-iOS 26 falls back to
+/// .ultraThinMaterial in the same shape.
 private struct ComposeCardGlassModifier: ViewModifier {
+    private static let topRadius: CGFloat = 22
+
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: Self.topRadius,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: Self.topRadius,
+            style: .continuous
+        )
+    }
+
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .glassEffect(.regular, in: shape)
+                .ignoresSafeArea(.container, edges: .bottom)
         } else {
             content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .background(.ultraThinMaterial, in: shape)
+                .ignoresSafeArea(.container, edges: .bottom)
         }
     }
 }
