@@ -351,29 +351,20 @@ struct ChatView: View {
     // scrolled above the viewport top. Re-uses the same frame tracers
     // that R1 populates.
     //
-    // Visibility depends on whether the candidate is the LATEST user
-    // message in the conversation (the active anchor for an in-flight
-    // reply) or an OLDER one (a chat-history landmark):
+    // ONE positional rule for every user bubble — latest or older,
+    // streaming or static, scroll up or scroll down:
     //
-    //   - LATEST candidate: hard binary — opacity 1 the moment the
-    //     bubble exits viewport top, 0 otherwise. This keeps the active
-    //     bubble from being trimmed by the nav bar during the
-    //     chat-bg → floating-foreground handoff, and keeps the
-    //     R1-LOCKED state clean (aboveAmount = 0 → opacity 0).
+    //   frame.minY >= scrollOffsetY  → pill 0, original 1 (bubble
+    //     is in or below the viewport, or pinned at the top by R1)
+    //   frame.minY <  scrollOffsetY  → pill 1, original 0 (the
+    //     instant the bubble's top crosses above the viewport top
+    //     the pill takes over and the original disappears)
     //
-    //   - OLDER candidate: distance-driven cross-fade so the original
-    //     can take over smoothly when the user scrolls back through
-    //     history. Tied to `aboveAmount`:
-    //       aboveAmount <= stickyFadeStart  → opacity 0 (original wins)
-    //       in (stickyFadeStart, stickyFadeEnd) → linear ramp
-    //       aboveAmount >= stickyFadeEnd  → opacity 1 (pill wins)
+    // Candidate switches (latest ↔ older) become pure content swaps
+    // in the pill — no rule change, no direction-dependent feel.
 
     /// Outer margin around the sticky overlay.
     fileprivate static let stickyMargin: CGFloat = 8
-    /// Older-candidate fade window starts here (pill below this is hidden).
-    fileprivate static let stickyFadeStart: CGFloat = 80
-    /// Older-candidate fade window ends here (pill above this is full).
-    fileprivate static let stickyFadeEnd: CGFloat = 160
 
     /// User messages currently at-or-above the viewport top, ordered
     /// ascending by content y. The sticky candidate is the LAST element
@@ -399,19 +390,14 @@ struct ChatView: View {
         stickyAboveCandidates.last
     }
 
-    /// Sticky pill opacity. Hard binary for the latest user message
-    /// (active anchor — must not be trimmed by the nav bar during
-    /// transition); distance-driven cross-fade for older candidates so
-    /// the original takes back over smoothly during scroll-back.
+    /// Sticky pill opacity. Hard binary on a single positional rule:
+    /// the pill takes over the instant the candidate's frame top
+    /// crosses above the viewport top, and yields the moment it
+    /// crosses back. Same rule for every user bubble.
     private var stickyOpacity: Double {
         guard let candidate = stickyCandidate,
               let frame = userBubbleFrames[candidate.id] else { return 0 }
-        let aboveAmount = scrollOffsetY - frame.minY
-        if aboveAmount <= 0 { return 0 }
-        if candidate.id == lastUserMessage?.id { return 1 }
-        let span = Self.stickyFadeEnd - Self.stickyFadeStart
-        let progress = (aboveAmount - Self.stickyFadeStart) / span
-        return Double(max(0, min(1, progress)))
+        return frame.minY < scrollOffsetY ? 1 : 0
     }
 
     @ViewBuilder
