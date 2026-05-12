@@ -1,12 +1,15 @@
 #if os(iOS)
-/// MessageInputView — Exact match of web MessageInput.tsx.
+/// MessageInputView — Compose card with text + voice modes.
 ///
-/// Two rows:
-///   Row 1: image attach (left) + mode picker (right)
-///   Row 2: rounded TextField + send/stop button (36×36, kraki coral)
+/// Layout: one liquid-glass card containing
+///   ① Optional pending action row (permission buttons / question choices)
+///   ② Input zone: text field OR WeChat/Doubao-style "Hold to Talk" pill
+///   ③ Bottom toolbar: voice toggle, image attach, mode picker, send/stop
 ///
-/// awaitingActive state prevents flicker after send.
-/// Gradient fade above for seamless chat transition.
+/// Voice mode swaps the text field for a press-and-hold button. Holding
+/// starts on-device transcription via SpeechRecognizer. Drag-up while
+/// holding arms cancellation. Release with text fills the draft and
+/// auto-switches back to text mode for review/send.
 
 import SwiftUI
 import PhotosUI
@@ -23,6 +26,12 @@ struct MessageInputView: View {
     @State private var awaitingActive = false
     @FocusState private var isFocused: Bool
 
+    // Voice
+    @State private var speech = SpeechRecognizer()
+    @State private var voiceMode = false
+    @State private var isPressing = false
+    @State private var cancelArmed = false
+
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
     private var sessionActive: Bool { session?.state == .active }
@@ -32,42 +41,242 @@ struct MessageInputView: View {
     private var hasImage: Bool { imageData != nil }
     private var canSend: Bool { isIdle && (hasText || hasImage) }
 
+    /// Voice toggle is hidden in permission flows (responses are structured,
+    /// not freeform speech).
+    private var canShowVoiceToggle: Bool { pendingPermission == nil }
+
+    /// Mode picker only makes sense in normal compose state.
+    private var canShowModePicker: Bool { pendingPermission == nil && pendingQuestion == nil }
+
     var body: some View {
-        VStack(spacing: 8) {
-            // Top row: context-dependent
-            if let permission = pendingPermission {
-                // Permission: 3 action buttons
-                permissionActionRow(permission)
-                    .padding(.horizontal, 12)
-            } else if let question = pendingQuestion, let choices = question.choices, !choices.isEmpty {
-                // Question: choice buttons stacked
-                questionChoicesRow(question, choices: choices)
-                    .padding(.horizontal, 12)
-            } else {
-                // Normal: image attach + mode picker
-                HStack {
-                    imageAttachButton
-                    Spacer()
-                    ModePickerView(sessionId: sessionId)
+        composeCard
+            .padding(.horizontal, 12)
+            .padding(.bottom, max(12, safeBottom))
+            .overlay(alignment: .top) {
+                if isPressing {
+                    recordingOverlay
+                        .offset(y: -96)
+                        .transition(.scale.combined(with: .opacity))
                 }
-                .padding(.horizontal, 12)
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isPressing)
+            .onChange(of: sessionActive) { _, active in
+                if active { awaitingActive = false }
+            }
+            .onChange(of: selectedPhoto) { _, newItem in
+                Task { await loadPhoto(newItem) }
+            }
+    }
+
+    // MARK: - Compose Card
+
+    @ViewBuilder
+    private var composeCard: some View {
+        VStack(spacing: 8) {
+            // ① Pending action row (permission / question)
+            if let perm = pendingPermission {
+                permissionActionRow(perm)
+            } else if let q = pendingQuestion, let choices = q.choices, !choices.isEmpty {
+                questionChoicesRow(q, choices: choices)
             }
 
-            // Bottom row: text input + send/action
-            HStack(alignment: .bottom, spacing: 8) {
+            // ② Input zone
+            if voiceMode {
+                holdToTalkPill
+            } else {
                 textFieldForMode
+            }
+
+            // ③ Bottom toolbar
+            bottomToolbar
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(composeCardBackground)
+    }
+
+    @ViewBuilder
+    private var composeCardBackground: some View {
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.regularMaterial.opacity(0.6))
+        } else {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.regularMaterial)
+        }
+    }
+
+    // MARK: - Bottom Toolbar
+
+    private var bottomToolbar: some View {
+        HStack(spacing: 8) {
+            if canShowVoiceToggle {
+                voiceToggleButton
+            }
+            imageAttachButton
+            if canShowModePicker {
+                ModePickerView(sessionId: sessionId)
+            }
+            Spacer(minLength: 0)
+            if !voiceMode {
                 actionButtonForMode
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, max(12, UIApplication.shared.connectedScenes
-                .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-                .first ?? 0))
         }
-        .onChange(of: sessionActive) { _, active in
-            if active { awaitingActive = false }
+        .animation(.easeInOut(duration: 0.2), value: voiceMode)
+    }
+
+    // MARK: - Voice Toggle
+
+    private var voiceToggleButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                voiceMode.toggle()
+                if voiceMode { isFocused = false }
+            }
+        } label: {
+            Image(systemName: voiceMode ? "keyboard" : "mic.fill")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .modifier(GlassCircleModifier())
         }
-        .onChange(of: selectedPhoto) { _, newItem in
-            Task { await loadPhoto(newItem) }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Hold to Talk Pill
+
+    private var holdToTalkPill: some View {
+        let activeTint: Color = cancelArmed ? .red : .krakiPrimary
+        let label: String = isPressing
+            ? (cancelArmed ? "Release to cancel" : "Recording…")
+            : "Hold to Talk"
+        let icon: String = isPressing
+            ? (cancelArmed ? "xmark.circle.fill" : "waveform")
+            : "mic.fill"
+
+        return HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+            Text(label)
+                .font(.subheadline)
+        }
+        .foregroundStyle(isPressing ? activeTint : .secondary)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(holdToTalkPillBackground(tint: activeTint))
+        .scaleEffect(isPressing ? 0.98 : 1)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isPressing)
+        .animation(.easeInOut(duration: 0.15), value: cancelArmed)
+        .gesture(holdToTalkGesture)
+    }
+
+    @ViewBuilder
+    private func holdToTalkPillBackground(tint: Color) -> some View {
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(isPressing ? tint.opacity(0.18) : Color.clear)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(.regularMaterial.opacity(0.7))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke((isPressing ? tint : .secondary).opacity(0.25), lineWidth: 1)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(isPressing ? tint.opacity(0.18) : Color(.tertiarySystemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke((isPressing ? tint : .secondary).opacity(0.25), lineWidth: 1)
+                )
+        }
+    }
+
+    private var holdToTalkGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if !isPressing {
+                    isPressing = true
+                    cancelArmed = false
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    speech.startRecording()
+                }
+                cancelArmed = value.translation.height < -60
+            }
+            .onEnded { _ in
+                speech.stopRecording()
+                let cancelled = cancelArmed
+                // Brief delay so the recognizer can flush its final partial.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(180))
+                    if !cancelled {
+                        let captured = speech.transcript
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !captured.isEmpty {
+                            let prior = text
+                            let merged = prior.isEmpty ? captured : (prior + " " + captured)
+                            sessionStore.setDraft(sessionId, merged)
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                voiceMode = false
+                            }
+                        }
+                    }
+                    isPressing = false
+                    cancelArmed = false
+                }
+            }
+    }
+
+    // MARK: - Recording Overlay
+
+    private var recordingOverlay: some View {
+        VStack(spacing: 8) {
+            // Animated bars
+            HStack(spacing: 4) {
+                ForEach(0..<9, id: \.self) { i in
+                    WaveformBar(index: i, color: cancelArmed ? .red : .krakiPrimary)
+                }
+            }
+            .frame(height: 28)
+
+            if cancelArmed {
+                Text("Release to cancel")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Text(speech.transcript.isEmpty ? "Listening…" : speech.transcript)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .frame(maxWidth: 240)
+
+                Text("Slide up ↑ to cancel")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(recordingOverlayBackground)
+        .shadow(color: .black.opacity(0.15), radius: 14, y: 4)
+    }
+
+    @ViewBuilder
+    private var recordingOverlayBackground: some View {
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.regularMaterial)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.clear)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                )
+        } else {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.ultraThickMaterial)
         }
     }
 
@@ -97,15 +306,9 @@ struct MessageInputView: View {
                     .offset(x: 4, y: -4)
                 }
             } else {
-                if #available(iOS 26.0, *) {
-                    LucideIcon(.imagePlus, size: 18, color: .secondary)
-                        .frame(width: 36, height: 36)
-                        .glassEffect(.regular)
-                } else {
-                    LucideIcon(.imagePlus, size: 18, color: .secondary)
-                        .frame(width: 36, height: 36)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
+                LucideIcon(.imagePlus, size: 18, color: .secondary)
+                    .frame(width: 36, height: 36)
+                    .modifier(GlassCircleModifier())
             }
         }
         .disabled(!isIdle)
@@ -132,9 +335,8 @@ struct MessageInputView: View {
         .lineLimit(1...6)
         .textFieldStyle(.plain)
         .font(.system(size: 16))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .modifier(GlassTextFieldModifier())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .focused($isFocused)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.6)
@@ -147,7 +349,6 @@ struct MessageInputView: View {
     @ViewBuilder
     private var actionButtonForMode: some View {
         if pendingPermission != nil {
-            // Deny with reason — only active when text is non-empty
             Button { handlePermissionDenyWithReason() } label: {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 14, weight: .bold))
@@ -160,7 +361,6 @@ struct MessageInputView: View {
             }
             .disabled(!hasText)
         } else if pendingQuestion != nil {
-            // Submit freeform answer
             Button { handleQuestionAnswer() } label: {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 14, weight: .bold))
@@ -339,6 +539,38 @@ struct MessageInputView: View {
             imageData = compressed; imageMimeType = "image/jpeg"
         }
     }
+
+    // MARK: - Helpers
+
+    private var safeBottom: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first ?? 0
+    }
+}
+
+// MARK: - Waveform Bar (recording overlay)
+
+private struct WaveformBar: View {
+    let index: Int
+    let color: Color
+    @State private var phase: CGFloat = 0.4
+
+    var body: some View {
+        Capsule()
+            .fill(color)
+            .frame(width: 3, height: 6 + phase * 22)
+            .onAppear {
+                let delay = Double(index) * 0.08
+                withAnimation(
+                    .easeInOut(duration: 0.45)
+                        .repeatForever(autoreverses: true)
+                        .delay(delay)
+                ) {
+                    phase = 1.0
+                }
+            }
+    }
 }
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
@@ -349,6 +581,16 @@ private struct GlassTextFieldModifier: ViewModifier {
             content.glassEffect(.regular)
         } else {
             content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+}
+
+private struct GlassCircleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Circle())
+        } else {
+            content.background(.ultraThinMaterial, in: Circle())
         }
     }
 }
