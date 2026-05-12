@@ -141,7 +141,6 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let _ = KLog.d("🖥️ ChatView render: \(filteredMessages.count) msgs, \(grouped.count) groups, session=\(sessionId.prefix(12)), isOnline=\(isDeviceOnline)")
         ScrollViewReader { proxy in
             scrollableMessages(proxy: proxy)
                 .overlay(alignment: .top) {
@@ -242,11 +241,11 @@ struct ChatView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 16)
+            .coordinateSpace(name: "chat")
         }
         .scrollDismissesKeyboard(.interactively)
         .scrollIndicators(.hidden)
         .defaultScrollAnchor(currentScrollAnchor)
-        .coordinateSpace(name: "chat")
         .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
             ChatScrollMetrics(
                 offsetY: geo.contentOffset.y + geo.contentInsets.top,
@@ -265,21 +264,32 @@ struct ChatView: View {
             }
         }
         .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
-            userBubbleFrames = newFrames
+            // Merge: LazyVStack destroys the GeometryReader for recycled
+            // (off-screen) rows, so `newFrames` only contains currently
+            // realized cells. Replacing the dictionary would wipe the
+            // positions of bubbles that have scrolled out of view —
+            // exactly when R2 needs them. Instead we merge: update
+            // entries with fresh non-empty frames, but never drop an
+            // entry just because its row was recycled. Stale entries
+            // are pruned explicitly on session change / message-list
+            // changes.
+            var merged = userBubbleFrames
+            for (id, frame) in newFrames where frame.height > 0 {
+                merged[id] = frame
+            }
+            userBubbleFrames = merged
             checkLockTransition(proxy: proxy)
         }
-        .onChange(of: lastUserMessage?.seq ?? 0) { old, newSeq in
-            KLog.d("📜 R1 onChange(lastUserSeq) old=\(old) → new=\(newSeq)")
+        .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
             handleNewUserMessage(proxy: proxy, seq: newSeq)
         }
-        .onChange(of: filteredMessages.count) { _, n in
-            KLog.d("📜 R1 onChange(msgCount)=\(n) mode=\(String(describing: growMode))")
+        .onChange(of: filteredMessages.count) { _, _ in
+            // Prune cached frames for messages that no longer exist.
+            let liveIds = Set(filteredMessages.map(\.id))
+            userBubbleFrames = userBubbleFrames.filter { liveIds.contains($0.key) }
             checkLockTransition(proxy: proxy)
         }
-        .onChange(of: streaming) { _, s in
-            if growMode == .followBottom {
-                KLog.d("📜 R1 onChange(streaming) len=\(s?.count ?? 0)")
-            }
+        .onChange(of: streaming) { _, _ in
             checkLockTransition(proxy: proxy)
         }
         .onChange(of: sessionIdle) { _, idle in
@@ -449,8 +459,17 @@ struct ChatView: View {
         lockedUserSeq = lastUserMessage?.seq ?? 0
 
         // Snapshot unread BEFORE any await so SessionDetailView's deferred
-        // markRead can't race ahead of us.
-        let wasUnread = (sessionStore.unreadCounts[sessionId] ?? 0) > 0
+        // markRead can't race ahead of us. Prefer SessionDetailView's
+        // synchronous capture (entryUnreadSnapshots) over the live count,
+        // since markRead's MainActor Task is scheduled FIFO ahead of this
+        // .task body and would otherwise have already cleared the count.
+        let wasUnread: Bool = {
+            if let snap = sessionStore.entryUnreadSnapshots[sessionId] {
+                sessionStore.entryUnreadSnapshots.removeValue(forKey: sessionId)
+                return snap
+            }
+            return (sessionStore.unreadCounts[sessionId] ?? 0) > 0
+        }()
 
         // Wait for messages + initial layout. We poll briefly because the
         // first non-empty render may arrive after this task starts.
@@ -487,20 +506,14 @@ struct ChatView: View {
     /// identifies a freshly-sent user message (vs. backfill or session
     /// switch, which don't increase past baseline).
     private func handleNewUserMessage(proxy: ScrollViewProxy, seq: Int) {
-        let msgId = lastUserMessage?.id ?? "nil"
-        KLog.d("📜 R1 newUserSeq=\(seq) baseline=\(lockedUserSeq) didInitial=\(didInitialScroll) msg=\(msgId.prefix(20))")
-        guard didInitialScroll, seq > lockedUserSeq else {
-            KLog.d("📜 R1 → skip (gate failed)")
-            return
-        }
-        guard let msg = lastUserMessage else {
-            KLog.d("📜 R1 → skip (no lastUserMessage)")
-            return
-        }
+        guard didInitialScroll, seq > lockedUserSeq else { return }
+        guard let msg = lastUserMessage else { return }
         lockedUserSeq = seq
         lockedMsgId = msg.id
         growMode = .followBottom
-        KLog.d("📜 R1 → ENTER followBottom, scrollTo chat-bottom")
+        // Drop any stale GeometryReader sample so checkLockTransition
+        // waits for a real, post-layout frame before deciding to lock.
+        userBubbleFrames.removeValue(forKey: msg.id)
         proxy.scrollTo("chat-bottom", anchor: .bottom)
     }
 
@@ -511,13 +524,15 @@ struct ChatView: View {
 
         guard let mid = lockedMsgId,
               let frame = userBubbleFrames[mid] else {
-            KLog.d("📜 R1 tick: scroll→bottom (no frame yet, mid=\(lockedMsgId?.prefix(20) ?? "nil"))")
             return
         }
+        // Ignore pre-layout / uninitialized GeometryReader samples. A real
+        // user bubble always has a positive height once SwiftUI has placed
+        // it; before that, minY can be a small negative sentinel which
+        // would falsely satisfy the "reached top" condition below.
+        guard frame.height > 0 else { return }
         let topInViewport = frame.minY - scrollOffsetY
-        KLog.d("📜 R1 tick: scroll→bottom, frameY=\(Int(frame.minY)) offsetY=\(Int(scrollOffsetY)) topInVP=\(Int(topInViewport))")
         if topInViewport <= 0 {
-            KLog.d("📜 R1 → LOCK at top")
             proxy.scrollTo(userScrollId(forMsgId: mid), anchor: .top)
             growMode = .lockedAtTop
         }
