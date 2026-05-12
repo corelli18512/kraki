@@ -2,8 +2,7 @@
 /// SessionDetailView — Main session view container.
 ///
 /// Mirrors SessionPage.tsx:
-/// - Toolbar with avatar, title, model/agent subtitle
-/// - Offline label + reconnecting spinner in toolbar
+/// - Toolbar with title only
 /// - Content: ChatView
 /// - Lifecycle: set/clear activeSessionId, mark read on appear/foreground
 
@@ -18,24 +17,9 @@ struct SessionDetailView: View {
     @State private var showInfoSheet = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
-    private var deviceStore: DeviceStore { appState.deviceStore }
 
     private var session: SessionInfo? {
         sessionStore.sessions[sessionId]
-    }
-
-    private var device: DeviceSummary? {
-        guard let session else { return nil }
-        return deviceStore.devices[session.deviceId]
-    }
-
-    private var isDeviceOnline: Bool {
-        device?.online ?? false
-    }
-
-    private var isReconnecting: Bool {
-        let status = appState.connectionStatus
-        return (status == .disconnected || status == .connecting) && appState.reconnectAttempt > 0
     }
 
     var body: some View {
@@ -99,62 +83,13 @@ struct SessionDetailView: View {
     // MARK: - Toolbar Title
 
     private func toolbarTitle(_ session: SessionInfo) -> some View {
-        let info = AgentInfo.from(session.agent)
         let displayTitle = session.displayTitle
 
-        return VStack(alignment: .leading, spacing: 0) {
-            Text(displayTitle)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .lineLimit(1)
-
-            subtitleRow(session, info: info)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func subtitleRow(_ session: SessionInfo, info: AgentInfo) -> some View {
-        HStack(spacing: 4) {
-            if session.title != nil || session.autoTitle != nil {
-                Text(info.label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if let model = session.model {
-                    Text("·")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(model)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            } else if let model = session.model {
-                Text(model)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            if !isDeviceOnline {
-                Text("offline")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-            }
-
-            if let name = session.deviceName.isEmpty ? nil : session.deviceName {
-                Text("·")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(name)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
+        return Text(displayTitle)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Not Found
