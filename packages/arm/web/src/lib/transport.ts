@@ -10,7 +10,13 @@ const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://kraki.corelli.cloud'
 const RECONNECT_BASE = 1000;
 const RECONNECT_MAX = 30000;
 const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
-const PING_INTERVAL = 25000;
+/** Application-level ping interval. Tightened from 25s to 10s so that
+ *  ack flow during read-only viewing keeps the head→arm in-flight buffer
+ *  small and bounds delivery recovery latency. */
+const PING_INTERVAL = 10_000;
+/** Max recent inbound relaySeqs tracked for dedup. Anything older than this
+ *  window would have been processed long ago. */
+const RELAY_SEQ_DEDUP_WINDOW = 200;
 export const STORAGE_KEY = 'kraki_device';
 
 export interface StoredDevice {
@@ -129,6 +135,14 @@ export class KrakiTransport {
   private callbacks: TransportCallbacks;
   private authenticated = false;
 
+  // ── Delivery assurance state ──────────────────────────────
+  /** Highest relaySeq received from head on this connection. Echoed back as
+   *  `ack` on every outbound message so head can prune its in-flight buffer. */
+  private lastReceivedRelaySeq = 0;
+  /** Recent relaySeqs we've already processed — used to drop duplicate retries
+   *  from head silently. Bounded; cleared on reconnect. */
+  private seenRelaySeqs = new Set<number>();
+
   get url(): string { return this._url; }
 
   isConnected(): boolean {
@@ -191,6 +205,11 @@ export class KrakiTransport {
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as Message;
+        // Track inbound relaySeq for ack piggybacking. Drop duplicates so
+        // retries from head don't re-trigger handlers.
+        if (this.trackInboundRelaySeq(msg as Record<string, unknown>)) {
+          return;
+        }
         this.callbacks.onParsedMessage(msg);
       } catch (err) {
         logger.warn('Malformed WS message:', event.data, err);
@@ -240,11 +259,13 @@ export class KrakiTransport {
 
   send(msg: Record<string, unknown>) {
     if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
-      this.ws.send(JSON.stringify(msg));
+      this.ws.send(JSON.stringify(this.withAck(msg)));
     }
   }
 
-  /** Send without auth gate — used only for auth handshake messages. */
+  /** Send without auth gate — used only for auth handshake messages.
+   *  Auth handshake messages don't carry ack (we haven't received anything
+   *  trackable yet). */
   sendRaw(msg: Record<string, unknown>) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
@@ -255,8 +276,38 @@ export class KrakiTransport {
     this.authenticated = value;
   }
 
+  /** Inject cumulative ack into any outbound message. Piggybacks on existing
+   *  traffic so we never send a dedicated ack message. */
+  private withAck(msg: Record<string, unknown>): Record<string, unknown> {
+    if (this.lastReceivedRelaySeq <= 0) return msg;
+    return { ...msg, ack: this.lastReceivedRelaySeq };
+  }
+
+  /** Update inbound relaySeq tracking. Returns true if this is a duplicate
+   *  retry from head and should be silently dropped. */
+  private trackInboundRelaySeq(msg: Record<string, unknown>): boolean {
+    if (!('relaySeq' in msg)) return false;
+    const seq = msg.relaySeq;
+    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
+
+    if (this.seenRelaySeqs.has(seq)) {
+      return true;
+    }
+    // Bound the dedup window — drop oldest insertion when full.
+    if (this.seenRelaySeqs.size >= RELAY_SEQ_DEDUP_WINDOW) {
+      const iter = this.seenRelaySeqs.values().next();
+      if (!iter.done) this.seenRelaySeqs.delete(iter.value);
+    }
+    this.seenRelaySeqs.add(seq);
+    if (seq > this.lastReceivedRelaySeq) {
+      this.lastReceivedRelaySeq = seq;
+    }
+    return false;
+  }
+
   private startPing() {
     this.pingTimer = setInterval(() => {
+      // Send goes through withAck — head sees our cumulative ack on every ping.
       this.send({ type: 'ping' });
     }, PING_INTERVAL);
   }
@@ -279,6 +330,10 @@ export class KrakiTransport {
 
   private cleanup() {
     this.authenticated = false;
+    // Reset delivery assurance state — relaySeq is per-connection, so a new
+    // connection starts fresh on both sides.
+    this.lastReceivedRelaySeq = 0;
+    this.seenRelaySeqs.clear();
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;

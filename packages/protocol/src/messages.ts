@@ -11,14 +11,44 @@
 //
 // Inner messages (ProducerMessage / ConsumerMessage) are encrypted
 // inside the blob and only visible to endpoints after decryption.
+//
+// Transport-layer delivery tracking (relaySeq, ack) is a separate
+// per-hop, per-connection concern — see TransportAckFields below.
+// It does not interact with the per-session application seq inside
+// the encrypted blob.
 // ------------------------------------------------------------
 
 // ============================================================
 // Relay envelopes (visible to relay)
 // ============================================================
 
+/** Per-hop transport delivery tracking fields.
+ *
+ *  Stamped by the sender of each hop; mirrored back by the receiver
+ *  in its outbound `ack` field. Both fields are envelope-level, visible
+ *  to the relay, and independent of the encrypted payload's per-session
+ *  application seq.
+ *
+ *  Counters are per WebSocket direction (one for sender→receiver,
+ *  another for receiver→sender) and reset on every new connection.
+ *
+ *  Recipients that don't understand these fields can safely ignore them
+ *  (graceful degradation — head detects support via the `ack` field
+ *  appearing on incoming messages and only retries for capable peers).
+ */
+export interface TransportAckFields {
+  /** Strictly monotonic per WebSocket direction, assigned by the sender
+   *  just before send. Receiver dedups by this and reports the highest
+   *  contiguous value back via `ack`. */
+  relaySeq?: number;
+  /** Cumulative ack: "I have received all relaySeqs ≤ this number from
+   *  the peer on the other end of this WebSocket." Piggybacks on any
+   *  outbound message — no dedicated ack message exists. */
+  ack?: number;
+}
+
 /** App → specific tentacle. Relay reads `to` for routing. */
-export interface UnicastEnvelope {
+export interface UnicastEnvelope extends TransportAckFields {
   type: 'unicast';
   /** Target device ID */
   to: string;
@@ -31,7 +61,7 @@ export interface UnicastEnvelope {
 }
 
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
-export interface BroadcastEnvelope {
+export interface BroadcastEnvelope extends TransportAckFields {
   type: 'broadcast';
   /** Encrypted payload: base64(iv + ciphertext + tag) */
   blob: string;
@@ -51,6 +81,16 @@ export interface BlobPayload {
   blob: string;
   /** Per-recipient RSA-OAEP encrypted AES key (base64), keyed by deviceId */
   keys: Record<string, string>;
+}
+
+/** Ping / pong control messages carry `ack` to keep delivery acknowledgments
+ *  flowing during idle periods (no dedicated ack message exists). */
+export interface PingMessage extends TransportAckFields {
+  type: 'ping';
+}
+
+export interface PongMessage extends TransportAckFields {
+  type: 'pong';
 }
 
 // ============================================================

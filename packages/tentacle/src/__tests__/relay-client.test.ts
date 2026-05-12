@@ -476,3 +476,136 @@ describe('RelayClient set_session_model', () => {
     expect(readMsg.sessionId).toBe('sess_1');
   });
 });
+
+describe('RelayClient delivery assurance', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildAuthedClient() {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const km = createKeyManager();
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, km);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_t',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+    return { adapter, sm, client, ws: sockets[0] };
+  }
+
+  it('echoes ack in pong response with highest received relaySeq', () => {
+    const { ws } = buildAuthedClient();
+    ws.sent.length = 0;
+
+    // Head sends some tracked messages.
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'app-1', name: 'Phone', role: 'app', online: true },
+      relaySeq: 3,
+    })));
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'app-2', name: 'Phone2', role: 'app', online: true },
+      relaySeq: 5,
+    })));
+
+    // Head pings — tentacle responds with pong including cumulative ack.
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 6 })));
+
+    const sent = ws.sent.map(s => JSON.parse(s));
+    const pong = sent.find(m => m.type === 'pong');
+    expect(pong).toBeDefined();
+    expect(pong.ack).toBe(6); // ping advanced lastReceivedRelaySeq to 6
+  });
+
+  it('dedups duplicate inbound relaySeq from head', () => {
+    const { ws } = buildAuthedClient();
+
+    // device_joined for the same app, sent twice with same relaySeq (a retry).
+    const device = { id: 'app-1', name: 'Phone', role: 'app', encryptionKey: 'pub', online: true };
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device,
+      relaySeq: 1,
+    })));
+    const firstSendCount = ws.sent.length;
+
+    // Duplicate retry — should be silently dropped, no additional outbound effect.
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device,
+      relaySeq: 1,
+    })));
+
+    // No additional greeting/session_list cascade triggered by the duplicate.
+    expect(ws.sent.length).toBe(firstSendCount);
+  });
+
+  it('does not flip lastReceivedRelaySeq backward', () => {
+    const { ws } = buildAuthedClient();
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 10 })));
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 5 })));
+
+    // Pongs reflect highest seen — 10 from first, still 10 after the lower one.
+    const pongs = ws.sent.map(s => JSON.parse(s)).filter(m => m.type === 'pong');
+    expect(pongs.length).toBe(2);
+    expect(pongs[0].ack).toBe(10);
+    expect(pongs[1].ack).toBe(10);
+  });
+
+  it('handles inbound messages without relaySeq normally (old relay compat)', () => {
+    const { ws } = buildAuthedClient();
+
+    // Old-style ping with no relaySeq.
+    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping' })));
+
+    const sent = ws.sent.map(s => JSON.parse(s));
+    const pong = sent.find(m => m.type === 'pong');
+    expect(pong).toBeDefined();
+    expect(pong.ack).toBeUndefined(); // no relaySeq received, no ack to send
+  });
+
+  it('resets ack tracking after reconnect', () => {
+    const { ws, client } = buildAuthedClient();
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'app-1', name: 'Phone', role: 'app', online: true },
+      relaySeq: 7,
+    })));
+
+    // Disconnect and reconnect to a fresh socket.
+    ws.close();
+    client.connect();
+    const ws2 = sockets[1]!;
+    ws2.emit('open');
+    ws2.emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_t',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+    ws2.sent.length = 0;
+
+    ws2.emit('message', Buffer.from(JSON.stringify({ type: 'ping' })));
+
+    const pong = ws2.sent.map(s => JSON.parse(s)).find(m => m.type === 'pong');
+    expect(pong).toBeDefined();
+    expect(pong.ack).toBeUndefined(); // state cleared, no stale ack
+  });
+});

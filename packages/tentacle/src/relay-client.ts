@@ -96,6 +96,15 @@ export class RelayClient {
   /** How often to check for stale connection (ms) */
   private static readonly STALE_CHECK_INTERVAL = 10_000;
 
+  // ── Delivery assurance state (per-connection) ──────────────
+  /** Highest relaySeq received from head on this connection. Echoed back as
+   *  `ack` in outbound messages so head can prune its in-flight buffer. */
+  private lastReceivedRelaySeq = 0;
+  /** Recent relaySeqs already processed — used to silently drop duplicate
+   *  retries from head. Bounded; cleared on reconnect. */
+  private seenRelaySeqs = new Set<number>();
+  private static readonly RELAY_SEQ_DEDUP_WINDOW = 200;
+
   /** Called when relay state changes */
   onStateChange: ((state: RelayClientState) => void) | null = null;
   /** Called on auth success */
@@ -124,6 +133,10 @@ export class RelayClient {
     this.intentionalDisconnect = false;
     this.setState('connecting');
 
+    // Reset delivery-assurance state — relaySeq is per-connection.
+    this.lastReceivedRelaySeq = 0;
+    this.seenRelaySeqs.clear();
+
     const ws = new WebSocket(this.options.relayUrl);
     this.ws = ws;
 
@@ -144,6 +157,8 @@ export class RelayClient {
       this.lastActivityAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
+        // Dedup duplicate retries from head silently.
+        if (this.trackInboundRelaySeq(msg)) return;
         this.handleMessage(msg);
       } catch {
         // Ignore malformed messages from head
@@ -263,7 +278,9 @@ export class RelayClient {
 
     if (msg.type === 'ping') {
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'pong' }));
+        const pong: Record<string, unknown> = { type: 'pong' };
+        if (this.lastReceivedRelaySeq > 0) pong.ack = this.lastReceivedRelaySeq;
+        this.ws.send(JSON.stringify(pong));
       }
       return;
     }
@@ -1206,10 +1223,38 @@ export class RelayClient {
     }
 
     try {
-      this.ws.send(JSON.stringify(msg));
+      this.ws.send(JSON.stringify(this.withAck(msg as Record<string, unknown>)));
     } catch (err) {
       logger.error({ err }, 'ws.send failed');
     }
+  }
+
+  /** Inject cumulative ack into an outbound envelope. Piggybacks delivery
+   *  acknowledgments on existing traffic — no dedicated ack message. */
+  private withAck<T extends Record<string, unknown>>(msg: T): T {
+    if (this.lastReceivedRelaySeq <= 0) return msg;
+    return { ...msg, ack: this.lastReceivedRelaySeq };
+  }
+
+  /** Update inbound relaySeq tracking. Returns true if this is a duplicate
+   *  retry from head and should be silently dropped. */
+  private trackInboundRelaySeq(msg: Record<string, unknown>): boolean {
+    if (!('relaySeq' in msg)) return false;
+    const seq = msg.relaySeq;
+    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
+
+    if (this.seenRelaySeqs.has(seq)) {
+      return true;
+    }
+    if (this.seenRelaySeqs.size >= RelayClient.RELAY_SEQ_DEDUP_WINDOW) {
+      const iter = this.seenRelaySeqs.values().next();
+      if (!iter.done) this.seenRelaySeqs.delete(iter.value);
+    }
+    this.seenRelaySeqs.add(seq);
+    if (seq > this.lastReceivedRelaySeq) {
+      this.lastReceivedRelaySeq = seq;
+    }
+    return false;
   }
 
   /**
@@ -1260,7 +1305,7 @@ export class RelayClient {
         envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
       }
 
-      this.ws.send(JSON.stringify(envelope));
+      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
     }
@@ -1286,7 +1331,7 @@ export class RelayClient {
         keys,
       };
 
-      this.ws.send(JSON.stringify(envelope));
+      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Encrypted unicast failed');
     }
