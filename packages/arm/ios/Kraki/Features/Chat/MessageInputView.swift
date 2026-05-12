@@ -375,14 +375,18 @@ private struct GlassSendButtonModifier: ViewModifier {
 }
 
 /// Liquid-glass button style for choice rows (question options, permission
-/// actions). Falls back to `.bordered` on iOS < 26 so semantic tints still
-/// read correctly.
+/// actions). Uses the neutral translucent `.glass` material with the tint
+/// applied to the label content — matching the New Session button pattern —
+/// so the buttons read as glass pills rather than saturated solid fills.
+/// Falls back to `.bordered` on iOS < 26 so semantic tints still show.
 private struct GlassChoiceButtonModifier: ViewModifier {
     let tint: Color
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.buttonStyle(.glass(.regular.tint(tint)))
+            content
+                .buttonStyle(.glass)
+                .tint(tint)
         } else {
             content
                 .buttonStyle(.bordered)
