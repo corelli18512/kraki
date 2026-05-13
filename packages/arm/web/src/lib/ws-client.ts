@@ -87,6 +87,18 @@ export class KrakiWSClient {
     commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg), attachments);
   }
 
+  /**
+   * Request the bytes of an attachment from the tentacle that owns the session.
+   * Used by `useAttachment` when an `AttachmentRef` arrives via replay
+   * (rather than a live push) or when a push safety-timeout elapses.
+   */
+  requestAttachment(sessionId: string, attachmentId: string) {
+    this.sendEncrypted({
+      type: 'request_attachment',
+      payload: { id: attachmentId, sessionId },
+    });
+  }
+
   approve(permissionId: string, sessionId: string) {
     commands.approve(permissionId, sessionId, (msg) => this.sendEncrypted(msg));
   }

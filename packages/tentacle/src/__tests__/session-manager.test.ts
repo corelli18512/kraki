@@ -618,4 +618,91 @@ describe('SessionManager', () => {
       expect(entry!.preview!.text).toContain('I will run a command');
     });
   });
+
+  // ── Legacy inline-image strip migration ───────────────
+
+  describe('stripLegacyInlineImages migration', () => {
+    it('strips inline image attachments from tool_complete on startup', async () => {
+      const { sessionId } = sm.createSession('copilot');
+      const bigBase64 = 'a'.repeat(4096); // pretend image bytes
+      sm.appendMessage(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete',
+        sessionId,
+        payload: {
+          toolName: 'view',
+          result: 'Viewed image file successfully.',
+          attachments: [{ type: 'image', mimeType: 'image/png', data: bigBase64 }],
+        },
+      }));
+
+      // Confirm the inline bytes are in the on-disk log
+      const beforeMessages = sm.getMessagesAfterSeq(sessionId, 0);
+      expect(beforeMessages.length).toBeGreaterThan(0);
+      const beforeInner = JSON.parse(beforeMessages[0].payload) as { payload: { attachments?: unknown[] } };
+      expect(beforeInner.payload.attachments).toHaveLength(1);
+
+      // Reset the `inlineImagesStripped` flag so we can re-run the migration
+      const meta = sm.getMeta(sessionId)!;
+      meta.inlineImagesStripped = false;
+      sm['writeMeta'](sessionId, meta);
+
+      // Re-construct the manager — runs migration in constructor
+      // eslint-disable-next-line no-new
+      const sm2 = new SessionManager(dir);
+      const afterMessages = sm2.getMessagesAfterSeq(sessionId, 0);
+      const afterInner = JSON.parse(afterMessages[0].payload) as { payload: { attachments?: unknown[] } };
+      expect(afterInner.payload.attachments).toBeUndefined();
+
+      // Flag is set so re-migration is a no-op
+      expect(sm2.getMeta(sessionId)!.inlineImagesStripped).toBe(true);
+    });
+
+    it('leaves AttachmentRef attachments untouched', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete',
+        sessionId,
+        payload: {
+          toolName: 'kraki-show_image',
+          result: 'Image displayed to user.',
+          attachments: [{ type: 'image_ref', id: 'abc', mimeType: 'image/png', size: 100 }],
+        },
+      }));
+
+      const meta = sm.getMeta(sessionId)!;
+      meta.inlineImagesStripped = false;
+      sm['writeMeta'](sessionId, meta);
+
+      const sm2 = new SessionManager(dir);
+      const after = sm2.getMessagesAfterSeq(sessionId, 0);
+      const inner = JSON.parse(after[0].payload) as { payload: { attachments?: unknown[] } };
+      expect(inner.payload.attachments).toEqual([
+        { type: 'image_ref', id: 'abc', mimeType: 'image/png', size: 100 },
+      ]);
+    });
+
+    it('is idempotent — skips when inlineImagesStripped is already true', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete',
+        sessionId,
+        payload: {
+          toolName: 'view',
+          result: 'ok',
+          attachments: [{ type: 'image', mimeType: 'image/png', data: 'aaaa' }],
+        },
+      }));
+
+      // Mark already stripped (e.g. previously migrated)
+      const meta = sm.getMeta(sessionId)!;
+      meta.inlineImagesStripped = true;
+      sm['writeMeta'](sessionId, meta);
+
+      const sm2 = new SessionManager(dir);
+      const after = sm2.getMessagesAfterSeq(sessionId, 0);
+      const inner = JSON.parse(after[0].payload) as { payload: { attachments?: unknown[] } };
+      // Migration was skipped, so the inline attachment is still there
+      expect(inner.payload.attachments).toHaveLength(1);
+    });
+  });
 });

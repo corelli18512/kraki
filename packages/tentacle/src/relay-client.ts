@@ -72,6 +72,9 @@ export class RelayClient {
     'session_model_set',
     'session_pinned',
     'session_read',
+    // attachment_data carries raw bytes and is regeneratable from the
+    // AttachmentStore — never persisted into messages.jsonl.
+    'attachment_data',
   ]);
   /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
@@ -117,13 +120,23 @@ export class RelayClient {
     sessionManager: SessionManager,
     options: RelayClientOptions,
     keyManager?: KeyManager | null,
+    attachmentStore?: import('./attachment-store.js').AttachmentStore,
   ) {
     this.adapter = adapter;
     this.sessionManager = sessionManager;
     this.options = options;
     this.keyManager = keyManager ?? null;
+    this.attachmentStore = attachmentStore;
     this.wireAdapterEvents();
   }
+
+  private readonly attachmentStore?: import('./attachment-store.js').AttachmentStore;
+
+  /** Track attachment ids already broadcast per session — prevents double-push
+   *  if the agent calls show_image twice with the same image bytes. The
+   *  receiving devices still see the ref each time (so the chat history is
+   *  correct); they just don't get a redundant byte broadcast. */
+  private broadcastedAttachmentIds = new Map<string, Set<string>>();
 
   /**
    * Connect to the relay. Auto-reconnects on disconnect.
@@ -416,6 +429,13 @@ export class RelayClient {
     }
     if (msg.type === 'import_session') {
       this.handleImportSession(msg);
+      return;
+    }
+
+    if (msg.type === 'request_attachment') {
+      this.handleRequestAttachment(msg).catch((err) => {
+        logger.warn({ err, attachmentId: msg.payload?.id }, 'request_attachment failed');
+      });
       return;
     }
 
@@ -995,6 +1015,18 @@ export class RelayClient {
       });
     };
 
+    this.adapter.onAttachmentBytes = (sessionId, event) => {
+      // Fire-and-forget — chunks are streamed from disk and pushed via the
+      // normal broadcast queue. We deliberately don't block onToolComplete
+      // on chunk delivery; both events ride the same WS queue so ordering
+      // (ref-first, chunks-after) is preserved naturally.
+      for (const ref of event.refs) {
+        this.broadcastAttachmentBytes(sessionId, ref).catch((err) => {
+          logger.warn({ err, sessionId, attachmentId: ref.id }, 'failed to broadcast attachment bytes');
+        });
+      }
+    };
+
     this.adapter.onIdle = (sessionId) => {
       this.sessionManager.markIdle(sessionId);
       const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
@@ -1152,6 +1184,127 @@ export class RelayClient {
       },
     };
     this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  }
+
+  // ── Attachment bytes ────────────────────────────────
+
+  /** Plaintext chunk budget for `attachment_data` envelopes.
+   *  Stays under the relay's 10 MB frame cap after base64 + envelope. */
+  private static readonly ATTACHMENT_CHUNK_BYTES = 2 * 1024 * 1024;
+
+  /**
+   * Stream an attachment's bytes to all connected consumers as
+   * `attachment_data` chunks. Called immediately after the producer fires
+   * a `tool_complete` carrying the matching `AttachmentRef`. Skipped if
+   * we've already broadcast this id within the session.
+   */
+  private async broadcastAttachmentBytes(
+    sessionId: string,
+    ref: import('@kraki/protocol').AttachmentRef,
+  ): Promise<void> {
+    if (!this.attachmentStore) {
+      logger.warn({ sessionId, attachmentId: ref.id }, 'no attachment store — skipping broadcast');
+      return;
+    }
+    let seen = this.broadcastedAttachmentIds.get(sessionId);
+    if (!seen) {
+      seen = new Set();
+      this.broadcastedAttachmentIds.set(sessionId, seen);
+    }
+    if (seen.has(ref.id)) return;
+    seen.add(ref.id);
+
+    const total = Math.max(1, Math.ceil(ref.size / RelayClient.ATTACHMENT_CHUNK_BYTES));
+    let index = 0;
+    for (const chunk of this.attachmentStore.stream(sessionId, ref.id, RelayClient.ATTACHMENT_CHUNK_BYTES)) {
+      this.send({
+        type: 'attachment_data',
+        sessionId,
+        payload: {
+          id: ref.id,
+          index,
+          total,
+          mimeType: ref.mimeType,
+          data: chunk.toString('base64'),
+        },
+      });
+      index += 1;
+    }
+    if (index === 0) {
+      // The ref was emitted but bytes are no longer on disk — odd state, but
+      // notify consumers with a structured error so they don't sit on a
+      // pending placeholder forever.
+      logger.warn({ sessionId, attachmentId: ref.id }, 'no bytes on disk for ref, sending error chunk');
+      this.send({
+        type: 'attachment_data',
+        sessionId,
+        payload: { id: ref.id, index: 0, total: 0, mimeType: ref.mimeType, data: '', error: 'not_found' },
+      });
+    }
+  }
+
+  /**
+   * Serve a `request_attachment` from a consumer device. Reads from the
+   * AttachmentStore, encrypts chunked unicasts to the requester only.
+   */
+  private async handleRequestAttachment(msg: ConsumerMessage): Promise<void> {
+    if (msg.type !== 'request_attachment') return;
+    const { id, sessionId } = msg.payload;
+    const requesterDeviceId = msg.deviceId;
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'request_attachment: no key for requester');
+      return;
+    }
+    if (!this.attachmentStore) {
+      this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
+      return;
+    }
+    const got = this.attachmentStore.read(sessionId, id);
+    if (!got) {
+      this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
+      return;
+    }
+    const total = Math.max(1, Math.ceil(got.bytes.length / RelayClient.ATTACHMENT_CHUNK_BYTES));
+    for (let i = 0; i < total; i++) {
+      const slice = got.bytes.subarray(
+        i * RelayClient.ATTACHMENT_CHUNK_BYTES,
+        Math.min((i + 1) * RelayClient.ATTACHMENT_CHUNK_BYTES, got.bytes.length),
+      );
+      const chunkMsg = {
+        type: 'attachment_data' as const,
+        deviceId: this.authInfo?.deviceId ?? '',
+        sessionId,
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: {
+          id,
+          index: i,
+          total,
+          mimeType: got.meta.mimeType,
+          data: slice.toString('base64'),
+        },
+      };
+      this.sendUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
+    }
+  }
+
+  private unicastAttachmentError(
+    requesterDeviceId: string,
+    requesterKey: string,
+    sessionId: string,
+    id: string,
+    error: 'not_found' | 'unauthorized' | 'too_large',
+  ): void {
+    const errorMsg = {
+      type: 'attachment_data' as const,
+      deviceId: this.authInfo?.deviceId ?? '',
+      sessionId,
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { id, index: 0, total: 0, mimeType: '', data: '', error },
+    };
+    this.sendUnicastTo(requesterDeviceId, requesterKey, errorMsg);
   }
 
   // ── Client log shipping ─────────────────────────────
