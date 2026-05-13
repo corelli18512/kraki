@@ -32,10 +32,11 @@ const RUN_DIR = join(ROOT_DIR, 'run');
 const HEAD_DB_PATH = join(ROOT_DIR, 'kraki-head.db');
 const HEAD_LOG_PATH = join(LOG_DIR, 'head.log');
 const WEB_LOG_PATH = join(LOG_DIR, 'web.log');
-const RELAY_PORT = 4000;
+const RELAY_PORT = Number(process.env.KRAKI_LOCAL_RELAY_PORT ?? 4400);
 const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
-const REDIRECT_PORT = 3100;
+const REDIRECT_PORT = Number(process.env.KRAKI_LOCAL_REDIRECT_PORT ?? 3400);
 const ENTRY_URL = `http://localhost:${REDIRECT_PORT}`;
+const WEB_DEV_PORT = Number(process.env.KRAKI_LOCAL_WEB_PORT ?? 3300);
 const STATE_VERSION = 'thin-relay-v1';
 const STATE_VERSION_PATH = join(ROOT_DIR, '.state-version');
 
@@ -306,11 +307,15 @@ function startHead(): ChildProcess {
 
 function startWeb(viteEnv: NodeJS.ProcessEnv): { child: ChildProcess; ready: Promise<string> } {
   const webLog = createWriteStream(WEB_LOG_PATH, { flags: 'w' });
-  const child = spawn('pnpm', ['--filter', '@kraki/arm-web', 'dev'], {
-    cwd: process.cwd(),
-    env: viteEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    'pnpm',
+    ['--filter', '@kraki/arm-web', 'dev', '--port', String(WEB_DEV_PORT), '--strictPort'],
+    {
+      cwd: process.cwd(),
+      env: viteEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
 
   if (!child.pid) {
     throw new Error('Failed to start local web process');
@@ -418,7 +423,7 @@ async function start(args: string[]): Promise<void> {
   console.log('🦑 Starting real Kraki daemon...');
   const daemonPid = await startDaemon(localConfig, join(process.cwd(), 'packages/tentacle/src/cli.ts'));
 
-  let vitePort = '3000';
+  let vitePort = String(WEB_DEV_PORT);
   let viteReady = false;
   redirectServer = createHttpServer(async (_req, res) => {
     if (!viteReady) {
