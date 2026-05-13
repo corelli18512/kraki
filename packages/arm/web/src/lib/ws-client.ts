@@ -91,10 +91,23 @@ export class KrakiWSClient {
    * Request the bytes of an attachment from the tentacle that owns the session.
    * Used by `useAttachment` when an `AttachmentRef` arrives via replay
    * (rather than a live push) or when a push safety-timeout elapses.
+   *
+   * The message stamps:
+   *   - deviceId at the inner level so the tentacle can address its chunked
+   *     reply back to us (other consumer messages don't need this because they
+   *     are addressed by sessionId, but our reply unicast requires the
+   *     requester's pubkey lookup).
+   *   - sessionId at the envelope level so encryption.encryptOutbound resolves
+   *     the tentacle device that owns the session.
+   *   - sessionId inside payload too, so the tentacle's AttachmentStore knows
+   *     which session dir to read from.
    */
   requestAttachment(sessionId: string, attachmentId: string) {
+    const deviceId = getStore().deviceId;
     this.sendEncrypted({
       type: 'request_attachment',
+      deviceId,
+      sessionId,
       payload: { id: attachmentId, sessionId },
     });
   }

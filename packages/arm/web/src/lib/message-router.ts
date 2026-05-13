@@ -424,6 +424,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
             const pull = (id: string) => {
               ctx.sendEncrypted?.({
                 type: 'request_attachment',
+                deviceId: store.deviceId,
+                sessionId: sid,
                 payload: { id, sessionId: sid },
               });
             };
