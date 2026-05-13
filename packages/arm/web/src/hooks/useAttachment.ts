@@ -36,6 +36,24 @@ interface UseAttachmentResult {
 /** wsClient.requestAttachment thunk — kept loose to avoid an import cycle. */
 type RequestPull = (sessionId: string, id: string) => void;
 
+/** Shared hydrate guard so concurrent mounts don't fan out duplicate IDB reads. */
+const hydratedIds = new Set<string>();
+const hydratingIds = new Map<string, Promise<boolean>>();
+
+function hydrateOnce(id: string): Promise<boolean> {
+  if (hydratedIds.has(id)) return Promise.resolve(true);
+  let p = hydratingIds.get(id);
+  if (!p) {
+    p = hydrateFromIDB(id).then((hit) => {
+      if (hit) hydratedIds.add(id);
+      hydratingIds.delete(id);
+      return hit;
+    });
+    hydratingIds.set(id, p);
+  }
+  return p;
+}
+
 export function useAttachment(
   ref: AttachmentRef,
   sessionId: string,
@@ -46,7 +64,6 @@ export function useAttachment(
 
   useEffect(() => {
     let cancelled = false;
-    let currentUrl: string | null = null;
 
     function onUpdate(): void {
       if (cancelled) return;
@@ -60,7 +77,7 @@ export function useAttachment(
       if (existing?.kind === 'ready') return;
       if (existing?.kind === 'awaiting-chunks' || existing?.kind === 'fetching') return;
       // Not in memory — try IDB
-      const hit = await hydrateFromIDB(ref.id);
+      const hit = await hydrateOnce(ref.id);
       if (cancelled) return;
       if (hit) return;
       // Miss + no live push → start a fetch
@@ -73,12 +90,11 @@ export function useAttachment(
     return () => {
       cancelled = true;
       unsubscribe();
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-        currentUrl = null;
-      }
     };
-  }, [ref.id, sessionId, requestPull]);
+    // requestPull identity changes every render; we deliberately exclude it
+    // from deps so this effect only re-runs when the id/session changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref.id, sessionId]);
 
   // Derive object URL from current state. Re-runs on every notify.
   useEffect(() => {
