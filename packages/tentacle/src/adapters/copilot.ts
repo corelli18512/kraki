@@ -335,6 +335,13 @@ export class CopilotAdapter extends AgentAdapter {
     mcpServerName?: string;
     mcpToolName?: string;
   }>();
+  /**
+   * Tool calls in flight per session — reverse index so we can clean up
+   * pendingToolArgs/pendingToolIdentity when a session ends without each
+   * tool call completing (kill, abort, error mid-flight). Without this the
+   * two maps grow unbounded over a long-lived daemon.
+   */
+  private sessionToolCallIds = new Map<string, Set<string>>();
   /** Expected model per session — detects involuntary model fallbacks by the CLI */
   private expectedModels = new Map<string, string>();
   /** User's originally requested model — never updated on involuntary fallbacks */
@@ -926,6 +933,14 @@ export class CopilotAdapter extends AgentAdapter {
     this.turnHasOutput.delete(sessionId);
     this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
+    const inflight = this.sessionToolCallIds.get(sessionId);
+    if (inflight) {
+      for (const id of inflight) {
+        this.pendingToolArgs.delete(id);
+        this.pendingToolIdentity.delete(id);
+      }
+      this.sessionToolCallIds.delete(sessionId);
+    }
     this.clearIdleTimer(sessionId);
   }
 
@@ -1074,6 +1089,12 @@ export class CopilotAdapter extends AgentAdapter {
           mcpServerName: data.mcpServerName as string | undefined,
           mcpToolName: data.mcpToolName as string | undefined,
         });
+        let inflight = this.sessionToolCallIds.get(sessionId);
+        if (!inflight) {
+          inflight = new Set();
+          this.sessionToolCallIds.set(sessionId, inflight);
+        }
+        inflight.add(toolCallId);
       }
       this.onToolStart?.(sessionId, {
         toolName: data.toolName as string,
@@ -1087,11 +1108,18 @@ export class CopilotAdapter extends AgentAdapter {
       const toolCallId = data.toolCallId as string | undefined;
       const identity = toolCallId ? this.pendingToolIdentity.get(toolCallId) : undefined;
       const toolName = identity?.toolName ?? (data.toolName as string | undefined) ?? 'tool';
-      if (toolName === 'report_intent') {
-        if (toolCallId) {
-          this.pendingToolIdentity.delete(toolCallId);
-          this.pendingToolArgs.delete(toolCallId);
+      const clearInflight = () => {
+        if (!toolCallId) return;
+        this.pendingToolIdentity.delete(toolCallId);
+        this.pendingToolArgs.delete(toolCallId);
+        const inflight = this.sessionToolCallIds.get(sessionId);
+        if (inflight) {
+          inflight.delete(toolCallId);
+          if (inflight.size === 0) this.sessionToolCallIds.delete(sessionId);
         }
+      };
+      if (toolName === 'report_intent') {
+        clearInflight();
         return;
       }
       const rawResult = data.result;
@@ -1149,10 +1177,7 @@ export class CopilotAdapter extends AgentAdapter {
       }
 
       // Clean up tracked state for this tool call
-      if (toolCallId) {
-        this.pendingToolArgs.delete(toolCallId);
-        this.pendingToolIdentity.delete(toolCallId);
-      }
+      clearInflight();
 
       this.onToolComplete?.(sessionId, {
         toolName,
