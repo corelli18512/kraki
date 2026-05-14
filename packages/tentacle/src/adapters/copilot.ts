@@ -28,7 +28,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { getKrakiHome } from '../config.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
@@ -147,6 +147,17 @@ export function resolveCopilotCliPath(): string | undefined {
 function isRecoverableSessionError(err: unknown): boolean {
   const message = getErrorMessage(err);
   return message.includes('Session not found:') || message.includes('Connection is disposed');
+}
+
+/** Defensive basename — strips any leading directory components and never
+ *  throws. Used to populate AttachmentRef.name from the absolute path the
+ *  agent passed to show_image. */
+function basenameSafe(p: string): string {
+  try {
+    return basename(p) || 'image';
+  } catch {
+    return 'image';
+  }
 }
 
 // ── Copilot configDir shadow ────────────────────────────
@@ -312,6 +323,25 @@ export class CopilotAdapter extends AgentAdapter {
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
+  /**
+   * Tool identity captured at tool.execution_start, keyed by toolCallId.
+   * The Copilot SDK omits these fields from tool.execution_complete events —
+   * only toolCallId is present there. We stash the names on start and look
+   * them up on complete (especially for `mcpServerName`/`mcpToolName`, which
+   * we use to recognise our own MCP presenter tools).
+   */
+  private pendingToolIdentity = new Map<string, {
+    toolName?: string;
+    mcpServerName?: string;
+    mcpToolName?: string;
+  }>();
+  /**
+   * Tool calls in flight per session — reverse index so we can clean up
+   * pendingToolArgs/pendingToolIdentity when a session ends without each
+   * tool call completing (kill, abort, error mid-flight). Without this the
+   * two maps grow unbounded over a long-lived daemon.
+   */
+  private sessionToolCallIds = new Map<string, Set<string>>();
   /** Expected model per session — detects involuntary model fallbacks by the CLI */
   private expectedModels = new Map<string, string>();
   /** User's originally requested model — never updated on involuntary fallbacks */
@@ -330,10 +360,34 @@ export class CopilotAdapter extends AgentAdapter {
    */
   private static readonly IDLE_FALLBACK_MS = 500;
 
-  constructor(options: { cliPath?: string } = {}) {
+  /** Set of attachment ids already broadcast for this session — prevents
+   *  re-broadcasting bytes when the same image is shown twice. */
+  private broadcastedAttachmentIds = new Map<string, Set<string>>();
+
+  constructor(options: {
+    cliPath?: string;
+    /** Tentacle's attachment store. When set, the adapter externalises
+     *  image bytes from `kraki-show_image` to it instead of carrying them
+     *  inline in the broadcast envelope. */
+    attachmentStore?: import('../attachment-store.js').AttachmentStore;
+    /** When set, the adapter wires the Kraki MCP server into every Copilot
+     *  session it creates/resumes, with the URL scoped per Kraki sessionId. */
+    krakiMcp?: {
+      urlForSession: (sessionId: string) => string;
+      bearerToken: string;
+    };
+  } = {}) {
     super();
     this.cliPath = options.cliPath;
+    this.attachmentStore = options.attachmentStore;
+    this.krakiMcp = options.krakiMcp;
   }
+
+  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  private readonly krakiMcp?: {
+    urlForSession: (sessionId: string) => string;
+    bearerToken: string;
+  };
 
   /** System prompt appended to the SDK's built-in prompt. See system-prompt.md for docs. */
   private static readonly SYSTEM_PROMPT = [
@@ -369,6 +423,25 @@ export class CopilotAdapter extends AgentAdapter {
     'When you see this signal, silently adopt the new mode\'s behavior from that',
     'point onward. Do not acknowledge or comment on the mode change — just adjust',
     'how you work. The signal is not part of the user\'s message.',
+  ].join('\n');
+
+  /**
+   * Appended to the system prompt when the Kraki MCP server is wired in.
+   * Tools are exposed to the model with display names of the form
+   * `<server>-<tool>` (dash), confirmed via a live SDK spike.
+   */
+  private static readonly KRAKI_MCP_PROMPT = [
+    'You have access to a Kraki MCP server. Its tools are visible with names',
+    'beginning with "kraki-".',
+    '',
+    'When you want to visually present an image to the user — a screenshot you',
+    'captured, a diagram you generated, a chart, a UI mock — call',
+    '`kraki-show_image` with the absolute file path. Use it sparingly: only',
+    'when the user benefits from seeing the actual pixels.',
+    '',
+    'Plain file viewing on image files (with `view`/`read`) is for your own',
+    'inspection; the image bytes do not appear in the chat. Use',
+    '`kraki-show_image` when the user should actually see the image inline.',
   ].join('\n');
 
   // ── Lifecycle ───────────────────────────────────────
@@ -497,6 +570,39 @@ export class CopilotAdapter extends AgentAdapter {
       ? config.reasoningEffort as SessionConfig['reasoningEffort']
       : undefined;
 
+    // Two-phase MCP wiring: create session WITHOUT kraki MCP server first
+    // (we need the SDK-assigned sessionId to scope the MCP URL), then the
+    // adapter re-wires through resumeSession with the kraki entry below.
+    // For simplicity in v1 we use a deterministic Kraki MCP wire-up:
+    // we let the SDK pick the session id, then on every Copilot session
+    // we add the kraki MCP at resume time. For initial creation we pre-pick
+    // a session id when the caller supplied one; otherwise the kraki MCP
+    // is added on the next message via resumeSession during normal flow.
+    //
+    // Simpler approach: register a Kraki MCP server using the *Copilot*
+    // sessionId only after createSession returns it. To do that without
+    // a second SDK call, we use a placeholder sessionId for the initial
+    // mcpServers entry and rewrite via resume on first use. But that's
+    // brittle — instead, see the comment block at the constructor: the
+    // kraki MCP HTTP server validates sessionId by checking SessionManager,
+    // not by Copilot SDK state, so we can ALWAYS include the kraki entry
+    // here by using a stable session-scoped URL that the adapter knows
+    // up-front via config.sessionId (the Kraki session id we assigned).
+    if (this.krakiMcp && config.sessionId) {
+      const krakiEntry: MCPServerConfig = {
+        type: 'http' as const,
+        url: this.krakiMcp.urlForSession(config.sessionId),
+        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        tools: ['*'],
+      } as MCPServerConfig;
+      mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
+      logger.info({ sessionId: config.sessionId }, 'wired kraki MCP into session config');
+    }
+
+    const systemPromptContent = this.krakiMcp
+      ? `${CopilotAdapter.SYSTEM_PROMPT}\n\n${CopilotAdapter.KRAKI_MCP_PROMPT}`
+      : CopilotAdapter.SYSTEM_PROMPT;
+
     const sessionConfig: SessionConfig = {
       ...(config.sessionId && { sessionId: config.sessionId }),
       ...(config.model && { model: config.model }),
@@ -504,7 +610,7 @@ export class CopilotAdapter extends AgentAdapter {
       ...(config.cwd && { workingDirectory: config.cwd }),
       configDir: getCopilotConfigDir(),
       ...(mcpServers && { mcpServers }),
-      systemMessage: { mode: 'append' as const, content: CopilotAdapter.SYSTEM_PROMPT },
+      systemMessage: { mode: 'append' as const, content: systemPromptContent },
       streaming: true,
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
@@ -827,6 +933,14 @@ export class CopilotAdapter extends AgentAdapter {
     this.turnHasOutput.delete(sessionId);
     this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
+    const inflight = this.sessionToolCallIds.get(sessionId);
+    if (inflight) {
+      for (const id of inflight) {
+        this.pendingToolArgs.delete(id);
+        this.pendingToolIdentity.delete(id);
+      }
+      this.sessionToolCallIds.delete(sessionId);
+    }
     this.clearIdleTimer(sessionId);
   }
 
@@ -855,6 +969,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   private makeResumeConfig(
+    sessionId: string,
     pendingPermissions: Map<string, PendingPermission>,
     pendingQuestions: Map<string, PendingQuestion>,
   ): ResumeSessionConfig {
@@ -873,11 +988,26 @@ export class CopilotAdapter extends AgentAdapter {
       } catch { /* ignore parse errors on resume */ }
     }
 
+    // Wire Kraki MCP into resumed sessions, scoped by the session id.
+    if (this.krakiMcp) {
+      const krakiEntry: MCPServerConfig = {
+        type: 'http' as const,
+        url: this.krakiMcp.urlForSession(sessionId),
+        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        tools: ['*'],
+      } as MCPServerConfig;
+      mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
+    }
+
+    const systemPromptContent = this.krakiMcp
+      ? `${CopilotAdapter.SYSTEM_PROMPT}\n\n${CopilotAdapter.KRAKI_MCP_PROMPT}`
+      : CopilotAdapter.SYSTEM_PROMPT;
+
     return {
       configDir: getCopilotConfigDir(),
       streaming: true,
       ...(mcpServers && { mcpServers }),
-      systemMessage: { mode: 'append' as const, content: CopilotAdapter.SYSTEM_PROMPT },
+      systemMessage: { mode: 'append' as const, content: systemPromptContent },
       onPermissionRequest: this.makePermissionHandler(pendingPermissions),
       onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
     };
@@ -890,7 +1020,7 @@ export class CopilotAdapter extends AgentAdapter {
     const pendingQuestions = new Map<string, PendingQuestion>();
     const session = await this.client!.resumeSession(
       sessionId,
-      this.makeResumeConfig(pendingPermissions, pendingQuestions),
+      this.makeResumeConfig(sessionId, pendingPermissions, pendingQuestions),
     );
     const entry = { session, pendingPermissions, pendingQuestions };
 
@@ -950,7 +1080,22 @@ export class CopilotAdapter extends AgentAdapter {
       }
       const args = (data.args ?? data.arguments ?? {}) as Record<string, unknown>;
       const toolCallId = data.toolCallId as string | undefined;
-      if (toolCallId) this.pendingToolArgs.set(toolCallId, args);
+      if (toolCallId) {
+        this.pendingToolArgs.set(toolCallId, args);
+        // Stash tool identity for tool.execution_complete, which only carries
+        // toolCallId (verified via live SDK spike).
+        this.pendingToolIdentity.set(toolCallId, {
+          toolName: data.toolName as string | undefined,
+          mcpServerName: data.mcpServerName as string | undefined,
+          mcpToolName: data.mcpToolName as string | undefined,
+        });
+        let inflight = this.sessionToolCallIds.get(sessionId);
+        if (!inflight) {
+          inflight = new Set();
+          this.sessionToolCallIds.set(sessionId, inflight);
+        }
+        inflight.add(toolCallId);
+      }
       this.onToolStart?.(sessionId, {
         toolName: data.toolName as string,
         args,
@@ -960,11 +1105,24 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('tool.execution_complete', (event) => {
       const data = event.data as unknown as Record<string, unknown>;
-      if (data.toolName === 'report_intent') return;
-      const rawResult = data.result;
       const toolCallId = data.toolCallId as string | undefined;
-      // SDK sends result as { content: string, contents?: [...] } or as a plain string.
-      // On failure, result is undefined and the error is in data.error ({ message } or string).
+      const identity = toolCallId ? this.pendingToolIdentity.get(toolCallId) : undefined;
+      const toolName = identity?.toolName ?? (data.toolName as string | undefined) ?? 'tool';
+      const clearInflight = () => {
+        if (!toolCallId) return;
+        this.pendingToolIdentity.delete(toolCallId);
+        this.pendingToolArgs.delete(toolCallId);
+        const inflight = this.sessionToolCallIds.get(sessionId);
+        if (inflight) {
+          inflight.delete(toolCallId);
+          if (inflight.size === 0) this.sessionToolCallIds.delete(sessionId);
+        }
+      };
+      if (toolName === 'report_intent') {
+        clearInflight();
+        return;
+      }
+      const rawResult = data.result;
       const resultObj = typeof rawResult === 'object' && rawResult !== null
         ? rawResult as Record<string, unknown>
         : null;
@@ -976,48 +1134,69 @@ export class CopilotAdapter extends AgentAdapter {
         result = (errObj?.message as string) ?? (typeof data.error === 'string' ? data.error : '');
       }
 
-      // Extract image attachments from structured content blocks (result.contents)
-      const attachments: import('@kraki/protocol').Attachment[] = [];
-      const contentBlocks = resultObj?.contents as Array<Record<string, unknown>> | undefined;
-      if (Array.isArray(contentBlocks)) {
-        for (const block of contentBlocks) {
-          if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
-            attachments.push({ type: 'image', data: block.data as string, mimeType: block.mimeType as string });
-          }
-        }
-      }
+      // Extract image content blocks — ONLY for the kraki-show_image MCP tool.
+      // All other tools' image bytes (notably `view` on a .png) are deliberately
+      // dropped here per the v1 design: only `kraki-show_image` surfaces images
+      // to the client. The file-path fallback (re-read image from disk when SDK
+      // strips bytes) has been removed.
+      const isKrakiShowImage =
+        identity?.mcpServerName === 'kraki' && identity?.mcpToolName === 'show_image';
 
-      // Fallback: the SDK strips binaryResultsForLlm from tool.execution_complete,
-      // but for image-viewing tools (e.g. `view` on a .png) the telemetry still
-      // carries viewType and mimeType. Use the file path from the original tool
-      // args (correlated by toolCallId) to read the image directly.
-      if (attachments.length === 0) {
-        const telemetry = data.toolTelemetry as Record<string, unknown> | undefined;
-        const props = telemetry?.properties as Record<string, string> | undefined;
-        if (props?.viewType === 'image' && props?.mimeType) {
-          const startArgs = toolCallId ? this.pendingToolArgs.get(toolCallId) : undefined;
-          const filePath = startArgs?.path as string | undefined;
-          if (filePath && existsSync(filePath)) {
-            try {
-              const imageData = readFileSync(filePath).toString('base64');
-              attachments.push({ type: 'image', data: imageData, mimeType: props.mimeType });
-            } catch (err) {
-              logger.debug({ err, filePath }, 'Failed to read image for forwarding');
+      let attachments: import('@kraki/protocol').Attachment[] | undefined;
+      if (isKrakiShowImage && this.attachmentStore) {
+        const contentBlocks = resultObj?.contents as Array<Record<string, unknown>> | undefined;
+        const args = toolCallId ? this.pendingToolArgs.get(toolCallId) ?? {} : {};
+        const caption = typeof args.caption === 'string' && args.caption.trim()
+          ? args.caption.trim()
+          : undefined;
+        const path = typeof args.path === 'string' ? args.path : undefined;
+        const refs: import('@kraki/protocol').AttachmentRef[] = [];
+        if (Array.isArray(contentBlocks)) {
+          for (const block of contentBlocks) {
+            if (
+              block.type === 'image' &&
+              typeof block.data === 'string' &&
+              typeof block.mimeType === 'string'
+            ) {
+              try {
+                const bytes = Buffer.from(block.data, 'base64');
+                const ref = this.attachmentStore.put(sessionId, bytes, block.mimeType, {
+                  ...(path && { name: basenameSafe(path) }),
+                  ...(caption && { caption }),
+                });
+                refs.push(ref);
+              } catch (err) {
+                logger.warn({ err, sessionId }, 'failed to store show_image attachment');
+              }
             }
           }
         }
+        if (refs.length > 0) {
+          attachments = refs;
+        }
       }
 
-      // Clean up tracked args
-      if (toolCallId) this.pendingToolArgs.delete(toolCallId);
+      // Clean up tracked state for this tool call
+      clearInflight();
 
       this.onToolComplete?.(sessionId, {
-        toolName: data.toolName as string,
+        toolName,
         result,
         toolCallId,
         success: data.success as boolean | undefined,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        attachments,
       });
+
+      // After tool_complete, fire the bytes broadcast event so RelayClient
+      // can stream attachment_data chunks to all connected devices.
+      if (attachments && attachments.length > 0) {
+        const refs = attachments.filter(
+          (a): a is import('@kraki/protocol').AttachmentRef => a.type === 'image_ref',
+        );
+        if (refs.length > 0) {
+          this.onAttachmentBytes?.(sessionId, { refs });
+        }
+      }
     });
 
     session.on('session.idle', () => {

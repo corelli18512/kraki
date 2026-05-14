@@ -54,6 +54,13 @@ export interface ToolCompleteEvent {
   attachments?: import('@kraki/protocol').Attachment[];
 }
 
+/** Emitted alongside a tool_complete that carries one or more
+ *  `AttachmentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
+ *  to all connected devices as `attachment_data` chunks. */
+export interface AttachmentBytesEvent {
+  refs: Array<import('@kraki/protocol').AttachmentRef>;
+}
+
 export interface SessionEndedEvent {
   reason: string;
 }
@@ -104,6 +111,9 @@ export abstract class AgentAdapter {
   onQuestionRequest: ((sessionId: string, event: QuestionRequestEvent) => void) | null = null;
   onToolStart: ((sessionId: string, event: ToolStartEvent) => void) | null = null;
   onToolComplete: ((sessionId: string, event: ToolCompleteEvent) => void) | null = null;
+  /** Called immediately after onToolComplete when bytes need to be pushed
+   *  (broadcast as `attachment_data` chunks) to connected devices. */
+  onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
   onIdle: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;

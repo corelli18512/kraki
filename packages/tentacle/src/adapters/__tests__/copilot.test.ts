@@ -960,6 +960,32 @@ describe('CopilotAdapter', () => {
       await adapter.start();
       await adapter.killSession('nonexistent'); // should not throw
     });
+
+    it('clears pendingToolArgs/pendingToolIdentity for tool calls that never completed', async () => {
+      await adapter.start();
+      await adapter.createSession({});
+      // Two tool calls started but never completed (e.g. session killed mid-flight)
+      mockSessions[0]._emit('tool.execution_start', { data: { toolName: 'bash', toolCallId: 'leak-1' } });
+      mockSessions[0]._emit('tool.execution_start', {
+        data: { toolName: 'view', toolCallId: 'leak-2', mcpServerName: 'kraki', mcpToolName: 'show_image' },
+      });
+      // Sanity: maps are populated
+      const a = adapter as unknown as {
+        pendingToolArgs: Map<string, unknown>;
+        pendingToolIdentity: Map<string, unknown>;
+        sessionToolCallIds: Map<string, Set<string>>;
+      };
+      expect(a.pendingToolArgs.size).toBe(2);
+      expect(a.pendingToolIdentity.size).toBe(2);
+      expect(a.sessionToolCallIds.get('mock-sess-1')?.size).toBe(2);
+
+      await adapter.killSession('mock-sess-1');
+
+      // After kill, all three are empty
+      expect(a.pendingToolArgs.size).toBe(0);
+      expect(a.pendingToolIdentity.size).toBe(0);
+      expect(a.sessionToolCallIds.has('mock-sess-1')).toBe(false);
+    });
   });
 
   // ── List sessions ───────────────────────────────────
@@ -1303,14 +1329,13 @@ describe('CopilotAdapter', () => {
       });
     });
 
-    it('tool_complete reads image file when telemetry indicates viewType=image', async () => {
+    it('tool_complete for `view` on an image NO LONGER attaches bytes (v1: only kraki-show_image surfaces images)', async () => {
       const spy = vi.fn();
       adapter.onToolComplete = spy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
       const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
       const imgPath = '/tmp/test-image.png';
-      // Mock fs to return the image
       mockExistsSync.mockImplementation((p: string) => p === imgPath);
       mockReadFileSync.mockImplementation((p: string) => {
         if (p === imgPath) return Buffer.from(pngBase64, 'base64');
@@ -1322,7 +1347,7 @@ describe('CopilotAdapter', () => {
         });
         mockSessions[0]._emit('tool.execution_complete', {
           data: {
-            toolName: 'view', toolCallId: 'tc_img',
+            toolCallId: 'tc_img',
             result: { content: 'Viewed image file successfully.' },
             toolTelemetry: { properties: { viewType: 'image', mimeType: 'image/png' } },
           },
@@ -1330,7 +1355,7 @@ describe('CopilotAdapter', () => {
         expect(spy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
           toolName: 'view',
           result: 'Viewed image file successfully.',
-          attachments: [{ type: 'image', data: pngBase64, mimeType: 'image/png' }],
+          attachments: undefined,
         }));
       } finally {
         mockExistsSync.mockReset();

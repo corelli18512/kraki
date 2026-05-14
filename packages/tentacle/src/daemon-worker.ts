@@ -28,6 +28,8 @@ process.on('unhandledRejection', () => {
 import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
+import { AttachmentStore } from './attachment-store.js';
+import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile } from './status-file.js';
 import type { AgentAdapter } from './adapters/base.js';
@@ -91,8 +93,33 @@ export async function startWorker(): Promise<WorkerResult> {
   }
 
   // 3. Initialize components
-  const adapter = new CopilotAdapter();
   const sessionManager = new SessionManager();
+  const attachmentStore = new AttachmentStore(sessionManager.getSessionsRoot());
+
+  // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
+  //     fails, log and continue without it — daemon stays up.
+  let mcpInfo: { urlForSession: (sid: string) => string; bearerToken: string } | undefined;
+  let mcpServer: KrakiMcpServer | null = null;
+  try {
+    mcpServer = new KrakiMcpServer({
+      version: getVersion(),
+      isSessionActive: (id) => sessionManager.isSessionActive(id),
+    });
+    const started = await mcpServer.start();
+    mcpInfo = {
+      urlForSession: started.urlForSession,
+      bearerToken: started.bearerToken,
+    };
+    logger.info({ port: started.port }, 'Kraki MCP server started');
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'Kraki MCP server failed to start — kraki-show_image will be unavailable');
+    mcpServer = null;
+  }
+
+  const adapter = new CopilotAdapter({
+    attachmentStore,
+    ...(mcpInfo && { krakiMcp: mcpInfo }),
+  });
   const keyManager = new KeyManager();
   const deviceId = getOrCreateDeviceId();
 
@@ -154,6 +181,7 @@ export async function startWorker(): Promise<WorkerResult> {
       version: getVersion(),
     },
     keyManager,
+    attachmentStore,
   );
 
   relay.onStateChange = (state) => {
@@ -189,6 +217,9 @@ export async function startWorker(): Promise<WorkerResult> {
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();
+    if (mcpServer) {
+      try { await mcpServer.stop(); } catch { /* already stopped */ }
+    }
   };
 
   process.on('SIGTERM', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });

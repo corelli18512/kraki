@@ -47,7 +47,33 @@ vi.mock('../relay-client.js', () => ({
 }));
 
 vi.mock('../session-manager.js', () => ({
-  SessionManager: vi.fn().mockImplementation(() => ({})),
+  SessionManager: vi.fn().mockImplementation(() => ({
+    getSessionsRoot: () => '/tmp/test-sessions',
+    isSessionActive: () => false,
+  })),
+}));
+
+vi.mock('../mcp/index.js', () => ({
+  KrakiMcpServer: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockResolvedValue({
+      urlForSession: (sid: string) => `http://127.0.0.1:1234/mcp/${sid}`,
+      bearerToken: 'test-bearer',
+      port: 1234,
+      baseUrl: 'http://127.0.0.1:1234/mcp',
+    }),
+    stop: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+vi.mock('../attachment-store.js', () => ({
+  AttachmentStore: vi.fn().mockImplementation(() => ({
+    put: vi.fn(),
+    has: vi.fn().mockReturnValue(false),
+    read: vi.fn().mockReturnValue(null),
+    stream: vi.fn(),
+    removeSession: vi.fn(),
+    gc: vi.fn().mockReturnValue(0),
+  })),
 }));
 
 vi.mock('../key-manager.js', () => ({

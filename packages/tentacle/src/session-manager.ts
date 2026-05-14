@@ -74,6 +74,14 @@ export interface SessionMeta {
   usage?: import('@kraki/protocol').SessionUsage;
   /** Origin of this session — set for imported sessions */
   source?: import('@kraki/protocol').LocalSessionSource | 'imported';
+  /** True once the one-shot legacy-inline-image migration has run.
+   *  See `stripLegacyInlineImages` — pre-MCP versions of Kraki stored
+   *  image bytes inline inside tool_complete entries in messages.jsonl,
+   *  which inflated replay batches above the relay's 10MB frame cap and
+   *  caused the daemon's WS to drop. The migration strips those bytes
+   *  in place (the bytes weren't recoverable via the new ref path anyway,
+   *  since they came from `view`-on-an-image, not show_image). */
+  inlineImagesStripped?: boolean;
 }
 
 export interface RunRecord {
@@ -92,6 +100,7 @@ export class SessionManager {
     this.sessionsDir = sessionsDir ?? join(getConfigDir(), 'sessions');
     mkdirSync(this.sessionsDir, { recursive: true });
     this.migrateGlobalLog();
+    this.stripAllLegacyInlineImages();
   }
 
   /**
@@ -149,6 +158,102 @@ export class SessionManager {
     try {
       rmSync(oldLogPath);
     } catch { /* ignore */ }
+  }
+
+  /**
+   * One-shot migration: for every session, strip inline image attachments
+   * from tool_complete entries in messages.jsonl. Pre-MCP versions of
+   * Kraki carried image bytes inline; after this migration, image bytes
+   * only flow via the `kraki-show_image` ref + chunked attachment_data
+   * pipeline. Bytes for pre-existing `view`-on-image entries are NOT
+   * preserved — they were never the agent's intentional output anyway.
+   *
+   * The migration is per-session, idempotent, and atomic per file.
+   */
+  private stripAllLegacyInlineImages(): void {
+    if (!existsSync(this.sessionsDir)) return;
+    let dirs: string[];
+    try {
+      dirs = readdirSync(this.sessionsDir);
+    } catch {
+      return;
+    }
+    for (const dir of dirs) {
+      const meta = this.readMeta(dir);
+      if (!meta || meta.inlineImagesStripped) continue;
+      try {
+        this.stripLegacyInlineImagesForSession(dir);
+        meta.inlineImagesStripped = true;
+        this.writeMeta(dir, meta);
+      } catch {
+        // Best-effort — failures are logged below but never crash startup
+      }
+    }
+  }
+
+  private stripLegacyInlineImagesForSession(sessionId: string): void {
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    if (!existsSync(logPath)) return;
+
+    let content: string;
+    try {
+      content = readFileSync(logPath, 'utf8');
+    } catch {
+      return;
+    }
+
+    const lines = content.split('\n');
+    let modified = false;
+    const rewritten = lines.map((line) => {
+      if (!line) return line;
+      let entry: { seq: number; type: string; payload: string; ts: string };
+      try {
+        entry = JSON.parse(line) as { seq: number; type: string; payload: string; ts: string };
+      } catch {
+        return line;
+      }
+      if (entry.type !== 'tool_complete' && entry.type !== 'agent_message' && entry.type !== 'user_message') {
+        return line;
+      }
+      let inner: Record<string, unknown>;
+      try {
+        inner = JSON.parse(entry.payload) as Record<string, unknown>;
+      } catch {
+        return line;
+      }
+      const payload = inner.payload as Record<string, unknown> | undefined;
+      const attachments = payload?.attachments;
+      if (!Array.isArray(attachments) || attachments.length === 0) return line;
+
+      // Drop any attachment that carries inline `data` (legacy shape). Refs
+      // (type === 'image_ref') are kept untouched.
+      let droppedAny = false;
+      const filtered = attachments.filter((a) => {
+        if (a && typeof a === 'object' && (a as Record<string, unknown>).type === 'image' && typeof (a as Record<string, unknown>).data === 'string') {
+          droppedAny = true;
+          return false;
+        }
+        return true;
+      });
+
+      if (!droppedAny) return line;
+
+      if (filtered.length > 0) {
+        payload!.attachments = filtered;
+      } else {
+        delete payload!.attachments;
+      }
+      entry.payload = JSON.stringify(inner);
+      modified = true;
+      return JSON.stringify(entry);
+    });
+
+    if (!modified) return;
+
+    // Atomic rewrite via tmp file + rename
+    const tmpPath = `${logPath}.${Date.now()}.tmp`;
+    writeFileSync(tmpPath, rewritten.join('\n'));
+    renameSync(tmpPath, logPath);
   }
 
   /**
@@ -466,6 +571,28 @@ export class SessionManager {
    */
   getMeta(sessionId: string): SessionMeta | null {
     return this.readMeta(sessionId);
+  }
+
+  /**
+   * Whether a session exists and is not in a terminal state.
+   * Used by the Kraki MCP server to validate `tools/call` requests whose
+   * URL path carries a sessionId — calls for unknown/ended sessions are
+   * rejected so the agent can't address arbitrary sessionIds.
+   */
+  isSessionActive(sessionId: string): boolean {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return false;
+    return meta.state !== 'ended';
+  }
+
+  /** Public accessor: absolute path to a session's directory. */
+  getSessionDir(sessionId: string): string {
+    return this.sessionDir(sessionId);
+  }
+
+  /** Public accessor: absolute path to the sessions root. */
+  getSessionsRoot(): string {
+    return this.sessionsDir;
   }
 
   /**

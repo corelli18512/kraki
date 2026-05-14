@@ -9,6 +9,7 @@ import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { Lock, Check, X, LockOpen, CircleStop, Copy } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useAttachment } from '../../hooks/useAttachment';
 
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
@@ -39,7 +40,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
                   </Markdown>
                 </div>
               )}
-              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
               <p className="mt-1 text-right text-[10px] text-white/60">
                 {formatTime(message.timestamp)}
               </p>
@@ -62,8 +63,8 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
                   {message.payload.content}
                 </Markdown>
               </div>
-              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
-              {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} />}
+              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
+              {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} sessionId={sessionId} />}
               <p className="mt-1 text-[10px] text-text-muted">
                 {formatTime(message.timestamp)}
               </p>
@@ -109,7 +110,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
             success={message.payload.success}
             forceExpanded={forceExpanded}
           />
-          <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+          <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
         </>
       );
 
@@ -130,7 +131,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
         <div className="flex justify-end">
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             {message.payload.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.payload.text}</p>}
-            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} />
+            <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
             <p className="mt-1 text-right text-[10px] text-white/60">
               {formatTime(message.timestamp)}
             </p>
@@ -256,7 +257,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
         <div className="flex justify-end">
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-br-md bg-kraki-500/70 px-4 py-2.5 text-white shadow-sm sm:max-w-[70%]">
             {message.text !== IMAGE_PLACEHOLDER && <p className="text-sm">{message.text}</p>}
-            <ImageAttachments attachments={message.attachments as Attachment[] | undefined} />
+            <ImageAttachments attachments={message.attachments as Attachment[] | undefined} sessionId={sessionId} />
             <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-white/60">
               <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/90" />
               Sending…
@@ -352,38 +353,24 @@ function CopyableBubble({ text, children }: { text: string; children: React.Reac
   );
 }
 
-function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {
+function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
-  const images = attachments?.filter((a): a is Attachment & { type: 'image' } => a.type === 'image');
+  const images = attachments?.filter(
+    (a): a is (Attachment & { type: 'image' }) | (Attachment & { type: 'image_ref' }) =>
+      a.type === 'image' || a.type === 'image_ref',
+  );
   if (!images?.length) return null;
 
   return (
     <>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-3">
         {images.map((img, i) => (
-          <button
+          <AttachmentTile
             key={i}
-            type="button"
-            className="overflow-hidden rounded-lg border border-border-primary/20"
-            onClick={() => setExpanded(`data:${img.mimeType};base64,${img.data}`)}
-          >
-            <img
-              src={`data:${img.mimeType};base64,${img.data}`}
-              alt="Attachment"
-              className="max-h-48 max-w-full object-contain"
-              onLoad={(e) => {
-                // After image renders, re-check scroll so auto-scroll accounts for image height
-                const scrollable = (e.target as HTMLElement).closest('[data-chat-scroll]');
-                if (scrollable) {
-                  const { scrollTop, scrollHeight, clientHeight } = scrollable;
-                  if (scrollHeight - scrollTop - clientHeight < 80) {
-                    console.info('[Kraki:scroll] IMG onLoad → scrollToBottom', { scrollTop, scrollHeight, clientHeight });
-                    scrollable.scrollTop = scrollHeight;
-                  }
-                }
-              }}
-            />
-          </button>
+            attachment={img}
+            sessionId={sessionId}
+            onExpand={(url) => setExpanded(url)}
+          />
         ))}
       </div>
       {expanded && (
@@ -400,4 +387,153 @@ function ImageAttachments({ attachments }: { attachments?: Attachment[] }) {
       )}
     </>
   );
+}
+
+function onImageLoad(e: React.SyntheticEvent<HTMLImageElement>): void {
+  const scrollable = (e.target as HTMLElement).closest('[data-chat-scroll]');
+  if (scrollable) {
+    const { scrollTop, scrollHeight, clientHeight } = scrollable;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      scrollable.scrollTop = scrollHeight;
+    }
+  }
+}
+
+function AttachmentTile({
+  attachment,
+  sessionId,
+  onExpand,
+}: {
+  attachment: Attachment & ({ type: 'image' } | { type: 'image_ref' });
+  sessionId?: string;
+  onExpand: (url: string) => void;
+}) {
+  if (attachment.type === 'image') {
+    const src = `data:${attachment.mimeType};base64,${attachment.data}`;
+    return (
+      <figure className="m-0 flex flex-col items-start gap-1">
+        <button
+          type="button"
+          className="overflow-hidden rounded-lg border border-border-primary/20"
+          onClick={() => onExpand(src)}
+        >
+          <img
+            src={src}
+            alt={attachment.caption ?? attachment.name ?? 'Attachment'}
+            className="max-h-72 max-w-full object-contain"
+            onLoad={onImageLoad}
+          />
+        </button>
+        {attachment.caption && (
+          <figcaption className="text-xs italic text-text-secondary">{attachment.caption}</figcaption>
+        )}
+      </figure>
+    );
+  }
+
+  // type === 'image_ref'
+  if (!sessionId) {
+    // No sessionId in scope means we can't fetch — render placeholder only
+    return <RefImagePlaceholder ref_={attachment} />;
+  }
+  return <RefImageTile ref_={attachment} sessionId={sessionId} onExpand={onExpand} />;
+}
+
+function RefImagePlaceholder({ ref_ }: { ref_: Attachment & { type: 'image_ref' } }) {
+  return (
+    <figure className="m-0 flex flex-col items-start gap-1">
+      <div
+        className="flex flex-col items-center justify-center rounded-lg border border-border-primary/20 bg-surface-secondary/50 text-text-secondary"
+        style={{
+          width: ref_.width ? Math.min(ref_.width, 320) : 320,
+          height: ref_.height ? Math.min(ref_.height, 180) : 180,
+        }}
+      >
+        <div className="text-xs">🖼 {ref_.name ?? 'image'}</div>
+        <div className="text-[10px] opacity-60">{formatBytes(ref_.size)}</div>
+      </div>
+      {ref_.caption && <figcaption className="text-xs italic text-text-secondary">{ref_.caption}</figcaption>}
+    </figure>
+  );
+}
+
+function RefImageTile({
+  ref_,
+  sessionId,
+  onExpand,
+}: {
+  ref_: Attachment & { type: 'image_ref' };
+  sessionId: string;
+  onExpand: (url: string) => void;
+}) {
+  // Lazy import wsClient to avoid a cycle with MessageBubble (which is
+  // re-exported through several layers).
+  const requestPull = (sid: string, id: string): void => {
+    void import('../../lib/ws-client').then(({ wsClient }) => {
+      wsClient.requestAttachment(sid, id);
+    });
+  };
+  const { status, url, error } = useAttachment(ref_, sessionId, requestPull);
+
+  const placeholderStyle: React.CSSProperties = {
+    width: ref_.width ? Math.min(ref_.width, 320) : 320,
+    height: ref_.height ? Math.min(ref_.height, 180) : 180,
+  };
+
+  if (status === 'ready' && url) {
+    return (
+      <figure className="m-0 flex flex-col items-start gap-1">
+        <button
+          type="button"
+          className="overflow-hidden rounded-lg border border-border-primary/20"
+          onClick={() => onExpand(url)}
+        >
+          <img
+            src={url}
+            alt={ref_.caption ?? ref_.name ?? 'Attachment'}
+            className="max-h-72 max-w-full object-contain"
+            onLoad={onImageLoad}
+          />
+        </button>
+        {ref_.caption && <figcaption className="text-xs italic text-text-secondary">{ref_.caption}</figcaption>}
+      </figure>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <figure className="m-0 flex flex-col items-start gap-1">
+        <div
+          className="flex flex-col items-center justify-center rounded-lg border border-red-500/40 bg-red-500/10 text-text-secondary"
+          style={placeholderStyle}
+        >
+          <div className="text-xs">⚠ Couldn't load image</div>
+          <div className="text-[10px] opacity-60">{ref_.name ?? 'image'}</div>
+          {error && <div className="text-[10px] opacity-60">{error}</div>}
+        </div>
+        {ref_.caption && <figcaption className="text-xs italic text-text-secondary">{ref_.caption}</figcaption>}
+      </figure>
+    );
+  }
+  // loading
+  return (
+    <figure className="m-0 flex flex-col items-start gap-1">
+      <div
+        className="flex flex-col items-center justify-center gap-2 rounded-lg border border-border-primary/20 bg-surface-secondary/50 text-text-secondary"
+        style={placeholderStyle}
+      >
+        <span
+          className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-text-secondary/40 border-t-text-secondary"
+          aria-label="Loading"
+        />
+        <div className="text-[10px] opacity-60">{ref_.name ?? 'image'} · {formatBytes(ref_.size)}</div>
+      </div>
+      {ref_.caption && <figcaption className="text-xs italic text-text-secondary">{ref_.caption}</figcaption>}
+    </figure>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

@@ -1,10 +1,11 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, AttachmentRef } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
 import type { CommandState } from './commands';
 import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { messageProvider } from './message-provider';
+import { ingestChunk, markAwaitingPush } from './attachments';
 import type { PendingPermission, PendingQuestion, SessionPreview } from '../types/store';
 
 const logger = createLogger('msg-router');
@@ -54,6 +55,15 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // Handle session_replay_batch — tentacle sent a batch of replayed messages
   if (msg.type === 'session_replay_batch') {
     ctx.onSessionReplayBatch?.(msg as SessionReplayBatchMessage);
+    return;
+  }
+
+  // attachment_data — chunk of bytes for an attachment ref. Has a sessionId
+  // but we route it before the session-existence check because the chunk's
+  // session may not be in our store yet during early load.
+  if (msg.type === 'attachment_data') {
+    const payload = (msg as { payload: { id: string; index: number; total: number; mimeType: string; data: string; error?: string } }).payload;
+    void ingestChunk(payload.id, payload.index, payload.total, payload.mimeType, payload.data, payload.error);
     return;
   }
 
@@ -398,6 +408,31 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'tool_complete': {
       store.appendMessage(sid, msg);
+      // If this tool_complete carries one or more AttachmentRefs, mark each
+      // id as "awaiting push" so useAttachment shows a spinner while chunks
+      // arrive. Replayed refs don't go through here (they ride
+      // session_replay_batch and are inspected by the replay handler).
+      const payload = (msg as { payload: { attachments?: Array<Record<string, unknown>> } }).payload;
+      const attachments = payload?.attachments;
+      if (Array.isArray(attachments)) {
+        for (const att of attachments) {
+          if (att.type === 'image_ref' && typeof att.id === 'string') {
+            const ref = att as unknown as AttachmentRef;
+            // `requestPull` is the safety-timeout fallback. We can't import
+            // wsClient here without a cycle; instead, expose a callback via
+            // ctx.sendEncrypted (already part of RouterContext).
+            const pull = (id: string) => {
+              ctx.sendEncrypted?.({
+                type: 'request_attachment',
+                deviceId: store.deviceId,
+                sessionId: sid,
+                payload: { id, sessionId: sid },
+              });
+            };
+            markAwaitingPush(ref.id, pull);
+          }
+        }
+      }
       break;
     }
 

@@ -97,13 +97,45 @@ export interface PongMessage extends TransportAckFields {
 // Attachment types (shared between producer and consumer)
 // ============================================================
 
+/** Inline image carried directly in a message payload as base64.
+ *  Used for user_message uploads from the PWA (already capped to ~3 MB by
+ *  client-side compression) and small images that don't justify the
+ *  attachment-store pipeline. */
 export interface ImageAttachment {
   type: 'image';
   mimeType: string;
-  data: string; // base64-encoded image data
+  /** base64-encoded image bytes */
+  data: string;
+  /** Optional caption shown beside/under the image */
+  caption?: string;
+  /** Optional original filename */
+  name?: string;
 }
 
-export type Attachment = ImageAttachment;
+/** Reference to an image stored in the tentacle's attachment store.
+ *  Used for agent-produced images (currently `kraki-show_image` via MCP)
+ *  so a small ref flows in the message stream while bytes travel as
+ *  separate `attachment_data` envelopes. */
+export interface AttachmentRef {
+  type: 'image_ref';
+  /** Content-addressed id: sha256 hex truncated to 32 chars. */
+  id: string;
+  mimeType: string;
+  /** Decoded byte size of the original image. */
+  size: number;
+  /** Optional caption to display under the image. */
+  caption?: string;
+  /** Optional original filename, e.g. "screenshot.png". */
+  name?: string;
+  /** Optional intrinsic width in CSS pixels — populated when the
+   *  tentacle could parse it cheaply from the file header. Used by the
+   *  client to render a correctly-shaped placeholder while bytes arrive. */
+  width?: number;
+  /** Optional intrinsic height in CSS pixels. */
+  height?: number;
+}
+
+export type Attachment = ImageAttachment | AttachmentRef;
 
 // ============================================================
 // Inner message base (inside encrypted blob, invisible to relay)
@@ -143,6 +175,7 @@ export interface UserMessage extends BaseEnvelope {
   type: 'user_message';
   payload: {
     content: string;
+    attachments?: Attachment[];
   };
 }
 
@@ -338,6 +371,29 @@ export interface LocalSessionsListMessage extends BaseEnvelope {
   };
 }
 
+/** Chunk of attachment bytes — flows either as a broadcast (live, immediately
+ *  after the message that referenced the attachment) or as a unicast response
+ *  to `request_attachment`. The relay never sees the bytes; payload is inside
+ *  the encrypted blob like any other message. */
+export interface AttachmentDataMessage extends BaseEnvelope {
+  type: 'attachment_data';
+  payload: {
+    /** Attachment id from the matching `AttachmentRef`. */
+    id: string;
+    /** 0-based chunk index. */
+    index: number;
+    /** Total chunk count for this attachment. */
+    total: number;
+    /** MIME type echoed for convenience. */
+    mimeType: string;
+    /** base64 of this chunk's bytes. Empty when `error` is set. */
+    data: string;
+    /** When set, this chunk carries an error instead of bytes (index/total
+     *  should be 0/0). */
+    error?: 'not_found' | 'unauthorized' | 'too_large';
+  };
+}
+
 export type ProducerMessage =
   | SessionCreatedMessage
   | SessionEndedMessage
@@ -362,7 +418,8 @@ export type ProducerMessage =
   | SessionListMessage
   | PermissionResolvedMessage
   | QuestionResolvedMessage
-  | LocalSessionsListMessage;
+  | LocalSessionsListMessage
+  | AttachmentDataMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -536,6 +593,20 @@ export interface ImportSessionMessage extends BaseEnvelope {
   };
 }
 
+/** Sent by app to tentacle to request the bytes of a stored attachment.
+ *  Used when a client sees an `AttachmentRef` it can't satisfy from its local
+ *  cache (typical after reconnect/replay). Tentacle responds with one or more
+ *  `attachment_data` messages addressed to the requester. */
+export interface RequestAttachmentMessage extends BaseEnvelope {
+  type: 'request_attachment';
+  payload: {
+    /** Attachment id from the AttachmentRef. */
+    id: string;
+    /** Session the attachment belongs to (used for AttachmentStore scoping). */
+    sessionId: string;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -555,7 +626,8 @@ export type ConsumerMessage =
   | RenameSessionMessage
   | PinSessionMessage
   | RequestLocalSessionsMessage
-  | ImportSessionMessage;
+  | ImportSessionMessage
+  | RequestAttachmentMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
