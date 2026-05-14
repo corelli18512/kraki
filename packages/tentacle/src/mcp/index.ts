@@ -1,6 +1,5 @@
 export { KrakiMcpServer } from './server.js';
 export type { KrakiMcpServerOptions, KrakiMcpServerStartResult } from './server.js';
-export { SYSTEM_PROMPT_HINT } from './prompts.js';
 export {
   showImageTool,
   showImageHandler,
