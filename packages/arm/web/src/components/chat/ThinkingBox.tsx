@@ -131,6 +131,7 @@ export function ThinkingBox({ messages, isActive, aborted, agent, sessionId, str
                       key={'seq' in msg && msg.seq ? `${msg.seq}-${msg.type}` : `thinking-${idx}`}
                       message={msg}
                       agent={agent}
+                      sessionId={sessionId}
                       forceExpanded={allExpanded || undefined}
                       cancelled={aborted && msg.type === 'tool_start'}
                     />
