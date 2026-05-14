@@ -127,6 +127,23 @@ Push notifications use the same E2E encryption model. When an agent event requir
 
 The relay sees the encrypted blob size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
 
+## Image attachments
+
+Images produced by an agent (via the `kraki-show_image` MCP tool) are content-addressed and stored on the tentacle's disk under the session's directory. The bytes are not embedded in agent activity messages — only an attachment reference (id + metadata) appears in the broadcast and in `messages.jsonl`.
+
+Bytes are delivered separately, encrypted per-recipient like any other message:
+
+- On live activity, the tentacle pushes the bytes as a chunked `attachment_data` stream to all session-member devices immediately after the referencing tool message.
+- On replay or cache miss, a receiver explicitly requests the bytes via a `request_attachment` unicast; the tentacle serves chunks back to that specific authenticated device.
+
+The relay sees the same opaque encrypted blobs it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
+
+## Local MCP server
+
+The tentacle runs a small loopback HTTP server (the Kraki MCP server) so the local agent can call Kraki-specific tools such as `kraki-show_image`. It binds to `127.0.0.1` only, requires a per-session bearer token, and is registered with the agent via a per-session URL.
+
+The MCP server is not exposed to the relay or to other devices. It is reachable only from processes on the same machine as the tentacle — the same trust zone as the agent itself.
+
 ## Open source and verification
 
 Open source helps because it lets people inspect how Kraki handles encryption, routing, and storage. It does not replace operational trust by itself, but it does make the design auditable and self-hosting possible.

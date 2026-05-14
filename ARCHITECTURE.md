@@ -77,6 +77,8 @@ Its job is to:
 - buffer messages for replay on reconnect
 - manage session lifecycle (create, update, close)
 - auto-approve tools from a local allowed list
+- store image attachments produced by the agent and serve them on demand to authenticated receivers
+- expose a local MCP server (`kraki-show_image` and friends) so agents can present images to the user explicitly
 
 Today the repository includes a Copilot-focused adapter. The adapter boundary is intentionally separated so more agents can be added without changing the relay or UI model.
 
@@ -137,6 +139,31 @@ Its job is to:
 4. For each offline device with a registered token, `head` sends the preview blob via the appropriate push service (APNs, FCM, or Web Push/VAPID).
 5. The device's service worker (or Notification Service Extension on iOS) receives the push, decrypts the preview using the device's private key, and shows a notification with the actual content.
 6. The relay never sees the notification content — it forwards the same opaque encrypted blob through the push service as it does through WebSocket.
+
+### 7. Image attachments
+
+Image bytes do not travel inline inside agent activity messages. Instead they flow as a separate, chunked stream so that broadcast and replay payloads stay small.
+
+1. The agent invokes the `kraki-show_image` MCP tool with a path and an optional caption (see "Kraki MCP server" below). Images surfaced by any other tool (e.g. `view`) are deliberately dropped — only `kraki-show_image` is treated as an intent to present.
+2. `tentacle` stores the bytes in a content-addressed attachment store under the session directory (`~/.kraki/sessions/<sid>/attachments/<id>.<ext>` with a `<id>.json` sidecar). The id is a truncated sha256 of the bytes.
+3. The accompanying `tool_complete` message carries an `AttachmentRef` (id, size, mime, optional dimensions, name, caption) — never bytes. `messages.jsonl` stays small forever.
+4. After the message is broadcast, `tentacle` pushes the bytes as a sequence of `attachment_data` chunks (≤ 2 MB plaintext each) over the existing broadcast channel, encrypted per-recipient like any other message. The relay's 10 MB `maxPayload` is never approached.
+5. Receivers decrypt and reassemble chunks, write the blob to IndexedDB keyed by id, and render the image. The IDB cache is bounded (LRU eviction at ~50–200 MB depending on storage quota).
+6. If a receiver joins late (replay) or has evicted the bytes, it sends a `request_attachment` unicast. `tentacle` looks up the id on disk and serves it as `attachment_data` chunks back to that specific device. Bytes only leave the tentacle in response to an authenticated session-member request.
+
+Future MCP tools that present non-image artifacts will reuse the same ref + chunk transport — the only thing that changes is the discriminator on `Attachment`.
+
+## Kraki MCP server
+
+A loopback HTTP server runs in-process inside the daemon. It is wired into Copilot's `mcpServers` configuration with a per-session URL and a per-session bearer token; only the local agent process can reach it. It is *not* exposed to the relay.
+
+For v1 the server registers one tool:
+
+- **`kraki-show_image(path, caption?)`** — read a file from disk, register its bytes with the attachment store, and return a refusal of the LLM-feed bytes so the agent does not see the image itself. The bytes flow to user-facing receivers via the attachment pipeline described above.
+
+Tool names follow Copilot's `<server>-<tool>` display convention (dash, not dot). The adapter correlates `tool.execution_start` and `tool.execution_complete` events via `toolCallId` because Copilot's SDK strips `mcpServerName`/`mcpToolName` from the complete event.
+
+If the MCP server fails to start (port collision, etc.) the daemon stays up, logs a warning, and omits the `kraki-show_image` tool from the agent's available tools — the rest of the session works as normal.
 
 ## Trust boundaries
 

@@ -59,6 +59,8 @@ Beyond bridging agent events, tentacle is responsible for several things that us
 - **Session lifecycle** — session create, update, and close are managed here
 - **Auto-approval** — tools on a local allowed list are approved automatically without user interaction
 - **Encryption** — all outgoing messages are encrypted before leaving the machine
+- **Attachment storage** — image bytes produced by the agent are stored content-addressed on disk and streamed to receivers in chunks, not embedded inline in messages
+- **Kraki MCP server** — a loopback HTTP server exposing tools the agent can call to surface images (`kraki-show_image`) and similar artifacts to user-facing devices
 
 The relay is a thin forwarder. Tentacle and the frontend own the application logic.
 
