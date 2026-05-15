@@ -150,7 +150,7 @@ function isRecoverableSessionError(err: unknown): boolean {
 }
 
 /** Defensive basename — strips any leading directory components and never
- *  throws. Used to populate AttachmentRef.name from the absolute path the
+ *  throws. Used to populate ContentRef.name from the absolute path the
  *  agent passed to show_image. */
 function basenameSafe(p: string): string {
   try {
@@ -1151,7 +1151,7 @@ export class CopilotAdapter extends AgentAdapter {
           ? args.caption.trim()
           : undefined;
         const path = typeof args.path === 'string' ? args.path : undefined;
-        const refs: import('@kraki/protocol').AttachmentRef[] = [];
+        const refs: import('@kraki/protocol').ContentRef[] = [];
         if (Array.isArray(contentBlocks)) {
           for (const block of contentBlocks) {
             if (
@@ -1192,7 +1192,7 @@ export class CopilotAdapter extends AgentAdapter {
       // can stream attachment_data chunks to all connected devices.
       if (attachments && attachments.length > 0) {
         const refs = attachments.filter(
-          (a): a is import('@kraki/protocol').AttachmentRef => a.type === 'image_ref',
+          (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
         );
         if (refs.length > 0) {
           this.onAttachmentBytes?.(sessionId, { refs });

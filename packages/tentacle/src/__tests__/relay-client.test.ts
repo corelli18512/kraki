@@ -61,6 +61,10 @@ vi.mock('../logger.js', () => ({
 }));
 
 import { RelayClient } from '../relay-client.js';
+import { AttachmentStore } from '../attachment-store.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function createAdapter(): Record<string, unknown> {
   return {
@@ -607,5 +611,130 @@ describe('RelayClient delivery assurance', () => {
     const pong = ws2.sent.map(s => JSON.parse(s)).find(m => m.type === 'pong');
     expect(pong).toBeDefined();
     expect(pong.ack).toBeUndefined(); // state cleared, no stale ack
+  });
+});
+
+describe('RelayClient tool message lazy-load shape', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildClientWithStore() {
+    const tmp = mkdtempSync(join(tmpdir(), 'kraki-lazy-test-'));
+    const store = new AttachmentStore(tmp);
+
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    // No keyManager → relay-client bypasses E2E encryption and sends messages
+    // directly. This matches how existing relay-client tests work and lets us
+    // inspect the wire shape from ws.sent.
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, null, store);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_t',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+    return { adapter, sm, client, ws: sockets[0], store, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
+  }
+
+  it('tool_start carries headline + argsRef (when args ≥ floor), no inline args', () => {
+    const { adapter, ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      const bigArgs = { command: 'echo ' + 'x'.repeat(400) };
+      (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash',
+        args: bigArgs,
+        toolCallId: 'tc1',
+      });
+      const start = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_start');
+      expect(start).toBeDefined();
+      expect(start.payload.toolName).toBe('bash');
+      expect(start.payload.headline).toMatch(/^\$ echo/);
+      expect(start.payload.args).toBeUndefined();
+      expect(start.payload.argsRef).toBeDefined();
+      expect(start.payload.argsRef.mimeType).toBe('application/json');
+      expect(start.payload.argsRef.size).toBeGreaterThan(256);
+    } finally { cleanup(); }
+  });
+
+  it('tool_start with tiny args has headline but NO argsRef (below floor)', () => {
+    const { adapter, ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'view',
+        args: { path: '/foo.ts' },
+        toolCallId: 'tc1',
+      });
+      const start = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_start');
+      expect(start.payload.headline).toBe('/foo.ts');
+      expect(start.payload.argsRef).toBeUndefined();
+      expect(start.payload.args).toBeUndefined();
+    } finally { cleanup(); }
+  });
+
+  it('tool_complete always ships resultRef (even tiny results) and no inline result', () => {
+    const { adapter, ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash',
+        result: 'ok',
+        toolCallId: 'tc1',
+      });
+      const complete = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_complete');
+      expect(complete.payload.toolName).toBe('bash');
+      expect(complete.payload.result).toBeUndefined();
+      expect(complete.payload.resultRef).toBeDefined();
+      expect(complete.payload.resultRef.mimeType).toBe('text/plain');
+      expect(complete.payload.resultRef.size).toBe(2);
+    } finally { cleanup(); }
+  });
+
+  it('tool_complete pushes attachment_data chunks for resultRef after the message', () => {
+    const { adapter, ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash',
+        result: 'hello world',
+        toolCallId: 'tc1',
+      });
+      const sent = ws.sent.map(s => JSON.parse(s));
+      const completeIdx = sent.findIndex(m => m.type === 'tool_complete');
+      const chunkIdx = sent.findIndex(m => m.type === 'attachment_data');
+      expect(completeIdx).toBeGreaterThanOrEqual(0);
+      expect(chunkIdx).toBeGreaterThanOrEqual(0);
+      // Chunks ride after the tool_complete in send order
+      expect(chunkIdx).toBeGreaterThan(completeIdx);
+      const chunk = sent[chunkIdx];
+      expect(chunk.payload.mimeType).toBe('text/plain');
+      expect(Buffer.from(chunk.payload.data, 'base64').toString('utf-8')).toBe('hello world');
+    } finally { cleanup(); }
+  });
+
+  it('tool_complete with no result has no resultRef', () => {
+    const { adapter, ws, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'noop',
+        result: '',
+        toolCallId: 'tc1',
+      });
+      const complete = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_complete');
+      expect(complete.payload.resultRef).toBeUndefined();
+    } finally { cleanup(); }
   });
 });

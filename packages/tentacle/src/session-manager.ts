@@ -226,7 +226,7 @@ export class SessionManager {
       if (!Array.isArray(attachments) || attachments.length === 0) return line;
 
       // Drop any attachment that carries inline `data` (legacy shape). Refs
-      // (type === 'image_ref') are kept untouched.
+      // (type === 'content_ref') are kept untouched.
       let droppedAny = false;
       const filtered = attachments.filter((a) => {
         if (a && typeof a === 'object' && (a as Record<string, unknown>).type === 'image' && typeof (a as Record<string, unknown>).data === 'string') {

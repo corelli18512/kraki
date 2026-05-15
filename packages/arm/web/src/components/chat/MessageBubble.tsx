@@ -14,6 +14,15 @@ import { useAttachment } from '../../hooks/useAttachment';
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
 
+/** Shared pull thunk for any ContentRef rendered inside a message bubble —
+ *  args/result on tool calls, images, etc. We lazy-import ws-client to
+ *  break the cycle (MessageBubble is re-exported through several layers). */
+const ATTACHMENT_PULL = (sid: string, id: string): void => {
+  void import('../../lib/ws-client').then(({ wsClient }) => {
+    wsClient.requestAttachment(sid, id);
+  });
+};
+
 const markdownComponents = {
   a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
@@ -97,7 +106,16 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
       );
 
     case 'tool_start':
-      return <ToolActivity type="start" toolName={message.payload.toolName} args={message.payload.args as Record<string, unknown>} cancelled={cancelled} forceExpanded={forceExpanded} />;
+      return <ToolActivity
+        type="start"
+        toolName={message.payload.toolName}
+        headline={(message.payload as { headline?: string }).headline ?? ''}
+        argsRef={(message.payload as { argsRef?: import('@kraki/protocol').ContentRef }).argsRef}
+        sessionId={sessionId ?? ''}
+        requestPull={ATTACHMENT_PULL}
+        cancelled={cancelled}
+        forceExpanded={forceExpanded}
+      />;
 
     case 'tool_complete':
       return (
@@ -105,8 +123,11 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
           <ToolActivity
             type="complete"
             toolName={message.payload.toolName}
-            args={message.payload.args as Record<string, unknown>}
-            result={message.payload.result}
+            headline={(message.payload as { headline?: string }).headline ?? ''}
+            argsRef={(message.payload as { argsRef?: import('@kraki/protocol').ContentRef }).argsRef}
+            resultRef={(message.payload as { resultRef?: import('@kraki/protocol').ContentRef }).resultRef}
+            sessionId={sessionId ?? ''}
+            requestPull={ATTACHMENT_PULL}
             success={message.payload.success}
             forceExpanded={forceExpanded}
           />
@@ -356,8 +377,8 @@ function CopyableBubble({ text, children }: { text: string; children: React.Reac
 function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const images = attachments?.filter(
-    (a): a is (Attachment & { type: 'image' }) | (Attachment & { type: 'image_ref' }) =>
-      a.type === 'image' || a.type === 'image_ref',
+    (a): a is (Attachment & { type: 'image' }) | (Attachment & { type: 'content_ref' }) =>
+      a.type === 'image' || a.type === 'content_ref',
   );
   if (!images?.length) return null;
 
@@ -404,7 +425,7 @@ function AttachmentTile({
   sessionId,
   onExpand,
 }: {
-  attachment: Attachment & ({ type: 'image' } | { type: 'image_ref' });
+  attachment: Attachment & ({ type: 'image' } | { type: 'content_ref' });
   sessionId?: string;
   onExpand: (url: string) => void;
 }) {
@@ -431,7 +452,7 @@ function AttachmentTile({
     );
   }
 
-  // type === 'image_ref'
+  // type === 'content_ref'
   if (!sessionId) {
     // No sessionId in scope means we can't fetch — render placeholder only
     return <RefImagePlaceholder ref_={attachment} />;
@@ -439,7 +460,7 @@ function AttachmentTile({
   return <RefImageTile ref_={attachment} sessionId={sessionId} onExpand={onExpand} />;
 }
 
-function RefImagePlaceholder({ ref_ }: { ref_: Attachment & { type: 'image_ref' } }) {
+function RefImagePlaceholder({ ref_ }: { ref_: Attachment & { type: 'content_ref' } }) {
   return (
     <figure className="m-0 flex flex-col items-start gap-1">
       <div
@@ -462,18 +483,11 @@ function RefImageTile({
   sessionId,
   onExpand,
 }: {
-  ref_: Attachment & { type: 'image_ref' };
+  ref_: Attachment & { type: 'content_ref' };
   sessionId: string;
   onExpand: (url: string) => void;
 }) {
-  // Lazy import wsClient to avoid a cycle with MessageBubble (which is
-  // re-exported through several layers).
-  const requestPull = (sid: string, id: string): void => {
-    void import('../../lib/ws-client').then(({ wsClient }) => {
-      wsClient.requestAttachment(sid, id);
-    });
-  };
-  const { status, url, error } = useAttachment(ref_, sessionId, requestPull);
+  const { status, url, error } = useAttachment(ref_, sessionId, ATTACHMENT_PULL);
 
   const placeholderStyle: React.CSSProperties = {
     width: ref_.width ? Math.min(ref_.width, 320) : 320,

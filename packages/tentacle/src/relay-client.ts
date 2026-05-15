@@ -24,6 +24,7 @@ import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
+import { makeHeadline } from './tool-headline.js';
 
 const logger = createLogger('relay-client');
 
@@ -137,6 +138,68 @@ export class RelayClient {
    *  receiving devices still see the ref each time (so the chat history is
    *  correct); they just don't get a redundant byte broadcast. */
   private broadcastedAttachmentIds = new Map<string, Set<string>>();
+
+  /** Inline floor for offloading args. Below this we don't bother creating
+   *  a ContentRef + chunk push — the round-trip overhead would exceed the
+   *  bytes saved. Above it we always offload. */
+  private static readonly ARGS_INLINE_FLOOR = 256;
+
+  /** Stash args (and the matching argsRef if we created one) at tool_start
+   *  so tool_complete can recompute the headline and carry the same argsRef
+   *  forward. Keyed by toolCallId. Cleaned on complete. */
+  private lastArgsByToolCallId = new Map<string, Record<string, unknown>>();
+  private lastArgsRefByToolCallId = new Map<string, import('@kraki/protocol').ContentRef>();
+
+  /** Build a ContentRef for the args JSON if the serialized size exceeds the
+   *  inline floor. Returns undefined when args are trivially small. */
+  private offloadArgs(
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown> | undefined,
+  ): import('@kraki/protocol').ContentRef | undefined {
+    if (!this.attachmentStore || !args) return undefined;
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(args);
+    } catch {
+      return undefined;
+    }
+    if (serialized.length < RelayClient.ARGS_INLINE_FLOOR) return undefined;
+    try {
+      const ref = this.attachmentStore.put(
+        sessionId,
+        Buffer.from(serialized, 'utf-8'),
+        'application/json',
+        { name: `${toolName}.args.json` },
+      );
+      return ref;
+    } catch (err) {
+      logger.warn({ err, sessionId, toolName }, 'failed to offload args');
+      return undefined;
+    }
+  }
+
+  /** Build a ContentRef for the tool result body. All non-empty results are
+   *  offloaded (uniform lazy treatment — the wire shape stays predictable). */
+  private offloadResult(
+    sessionId: string,
+    toolName: string,
+    result: string | undefined,
+  ): import('@kraki/protocol').ContentRef | undefined {
+    if (!this.attachmentStore || !result) return undefined;
+    try {
+      const ref = this.attachmentStore.put(
+        sessionId,
+        Buffer.from(result, 'utf-8'),
+        'text/plain',
+        { name: `${toolName}.result.txt` },
+      );
+      return ref;
+    } catch (err) {
+      logger.warn({ err, sessionId, toolName }, 'failed to offload result');
+      return undefined;
+    }
+  }
 
   /**
    * Connect to the relay. Auto-reconnects on disconnect.
@@ -983,13 +1046,30 @@ export class RelayClient {
     };
 
     this.adapter.onToolStart = (sessionId, event) => {
+      const headline = makeHeadline(event.toolName, event.args);
+      const argsRef = this.offloadArgs(sessionId, event.toolName, event.args);
+      if (event.toolCallId) {
+        this.lastArgsByToolCallId.set(event.toolCallId, event.args ?? {});
+        if (argsRef) this.lastArgsRefByToolCallId.set(event.toolCallId, argsRef);
+      }
       this.send({
         type: 'tool_start',
         sessionId,
-        payload: { toolName: event.toolName, args: event.args, toolCallId: event.toolCallId },
+        payload: {
+          toolName: event.toolName,
+          headline,
+          ...(argsRef && { argsRef }),
+          toolCallId: event.toolCallId,
+        },
       });
+      if (argsRef) {
+        this.broadcastAttachmentBytes(sessionId, argsRef).catch((err) => {
+          logger.warn({ err, sessionId, attachmentId: argsRef.id }, 'failed to broadcast args bytes');
+        });
+      }
       // Track key files from tool usage
-      if (event.toolName === 'read_file' || event.toolName === 'write_file') {
+      if (event.toolName === 'read_file' || event.toolName === 'write_file' || event.toolName === 'view' ||
+          event.toolName === 'edit' || event.toolName === 'create') {
         const path = (event.args as Record<string, unknown>)?.path as string | undefined;
         if (path) {
           const ctx = this.sessionManager.getContext(sessionId);
@@ -1003,16 +1083,33 @@ export class RelayClient {
     };
 
     this.adapter.onToolComplete = (sessionId, event) => {
+      // Recompute headline from the args we stashed at start; falls back to
+      // toolName if args aren't available.
+      const headline = makeHeadline(event.toolName, this.lastArgsByToolCallId.get(event.toolCallId ?? '') ?? {});
+      const resultRef = this.offloadResult(sessionId, event.toolName, event.result);
+      const argsRef = this.lastArgsRefByToolCallId.get(event.toolCallId ?? '');
+      if (event.toolCallId) {
+        this.lastArgsByToolCallId.delete(event.toolCallId);
+        this.lastArgsRefByToolCallId.delete(event.toolCallId);
+      }
       this.send({
         type: 'tool_complete',
         sessionId,
         payload: {
-          toolName: event.toolName, args: {}, result: event.result,
+          toolName: event.toolName,
+          headline,
+          ...(resultRef && { resultRef }),
+          ...(argsRef && { argsRef }),
           toolCallId: event.toolCallId,
           ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
       });
+      if (resultRef) {
+        this.broadcastAttachmentBytes(sessionId, resultRef).catch((err) => {
+          logger.warn({ err, sessionId, attachmentId: resultRef.id }, 'failed to broadcast result bytes');
+        });
+      }
     };
 
     this.adapter.onAttachmentBytes = (sessionId, event) => {
@@ -1195,12 +1292,12 @@ export class RelayClient {
   /**
    * Stream an attachment's bytes to all connected consumers as
    * `attachment_data` chunks. Called immediately after the producer fires
-   * a `tool_complete` carrying the matching `AttachmentRef`. Skipped if
+   * a `tool_complete` carrying the matching `ContentRef`. Skipped if
    * we've already broadcast this id within the session.
    */
   private async broadcastAttachmentBytes(
     sessionId: string,
-    ref: import('@kraki/protocol').AttachmentRef,
+    ref: import('@kraki/protocol').ContentRef,
   ): Promise<void> {
     if (!this.attachmentStore) {
       logger.warn({ sessionId, attachmentId: ref.id }, 'no attachment store — skipping broadcast');

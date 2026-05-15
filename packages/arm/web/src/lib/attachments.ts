@@ -4,7 +4,7 @@
  * One state machine per attachment id:
  *
  *   awaiting-chunks  ← live message router calls markAwaitingPush() when a
- *                       fresh tool_complete with an AttachmentRef arrives;
+ *                       fresh tool_complete with an ContentRef arrives;
  *                       chunks are inbound via attachment_data messages.
  *   fetching         ← useAttachment triggered a pull (replay path or
  *                       safety-timeout fallback).
@@ -112,7 +112,7 @@ export function getState(id: string): AttachmentState | undefined {
   return states.get(id);
 }
 
-/** Called by the message router for every AttachmentRef in a LIVE message. */
+/** Called by the message router for every ContentRef in a LIVE message. */
 export function markAwaitingPush(id: string, requestPull: (id: string) => void): void {
   // No-op if we already have it or are mid-fetch
   const current = states.get(id);

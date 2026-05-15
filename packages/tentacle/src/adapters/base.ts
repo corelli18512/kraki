@@ -55,10 +55,10 @@ export interface ToolCompleteEvent {
 }
 
 /** Emitted alongside a tool_complete that carries one or more
- *  `AttachmentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
+ *  `ContentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
  *  to all connected devices as `attachment_data` chunks. */
 export interface AttachmentBytesEvent {
-  refs: Array<import('@kraki/protocol').AttachmentRef>;
+  refs: Array<import('@kraki/protocol').ContentRef>;
 }
 
 export interface SessionEndedEvent {

@@ -353,108 +353,54 @@ describe('StreamingText', () => {
 // ============================================================
 
 describe('ToolActivity', () => {
-  it('renders tool start', () => {
+  const noopPull = () => {};
+
+  it('renders tool start with headline', () => {
     renderWithRouter(
-      <ToolActivity type="start" toolName="shell" args={{ command: 'ls -la' }} />,
+      <ToolActivity type="start" toolName="shell" headline="$ ls -la" sessionId="s1" requestPull={noopPull} />,
     );
     expect(screen.getByText('shell')).toBeInTheDocument();
-    expect(screen.getByText(/shell/)).toBeInTheDocument();
+    expect(screen.getByText('$ ls -la')).toBeInTheDocument();
   });
 
-  it('renders tool complete', () => {
+  it('renders tool complete with headline', () => {
     renderWithRouter(
-      <ToolActivity type="complete" toolName="read_file" args={{ path: 'src/index.ts' }} result="content" />,
+      <ToolActivity type="complete" toolName="read_file" headline="src/index.ts" sessionId="s1" requestPull={noopPull} />,
     );
     expect(screen.getByText('read_file')).toBeInTheDocument();
+    expect(screen.getByText('src/index.ts')).toBeInTheDocument();
   });
 
-  it('shows summary for shell tool', () => {
+  it('renders empty headline gracefully', () => {
     renderWithRouter(
-      <ToolActivity type="start" toolName="shell" args={{ command: 'npm test' }} />,
-    );
-    expect(screen.getByText('$ npm test')).toBeInTheDocument();
-  });
-
-  it('shows summary for read_file tool', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="read_file" args={{ path: 'package.json' }} />,
-    );
-    expect(screen.getByText('package.json')).toBeInTheDocument();
-  });
-
-  it('expands to show args on click', async () => {
-    const user = userEvent.setup();
-    renderWithRouter(
-      <ToolActivity type="complete" toolName="shell" args={{ command: 'ls' }} result="file1\nfile2" />,
-    );
-    await user.click(screen.getByRole('button'));
-    expect(screen.getByText('Command')).toBeInTheDocument();
-    expect(screen.getByText('Result')).toBeInTheDocument();
-  });
-
-  it('does not show result section for start type', async () => {
-    const user = userEvent.setup();
-    renderWithRouter(
-      <ToolActivity type="start" toolName="shell" args={{ command: 'ls' }} />,
-    );
-    await user.click(screen.getByRole('button'));
-    expect(screen.getByText('Command')).toBeInTheDocument();
-    expect(screen.queryByText('Result')).not.toBeInTheDocument();
-  });
-
-  it('shows summary for fetch_url tool', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="fetch_url" args={{ url: 'https://example.com' }} />,
-    );
-    expect(screen.getByText('https://example.com')).toBeInTheDocument();
-  });
-
-  it('shows summary for mcp tool', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="mcp" args={{ server: 'myserver', tool: 'search', params: {} }} />,
-    );
-    expect(screen.getByText('myserver/search')).toBeInTheDocument();
-  });
-
-  it('shows empty summary for unknown tool', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="custom_tool" args={{ foo: 'bar' }} />,
+      <ToolActivity type="start" toolName="custom_tool" headline="" sessionId="s1" requestPull={noopPull} />,
     );
     expect(screen.getByText('custom_tool')).toBeInTheDocument();
   });
 
-  it('shows summary for write_file tool', () => {
+  it('expands to show body when clicked', async () => {
+    const user = userEvent.setup();
     renderWithRouter(
-      <ToolActivity type="start" toolName="write_file" args={{ path: 'src/app.ts', content: '...' }} />,
+      <ToolActivity type="complete" toolName="shell" headline="$ ls" sessionId="s1" requestPull={noopPull} />,
     );
-    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
+    await user.click(screen.getByRole('button'));
+    // Without refs, the body just echoes the headline under "Command" label
+    expect(screen.getByText('Command')).toBeInTheDocument();
   });
 
-  it('handles shell tool with non-string command gracefully', () => {
+  it('does not show result section without resultRef', async () => {
+    const user = userEvent.setup();
     renderWithRouter(
-      <ToolActivity type="start" toolName="shell" args={{ command: 123 }} />,
+      <ToolActivity type="start" toolName="shell" headline="$ ls" sessionId="s1" requestPull={noopPull} />,
     );
-    expect(screen.getByText('shell')).toBeInTheDocument();
+    await user.click(screen.getByRole('button'));
+    expect(screen.queryByText('Result')).not.toBeInTheDocument();
   });
 
-  it('handles fetch_url with non-string url gracefully', () => {
+  it('renders tool with truncated headline', () => {
     renderWithRouter(
-      <ToolActivity type="start" toolName="fetch_url" args={{ url: null }} />,
+      <ToolActivity type="start" toolName="bash" headline={'$ ' + 'x'.repeat(197) + '…'} sessionId="s1" requestPull={noopPull} />,
     );
-    expect(screen.getByText('fetch_url')).toBeInTheDocument();
-  });
-
-  it('handles mcp with non-string tool gracefully', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="mcp" args={{ server: 's', tool: 42, params: {} }} />,
-    );
-    expect(screen.getByText('mcp')).toBeInTheDocument();
-  });
-
-  it('handles read_file with non-string path gracefully', () => {
-    renderWithRouter(
-      <ToolActivity type="start" toolName="read_file" args={{ path: undefined }} />,
-    );
-    expect(screen.getByText('read_file')).toBeInTheDocument();
+    expect(screen.getByText('bash')).toBeInTheDocument();
   });
 });
