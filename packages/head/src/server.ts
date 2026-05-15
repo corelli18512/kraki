@@ -1037,12 +1037,17 @@ export class HeadServer {
       deviceId: string;
       /** The authenticated user's ID. */
       userId: string;
-      /** Identity fields from the auth source (local DB or remote backend). */
+      /** Identity fields from the auth source (local DB or remote backend).
+       *  `preferences` and `region` are optional and only meaningful from the
+       *  delegated-backend path — local paths leave them undefined and the
+       *  helper reads preferences from local storage instead. */
       user: {
         id: string;
         login: string;
         provider: string;
         email?: string;
+        preferences?: Record<string, unknown>;
+        region?: string;
       };
       /** Auth method, echoed back in auth_ok. */
       authMethod: string;
@@ -1059,14 +1064,20 @@ export class HeadServer {
       vapidPublicKey?: string;
     },
   ): void {
-    // Local preferences win. Some auth paths receive a `user` object from a
-    // remote backend that doesn't know about per-edge preference overrides.
-    // Reading from local storage (which both edge and non-edge maintain via
-    // upsertUser) guarantees a consistent view regardless of auth path.
+    // Merge preferences. Local storage takes precedence (it captures per-edge
+    // overrides the backend might not know about), but fall back to the
+    // backend-supplied preferences if local has none — e.g. on a user's very
+    // first auth to this edge, before upsertUser has been called or when the
+    // backend is the canonical source of truth.
+    //
+    // Why this matters: storage.upsertUser only writes username/provider/email,
+    // NOT preferences. So a brand-new user record reads back with
+    // preferences=undefined. Without this fallback, backend preferences would
+    // be silently dropped at every first auth.
     const fullUser = this.storage.getUser(params.userId);
     const userResponse = {
       ...params.user,
-      preferences: fullUser?.preferences,
+      preferences: fullUser?.preferences ?? params.user.preferences,
     };
 
     // Flush locally-queued pending messages — every auth path that lands here

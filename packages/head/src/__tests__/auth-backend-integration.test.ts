@@ -42,7 +42,14 @@ class MockAuthBackend implements AuthBackend {
   /** Override per call if needed (default: empty). */
   backendPendingMessages: UnicastEnvelope[] = [];
   /** User identity returned to the head. */
-  user = {
+  user: {
+    id: string;
+    login: string;
+    provider: string;
+    email?: string;
+    preferences?: Record<string, unknown>;
+    region?: string;
+  } = {
     id: 'u_remote',
     login: 'remote-user',
     provider: 'open',
@@ -240,11 +247,50 @@ describe('Edge-mode auth: local preferences merged into user response', () => {
 
   it('handles missing local user record gracefully (preferences undefined)', async () => {
     // No upsertUser before connect — head will upsert during mirror, but
-    // with no preferences set.
+    // with no preferences set. Backend also returns no preferences.
     const { authOk } = await connectEdge(env.port, 'dev_t5');
     const user = authOk.user as Record<string, unknown>;
     // preferences should be omitted/undefined, not crash.
     expect(user.preferences).toBeUndefined();
+  });
+
+  it('falls back to backend preferences when local has none (first-time auth)', async () => {
+    // User authenticating for the first time on this edge — no local record yet.
+    // Backend is canonical and supplies preferences.
+    env.backend.user = {
+      id: 'u_remote',
+      login: 'remote-user',
+      provider: 'open',
+      email: 'remote@example.com',
+      preferences: { theme: 'light', autoMode: false, fromBackend: true },
+    };
+
+    const { authOk } = await connectEdge(env.port, 'dev_t_first_auth');
+
+    const user = authOk.user as Record<string, unknown>;
+    // Backend preferences must reach the client. Without the fallback, they
+    // would be silently dropped because storage.upsertUser doesn't persist
+    // preferences and the subsequent getUser returns preferences=undefined.
+    expect(user.preferences).toEqual({ theme: 'light', autoMode: false, fromBackend: true });
+  });
+
+  it('local preferences override backend preferences when both exist', async () => {
+    // Local already has prefs (set by user via update_preferences on this edge).
+    env.storage.upsertUser('u_remote', 'remote-user', 'open');
+    env.storage.updatePreferences('u_remote', { theme: 'dark', source: 'local' });
+
+    // Backend also reports preferences, but stale ones.
+    env.backend.user = {
+      id: 'u_remote',
+      login: 'remote-user',
+      provider: 'open',
+      preferences: { theme: 'light', source: 'backend' },
+    };
+
+    const { authOk } = await connectEdge(env.port, 'dev_t_pref_conflict');
+
+    const user = authOk.user as Record<string, unknown>;
+    expect(user.preferences).toEqual({ theme: 'dark', source: 'local' });
   });
 });
 
