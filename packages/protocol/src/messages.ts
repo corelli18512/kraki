@@ -804,6 +804,15 @@ export interface DeviceLeftMessage {
   deviceId: string;
 }
 
+/** Sent to all connected devices when a device's liveness is uncertain
+ *  (ping sent but pong not yet received within the grace period).
+ *  Transient: will be followed by either device_joined (recovered)
+ *  or device_left (terminated). */
+export interface DevicePendingMessage {
+  type: 'device_pending';
+  deviceId: string;
+}
+
 /** Request to remove an offline device from the user's account. */
 export interface RemoveDeviceMessage {
   type: 'remove_device';
@@ -875,6 +884,7 @@ export type ControlMessage =
   | AuthInfoResponse
   | DeviceJoinedMessage
   | DeviceLeftMessage
+  | DevicePendingMessage
   | RemoveDeviceMessage
   | DeviceRemovedMessage
   | UpdatePreferencesMessage
