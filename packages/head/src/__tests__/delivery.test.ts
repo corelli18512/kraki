@@ -287,7 +287,7 @@ describe('Delivery assurance — retry behavior', () => {
     expect(env.server.getDeliveryState(app.deviceId)!.ackSupported).toBe(false);
   }, 15000);
 
-  it('closes connection after MAX_RETRIES exceeded', async () => {
+  it('marks entries giveUp after MAX_RETRIES but keeps the connection alive', async () => {
     const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
     const app = await connectDevice(env.port, 'Phone', 'app');
 
@@ -295,25 +295,87 @@ describe('Delivery assurance — retry behavior', () => {
     app.send({ type: 'ping', ack: 0 });
     await new Promise(r => setTimeout(r, 30));
 
-    tentacle.send({ type: 'broadcast', blob: 'doomed', keys: { [app.deviceId]: 'k' } });
+    tentacle.send({ type: 'broadcast', blob: 'stuck', keys: { [app.deviceId]: 'k' } });
     await app.waitFor('broadcast', 2000);
 
-    // Track when the connection closes.
+    // Connection should NEVER close from retry exhaustion.
     let closed = false;
     app.ws.on('close', () => { closed = true; });
 
-    // Wait past RETRY_AFTER_MS, then force 4 retry passes (3 retries + 1 to trigger close).
+    // 4 retry passes with intervals > RETRY_AFTER_MS — retries=1, 2, 3, then giveUp.
     for (let i = 0; i < 4; i++) {
       await new Promise(r => setTimeout(r, 5100));
       env.server.forceRetryPass();
-      if (closed) break;
     }
 
-    await new Promise(r => setTimeout(r, 200));
-    expect(closed).toBe(true);
-    // Connection removed from head's map.
-    expect(env.server.getDeliveryState(app.deviceId)).toBeUndefined();
+    // Connection still up.
+    expect(closed).toBe(false);
+    const state = env.server.getDeliveryState(app.deviceId);
+    expect(state).toBeDefined();
+    expect(state!.inFlightCount).toBe(1);
+    expect(state!.givenUpCount).toBe(1);
+
+    // Future retry passes are no-ops for given-up entries — no further sends.
+    const sendsBefore = app.messages.filter(m => m.type === 'broadcast').length;
+    await new Promise(r => setTimeout(r, 5100));
+    env.server.forceRetryPass();
+    await new Promise(r => setTimeout(r, 50));
+    const sendsAfter = app.messages.filter(m => m.type === 'broadcast').length;
+    expect(sendsAfter).toBe(sendsBefore);
   }, 30000);
+
+  it('peer ack after give-up still prunes the buffer cleanly', async () => {
+    const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
+    const app = await connectDevice(env.port, 'Phone', 'app');
+    app.send({ type: 'ping', ack: 0 });
+    await new Promise(r => setTimeout(r, 30));
+
+    tentacle.send({ type: 'broadcast', blob: 'stuck', keys: { [app.deviceId]: 'k' } });
+    await app.waitFor('broadcast', 2000);
+    const stuckSeq = env.server.getDeliveryState(app.deviceId)!.relaySeqCounter;
+
+    // Exhaust retries → give up.
+    for (let i = 0; i < 4; i++) {
+      await new Promise(r => setTimeout(r, 5100));
+      env.server.forceRetryPass();
+    }
+    expect(env.server.getDeliveryState(app.deviceId)!.givenUpCount).toBe(1);
+
+    // Peer eventually pings with cumulative ack covering the given-up entry.
+    app.send({ type: 'ping', ack: stuckSeq });
+    await new Promise(r => setTimeout(r, 50));
+
+    const state = env.server.getDeliveryState(app.deviceId)!;
+    expect(state.inFlightCount).toBe(0);
+    expect(state.givenUpCount).toBe(0);
+    expect(state.lastAckedSeq).toBe(stuckSeq);
+  }, 30000);
+
+  it('buffer-full evicts oldest entry silently, does not kill connection', async () => {
+    const tentacle = await connectDevice(env.port, 'Laptop', 'tentacle');
+    const app = await connectDevice(env.port, 'Phone', 'app');
+    app.send({ type: 'ping', ack: 0 });
+    await new Promise(r => setTimeout(r, 30));
+
+    let closed = false;
+    app.ws.on('close', () => { closed = true; });
+
+    // MAX_IN_FLIGHT = 200. Send 205 broadcasts without acking — the first
+    // few entries should silently evict to make room.
+    for (let i = 0; i < 205; i++) {
+      tentacle.send({ type: 'broadcast', blob: `m${i}`, keys: { [app.deviceId]: 'k' } });
+    }
+    // Drain just enough to let head finish forwarding.
+    await new Promise(r => setTimeout(r, 500));
+
+    expect(closed).toBe(false);
+    const state = env.server.getDeliveryState(app.deviceId);
+    expect(state).toBeDefined();
+    // Buffer is capped at 200 even though 205 were sent.
+    expect(state!.inFlightCount).toBeLessThanOrEqual(200);
+    // The counter shows 205 — head stamped all of them.
+    expect(state!.relaySeqCounter).toBeGreaterThanOrEqual(205);
+  }, 15000);
 });
 
 describe('Delivery assurance — head dedup', () => {

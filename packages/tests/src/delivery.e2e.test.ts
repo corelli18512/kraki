@@ -467,16 +467,20 @@ describe('E2E delivery assurance', () => {
     expect((userMsg!.payload as { content: string }).content).toBe('I approve');
   });
 
-  it('drops connection after MAX_RETRIES and tentacle stops seeing the app online', async () => {
+  it('throttled-but-alive peer stays connected through retry exhaustion (no flapping)', async () => {
+    // This is the regression test for the v0.12.0 bug where a backgrounded
+    // browser tab would get its connection killed every ~30s. The peer is
+    // ALIVE (TCP fine, would auto-pong if pinged) but its application-level
+    // acks are deferred. Head must not kill the connection on retry-exhaustion.
     const tentacle = await connectTentaclePeer(env.port);
     const app = await connectAppPeer(env.port);
     await waitMs(50);
-    // Make head consider app ack-capable, but then start dropping everything.
     app.sendPing();
     await waitMs(30);
     expect(env.head.getDeliveryState(app.deviceId)!.ackSupported).toBe(true);
 
-    // App will drop everything from now on.
+    // App simulates throttled JS: receives messages at the wire level but
+    // can't ack (acks are dropped on the app side here).
     app.dropNext(1000);
 
     let appClosed = false;
@@ -488,23 +492,69 @@ describe('E2E delivery assurance', () => {
       deviceId: tentacle.deviceId,
       seq: 1,
       timestamp: new Date().toISOString(),
-      payload: { content: 'doomed' },
+      payload: { content: 'eventually-acked' },
     });
 
-    // 4 retry passes spaced past RETRY_AFTER_MS.
+    // Burn through the retry budget.
     for (let i = 0; i < 4; i++) {
       await waitMs(5100);
       env.head.forceRetryPass();
-      if (appClosed) break;
     }
-    await waitMs(200);
 
-    expect(appClosed).toBe(true);
-    expect(env.head.getDeliveryState(app.deviceId)).toBeUndefined();
+    // Crucial: connection is NOT closed. App remains online from head's POV.
+    expect(appClosed).toBe(false);
+    const state = env.head.getDeliveryState(app.deviceId);
+    expect(state).toBeDefined();
+    expect(state!.givenUpCount).toBeGreaterThanOrEqual(1);
 
-    // Tentacle should have been notified that the app left.
-    const left = tentacle.rawMessages.find(m => m.type === 'device_left');
-    expect(left).toBeDefined();
+    // Tentacle did NOT receive a spurious device_left.
+    const left = tentacle.rawMessages.find(m => m.type === 'device_left' && (m as { deviceId?: string }).deviceId === app.deviceId);
+    expect(left).toBeUndefined();
+  }, 30000);
+
+  it('peer that catches up after give-up gets its buffer pruned correctly', async () => {
+    // Models: tab was backgrounded, head gave up retrying. Tab thaws,
+    // sends a ping with cumulative ack. Head must drain the buffer.
+    const tentacle = await connectTentaclePeer(env.port);
+    const app = await connectAppPeer(env.port);
+    await waitMs(50);
+    app.sendPing();
+    await waitMs(30);
+
+    app.dropNext(1000);
+    tentacle.broadcast({
+      type: 'agent_message',
+      sessionId: 's',
+      deviceId: tentacle.deviceId,
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { content: 'arrived-eventually' },
+    });
+
+    // Exhaust retries.
+    for (let i = 0; i < 4; i++) {
+      await waitMs(5100);
+      env.head.forceRetryPass();
+    }
+
+    let state = env.head.getDeliveryState(app.deviceId)!;
+    expect(state.givenUpCount).toBeGreaterThanOrEqual(1);
+    const stuckSeq = state.relaySeqCounter;
+
+    // Tab "thaws": app now acks everything cumulatively.
+    app.dropNext(0);
+    // Force the ping to carry the highest relaySeq head has stamped.
+    // The peer's lastReceivedRelaySeq advanced via the dropped frames'
+    // bookkeeping in connectAppPeer — even dropped frames updated the
+    // tracker before being discarded? They didn't: we drop before tracking.
+    // Send a synthetic ping with explicit ack at stuckSeq.
+    app.ws.send(JSON.stringify({ type: 'ping', ack: stuckSeq }));
+    await waitMs(100);
+
+    state = env.head.getDeliveryState(app.deviceId)!;
+    expect(state.inFlightCount).toBe(0);
+    expect(state.givenUpCount).toBe(0);
+    expect(state.lastAckedSeq).toBe(stuckSeq);
   }, 30000);
 
   it('arm→head direction: tentacle never sees duplicates even if arm retries same relaySeq', async () => {
