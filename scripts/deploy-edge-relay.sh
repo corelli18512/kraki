@@ -86,8 +86,13 @@ find "$BACKUP_ROOT" -maxdepth 1 -type d -name 'pre-*' -mtime +30 -exec rm -rf {}
 
 # ---- install ----
 
-echo "==> npm install -g @kraki/head@$VERSION"
-npm install -g "@kraki/head@$VERSION"
+# Pin to the upstream registry. Edge nodes in China often have npm configured
+# for registry.npmmirror.com, which lags behind on new versions by hours.
+# We want the freshly-published @kraki/head@$VERSION right now, not whenever
+# the mirror syncs.
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
+echo "==> npm install -g --registry=$NPM_REGISTRY @kraki/head@$VERSION"
+npm install -g --registry="$NPM_REGISTRY" "@kraki/head@$VERSION"
 
 INSTALLED_VERSION="$(current_version || true)"
 if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
@@ -103,7 +108,7 @@ rollback() {
   local reason="$1"
   echo "==> ROLLBACK ($reason)"
   if [ -n "${CURRENT_VERSION:-}" ] && [ "$CURRENT_VERSION" != "$VERSION" ]; then
-    npm install -g "@kraki/head@$CURRENT_VERSION" || true
+    npm install -g --registry="$NPM_REGISTRY" "@kraki/head@$CURRENT_VERSION" || true
   fi
   cp -p "$SNAP/kraki-relay.service" "$UNIT"
   if [ -f "$SNAP/relay.env" ]; then

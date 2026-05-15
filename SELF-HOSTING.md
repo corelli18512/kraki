@@ -98,6 +98,8 @@ sudo /usr/local/sbin/deploy-edge-relay.sh 0.12.0
 
 (or invoke `scripts/deploy-edge-relay.sh` directly from a checkout — the script doesn't depend on the repo).
 
+The script pins `npm install` to `https://registry.npmjs.org` so it doesn't see stale versions from mirrors (e.g. `registry.npmmirror.com`, common on Chinese edge hosts, can lag the upstream registry by hours). Override via `NPM_REGISTRY=...` if you need to install from a different source.
+
 ### Daily database backups
 
 `scripts/backup-relay-db.sh` performs a WAL-safe `sqlite3 .backup` of the live DB and prunes copies older than 14 days. Install it once on the relay host:
