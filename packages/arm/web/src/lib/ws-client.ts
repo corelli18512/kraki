@@ -89,7 +89,7 @@ export class KrakiWSClient {
 
   /**
    * Request the bytes of an attachment from the tentacle that owns the session.
-   * Used by `useAttachment` when an `AttachmentRef` arrives via replay
+   * Used by `useAttachment` when an `ContentRef` arrives via replay
    * (rather than a live push) or when a push safety-timeout elapses.
    *
    * The message stamps:

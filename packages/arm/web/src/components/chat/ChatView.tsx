@@ -20,7 +20,7 @@ function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
   for (const m of thinkingMessages) {
     if (m.type === 'tool_complete' && Array.isArray(m.payload?.attachments)) {
       for (const att of m.payload.attachments) {
-        if (att.type === 'image' || att.type === 'image_ref') {
+        if (att.type === 'image' || att.type === 'content_ref') {
           images.push(att as Attachment);
         }
       }

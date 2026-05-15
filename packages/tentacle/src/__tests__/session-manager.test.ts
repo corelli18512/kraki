@@ -657,7 +657,7 @@ describe('SessionManager', () => {
       expect(sm2.getMeta(sessionId)!.inlineImagesStripped).toBe(true);
     });
 
-    it('leaves AttachmentRef attachments untouched', () => {
+    it('leaves ContentRef attachments untouched', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'tool_complete', JSON.stringify({
         type: 'tool_complete',
@@ -665,7 +665,7 @@ describe('SessionManager', () => {
         payload: {
           toolName: 'kraki-show_image',
           result: 'Image displayed to user.',
-          attachments: [{ type: 'image_ref', id: 'abc', mimeType: 'image/png', size: 100 }],
+          attachments: [{ type: 'content_ref', id: 'abc', mimeType: 'image/png', size: 100 }],
         },
       }));
 
@@ -677,7 +677,7 @@ describe('SessionManager', () => {
       const after = sm2.getMessagesAfterSeq(sessionId, 0);
       const inner = JSON.parse(after[0].payload) as { payload: { attachments?: unknown[] } };
       expect(inner.payload.attachments).toEqual([
-        { type: 'image_ref', id: 'abc', mimeType: 'image/png', size: 100 },
+        { type: 'content_ref', id: 'abc', mimeType: 'image/png', size: 100 },
       ]);
     });
 

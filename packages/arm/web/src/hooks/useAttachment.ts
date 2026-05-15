@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react';
 
-import type { AttachmentRef } from '@kraki/protocol';
+import type { ContentRef } from '@kraki/protocol';
 
 import {
   type AttachmentState,
@@ -30,6 +30,12 @@ import {
 interface UseAttachmentResult {
   status: 'loading' | 'ready' | 'error';
   url: string | null;
+  error: string | null;
+}
+
+interface UseAttachmentTextResult {
+  status: 'loading' | 'ready' | 'error';
+  text: string | null;
   error: string | null;
 }
 
@@ -54,39 +60,34 @@ function hydrateOnce(id: string): Promise<boolean> {
   return p;
 }
 
-export function useAttachment(
-  ref: AttachmentRef,
+/** Common subscribe + auto-fetch effect shared by useAttachment and
+ *  useAttachmentText. */
+function useAttachmentLifecycle(
+  ref: ContentRef,
   sessionId: string,
   requestPull: RequestPull,
-): UseAttachmentResult {
+  enabled: boolean,
+): number {
   const [tick, setTick] = useState(0);
-  const [url, setUrl] = useState<string | null>(null);
-
   useEffect(() => {
+    if (!enabled) return undefined;
     let cancelled = false;
-
     function onUpdate(): void {
       if (cancelled) return;
       setTick((t) => t + 1);
     }
-
     const unsubscribe = subscribe(ref.id, onUpdate);
-
     async function init(): Promise<void> {
       const existing = getState(ref.id);
       if (existing?.kind === 'ready') return;
       if (existing?.kind === 'awaiting-chunks' || existing?.kind === 'fetching') return;
-      // Not in memory — try IDB
       const hit = await hydrateOnce(ref.id);
       if (cancelled) return;
       if (hit) return;
-      // Miss + no live push → start a fetch
       markFetching(ref.id);
       requestPull(sessionId, ref.id);
     }
-
     void init();
-
     return () => {
       cancelled = true;
       unsubscribe();
@@ -94,7 +95,17 @@ export function useAttachment(
     // requestPull identity changes every render; we deliberately exclude it
     // from deps so this effect only re-runs when the id/session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ref.id, sessionId]);
+  }, [ref.id, sessionId, enabled]);
+  return tick;
+}
+
+export function useAttachment(
+  ref: ContentRef,
+  sessionId: string,
+  requestPull: RequestPull,
+): UseAttachmentResult {
+  const tick = useAttachmentLifecycle(ref, sessionId, requestPull, true);
+  const [url, setUrl] = useState<string | null>(null);
 
   // Derive object URL from current state. Re-runs on every notify.
   useEffect(() => {
@@ -121,4 +132,43 @@ export function useAttachment(
     return { status: 'error', url: null, error: state.reason };
   }
   return { status: 'loading', url: null, error: null };
+}
+
+/** Sibling of {@link useAttachment} that decodes the bytes as UTF-8 text.
+ *  Use for tool result/args refs (mime `text/plain` or `application/json`).
+ *  Set `enabled=false` to skip the fetch entirely (e.g. while a collapsed
+ *  chip doesn't need the body yet). */
+export function useAttachmentText(
+  ref: ContentRef,
+  sessionId: string,
+  requestPull: RequestPull,
+  enabled = true,
+): UseAttachmentTextResult {
+  const tick = useAttachmentLifecycle(ref, sessionId, requestPull, enabled);
+  const [text, setText] = useState<string | null>(null);
+
+  useEffect(() => {
+    const state = getState(ref.id);
+    if (state?.kind === 'ready') {
+      let cancelled = false;
+      void state.blob.text().then((t) => {
+        if (!cancelled) setText(t);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setText(null);
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref.id, tick]);
+
+  const state = getState(ref.id) as AttachmentState | undefined;
+  if (state?.kind === 'ready' && text !== null) {
+    return { status: 'ready', text, error: null };
+  }
+  if (state?.kind === 'error') {
+    return { status: 'error', text: null, error: state.reason };
+  }
+  return { status: 'loading', text: null, error: null };
 }

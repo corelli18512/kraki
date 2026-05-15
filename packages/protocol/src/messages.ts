@@ -112,30 +112,33 @@ export interface ImageAttachment {
   name?: string;
 }
 
-/** Reference to an image stored in the tentacle's attachment store.
- *  Used for agent-produced images (currently `kraki-show_image` via MCP)
- *  so a small ref flows in the message stream while bytes travel as
- *  separate `attachment_data` envelopes. */
-export interface AttachmentRef {
-  type: 'image_ref';
+/** Reference to content stored in the tentacle's attachment store —
+ *  used as a lazy handle for image bytes, large tool output, large args,
+ *  etc. The ref flows inline in messages; bytes flow separately via
+ *  `attachment_data` chunks. */
+export interface ContentRef {
+  type: 'content_ref';
   /** Content-addressed id: sha256 hex truncated to 32 chars. */
   id: string;
   mimeType: string;
-  /** Decoded byte size of the original image. */
+  /** Decoded byte size of the underlying content. */
   size: number;
-  /** Optional caption to display under the image. */
+  /** Optional caption (used for image attachments). */
   caption?: string;
   /** Optional original filename, e.g. "screenshot.png". */
   name?: string;
   /** Optional intrinsic width in CSS pixels — populated when the
-   *  tentacle could parse it cheaply from the file header. Used by the
-   *  client to render a correctly-shaped placeholder while bytes arrive. */
+   *  tentacle could parse it cheaply from an image file header. */
   width?: number;
   /** Optional intrinsic height in CSS pixels. */
   height?: number;
 }
 
-export type Attachment = ImageAttachment | AttachmentRef;
+/** @deprecated Old name for {@link ContentRef}. Kept as alias during the
+ *  v0.17 transition so callers can be migrated in one step. */
+export type AttachmentRef = ContentRef;
+
+export type Attachment = ImageAttachment | ContentRef;
 
 // ============================================================
 // Inner message base (inside encrypted blob, invisible to relay)
@@ -213,7 +216,18 @@ export interface QuestionRequest extends BaseEnvelope {
 
 export interface ToolStartMessage extends BaseEnvelope {
   type: 'tool_start';
-  payload: ToolArgs & {
+  payload: {
+    toolName: string;
+    /** Short user-facing preview of the tool invocation, composed on
+     *  the tentacle side (≤ MAX_HEADLINE chars, ends with "…" if
+     *  truncated). Always present; safe to render immediately even on
+     *  cold replay. UX may upgrade to the full args text once
+     *  `argsRef` resolves. */
+    headline: string;
+    /** Lazy ref to the full args JSON. Present when args exceed a tiny
+     *  inline floor (so we don't pay a sha256 + round trip for trivial
+     *  args). Absent for trivially small args. */
+    argsRef?: ContentRef;
     /** Unique ID for this tool invocation (matches tool_complete) */
     toolCallId?: string;
   };
@@ -221,12 +235,25 @@ export interface ToolStartMessage extends BaseEnvelope {
 
 export interface ToolCompleteMessage extends BaseEnvelope {
   type: 'tool_complete';
-  payload: ToolArgs & {
-    result: string;
+  payload: {
+    toolName: string;
+    /** Same headline as the matching `tool_start`, repeated for
+     *  replay-completeness (a client that joins after `tool_start` has
+     *  been buffered out should still see a chip header). */
+    headline: string;
+    /** Lazy ref to the full result body. Always present except when the
+     *  tool produced no result text at all. Results are uniformly lazy
+     *  so the wire shape stays predictable and replay batches stay flat. */
+    resultRef?: ContentRef;
+    /** Lazy ref to the full args JSON, repeated for replay convenience. */
+    argsRef?: ContentRef;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
     /** Whether the tool execution succeeded (default true if absent) */
     success?: boolean;
+    /** Images produced by the tool (e.g. from `kraki-show_image`).
+     *  Separate from `resultRef` because images render as a grid below
+     *  the chip rather than as an expandable text body. */
     attachments?: Attachment[];
   };
 }

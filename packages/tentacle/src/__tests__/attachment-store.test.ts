@@ -50,7 +50,7 @@ describe('AttachmentStore', () => {
   it('put writes bytes + sidecar and returns a stable ref', () => {
     const ref = store.put('sid-A', PNG_1X1, 'image/png', { name: 'pixel.png' });
     expect(ref).toMatchObject({
-      type: 'image_ref',
+      type: 'content_ref',
       id: expect.any(String),
       mimeType: 'image/png',
       size: PNG_1X1.length,

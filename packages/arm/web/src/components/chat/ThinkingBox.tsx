@@ -175,20 +175,18 @@ function getMessageSummary(msg: ChatMessage): string {
   switch (msg.type) {
     case 'tool_start': {
       const toolName = msg.payload.toolName;
-      const args = msg.payload.args as Record<string, unknown>;
-      const detail = getToolDetail(args);
+      const headline = (msg.payload as { headline?: string }).headline ?? '';
       summary = toolName
-        ? `${toolName}${detail ? ` ${detail}` : ''}`
-        : (detail || 'Running…');
+        ? `${toolName}${headline ? ` ${headline}` : ''}`
+        : (headline || 'Running…');
       break;
     }
     case 'tool_complete': {
       const toolName = msg.payload.toolName;
-      const args = msg.payload.args as Record<string, unknown>;
-      const detail = getToolDetail(args);
+      const headline = (msg.payload as { headline?: string }).headline ?? '';
       summary = toolName
-        ? `${toolName}${detail ? ` ${detail}` : ''}`
-        : (detail || 'Done');
+        ? `${toolName}${headline ? ` ${headline}` : ''}`
+        : (headline || 'Done');
       break;
     }
     case 'agent_message': {
@@ -221,16 +219,8 @@ function getMessageSummary(msg: ChatMessage): string {
     type: msg.type,
     seq: 'seq' in msg ? (msg as { seq?: number }).seq : '?',
     toolName: msg.type === 'tool_start' || msg.type === 'tool_complete' ? msg.payload.toolName : undefined,
-    argKeys: msg.type === 'tool_start' || msg.type === 'tool_complete' ? Object.keys(msg.payload.args as Record<string, unknown> ?? {}) : undefined,
+    headline: msg.type === 'tool_start' || msg.type === 'tool_complete' ? (msg.payload as { headline?: string }).headline : undefined,
     summary: summary.slice(0, 80),
   });
   return summary;
-}
-
-function getToolDetail(args: Record<string, unknown>): string {
-  if (typeof args.command === 'string') return `$ ${args.command}`;
-  if (typeof args.path === 'string') return args.path;
-  if (typeof args.pattern === 'string') return args.pattern;
-  if (typeof args.url === 'string') return args.url;
-  return '';
 }

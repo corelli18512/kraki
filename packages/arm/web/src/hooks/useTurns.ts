@@ -158,15 +158,16 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): GroupedMessages
             const startMsg = currentThinking[startIdx];
             const startPayload = (startMsg as { payload?: Record<string, unknown> }).payload ?? {};
             const completePayload = (msg as { payload?: Record<string, unknown> }).payload ?? {};
-            const startArgs = (startPayload.args ?? {}) as Record<string, unknown>;
-            const completeArgs = (completePayload.args ?? {}) as Record<string, unknown>;
             currentThinking[startIdx] = {
               ...msg,
               seq: (startMsg as { seq?: number }).seq,
               payload: {
                 ...completePayload,
                 toolName: completePayload.toolName || startPayload.toolName,
-                args: { ...startArgs, ...completeArgs },
+                headline: completePayload.headline || startPayload.headline || '',
+                // Prefer ref/attachments from the complete event; carry forward
+                // argsRef from start so the chip can lazy-expand args.
+                argsRef: completePayload.argsRef || startPayload.argsRef,
               },
             } as ChatMessage;
           } else {

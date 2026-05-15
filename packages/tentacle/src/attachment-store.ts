@@ -37,7 +37,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-import type { AttachmentRef } from '@kraki/protocol';
+import type { ContentRef } from '@kraki/protocol';
 
 import { createLogger } from './logger.js';
 
@@ -175,14 +175,14 @@ export class AttachmentStore {
   /**
    * Write bytes to the store (idempotent — same hash → same id, no re-write).
    *
-   * Returns an `AttachmentRef` ready to embed in a message envelope.
+   * Returns a `ContentRef` ready to embed in a message envelope.
    */
   put(
     sessionId: string,
     bytes: Buffer,
     mimeType: string,
     options?: { name?: string; caption?: string },
-  ): AttachmentRef {
+  ): ContentRef {
     const id = hashBytes(bytes);
     const ext = extForMime(mimeType);
     const dir = this.dir(sessionId);
@@ -222,7 +222,7 @@ export class AttachmentStore {
     }
 
     return {
-      type: 'image_ref',
+      type: 'content_ref',
       id,
       mimeType: meta.mimeType,
       size: meta.size,

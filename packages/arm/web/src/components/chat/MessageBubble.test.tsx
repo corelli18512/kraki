@@ -77,17 +77,18 @@ describe('MessageBubble', () => {
   });
 
   describe('tool_start', () => {
-    it('renders tool start with name', () => {
-      renderMsg(makeMsg('tool_start', { toolName: 'shell', args: { command: 'ls' } }));
+    it('renders tool start with name and headline', () => {
+      renderMsg(makeMsg('tool_start', { toolName: 'shell', headline: '$ ls' }));
       expect(screen.getByText('shell')).toBeInTheDocument();
-      expect(screen.getByText(/shell/)).toBeInTheDocument();
+      expect(screen.getByText('$ ls')).toBeInTheDocument();
     });
   });
 
   describe('tool_complete', () => {
-    it('renders tool complete with name', () => {
-      renderMsg(makeMsg('tool_complete', { toolName: 'read_file', args: { path: 'a.ts' }, result: 'content' }));
+    it('renders tool complete with name and headline', () => {
+      renderMsg(makeMsg('tool_complete', { toolName: 'read_file', headline: 'a.ts' }));
       expect(screen.getByText('read_file')).toBeInTheDocument();
+      expect(screen.getByText('a.ts')).toBeInTheDocument();
     });
   });
 

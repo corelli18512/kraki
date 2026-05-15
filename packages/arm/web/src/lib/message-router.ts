@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, AttachmentRef } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, ContentRef } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -38,6 +38,22 @@ export interface RouterContext {
   onSessionReplayBatch?: (msg: SessionReplayBatchMessage) => void;
 }
 
+/** Build the request_attachment fallback callback used by markAwaitingPush. */
+function makePullCallback(
+  ctx: RouterContext,
+  store: ReturnType<typeof getStore>,
+  sid: string,
+): (id: string) => void {
+  return (id: string) => {
+    ctx.sendEncrypted?.({
+      type: 'request_attachment',
+      deviceId: store.deviceId,
+      sessionId: sid,
+      payload: { id, sessionId: sid },
+    });
+  };
+}
+
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   const store = getStore();
 
@@ -57,7 +73,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     ctx.onSessionReplayBatch?.(msg as SessionReplayBatchMessage);
     return;
   }
-
   // attachment_data — chunk of bytes for an attachment ref. Has a sessionId
   // but we route it before the session-existence check because the chunk's
   // session may not be in our store yet during early load.
@@ -406,29 +421,36 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'send_input':
       break;
 
+    case 'tool_start': {
+      store.appendMessage(sid, msg);
+      const payload = (msg as { payload: { argsRef?: ContentRef } }).payload;
+      if (payload?.argsRef && typeof payload.argsRef.id === 'string') {
+        const pull = makePullCallback(ctx, store, sid);
+        markAwaitingPush(payload.argsRef.id, pull);
+      }
+      break;
+    }
+
     case 'tool_complete': {
       store.appendMessage(sid, msg);
-      // If this tool_complete carries one or more AttachmentRefs, mark each
-      // id as "awaiting push" so useAttachment shows a spinner while chunks
-      // arrive. Replayed refs don't go through here (they ride
-      // session_replay_batch and are inspected by the replay handler).
-      const payload = (msg as { payload: { attachments?: Array<Record<string, unknown>> } }).payload;
+      const payload = (msg as { payload: {
+        attachments?: Array<Record<string, unknown>>;
+        argsRef?: ContentRef;
+        resultRef?: ContentRef;
+      } }).payload;
+      const pull = makePullCallback(ctx, store, sid);
+      if (payload?.argsRef && typeof payload.argsRef.id === 'string') {
+        markAwaitingPush(payload.argsRef.id, pull);
+      }
+      if (payload?.resultRef && typeof payload.resultRef.id === 'string') {
+        markAwaitingPush(payload.resultRef.id, pull);
+      }
+      // Image attachments still flow through the attachments array.
       const attachments = payload?.attachments;
       if (Array.isArray(attachments)) {
         for (const att of attachments) {
-          if (att.type === 'image_ref' && typeof att.id === 'string') {
-            const ref = att as unknown as AttachmentRef;
-            // `requestPull` is the safety-timeout fallback. We can't import
-            // wsClient here without a cycle; instead, expose a callback via
-            // ctx.sendEncrypted (already part of RouterContext).
-            const pull = (id: string) => {
-              ctx.sendEncrypted?.({
-                type: 'request_attachment',
-                deviceId: store.deviceId,
-                sessionId: sid,
-                payload: { id, sessionId: sid },
-              });
-            };
+          if (att.type === 'content_ref' && typeof att.id === 'string') {
+            const ref = att as unknown as ContentRef;
             markAwaitingPush(ref.id, pull);
           }
         }
