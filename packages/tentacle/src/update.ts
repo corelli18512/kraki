@@ -329,6 +329,18 @@ function isNewer(latest: string, current: string): boolean {
 
 // ── Update command ──────────────────────────────────────
 
+/**
+ * Wait for the daemon process to fully exit so file locks are released.
+ * Polls `isDaemonRunning()` at the given interval, up to maxAttempts.
+ */
+async function waitForProcessExit(intervalMs: number, maxAttempts: number): Promise<void> {
+  const { isDaemonRunning } = await import('./daemon.js');
+  for (let i = 0; i < maxAttempts; i++) {
+    if (!isDaemonRunning()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 export async function performUpdate(currentVersion: string): Promise<void> {
   const spinner = ora({ text: 'Checking for updates…', indent: 2 }).start();
 
@@ -346,6 +358,19 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const method = detectInstallMethod();
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
 
+  // Import daemon management upfront — needed for pre-update stop and post-update restart
+  const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
+  const daemonWasRunning = isDaemonRunning();
+
+  // On Windows, a running .exe is locked by the OS and cannot be renamed or
+  // overwritten. Stop the daemon before attempting to replace the binary.
+  if (daemonWasRunning && method === 'sea' && process.platform === 'win32') {
+    spinner.text = `Stopping daemon before update…`;
+    stopDaemon();
+    // Wait for the process to release the file lock
+    await waitForProcessExit(500, 10);
+  }
+
   try {
     switch (method) {
       case 'npm':
@@ -362,11 +387,11 @@ export async function performUpdate(currentVersion: string): Promise<void> {
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
     writeCache(latest);
 
-    // Restart daemon if running
-    const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
-    if (isDaemonRunning()) {
+    // Restart daemon if it was running before the update
+    if (daemonWasRunning) {
       console.log(chalk.dim('  Restarting daemon…'));
-      stopDaemon();
+      // Ensure it's fully stopped (may still be running on non-Windows)
+      if (isDaemonRunning()) stopDaemon();
       const { loadConfig } = await import('./config.js');
       const config = loadConfig();
       if (config) {
@@ -395,6 +420,15 @@ export async function performUpdate(currentVersion: string): Promise<void> {
       }
     }
   } catch (err) {
+    // If we stopped the daemon for the update but it failed, restart so the
+    // user isn't left with a stopped daemon.
+    if (daemonWasRunning && !isDaemonRunning()) {
+      try {
+        const { loadConfig } = await import('./config.js');
+        const config = loadConfig();
+        if (config) await startDaemon(config);
+      } catch { /* best effort */ }
+    }
     spinner.fail(`Update failed: ${(err as Error).message}`);
   }
 }
@@ -479,10 +513,24 @@ async function updateViaBinary(version: string): Promise<void> {
 function replaceBinary(source: string, target: string): void {
   const backupPath = target + '.bak';
 
+  // Clean up stale .bak from a prior failed update attempt
+  try { unlinkSync(backupPath); } catch { /* ignore */ }
+
   try {
     renameSync(target, backupPath);
   } catch (err: unknown) {
     if (isPermissionError(err)) {
+      if (process.platform === 'win32') {
+        // On Windows, EACCES/EBUSY typically means the binary is locked by
+        // another process. Don't attempt sudo — surface a helpful message.
+        try { unlinkSync(source); } catch { /* ignore */ }
+        throw new Error(
+          'Cannot replace kraki.exe — the file is locked by a running process.\n' +
+          '  Stop the daemon with `kraki stop`, close any other Kraki processes, and retry.\n' +
+          '  If the problem persists, reinstall:\n' +
+          '  irm https://kraki.corelli.cloud/install.ps1 | iex',
+        );
+      }
       replaceBinaryElevated(source, target);
       return;
     }
@@ -514,15 +562,15 @@ function replaceBinaryElevated(source: string, target: string): void {
   } catch {
     try { unlinkSync(source); } catch { /* ignore */ }
     throw new Error(
-      `Permission denied. To fix, reinstall to a user-writable location:\n` +
-      `  curl -fsSL https://kraki.corelli.cloud/install.sh | bash`,
+      'Permission denied. To fix, reinstall to a user-writable location:\n' +
+      '  curl -fsSL https://kraki.corelli.cloud/install.sh | bash',
     );
   }
 }
 
 function isPermissionError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException).code;
-  return code === 'EACCES' || code === 'EPERM';
+  return code === 'EACCES' || code === 'EPERM' || code === 'EBUSY';
 }
 
 /** Strip com.apple.provenance / quarantine xattrs so CSM 2 doesn't SIGKILL the binary. */
