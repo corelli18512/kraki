@@ -32,6 +32,12 @@ interface InFlightEntry {
   /** Date.now() when first sent. Updated on each retry. */
   sentAt: number;
   retries: number;
+  /** True once retries are exhausted. Head stops re-sending this entry but
+   *  keeps it in the buffer; a future ack will still prune it cleanly. The
+   *  message bytes may or may not have reached the peer — recovery is
+   *  delegated to application-level per-session replay if the content is
+   *  actually missing. */
+  giveUp?: boolean;
 }
 
 interface ClientState {
@@ -227,19 +233,16 @@ export class HeadServer {
     }
     const payload = JSON.stringify(stamped);
 
-    // Evict oldest if buffer full. With MAX_RETRIES=3 and 5s retry, hitting
-    // MAX_IN_FLIGHT means the peer is pathologically slow — force reconnect.
+    // Buffer full: evict the oldest entry silently and continue.
+    // Connection is NOT killed — peer may simply be temporarily throttled
+    // (e.g. backgrounded browser tab). The 30s protocol-level ping/pong is
+    // the source of truth for liveness, not delivery exhaustion.
     if (state.inFlight.length >= MAX_IN_FLIGHT) {
-      getLogger().warn('In-flight buffer full, forcing reconnect', {
+      getLogger().warn('In-flight buffer full, evicting oldest entry', {
         deviceId: state.deviceId,
         inFlight: state.inFlight.length,
       });
-      if (state.deviceId) {
-        this.removeConnection(state.deviceId);
-      } else {
-        try { ws.close(); } catch { /* ignore */ }
-      }
-      return;
+      state.inFlight.shift();
     }
 
     state.inFlight.push({
@@ -311,8 +314,9 @@ export class HeadServer {
   }
 
   /** Walk all connections; re-send unacked messages that have aged past
-   *  RETRY_AFTER_MS. Close connections whose oldest unacked message has
-   *  exceeded MAX_RETRIES (forces clean reconnect via existing replay path). */
+   *  RETRY_AFTER_MS. When MAX_RETRIES is exceeded, mark the entry giveUp
+   *  but keep the connection alive — liveness is decided by the 30s
+   *  protocol-level ping/pong, not by delivery-retry exhaustion. */
   private runRetryPass(): void {
     const logger = getLogger();
     const now = Date.now();
@@ -325,22 +329,28 @@ export class HeadServer {
       if (ws.readyState !== WebSocket.OPEN) continue;
 
       state.lastRetryAt = now;
-      let killConnection = false;
+      let sendFailed = false;
 
       for (const entry of state.inFlight) {
+        if (entry.giveUp) continue;
         // Already acked? (Shouldn't normally happen — processAck prunes —
         // but guard against races.)
         if (entry.relaySeq <= state.lastAckedSeq) continue;
         if (now - entry.sentAt < RETRY_AFTER_MS) continue;
 
         if (entry.retries >= MAX_RETRIES) {
-          logger.warn('Max retries exceeded, closing connection', {
+          // Give up retrying this entry. Don't kill the connection — the
+          // peer may just be temporarily throttled (e.g. backgrounded
+          // browser tab). If the peer later catches up and acks, this
+          // entry is pruned normally. If the bytes were truly lost, the
+          // application layer's per-session replay handles content recovery.
+          logger.debug('Giving up retries for entry', {
             deviceId,
             relaySeq: entry.relaySeq,
             retries: entry.retries,
           });
-          killConnection = true;
-          break;
+          entry.giveUp = true;
+          continue;
         }
 
         entry.retries += 1;
@@ -353,12 +363,15 @@ export class HeadServer {
             attempt: entry.retries,
           });
         } catch {
-          killConnection = true;
+          // ws.send threw — the underlying socket is dead. Close it so the
+          // close handler can clean up. This is a transport failure, not a
+          // delivery-retry failure.
+          sendFailed = true;
           break;
         }
       }
 
-      if (killConnection) {
+      if (sendFailed) {
         this.removeConnection(deviceId);
       }
     }
@@ -1460,6 +1473,7 @@ export class HeadServer {
   /** Test hook: inspect delivery state for an online device. Not used in prod. */
   getDeliveryState(deviceId: string): {
     inFlightCount: number;
+    givenUpCount: number;
     relaySeqCounter: number;
     lastAckedSeq: number;
     ackSupported: boolean;
@@ -1471,6 +1485,7 @@ export class HeadServer {
     if (!state) return undefined;
     return {
       inFlightCount: state.inFlight.length,
+      givenUpCount: state.inFlight.filter(e => e.giveUp).length,
       relaySeqCounter: state.relaySeqCounter,
       lastAckedSeq: state.lastAckedSeq,
       ackSupported: state.ackSupported,
