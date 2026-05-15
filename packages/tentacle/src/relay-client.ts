@@ -593,16 +593,19 @@ export class RelayClient {
             });
           break;
         case 'delete_session':
+          // Remove from local session state SYNCHRONOUSLY. The adapter's
+          // killSession runs async and may take a while to talk to the
+          // Copilot SDK; we don't want broadcastSessionList (which fires
+          // immediately after processPendingMessages on auth_ok) to see
+          // the still-tracked session and broadcast it back to arms.
+          this.sessionManager.removeLinkByKrakiId(sessionId);
+          this.sessionManager.deleteSession(sessionId);
+          this.lastAgentContent.delete(sessionId);
+          this.purgeSessionToolState(sessionId);
+          this.broadcastedAttachmentIds.delete(sessionId);
+          this.send({ type: 'session_deleted', sessionId, payload: {} });
           this.adapter.killSession(sessionId)
-            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
-            .finally(() => {
-              this.sessionManager.removeLinkByKrakiId(sessionId);
-              this.sessionManager.deleteSession(sessionId);
-              this.lastAgentContent.delete(sessionId);
-              this.purgeSessionToolState(sessionId);
-              this.broadcastedAttachmentIds.delete(sessionId);
-              this.send({ type: 'session_deleted', sessionId, payload: {} });
-            });
+            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           break;
         case 'mark_read':
           this.sessionManager.markRead(sessionId, msg.payload.seq);

@@ -937,22 +937,17 @@ export class HeadServer {
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
-    const fullUser = this.storage.getUser(user.userId);
-    const pendingMessages = this.flushPendingEnvelopes(deviceId);
-    ws.send(JSON.stringify({
-      type: 'auth_ok',
+    this.completeAuthHandshake(ws, {
       deviceId,
+      userId: user.userId,
+      user: {
+        id: user.userId,
+        login: user.username,
+        provider: user.provider,
+        email: user.email,
+      },
       authMethod: 'challenge',
-      user: { id: user.userId, login: user.username, provider: user.provider, preferences: fullUser?.preferences },
-      devices: this.getDeviceSummaries(user.userId),
-      githubClientId: this.getGitHubClientId(),
-      vapidPublicKey: this.getVapidPublicKey(),
-      relayVersion: this.options.version,
-      ...(pendingMessages.length > 0 && { pendingMessages }),
-    }));
-
-    // Notify other connected devices about the reconnected device
-    this.broadcastDeviceJoined(user.userId, deviceId);
+    });
   }
 
   /**
@@ -1005,26 +1000,115 @@ export class HeadServer {
       logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
     }
 
-    // Set correct online status on device summaries
-    const devices = result.devices.map(d => ({
-      ...d,
-      online: this.connections.has(d.id),
-    }));
+    this.completeAuthHandshake(ws, {
+      deviceId: result.deviceId,
+      userId: result.userId,
+      user: result.user,
+      authMethod: result.authMethod,
+      devices: result.devices,
+      backendPendingMessages: result.pendingMessages,
+      githubClientId: result.githubClientId,
+      vapidPublicKey: result.vapidPublicKey,
+    });
+  }
+
+  /**
+   * Common post-auth completion logic, used by every auth path.
+   *
+   * Responsibilities:
+   *  - Read user preferences from local storage and merge into the user object.
+   *  - Flush any locally-queued pending messages for this device (offline-queue).
+   *  - Build and send the `auth_ok` response.
+   *  - Broadcast `device_joined` to the user's other connected devices.
+   *
+   * Each caller is responsible for path-specific work BEFORE calling this:
+   * validating credentials, persisting user/device records, setting up
+   * ClientState, populating `connections` / `userByDevice` maps, and logging
+   * the path-specific "authenticated via X" line.
+   *
+   * Centralising the tail eliminates a class of bugs where new auth paths
+   * (notably the multi-region delegated-backend path) silently diverge from
+   * the established post-auth flow.
+   */
+  private completeAuthHandshake(
+    ws: WebSocket,
+    params: {
+      /** The authenticated device's ID. */
+      deviceId: string;
+      /** The authenticated user's ID. */
+      userId: string;
+      /** Identity fields from the auth source (local DB or remote backend).
+       *  `preferences` and `region` are optional and only meaningful from the
+       *  delegated-backend path — local paths leave them undefined and the
+       *  helper reads preferences from local storage instead. */
+      user: {
+        id: string;
+        login: string;
+        provider: string;
+        email?: string;
+        preferences?: Record<string, unknown>;
+        region?: string;
+      };
+      /** Auth method, echoed back in auth_ok. */
+      authMethod: string;
+      /** Devices list to include in auth_ok. If omitted, derived from local storage.
+       *  Edge mode supplies this from the remote backend's view. */
+      devices?: DeviceSummary[];
+      /** Pending messages forwarded by a remote auth backend, if any. Merged with
+       *  the local edge's own pending_messages table (which the head queued when
+       *  unicasts arrived for this device while it was offline). */
+      backendPendingMessages?: UnicastEnvelope[];
+      /** Override of `getGitHubClientId()` (used when delegated). */
+      githubClientId?: string;
+      /** Override of `getVapidPublicKey()` (used when delegated). */
+      vapidPublicKey?: string;
+    },
+  ): void {
+    // Merge preferences. Local storage takes precedence (it captures per-edge
+    // overrides the backend might not know about), but fall back to the
+    // backend-supplied preferences if local has none — e.g. on a user's very
+    // first auth to this edge, before upsertUser has been called or when the
+    // backend is the canonical source of truth.
+    //
+    // Why this matters: storage.upsertUser only writes username/provider/email,
+    // NOT preferences. So a brand-new user record reads back with
+    // preferences=undefined. Without this fallback, backend preferences would
+    // be silently dropped at every first auth.
+    const fullUser = this.storage.getUser(params.userId);
+    const userResponse = {
+      ...params.user,
+      preferences: fullUser?.preferences ?? params.user.preferences,
+    };
+
+    // Flush locally-queued pending messages — every auth path that lands here
+    // means a device is reconnecting, and any unicasts queued for it locally
+    // (via handleUnicast → storage.insertPending) should be delivered now.
+    // Combined with whatever the remote backend forwarded, if applicable.
+    const localPending = this.flushPendingEnvelopes(params.deviceId);
+    const pendingMessages = [
+      ...(params.backendPendingMessages ?? []),
+      ...localPending,
+    ];
+
+    // Devices list. If the caller provided one (edge mode), recompute online
+    // status against our current connections map. Otherwise derive locally.
+    const devices = params.devices
+      ? params.devices.map(d => ({ ...d, online: this.connections.has(d.id) }))
+      : this.getDeviceSummaries(params.userId);
 
     ws.send(JSON.stringify({
       type: 'auth_ok',
-      deviceId: result.deviceId,
-      authMethod: result.authMethod,
-      user: result.user,
+      deviceId: params.deviceId,
+      authMethod: params.authMethod,
+      user: userResponse,
       devices,
-      githubClientId: result.githubClientId,
-      vapidPublicKey: result.vapidPublicKey ?? this.getVapidPublicKey(),
+      githubClientId: params.githubClientId ?? this.getGitHubClientId(),
+      vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
-      ...(result.pendingMessages.length > 0 && { pendingMessages: result.pendingMessages }),
+      ...(pendingMessages.length > 0 && { pendingMessages }),
     }));
 
-    // Notify other connected devices
-    this.broadcastDeviceJoined(result.userId, result.deviceId);
+    this.broadcastDeviceJoined(params.userId, params.deviceId);
   }
 
   private completeAuth(
@@ -1067,22 +1151,17 @@ export class HeadServer {
       ip: state.ip,
     });
 
-    const fullUser = this.storage.getUser(user.id);
-    const pendingMessages = this.flushPendingEnvelopes(deviceId);
-    ws.send(JSON.stringify({
-      type: 'auth_ok',
+    this.completeAuthHandshake(ws, {
       deviceId,
+      userId: user.id,
+      user: {
+        id: user.id,
+        login: user.login,
+        provider: user.provider,
+        email: user.email,
+      },
       authMethod,
-      user: { id: user.id, login: user.login, provider: user.provider, preferences: fullUser?.preferences },
-      devices: this.getDeviceSummaries(user.id),
-      githubClientId: this.getGitHubClientId(),
-      vapidPublicKey: this.getVapidPublicKey(),
-      relayVersion: this.options.version,
-      ...(pendingMessages.length > 0 && { pendingMessages }),
-    }));
-
-    // Notify other connected devices about the new device
-    this.broadcastDeviceJoined(user.id, deviceId);
+    });
   }
 
   // --- Pairing tokens (in-memory) ---
