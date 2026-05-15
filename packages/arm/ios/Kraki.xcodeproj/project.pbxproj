@@ -53,6 +53,7 @@
 		B320E431D3B0720779F6C57B /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
 		B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E805046685AE086D68B890D4 /* MainTabView.swift */; };
 		B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2ACA651B6DE122BE92C76 /* LoginView.swift */; };
+		B48D7154FCD6A38CF2F94727 /* ConnectionStatusChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2ACA651B6DE122BE92C77 /* ConnectionStatusChip.swift */; };
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
@@ -66,7 +67,6 @@
 		EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */; };
 		F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97B0E319E0F6D893D83C12A /* PushManager.swift */; };
 		F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8261534E96234C67C920EDCA /* AuthManager.swift */; };
-		FCA76B710DFAF5901A58CE09 /* ConnectionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCAAB30A369C1F30BA148399 /* ConnectionOverlayView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -152,8 +152,8 @@
 		AA22F5E0E19B4EFDAE920582 /* OAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthView.swift; sourceTree = "<group>"; };
 		AE712E4B973F287EF5B0DC17 /* QuestionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionCardView.swift; sourceTree = "<group>"; };
 		AF830792579504E8F32DFC4F /* SessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTable.swift; sourceTree = "<group>"; };
-		BCAAB30A369C1F30BA148399 /* ConnectionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionOverlayView.swift; sourceTree = "<group>"; };
 		C1B2ACA651B6DE122BE92C76 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		C1B2ACA651B6DE122BE92C77 /* ConnectionStatusChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusChip.swift; sourceTree = "<group>"; };
 		C97B0E319E0F6D893D83C12A /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5B791C3F6BA99245733A941 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -219,8 +219,8 @@
 		585ABCCD37D23574BAA03195 /* Auth */ = {
 			isa = PBXGroup;
 			children = (
-				BCAAB30A369C1F30BA148399 /* ConnectionOverlayView.swift */,
 				C1B2ACA651B6DE122BE92C76 /* LoginView.swift */,
+				C1B2ACA651B6DE122BE92C77 /* ConnectionStatusChip.swift */,
 				E805046685AE086D68B890D4 /* MainTabView.swift */,
 				AA22F5E0E19B4EFDAE920582 /* OAuthView.swift */,
 				D5B791C3F6BA99245733A941 /* PairingView.swift */,
@@ -533,7 +533,6 @@
 				F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */,
 				2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */,
 				011C11527B518D1977DB2289 /* CommandSender.swift in Sources */,
-				FCA76B710DFAF5901A58CE09 /* ConnectionOverlayView.swift in Sources */,
 				D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */,
 				1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */,
 				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
@@ -544,6 +543,7 @@
 				39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */,
 				D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */,
 				B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */,
+				B48D7154FCD6A38CF2F94727 /* ConnectionStatusChip.swift in Sources */,
 				418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */,
 				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
 				4BEB0FA2DCF6DEBF5298311D /* MarkdownText.swift in Sources */,

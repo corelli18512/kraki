@@ -26,9 +26,19 @@ struct DeviceDetailView: View {
     }
 
     private var deviceSessions: [SessionInfo] {
-        appState.sessionStore.sessions.values
+        // Match the session list ordering exactly: pinned first, then
+        // most recent activity (preview timestamp), then createdAt.
+        // Filtered down to this device.
+        let previews = appState.sessionStore.sessionPreviews
+        return appState.sessionStore.sessions.values
             .filter { $0.deviceId == device.id }
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted { a, b in
+                if a.pinned != b.pinned { return a.pinned }
+                let aTs = previews[a.id]?.timestamp ?? ""
+                let bTs = previews[b.id]?.timestamp ?? ""
+                if aTs != bTs { return bTs < aTs }
+                return a.createdAt > b.createdAt
+            }
     }
 
     private var canRemove: Bool {
@@ -97,17 +107,16 @@ struct DeviceDetailView: View {
                         NavigationLink(value: SessionNavID(id: session.id)) {
                             HStack {
                                 AgentAvatar(agent: session.agent, sessionId: session.id, size: .sm, status: session.state)
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 1) {
                                     Text(session.displayTitle)
                                         .font(.subheadline)
                                         .lineLimit(1)
-                                    Text(relativeTimestamp(session.createdAt))
-                                        .font(.caption)
+                                    Text(sessionListTimestamp(for: session))
+                                        .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
                             }
-                            .padding(.vertical, 4)
                         }
                     }
                 }
@@ -161,6 +170,25 @@ struct DeviceDetailView: View {
     }
 
     // MARK: - Helpers
+
+    /// Mirrors SessionCardView's `timestampView`: prefer the preview's
+    /// last-activity timestamp; fall back to converting `createdAt`
+    /// (which is a `Date`) into ISO so SessionTimeFormatter can read
+    /// it. Same formatter → same output ("HH:mm" / "yesterday" / "Xd
+    /// ago") as the session list, keeping the two views in sync.
+    private func sessionListTimestamp(for session: SessionInfo) -> String {
+        if let preview = appState.sessionStore.sessionPreviews[session.id],
+           !preview.timestamp.isEmpty {
+            return SessionTimeFormatter.format(preview.timestamp)
+        }
+        return SessionTimeFormatter.format(Self.isoFormatter.string(from: session.createdAt))
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 
     private func formatDate(_ iso: String?) -> String {
         guard let iso, !iso.isEmpty else { return "—" }

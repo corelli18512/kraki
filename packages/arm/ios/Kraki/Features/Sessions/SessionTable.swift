@@ -18,17 +18,20 @@ import Observation
 
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
+    let deviceFilter: String?  // nil = all devices
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
         let vc = SessionTableController()
         vc.appState = appState
+        vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
         return vc
     }
 
     func updateUIViewController(_ vc: SessionTableController, context: Context) {
         vc.appState = appState
+        vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
         vc.applySnapshot(animated: true)
     }
@@ -38,6 +41,7 @@ struct SessionTable: UIViewControllerRepresentable {
 
 final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
+    var deviceFilter: String?
     var onCellTapped: ((String) -> Void)?
 
     private var tableView: UITableView!
@@ -90,7 +94,14 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         guard isViewLoaded, let appState else { return }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        let ids = appState.sessionStore.sortedSessions.map(\.id)
+        let allSessions = appState.sessionStore.sortedSessions
+        let filtered: [SessionInfo]
+        if let deviceFilter {
+            filtered = allSessions.filter { $0.deviceId == deviceFilter }
+        } else {
+            filtered = allSessions
+        }
+        let ids = filtered.map(\.id)
         snapshot.appendItems(ids)
 
         // Reconfigure all items so cells re-render their SwiftUI content

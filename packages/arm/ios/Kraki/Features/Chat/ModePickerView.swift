@@ -23,41 +23,38 @@ struct ModePickerView: View {
     private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        ZStack(alignment: .leading) {
             if expanded {
                 expandedPicker
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
             } else {
                 collapsedPill
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: expanded)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 32)
+        .animation(.easeInOut(duration: 0.22), value: expanded)
     }
 
     // MARK: - Collapsed
+    //
+    // Rendered as a 1-item UISegmentedControl so it's pixel-identical to a
+    // single segment in the expanded picker (same chrome, corner radius,
+    // selected-tint color, font, shadow). The control itself is disabled for
+    // hit-testing; the outer Button captures taps and triggers expansion.
 
-    @ViewBuilder
     private var collapsedPill: some View {
-        if #available(iOS 26.0, *) {
-            Button { expand() } label: {
-                Text(currentMode.rawValue.capitalized)
-                    .font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.glass(.regular.tint(modeColor(currentMode))))
-        } else {
-            Button { expand() } label: {
-                Text(currentMode.rawValue.capitalized)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(modeTextColorDark(currentMode))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(modePillColor(currentMode), in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
+        TintedSegmentedControl(
+            items: [currentMode.rawValue.capitalized],
+            selection: .constant(0),
+            tintColor: UIColor(modeColor(currentMode))
+        )
+        .allowsHitTesting(false)
+        .frame(height: 32)
+        .fixedSize(horizontal: true, vertical: false)
+        .contentShape(Rectangle())
+        .onTapGesture { expand() }
     }
 
     // MARK: - Expanded
@@ -71,7 +68,8 @@ struct ModePickerView: View {
             ),
             tintColor: UIColor(modeColor(currentMode))
         )
-        .frame(maxWidth: 300, maxHeight: 32)
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
         .animation(.easeInOut(duration: 0.3), value: currentMode)
     }
 

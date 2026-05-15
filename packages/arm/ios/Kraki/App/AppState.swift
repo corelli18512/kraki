@@ -22,15 +22,38 @@ final class AppState {
     var deviceId: String?
     var user: UserInfo?
     #if DEBUG
-    var relayURL: String = "ws://localhost:4000"
+    var relayURL: String = "ws://localhost:4400"
     #else
     var relayURL: String = "wss://kraki.corelli.cloud"
     #endif
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
+    /// 0 means "no reconnect in progress". Incremented by the WS client
+    /// on every retry; reset to 0 on a successful connect.
     var reconnectAttempt: Int = 0
-    var maxReconnectAttempts: Int = 5
+    /// Set once after the first successful auth handshake. Survives any
+    /// subsequent mid-session disconnect so the UI doesn't bounce back
+    /// to the login screen — instead we surface status ambiently in
+    /// the brand header.
+    var hasCompletedInitialConnect: Bool = false
+
+    /// True while the WS layer is actively trying to (re)connect after
+    /// a drop, or sitting authenticated-pending-handshake. Used by the
+    /// brand-header status indicator.
+    var isReconnecting: Bool {
+        switch connectionStatus {
+        case .connecting, .authenticating, .disconnected:
+            return hasCompletedInitialConnect
+        default:
+            return false
+        }
+    }
+
+    /// True only when the WS is fully connected and authenticated.
+    var isFullyOnline: Bool {
+        connectionStatus == .connected
+    }
 
     init() {
         setupNetworking()
@@ -56,6 +79,9 @@ final class AppState {
         }
         client.onStateChange = { [weak self] state in
             self?.handleConnectionStateChange(state)
+        }
+        client.onReconnectAttempt = { [weak self] attempt in
+            self?.updateReconnectAttempt(attempt)
         }
 
         self.wsClient = client
@@ -87,6 +113,39 @@ final class AppState {
         connectionStatus = .disconnected
     }
 
+    /// Sign the user out: drop the WS, wipe stored credentials, and
+    /// reset everything to the pre-login state so RootView routes
+    /// back to the login screen.
+    func logout() {
+        wsClient?.disconnect()
+        authManager?.clearStoredCredentials()
+        deviceId = nil
+        user = nil
+        githubClientId = nil
+        relayVersion = nil
+        lastError = nil
+        reconnectAttempt = 0
+        hasCompletedInitialConnect = false
+        connectionStatus = .awaitingLogin
+        sessionStore.reset()
+        deviceStore.reset()
+        messageStore.reset()
+    }
+
+    /// Called when the app returns to foreground. Reset backoff and
+    /// kick a fresh connect immediately so the user doesn't have to
+    /// wait out a long backoff timer that started in the background.
+    func handleForegroundRehydrate() {
+        guard hasCompletedInitialConnect else { return }
+        guard connectionStatus != .connected else { return }
+        wsClient?.resetBackoffAndReconnect()
+    }
+
+    /// Called by the WS client whenever it bumps its retry counter.
+    func updateReconnectAttempt(_ attempt: Int) {
+        reconnectAttempt = attempt
+    }
+
     private func handleConnectionStateChange(_ state: WebSocketState) {
         switch state {
         case .connected:
@@ -110,6 +169,10 @@ final class AppState {
         self.connectionStatus = .connected
         self.reconnectAttempt = 0
         self.lastError = nil
+        // First-time login crosses the line into MainTabView. Mid-
+        // session reconnects re-enter this method too, which is fine
+        // — setting it to true again is a no-op.
+        self.hasCompletedInitialConnect = true
 
         deviceStore.setDevices(devices)
 
@@ -228,16 +291,18 @@ struct UserInfo: Codable, Equatable {
     let id: String
     let login: String
     let provider: String?
+    let email: String?
     let preferences: [String: AnyCodable]?
 
     enum CodingKeys: String, CodingKey {
-        case id, login, provider, preferences
+        case id, login, provider, email, preferences
     }
 
-    init(id: String, login: String, provider: String? = nil, preferences: [String: AnyCodable]? = nil) {
+    init(id: String, login: String, provider: String? = nil, email: String? = nil, preferences: [String: AnyCodable]? = nil) {
         self.id = id
         self.login = login
         self.provider = provider
+        self.email = email
         self.preferences = preferences
     }
 
@@ -246,6 +311,7 @@ struct UserInfo: Codable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         login = try container.decode(String.self, forKey: .login)
         provider = try container.decodeIfPresent(String.self, forKey: .provider)
+        email = try container.decodeIfPresent(String.self, forKey: .email)
         preferences = try container.decodeIfPresent([String: AnyCodable].self, forKey: .preferences)
     }
 }

@@ -38,6 +38,7 @@ private struct StickyOverlayHeightKey: PreferenceKey {
 private struct ChatScrollMetrics: Equatable {
     var offsetY: CGFloat
     var viewportHeight: CGFloat
+    var insetTop: CGFloat
 }
 
 struct ChatView: View {
@@ -98,6 +99,16 @@ struct ChatView: View {
     /// margin). Used by `stickyHandoffOffset` so the handoff band
     /// matches reality regardless of message length.
     @State private var stickyOverlayHeight: CGFloat = 0
+    /// ScrollPosition binding used for the tap-to-restore action so we
+    /// can land the tapped user bubble's top exactly at the viewport
+    /// top — the precise threshold where the natural pill-opacity rule
+    /// hides the pill and reveals the original bubble in chat.
+    @State private var chatScrollPosition: ScrollPosition = .init()
+    /// Top content inset of the chat scroll view, tracked from
+    /// `onScrollGeometryChange` so we can convert between our
+    /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
+    /// raw content-offset y when issuing programmatic scrolls.
+    @State private var chatScrollInsetTop: CGFloat = 0
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
@@ -168,7 +179,10 @@ struct ChatView: View {
                     stickyUserOverlay(proxy: proxy)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if isDeviceOnline {
+                    // Hide the entire compose area while the relay
+                    // channel is broken — the user can't send anything
+                    // anyway and the chat surface is read-only.
+                    if isDeviceOnline && appState.isFullyOnline {
                         bottomInputArea
                     }
                 }
@@ -180,7 +194,7 @@ struct ChatView: View {
 
     private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            VStack(spacing: 12) {
                 // Load older messages button
                 if hasOlderMessages {
                     Button {
@@ -267,15 +281,18 @@ struct ChatView: View {
         .scrollDismissesKeyboard(.interactively)
         .scrollIndicators(.hidden)
         .defaultScrollAnchor(currentScrollAnchor)
+        .scrollPosition($chatScrollPosition, anchor: .top)
         .onScrollGeometryChange(for: ChatScrollMetrics.self) { geo in
             ChatScrollMetrics(
                 offsetY: geo.contentOffset.y + geo.contentInsets.top,
                 viewportHeight: geo.containerSize.height
-                    - geo.contentInsets.top - geo.contentInsets.bottom
+                    - geo.contentInsets.top - geo.contentInsets.bottom,
+                insetTop: geo.contentInsets.top
             )
         } action: { _, m in
             scrollOffsetY = m.offsetY
             viewportHeight = m.viewportHeight
+            chatScrollInsetTop = m.insetTop
             checkLockTransition(proxy: proxy)
         }
         .onScrollPhaseChange { _, newPhase in
@@ -285,30 +302,17 @@ struct ChatView: View {
             }
         }
         .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
-            // Merge: LazyVStack destroys the GeometryReader for recycled
-            // (off-screen) rows, so `newFrames` only contains currently
-            // realized cells. Replacing the dictionary would wipe the
-            // positions of bubbles that have scrolled out of view —
-            // exactly when R2 needs them. Instead we merge: update
-            // entries with fresh non-empty frames, but never drop an
-            // entry just because its row was recycled. Stale entries
-            // are pruned explicitly on session change / message-list
-            // changes.
-            var merged = userBubbleFrames
-            for (id, frame) in newFrames where frame.height > 0 {
-                merged[id] = frame
-            }
-            userBubbleFrames = merged
+            // Plain VStack lays out every row eagerly, so `newFrames`
+            // always contains a fresh frame for every user bubble.
+            // Replace (don't merge) — merging causes stale-low minY
+            // values to linger after older messages are prepended,
+            // which then wrongly satisfy `f.minY <= scrollOffsetY`
+            // and surface a sticky candidate that shouldn't exist.
+            userBubbleFrames = newFrames
             checkLockTransition(proxy: proxy)
         }
         .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
             handleNewUserMessage(proxy: proxy, seq: newSeq)
-        }
-        .onChange(of: filteredMessages.count) { _, _ in
-            // Prune cached frames for messages that no longer exist.
-            let liveIds = Set(filteredMessages.map(\.id))
-            userBubbleFrames = userBubbleFrames.filter { liveIds.contains($0.key) }
-            checkLockTransition(proxy: proxy)
         }
         .onChange(of: streaming) { _, _ in
             checkLockTransition(proxy: proxy)
@@ -347,24 +351,40 @@ struct ChatView: View {
     // MARK: - R2: Sticky User Bubble Overlay
     //
     // When the user scrolls back through a long agent reply, pin a
-    // glass-backed copy of the most recent user message that has
-    // scrolled above the viewport top. Re-uses the same frame tracers
-    // that R1 populates.
+    // glass-backed copy of the user message of the CURRENT turn at the
+    // top of the chat. The pill always shows whichever user bubble has
+    // most recently scrolled above the viewport top (`stickyCandidate`).
     //
-    // ONE positional rule for every user bubble — latest or older,
-    // streaming or static, scroll up or scroll down:
+    // Opacity is driven purely by the distance from the viewport top
+    // down to the NEXT user bubble (chronologically after the
+    // candidate), i.e. how close the upcoming turn's bubble is to
+    // reaching the pill's slot:
+    //   distance ≥ stickyFadeEnd   → opacity 1   (next turn far below)
+    //   distance ≤ stickyFadeStart → opacity 0   (next turn about to take over)
+    //   between                    → linear ramp
+    // If no next user bubble exists (candidate is the latest user
+    // message), distance is infinite → opacity 1.
     //
-    //   frame.minY >= scrollOffsetY  → pill 0, original 1 (bubble
-    //     is in or below the viewport, or pinned at the top by R1)
-    //   frame.minY <  scrollOffsetY  → pill 1, original 0 (the
-    //     instant the bubble's top crosses above the viewport top
-    //     the pill takes over and the original disappears)
+    // When the candidate's own top has not yet crossed the viewport
+    // top (`aboveAmount ≤ 0`, R1 lock or just-clipping), the pill is
+    // suppressed entirely.
     //
-    // Candidate switches (latest ↔ older) become pure content swaps
-    // in the pill — no rule change, no direction-dependent feel.
+    // The original row's opacity on the candidate row stays
+    // `1 - stickyOpacity`, so pill and in-chat row cross-fade through
+    // the window as the next turn approaches.
 
-    /// Outer margin around the sticky overlay.
-    fileprivate static let stickyMargin: CGFloat = 8
+    /// Outer margin around the sticky overlay. Set to 0 so the pill's
+    /// top edge sits exactly at the safe-area top — the same screen y
+    /// as a user bubble whose top is just crossing above the viewport
+    /// (`aboveAmount = 0`). Result: zero positional jump at the
+    /// pill ↔ chat-bubble handoff.
+    fileprivate static let stickyMargin: CGFloat = 0
+    /// Pill begins to fade out once the next user bubble is this close
+    /// to the viewport top.
+    fileprivate static let stickyFadeStart: CGFloat = 120
+    /// Pill stays at full opacity while the next user bubble is at
+    /// least this far below the viewport top.
+    fileprivate static let stickyFadeEnd: CGFloat = 240
 
     /// User messages currently at-or-above the viewport top, ordered
     /// ascending by content y. The sticky candidate is the LAST element
@@ -390,19 +410,56 @@ struct ChatView: View {
         stickyAboveCandidates.last
     }
 
-    /// Sticky pill opacity. Hard binary on a single positional rule:
-    /// the pill takes over the instant the candidate's frame top
-    /// crosses above the viewport top, and yields the moment it
-    /// crosses back. Same rule for every user bubble.
+    /// The next user message chronologically after `stickyCandidate`.
+    /// Its viewport-top distance drives `stickyOpacity`.
+    private var nextUserBubbleAfterCandidate: ChatMessage? {
+        guard let candidate = stickyCandidate else { return nil }
+        let userMsgs = filteredMessages.filter {
+            $0.type == "user_message" || $0.type == "send_input"
+        }
+        guard let idx = userMsgs.firstIndex(where: { $0.id == candidate.id }),
+              idx + 1 < userMsgs.count else { return nil }
+        return userMsgs[idx + 1]
+    }
+
+    /// Sticky pill opacity, driven purely by the distance from the
+    /// viewport top to the next user bubble below the candidate.
+    ///   - candidate's own top not yet above viewport top → 0
+    ///   - no next user bubble → 1 (distance is infinite)
+    ///   - distance ≥ stickyFadeEnd  → 1
+    ///   - distance ≤ stickyFadeStart → 0
+    ///   - between → linear ramp
     private var stickyOpacity: Double {
         guard let candidate = stickyCandidate,
-              let frame = userBubbleFrames[candidate.id] else { return 0 }
-        return frame.minY < scrollOffsetY ? 1 : 0
+              let candidateFrame = userBubbleFrames[candidate.id] else { return 0 }
+        let aboveAmount = scrollOffsetY - candidateFrame.minY
+        if aboveAmount <= 0 { return 0 }
+        guard let next = nextUserBubbleAfterCandidate,
+              let nextFrame = userBubbleFrames[next.id] else { return 1 }
+        // Visual gap from the pill's bottom edge to the next user
+        // bubble's top. The pill renders the candidate's own content,
+        // so its rendered height ≈ candidateFrame.height — using that
+        // avoids a fragile preference-key round-trip for the actual
+        // overlay height which was prone to staying at 0 in some
+        // remount paths.
+        let distance = nextFrame.minY - (scrollOffsetY + candidateFrame.height)
+        if distance >= Self.stickyFadeEnd { return 1 }
+        if distance <= Self.stickyFadeStart { return 0 }
+        let span = Self.stickyFadeEnd - Self.stickyFadeStart
+        let progress = (distance - Self.stickyFadeStart) / span
+        return Double(max(0, min(1, progress)))
     }
 
     @ViewBuilder
     private func stickyUserOverlay(proxy: ScrollViewProxy) -> some View {
-        if let msg = stickyCandidate {
+        // Always render the pill so its layout is stable across scroll
+        // and candidate changes — only `opacity` and hit-testing flip
+        // based on `stickyOpacity`. When there's no candidate, we fall
+        // back to the latest user message so the view is laid out at a
+        // real size while invisible; this avoids the brief width
+        // measurement flicker that occurs when the pill is inserted /
+        // removed from the tree on every viewport-top crossing.
+        if let msg = stickyCandidate ?? lastUserMessage {
             StickyUserBubble(message: msg)
                 .padding(.top, Self.stickyMargin)
                 .background(
@@ -414,14 +471,25 @@ struct ChatView: View {
                     }
                 )
                 .opacity(stickyOpacity)
+                // Animate only when the pill flips between visible and
+                // hidden (the boundary snap when a candidate crosses
+                // the viewport top). The continuous 80→160 ramp keeps
+                // tracking scroll directly with no animation interference.
+                .animation(.easeInOut(duration: 0.18), value: stickyOpacity > 0)
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    guard stickyOpacity > 0,
+                          let frame = userBubbleFrames[msg.id] else { return }
+                    // Land msg.top 1pt above the viewport top — robust
+                    // trigger for the natural rule's `aboveAmount <= 0`
+                    // branch regardless of scroll precision. With
+                    // stickyMargin = 0 the pill and bubble share the
+                    // same screen y, so this 1pt is purely a rule-
+                    // satisfying nudge, not a visual offset.
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(userScrollId(msg), anchor: .top)
+                        chatScrollPosition.scrollTo(y: frame.minY - 1)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                .animation(.easeOut(duration: 0.18), value: msg.id)
                 .allowsHitTesting(stickyOpacity > 0.5)
                 .onPreferenceChange(StickyOverlayHeightKey.self) { h in
                     stickyOverlayHeight = h
@@ -445,6 +513,7 @@ struct ChatView: View {
             bubble
                 .id(userScrollId(msg))
                 .opacity(msg.id == stickyCandidate?.id ? (1 - stickyOpacity) : 1)
+                .animation(.easeInOut(duration: 0.18), value: stickyOpacity > 0)
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(
@@ -478,7 +547,14 @@ struct ChatView: View {
     private func performEntryScroll(proxy: ScrollViewProxy) async {
         // Reset on session switch (.task(id:) re-runs when sessionId changes)
         didInitialScroll = false
-        userBubbleFrames = [:]
+        // NOTE: don't wipe userBubbleFrames here. By the time this async
+        // task runs, the first layout pass may have already populated
+        // frames via preference, and `geo.frame(in: .named("chat"))` is
+        // a content-space value that doesn't re-emit on scroll — wiping
+        // would leave us empty until the next layout-changing event.
+        // On a fresh mount, @State defaults to [:] anyway. On a
+        // session-id swap within the same mount, the next preference
+        // fire will overwrite with new-session frames.
         scrollOffsetY = 0
         growMode = .idle
         lockedMsgId = nil
@@ -653,7 +729,7 @@ private struct StickyUserBubble: View {
 
     var body: some View {
         HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.10)
             VStack(alignment: .trailing, spacing: 4) {
                 if let text = content, !text.isEmpty, text != "[image]" {
                     Text(markdown(text))

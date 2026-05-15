@@ -63,7 +63,6 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
-            .ignoresSafeArea(.container, edges: .bottom)
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -95,22 +94,15 @@ struct MessageInputView: View {
             // ② Input row (mic toggle + text field, OR hold-to-talk pill)
             inputRow
 
-            // ③ Expanded mode picker on its own row (too wide for bottom toolbar)
-            if canShowModePicker && modePickerExpanded {
-                ModePickerView(sessionId: sessionId, expanded: $modePickerExpanded)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-
-            // ④ Bottom toolbar
+            // ③ Bottom toolbar (image + mode picker fills middle + send)
             bottomToolbar
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
-        .padding(.bottom, 10)
         .frame(maxWidth: .infinity)
-        .modifier(ComposeCardGlassModifier())
-        .animation(.easeInOut(duration: 0.2), value: modePickerExpanded)
+        .background(alignment: .top) {
+            ComposeCardGlassBackground()
+        }
     }
 
     // MARK: - Input Row (mic toggle + text field / hold-to-talk pill)
@@ -133,10 +125,12 @@ struct MessageInputView: View {
     private var bottomToolbar: some View {
         HStack(spacing: 8) {
             imageAttachButton
-            if canShowModePicker && !modePickerExpanded {
+            if canShowModePicker {
                 ModePickerView(sessionId: sessionId, expanded: $modePickerExpanded)
+                    .frame(maxWidth: .infinity)
+            } else {
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
             if !voiceMode {
                 actionButtonForMode
             }
@@ -577,13 +571,15 @@ private struct WaveformBar: View {
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
 
-/// Edge-to-edge bottom bar of liquid glass: rounds only the top corners.
-/// The view that uses this modifier should also call
-/// `.ignoresSafeArea(.container, edges: .bottom)` on its outer body so the
-/// glass actually slides under the home indicator. Pre-iOS 26 falls back
-/// to .ultraThinMaterial in the same shape.
-private struct ComposeCardGlassModifier: ViewModifier {
-    private static let topRadius: CGFloat = 22
+/// Edge-to-edge bottom bar of liquid glass: a separate background view that
+/// rounds only the top corners (subtly) and ignores the bottom safe area so
+/// the glass reaches the device's bottom edge. We use a sibling background
+/// view here (rather than a `.background(...)` modifier on the content)
+/// because `safeAreaInset` ignores `.ignoresSafeArea` requests on the inset
+/// content itself; the only reliable way to extend through is to place an
+/// independently-positioned background that opts out of the safe area.
+private struct ComposeCardGlassBackground: View {
+    private static let topRadius: CGFloat = 12
 
     private var shape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
@@ -595,11 +591,15 @@ private struct ComposeCardGlassModifier: ViewModifier {
         )
     }
 
-    func body(content: Content) -> some View {
+    var body: some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: shape)
+            Color.clear
+                .glassEffect(.regular, in: shape)
+                .ignoresSafeArea(.container, edges: .bottom)
         } else {
-            content.background(.ultraThinMaterial, in: shape)
+            shape
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea(.container, edges: .bottom)
         }
     }
 }

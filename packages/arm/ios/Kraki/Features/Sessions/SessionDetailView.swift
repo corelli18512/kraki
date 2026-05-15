@@ -83,13 +83,18 @@ struct SessionDetailView: View {
     // MARK: - Toolbar Title
 
     private func toolbarTitle(_ session: SessionInfo) -> some View {
-        let displayTitle = session.displayTitle
+        // While the relay channel is broken we replace the session
+        // title with "Reconnecting…" so the user knows the chat is
+        // currently in a stale-read state. Wording matches the
+        // ambient indicator on the brand header.
+        let displayTitle = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
 
         return Text(displayTitle)
             .font(.subheadline)
             .fontWeight(.semibold)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.easeInOut(duration: 0.2), value: appState.isReconnecting)
     }
 
     // MARK: - Not Found
