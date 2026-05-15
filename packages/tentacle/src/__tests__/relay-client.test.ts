@@ -371,6 +371,7 @@ describe('RelayClient set_session_model', () => {
       markActive: vi.fn(),
       markRead: vi.fn(),
       deleteSession: vi.fn(),
+      removeLinkByKrakiId: vi.fn(),
       appendMessage: vi.fn(() => 1),
       getSessionList: vi.fn(() => []),
       getMessagesAfterSeq: vi.fn(() => []),
@@ -478,6 +479,66 @@ describe('RelayClient set_session_model', () => {
     expect(readMsg).toBeDefined();
     expect(readMsg.payload.seq).toBe(42);
     expect(readMsg.sessionId).toBe('sess_1');
+  });
+
+  it('delete_session removes from sessionManager SYNCHRONOUSLY before any awaits', () => {
+    // Regression for: pre-fix, session removal happened in adapter.killSession()'s
+    // .finally(), so a broadcastSessionList fired immediately after (e.g. on
+    // auth_ok during reconnect after processPendingMessages) would still see
+    // the session and broadcast it back to arms. After the fix, deletion is
+    // synchronous; the async killSession runs in the background.
+    const { adapter, sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    // Adapter's killSession returns a Promise that NEVER resolves — to prove
+    // we don't depend on it.
+    adapter.killSession = vi.fn(() => new Promise<void>(() => {}));
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'delete_session',
+      sessionId: 'sess_1',
+      deviceId: 'dev_app',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: {},
+    })));
+
+    // SYNCHRONOUSLY: sessionManager state was cleaned up.
+    expect(sm.deleteSession).toHaveBeenCalledWith('sess_1');
+    expect(sm.removeLinkByKrakiId).toHaveBeenCalledWith('sess_1');
+
+    // SYNCHRONOUSLY: session_deleted broadcast was sent.
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    const deletedMsg = sent.find((m: { type: string }) => m.type === 'session_deleted');
+    expect(deletedMsg).toBeDefined();
+    expect(deletedMsg.sessionId).toBe('sess_1');
+
+    // killSession was kicked off but we didn't wait for it.
+    expect(adapter.killSession).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('delete_session is robust to adapter.killSession failure', () => {
+    const { adapter, sm } = buildConnectedClient();
+    const ws = sockets[0];
+
+    // Adapter rejects — but our local cleanup already ran, so this should
+    // not affect the observable side effects.
+    adapter.killSession = vi.fn(() => Promise.reject(new Error('adapter exploded')));
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'delete_session',
+      sessionId: 'sess_doomed',
+      deviceId: 'dev_app',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: {},
+    })));
+
+    expect(sm.deleteSession).toHaveBeenCalledWith('sess_doomed');
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    const deletedMsg = sent.find((m: { type: string }) => m.type === 'session_deleted');
+    expect(deletedMsg).toBeDefined();
   });
 });
 
