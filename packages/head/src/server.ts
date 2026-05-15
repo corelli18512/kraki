@@ -52,6 +52,12 @@ interface ClientState {
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
 
+  // ── Liveness uncertainty (device_pending broadcast) ──
+  /** Timestamp when pong grace period expires (null = no pending ping). */
+  pongOverdueAt: number | null;
+  /** Whether we already broadcast device_pending for this ping cycle. */
+  pendingLivenessBroadcast: boolean;
+
   // ── Delivery assurance (per-connection, head→peer direction) ──
   /** Monotonic counter for relaySeq head stamps on outbound tracked sends. */
   relaySeqCounter: number;
@@ -105,6 +111,9 @@ const MAX_RETRIES = 3;
  *  so detection latency tracks the recipient's ping cadence (~10s), not the
  *  liveness check cadence. */
 const RETRY_CHECK_INTERVAL_MS = 2_500;
+/** Grace period after ping before broadcasting device_pending (ms).
+ *  Overridable via PONG_GRACE_MS environment variable. */
+const PONG_GRACE_MS = Math.max(1_000, parseInt(process.env.PONG_GRACE_MS ?? '8000', 10) || 8_000);
 
 function isValidMessage(msg: unknown): msg is { type: string; [key: string]: unknown } {
   if (typeof msg !== 'object' || msg === null) return false;
@@ -187,6 +196,11 @@ export class HeadServer {
               pingMsg.ack = state.lastReceivedRelaySeq;
             }
             ws.send(JSON.stringify(pingMsg));
+            // Start the grace timer for device_pending broadcast
+            if (state) {
+              state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
+              state.pendingLivenessBroadcast = false;
+            }
           }
         } catch {
           this.removeConnection(deviceId);
@@ -375,6 +389,19 @@ export class HeadServer {
         this.removeConnection(deviceId);
       }
     }
+
+    // ── Liveness uncertainty: broadcast device_pending when pong is overdue ──
+    for (const [deviceId, ws] of this.connections) {
+      const state = this.clients.get(ws);
+      if (!state?.authenticated || !state.userId) continue;
+      if (state.pongOverdueAt === null) continue;
+      if (state.pendingLivenessBroadcast) continue;
+      if (now <= state.pongOverdueAt) continue;
+
+      state.pendingLivenessBroadcast = true;
+      getLogger().debug('Broadcasting device_pending (pong overdue)', { deviceId });
+      this.broadcastDevicePending(state.userId, deviceId);
+    }
   }
 
   // ── End delivery assurance ──────────────────────────────
@@ -435,6 +462,8 @@ export class HeadServer {
       authenticated: false,
       isAlive: true,
       ip,
+      pongOverdueAt: null,
+      pendingLivenessBroadcast: false,
       relaySeqCounter: 0,
       inFlight: [],
       lastAckedSeq: 0,
@@ -447,7 +476,7 @@ export class HeadServer {
     this.clients.set(ws, state);
     logger.debug('WebSocket connected', { ip });
 
-    ws.on('pong', () => { state.isAlive = true; });
+    ws.on('pong', () => { this.onPongReceived(state); });
 
     ws.on('message', (data) => {
       try {
@@ -631,7 +660,7 @@ export class HeadServer {
     }
 
     if (msg.type === 'pong') {
-      state.isAlive = true;
+      this.onPongReceived(state);
       return;
     }
 
@@ -1333,6 +1362,42 @@ export class HeadServer {
     }
   }
 
+  private broadcastDevicePending(userId: string, pendingDeviceId: string): void {
+    let userDevices;
+    try {
+      userDevices = this.storage.getDevicesByUser(userId);
+    } catch { return; }
+    for (const d of userDevices) {
+      if (d.id === pendingDeviceId) continue;
+      const ws = this.connections.get(d.id);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      const targetState = this.clients.get(ws);
+      if (!targetState) continue;
+      this.trackedSend(ws, targetState, { type: 'device_pending', deviceId: pendingDeviceId });
+    }
+  }
+
+  /** Handle pong from either protocol-level or JSON pong.
+   *  Re-promotes to device_joined if we already broadcast device_pending.
+   *  Guards against stale pongs from replaced connections (reconnect race). */
+  private onPongReceived(state: ClientState): void {
+    state.isAlive = true;
+    const wasPending = state.pendingLivenessBroadcast;
+    state.pongOverdueAt = null;
+    state.pendingLivenessBroadcast = false;
+
+    if (wasPending && state.userId && state.deviceId) {
+      // Only re-promote if this state still belongs to the active connection.
+      // A reconnecting device may have replaced us in the connections map;
+      // broadcasting from a stale socket would emit a duplicate device_joined.
+      const activeWs = this.connections.get(state.deviceId);
+      const activeState = activeWs ? this.clients.get(activeWs) : null;
+      if (activeState === state) {
+        this.broadcastDeviceJoined(state.userId, state.deviceId);
+      }
+    }
+  }
+
   // --- Helpers ---
 
   private getDeviceSummaries(userId: string): DeviceSummary[] {
@@ -1496,6 +1561,61 @@ export class HeadServer {
   /** Test hook: force a retry pass without waiting for the timer. */
   forceRetryPass(): void {
     this.runRetryPass();
+  }
+
+  /** Test hook: run the ping pass (set isAlive=false, send ping, start grace timer). */
+  forcePingPass(): void {
+    for (const [deviceId, ws] of this.connections) {
+      const state = this.clients.get(ws);
+      if (state && !state.isAlive) {
+        getLogger().info('Terminating stale connection (no pong)', { deviceId });
+        this.removeConnection(deviceId);
+        continue;
+      }
+      if (state) state.isAlive = false;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+          const pingMsg: Record<string, unknown> = { type: 'ping' };
+          if (state && state.lastReceivedRelaySeq > 0) {
+            pingMsg.ack = state.lastReceivedRelaySeq;
+          }
+          ws.send(JSON.stringify(pingMsg));
+          if (state) {
+            state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
+            state.pendingLivenessBroadcast = false;
+          }
+        }
+      } catch {
+        this.removeConnection(deviceId);
+      }
+    }
+  }
+
+  /** Test hook: simulate the effect of a ping pass on a single device without
+   *  actually sending a protocol-level ws.ping() (which triggers an auto-pong
+   *  from the ws library client, making it impossible to test overdue scenarios).
+   *  Sets isAlive=false and starts the grace timer. */
+  simulatePingSent(deviceId: string): void {
+    const ws = this.connections.get(deviceId);
+    if (!ws) return;
+    const state = this.clients.get(ws);
+    if (!state) return;
+    state.isAlive = false;
+    state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
+    state.pendingLivenessBroadcast = false;
+  }
+
+  /** Test hook: expire the pong grace timer for a specific device so the next
+   *  retry pass will broadcast device_pending immediately. */
+  expirePongGrace(deviceId: string): void {
+    const ws = this.connections.get(deviceId);
+    if (!ws) return;
+    const state = this.clients.get(ws);
+    if (!state) return;
+    if (state.pongOverdueAt !== null) {
+      state.pongOverdueAt = Date.now() - 1;
+    }
   }
 
   close(): void {
