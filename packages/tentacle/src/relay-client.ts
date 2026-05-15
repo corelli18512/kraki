@@ -146,9 +146,15 @@ export class RelayClient {
 
   /** Stash args (and the matching argsRef if we created one) at tool_start
    *  so tool_complete can recompute the headline and carry the same argsRef
-   *  forward. Keyed by toolCallId. Cleaned on complete. */
+   *  forward. Keyed by toolCallId. Cleaned on complete OR on session end. */
   private lastArgsByToolCallId = new Map<string, Record<string, unknown>>();
   private lastArgsRefByToolCallId = new Map<string, import('@kraki/protocol').ContentRef>();
+  /** Reverse index of in-flight toolCallIds per session — so we can purge
+   *  the two `lastArgs*` maps when a session ends with tool calls that
+   *  never received a matching `tool_complete`. Without this, the toolCallId-
+   *  keyed maps leak entries permanently (Phase 1 had the identical issue
+   *  in the Copilot adapter; same fix here). */
+  private sessionToolCallIds = new Map<string, Set<string>>();
 
   /** Build a ContentRef for the args JSON if the serialized size exceeds the
    *  inline floor. Returns undefined when args are trivially small. */
@@ -199,6 +205,20 @@ export class RelayClient {
       logger.warn({ err, sessionId, toolName }, 'failed to offload result');
       return undefined;
     }
+  }
+
+  /** Drop any in-flight toolCallId state for a session — called when a
+   *  session ends or is deleted. Without this, the toolCallId-keyed
+   *  `lastArgs*` maps would leak entries for any tool call that didn't
+   *  receive a matching `tool_complete` before the session went away. */
+  private purgeSessionToolState(sessionId: string): void {
+    const inflight = this.sessionToolCallIds.get(sessionId);
+    if (!inflight) return;
+    for (const id of inflight) {
+      this.lastArgsByToolCallId.delete(id);
+      this.lastArgsRefByToolCallId.delete(id);
+    }
+    this.sessionToolCallIds.delete(sessionId);
   }
 
   /**
@@ -579,6 +599,8 @@ export class RelayClient {
               this.sessionManager.removeLinkByKrakiId(sessionId);
               this.sessionManager.deleteSession(sessionId);
               this.lastAgentContent.delete(sessionId);
+              this.purgeSessionToolState(sessionId);
+              this.broadcastedAttachmentIds.delete(sessionId);
               this.send({ type: 'session_deleted', sessionId, payload: {} });
             });
           break;
@@ -1051,6 +1073,12 @@ export class RelayClient {
       if (event.toolCallId) {
         this.lastArgsByToolCallId.set(event.toolCallId, event.args ?? {});
         if (argsRef) this.lastArgsRefByToolCallId.set(event.toolCallId, argsRef);
+        let inflight = this.sessionToolCallIds.get(sessionId);
+        if (!inflight) {
+          inflight = new Set();
+          this.sessionToolCallIds.set(sessionId, inflight);
+        }
+        inflight.add(event.toolCallId);
       }
       this.send({
         type: 'tool_start',
@@ -1091,6 +1119,11 @@ export class RelayClient {
       if (event.toolCallId) {
         this.lastArgsByToolCallId.delete(event.toolCallId);
         this.lastArgsRefByToolCallId.delete(event.toolCallId);
+        const inflight = this.sessionToolCallIds.get(sessionId);
+        if (inflight) {
+          inflight.delete(event.toolCallId);
+          if (inflight.size === 0) this.sessionToolCallIds.delete(sessionId);
+        }
       }
       this.send({
         type: 'tool_complete',
@@ -1149,6 +1182,8 @@ export class RelayClient {
       this.turnCounts.delete(sessionId);
       this.titleGenerationInFlight.delete(sessionId);
       this.lastAgentContent.delete(sessionId);
+      this.purgeSessionToolState(sessionId);
+      this.broadcastedAttachmentIds.delete(sessionId);
       this.send({
         type: 'session_ended',
         sessionId,

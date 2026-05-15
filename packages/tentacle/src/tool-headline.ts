@@ -63,14 +63,16 @@ function pickRaw(toolName: string, args: Record<string, unknown>): string {
     case 'report_intent':
       return strField(args, 'intent');
     default:
-      // Unknown tool: pick the first non-empty short string arg.
-      // (Long strings are likely file_text dumps — skip those so we
-      // don't accidentally inline what the ref is supposed to carry.)
-      for (const v of Object.values(args)) {
-        if (typeof v === 'string' && v.length > 0 && v.length <= MAX_HEADLINE * 2) {
-          return v;
-        }
-      }
+      // Unknown tool: return empty. Why not pick the first string arg?
+      //  - We can't tell whether an arbitrary field carries something
+      //    sensitive (a token, password, API key). The headline goes
+      //    inline in the message envelope (broadcast eagerly), unlike
+      //    the args themselves which ship as a lazy ref.
+      //  - The chip still shows the toolName, which is enough signal
+      //    for an unknown tool. Users who want details can expand to
+      //    fetch the full args.
+      //  - When a new tool is observed in real sessions, add a case
+      //    above with the right field.
       return '';
   }
 }

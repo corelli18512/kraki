@@ -39,8 +39,9 @@ describe('makeHeadline', () => {
     expect(makeHeadline('mcp', {})).toBe('?/?');
   });
 
-  it('falls back to first short string for unknown tools', () => {
-    expect(makeHeadline('weird_tool', { foo: 'bar', baz: 42 })).toBe('bar');
+  it('returns empty for unknown tools (no fallback to avoid leaking sensitive args)', () => {
+    expect(makeHeadline('weird_tool', { foo: 'bar', baz: 42 })).toBe('');
+    expect(makeHeadline('weird_tool', { token: 'sk-XXX' })).toBe('');
     expect(makeHeadline('weird_tool', { huge: 'x'.repeat(1000) })).toBe('');
     expect(makeHeadline('weird_tool', {})).toBe('');
   });

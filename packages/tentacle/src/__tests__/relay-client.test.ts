@@ -737,4 +737,37 @@ describe('RelayClient tool message lazy-load shape', () => {
       expect(complete.payload.resultRef).toBeUndefined();
     } finally { cleanup(); }
   });
+
+  it('purges lastArgs* + broadcastedAttachmentIds when a session ends with in-flight tool calls', () => {
+    const { adapter, client, cleanup } = buildClientWithStore();
+    try {
+      const bigArgs = { command: 'echo ' + 'x'.repeat(400) };
+      // Two tool_starts that never get a matching tool_complete (mimics
+      // session being killed mid-tool).
+      (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash', args: bigArgs, toolCallId: 'leak-1',
+      });
+      (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash', args: bigArgs, toolCallId: 'leak-2',
+      });
+      const c = client as unknown as {
+        lastArgsByToolCallId: Map<string, unknown>;
+        lastArgsRefByToolCallId: Map<string, unknown>;
+        sessionToolCallIds: Map<string, Set<string>>;
+        broadcastedAttachmentIds: Map<string, Set<string>>;
+      };
+      expect(c.lastArgsByToolCallId.size).toBe(2);
+      expect(c.lastArgsRefByToolCallId.size).toBe(2);
+      expect(c.sessionToolCallIds.get('sess_1')?.size).toBe(2);
+      expect(c.broadcastedAttachmentIds.has('sess_1')).toBe(true);
+
+      // Session ends.
+      (adapter.onSessionEnded as ((sid: string, e: { reason: string }) => void))('sess_1', { reason: 'killed' });
+
+      expect(c.lastArgsByToolCallId.size).toBe(0);
+      expect(c.lastArgsRefByToolCallId.size).toBe(0);
+      expect(c.sessionToolCallIds.has('sess_1')).toBe(false);
+      expect(c.broadcastedAttachmentIds.has('sess_1')).toBe(false);
+    } finally { cleanup(); }
+  });
 });
