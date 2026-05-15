@@ -10,19 +10,30 @@ struct SessionListView: View {
 
     @Binding var navigationPath: NavigationPath
     @State private var showNewSession = false
+    @State private var selectedDeviceFilter: String? = nil
+    @State private var showFilterRow = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var deviceStore: DeviceStore { appState.deviceStore }
 
     private var sorted: [SessionInfo] { sessionStore.sortedSessions }
 
+    private var filteredSessions: [SessionInfo] {
+        guard let id = selectedDeviceFilter else { return sorted }
+        return sorted.filter { $0.deviceId == id }
+    }
+
     private var hasTentacle: Bool {
         deviceStore.tentacleDevices.contains { $0.online }
     }
 
+    private var tentacleDevices: [DeviceSummary] {
+        deviceStore.tentacleDevices.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
     var body: some View {
         Group {
-            if sorted.isEmpty {
+            if filteredSessions.isEmpty {
                 emptyState
             } else {
                 sessionList
@@ -31,7 +42,14 @@ struct SessionListView: View {
         .navigationBarHidden(true)
         .background(Color.surfacePrimary)
         .safeAreaInset(edge: .top) {
-            brandHeader
+            VStack(spacing: 0) {
+                brandHeader
+                if showFilterRow {
+                    deviceFilterRow
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.25), value: showFilterRow)
         }
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
@@ -55,19 +73,24 @@ struct SessionListView: View {
                 .padding(.vertical, 2)
                 .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
 
+            // Ambient connection status — only visible while we're
+            // away from `.connected`. Mirrors the WhatsApp / Telegram
+            // pattern: small inline pill, not a blocking dialog.
+            ConnectionStatusChip()
+
             Spacer()
 
-            if !sorted.isEmpty {
+            // Filter toggle button — hidden when only one device
+            if tentacleDevices.count > 1 {
                 Button {
-                    showNewSession = true
+                    withAnimation { showFilterRow.toggle() }
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.krakiPrimary)
-                        .frame(width: 22, height: 22)
+                    Image(systemName: showFilterRow
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundColor(selectedDeviceFilter != nil || showFilterRow ? .krakiPrimary : Color(.tertiaryLabel))
                 }
-                .clipShape(Circle())
-                .if_available_glass()
             }
         }
         .padding(.leading, 20)
@@ -76,10 +99,65 @@ struct SessionListView: View {
         .background(Color.surfacePrimary)
     }
 
+    // MARK: - Device Filter Row (toggleable, floating glass pills)
+
+    private var deviceFilterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                filterPill(label: "All", isSelected: selectedDeviceFilter == nil, isEnabled: true) {
+                    selectedDeviceFilter = nil
+                }
+
+                ForEach(tentacleDevices) { device in
+                    filterPill(
+                        label: device.name,
+                        isSelected: selectedDeviceFilter == device.id,
+                        isEnabled: tentacleDevices.count > 1
+                    ) {
+                        if tentacleDevices.count > 1 {
+                            selectedDeviceFilter = device.id
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+        }
+        .background(Color.surfacePrimary.opacity(0.85))
+    }
+
+    @ViewBuilder
+    private func filterPill(label: String, isSelected: Bool, isEnabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isSelected ? Color.white : (isEnabled ? Color.primary : Color.secondary))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        }
+        .background {
+            if #available(iOS 26.0, *) {
+                Capsule()
+                    .fill(isSelected ? Color.krakiPrimary : Color.clear)
+                    .overlay {
+                        if !isSelected {
+                            Capsule().fill(.regularMaterial)
+                        }
+                    }
+            } else {
+                Capsule()
+                    .fill(isSelected ? Color.krakiPrimary : Color(.tertiarySystemBackground))
+            }
+        }
+        .clipShape(Capsule())
+        .disabled(!isEnabled)
+        .opacity(isEnabled || isSelected ? 1 : 0.5)
+    }
+
     // MARK: - Session List (UIKit-backed for smooth row reorder)
 
     private var sessionList: some View {
-        SessionTable(appState: appState) { sessionId in
+        SessionTable(appState: appState, deviceFilter: selectedDeviceFilter) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
         .background(Color.surfacePrimary)
@@ -91,38 +169,24 @@ struct SessionListView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Text("No sessions")
-                .font(.title3)
+            Image("KrakiLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .opacity(0.85)
+
+            Text("Create a session to begin")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            if hasTentacle {
-                if #available(iOS 26.0, *) {
-                    Button {
-                        showNewSession = true
-                    } label: {
-                        Label("New Session", systemImage: "plus")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                    .buttonStyle(.glass)
-                    .tint(.krakiPrimary)
-                    .padding(.top, 4)
-                } else {
-                    Button {
-                        showNewSession = true
-                    } label: {
-                        Label("New Session", systemImage: "plus")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.krakiPrimary)
-                    .padding(.top, 4)
-                }
-            } else {
+            if !hasTentacle {
                 Text("npx @kraki/tentacle")
                     .font(.system(size: 13, design: .monospaced))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 4)
             }
 
             Spacer()

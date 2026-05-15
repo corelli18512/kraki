@@ -12,29 +12,18 @@ struct RootView: View {
             Color.surfacePrimary
                 .ignoresSafeArea()
 
-            switch appState.connectionStatus {
-            case .connected:
+            // We show the LoginView only during the very first auth
+            // flow. Once we've reached `.connected` at least once, mid-
+            // session reconnects (.connecting / .authenticating / etc.)
+            // stay inside MainTabView — the brand header surfaces the
+            // status ambiently rather than blocking the whole screen.
+            if appState.hasCompletedInitialConnect {
                 MainTabView()
-            case .awaitingLogin:
+            } else {
                 LoginView()
-            case .connecting, .authenticating:
-                LoginView()
-                    .overlay {
-                        ConnectionOverlayView(status: appState.connectionStatus)
-                    }
-            case .disconnected:
-                MainTabView()
-                    .overlay {
-                        ConnectionOverlayView(status: appState.connectionStatus)
-                    }
-            case .error:
-                MainTabView()
-                    .overlay {
-                        ConnectionOverlayView(status: appState.connectionStatus)
-                    }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: appState.connectionStatus)
+        .animation(.easeInOut(duration: 0.3), value: appState.hasCompletedInitialConnect)
     }
 }
 

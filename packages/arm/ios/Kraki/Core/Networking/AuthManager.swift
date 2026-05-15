@@ -177,7 +177,8 @@ final class AuthManager {
             user = UserInfo(
                 id: userId,
                 login: login,
-                provider: userDict["provider"] as? String
+                provider: userDict["provider"] as? String,
+                email: userDict["email"] as? String
             )
             KLog.d("👤 User: \(login)")
         }

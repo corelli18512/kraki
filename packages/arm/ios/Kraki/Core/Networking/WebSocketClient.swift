@@ -27,7 +27,11 @@ final class WebSocketClient: NSObject {
 
     private static let reconnectBase: TimeInterval = 1.0
     private static let reconnectMax: TimeInterval = 30.0
-    private static let maxReconnectAttempts = 5
+    // Note: there is intentionally no hard retry cap. We keep backing
+    // off (exponential, capped at `reconnectMax`) for as long as the
+    // app is foregrounded — matching what Slack / WhatsApp / iMessage
+    // do. Users get an ambient indicator while we keep trying rather
+    // than a blocking "we gave up" dialog.
     private static let pingInterval: TimeInterval = 25.0
 
     // MARK: Observable state
@@ -48,6 +52,10 @@ final class WebSocketClient: NSObject {
 
     /// Called on the main queue when the connection state changes.
     var onStateChange: ((WebSocketState) -> Void)?
+
+    /// Called on the main queue every time the retry counter bumps
+    /// (or resets to 0 after a successful connect).
+    var onReconnectAttempt: ((Int) -> Void)?
 
     // MARK: Internals
 
@@ -188,11 +196,11 @@ final class WebSocketClient: NSObject {
 
     private func scheduleReconnect() {
         guard reconnectWorkItem == nil else { return }
-        guard reconnectAttempts < Self.maxReconnectAttempts else { return }
 
         let delay = reconnectDelay
         reconnectAttempts += 1
         reconnectDelay = min(reconnectDelay * 2, Self.reconnectMax)
+        onReconnectAttempt?(reconnectAttempts)
 
         let work = DispatchWorkItem { [weak self] in
             self?.reconnectWorkItem = nil
@@ -200,6 +208,17 @@ final class WebSocketClient: NSObject {
         }
         reconnectWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Reset backoff to base and connect immediately. Use on app-
+    /// foreground transitions so the user doesn't have to wait out a
+    /// long backoff timer that started in the background.
+    func resetBackoffAndReconnect() {
+        cancelReconnect()
+        reconnectDelay = Self.reconnectBase
+        reconnectAttempts = 0
+        onReconnectAttempt?(0)
+        connect()
     }
 
     private func cancelReconnect() {
@@ -226,6 +245,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         KLog.d("✅ WebSocket opened")
         reconnectDelay = Self.reconnectBase
         reconnectAttempts = 0
+        onReconnectAttempt?(0)
         state = .connected
         startPing()
         listenForMessages()

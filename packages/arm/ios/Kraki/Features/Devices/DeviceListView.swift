@@ -102,11 +102,16 @@ struct DeviceListView: View {
 // MARK: - Device Row
 
 private struct DeviceRow: View {
+    @Environment(AppState.self) private var appState
     let device: DeviceSummary
     let isSelf: Bool
     let hasGreeting: Bool
 
     private var dotColor: Color {
+        // When the iOS client itself is not connected to the relay we
+        // can't trust any device's online state — show everything in
+        // warning orange to make the staleness visible.
+        if !appState.isFullyOnline { return Color(hex: 0xFBBF24) }
         if device.online && hasGreeting { return Color(hex: 0x34D399) }
         if device.online { return Color(hex: 0xFBBF24) }
         return Color(hex: 0x94A3B8)

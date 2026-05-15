@@ -86,7 +86,18 @@ struct SessionCardView: View {
 
     @ViewBuilder
     private var statusDot: some View {
-        if isDeviceOnline {
+        // When the relay channel is broken, every session's state is
+        // potentially stale. Surface that as a warning-orange dot
+        // regardless of the cached online flag.
+        if !appState.isFullyOnline {
+            Circle()
+                .fill(Color(hex: 0xFBBF24))
+                .frame(width: 8, height: 8)
+                .overlay(
+                    Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5)
+                )
+                .offset(x: 2, y: 2)
+        } else if isDeviceOnline {
             Circle()
                 .fill(session.state == .active ? Color.blue : Color.green)
                 .frame(width: 8, height: 8)
@@ -163,6 +174,7 @@ struct SessionCardView: View {
     }
 
     private var statusColor: Color {
+        if !appState.isFullyOnline { return Color(hex: 0xFBBF24) }
         if !isDeviceOnline { return .gray }
         return session.state == .active ? .blue : .green
     }
