@@ -383,7 +383,14 @@ export async function performUpdate(currentVersion: string): Promise<void> {
         await updateViaNpm(latest);
         break;
       case 'sea':
-        await updateViaBinary(latest);
+        await updateViaBinary(latest, (received, total) => {
+          if (total > 0) {
+            const pct = Math.floor((received / total) * 100);
+            spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
+          } else {
+            spinner.text = `Downloading ${formatBytes(received)}…`;
+          }
+        });
         break;
       default:
         spinner.fail('Cannot determine install method. Update manually.');
@@ -463,7 +470,10 @@ function getPlatformAssetName(): string {
   return `kraki-cli-${platform}-${arch}${ext}`;
 }
 
-async function updateViaBinary(version: string): Promise<void> {
+async function updateViaBinary(
+  version: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<void> {
   const assetName = getPlatformAssetName();
   // Try v* tag first, fall back to tentacle-v*
   let release: GitHubRelease;
@@ -485,7 +495,7 @@ async function updateViaBinary(version: string): Promise<void> {
   const tmpPath = join(tmpdir(), assetName + '.update');
 
   // Download binary
-  await downloadFile(downloadUrl, tmpPath);
+  await downloadFile(downloadUrl, tmpPath, onProgress);
 
   // Verify checksum if SHA256SUMS is available
   const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
@@ -610,17 +620,46 @@ function fetchText(url: string): Promise<string> {
   });
 }
 
-async function downloadFile(url: string, dest: string): Promise<void> {
+async function downloadFile(
+  url: string,
+  dest: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<void> {
   const res = await sendRequest(url);
   if (res.statusCode !== 200) {
     throw new Error(`Download failed: HTTP ${res.statusCode}`);
   }
 
+  const contentLength = Number.parseInt(res.headers['content-length'] ?? '', 10);
+  const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+  let received = 0;
+  let lastTick = 0;
+
+  if (onProgress) {
+    res.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      // Throttle to ~10 updates/sec so the spinner doesn't churn.
+      const now = Date.now();
+      if (now - lastTick >= 100) {
+        lastTick = now;
+        onProgress(received, total);
+      }
+    });
+  }
+
   const file = createWriteStream(dest);
   try {
     await pipeline(res, file);
+    if (onProgress) onProgress(received, total); // final update
   } catch (err) {
     try { unlinkSync(dest); } catch { /* ignore */ }
     throw err;
   }
+}
+
+/** Format bytes as `12.3 MB` / `456 KB` / `78 B`. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

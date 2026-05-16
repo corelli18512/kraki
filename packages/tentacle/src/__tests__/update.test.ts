@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, getProxyForUrl, shouldBypassProxy } from '../update.js';
+import { fetchLatestVersion, formatBytes, getProxyForUrl, shouldBypassProxy } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -122,5 +122,25 @@ describe('update proxy support', () => {
     await expect(fetchLatestVersion()).resolves.toBe('0.12.0');
     expect(mockHttpRequest).toHaveBeenCalledOnce();
     expect(mockHttpsRequest).toHaveBeenCalledOnce();
+  });
+});
+
+describe('formatBytes', () => {
+  it('formats < 1 KB as bytes', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1023)).toBe('1023 B');
+  });
+
+  it('formats KB without decimal', () => {
+    expect(formatBytes(1024)).toBe('1 KB');
+    expect(formatBytes(1536)).toBe('2 KB');
+    expect(formatBytes(1024 * 1023)).toBe('1023 KB');
+  });
+
+  it('formats MB with 1 decimal', () => {
+    expect(formatBytes(1024 * 1024)).toBe('1.0 MB');
+    expect(formatBytes(1.5 * 1024 * 1024)).toBe('1.5 MB');
+    expect(formatBytes(121462912)).toBe('115.8 MB');
   });
 });
