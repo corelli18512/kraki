@@ -253,6 +253,46 @@ describe('CopilotAdapter', () => {
     it('stop() is safe to call without start', async () => {
       await adapter.stop(); // should not throw
     });
+
+    it('stop() aborts each active session before tearing down the client', async () => {
+      await adapter.start();
+      const a = await adapter.createSession({ model: 'gpt-5' });
+      const b = await adapter.createSession({ model: 'gpt-5' });
+
+      const sessionA = mockSessions.find(s => s.sessionId === a.sessionId)!;
+      const sessionB = mockSessions.find(s => s.sessionId === b.sessionId)!;
+
+      await adapter.stop();
+
+      expect(sessionA.abort).toHaveBeenCalledTimes(1);
+      expect(sessionB.abort).toHaveBeenCalledTimes(1);
+    });
+
+    it('stop() proceeds when one session.abort() hangs (timeout guard)', async () => {
+      await adapter.start();
+      const a = await adapter.createSession({ model: 'gpt-5' });
+      const b = await adapter.createSession({ model: 'gpt-5' });
+
+      const sessionA = mockSessions.find(s => s.sessionId === a.sessionId)!;
+      const sessionB = mockSessions.find(s => s.sessionId === b.sessionId)!;
+
+      // sessionA's abort hangs forever; sessionB resolves normally.
+      sessionA.abort.mockImplementation(() => new Promise(() => {}));
+
+      vi.useFakeTimers();
+      const stopP = adapter.stop();
+      // Let microtasks run, then exceed the abort timeout.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await stopP;
+      vi.useRealTimers();
+
+      // Both sessions were attempted; the hung one was abandoned.
+      expect(sessionA.abort).toHaveBeenCalledTimes(1);
+      expect(sessionB.abort).toHaveBeenCalledTimes(1);
+      // listSessions returns [] — sessions map was cleared.
+      const sessions = await adapter.listSessions();
+      expect(sessions).toEqual([]);
+    });
   });
 
   describe('patchCopilotSdkSessionImport', () => {

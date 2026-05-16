@@ -60,6 +60,17 @@ vi.mock('../logger.js', () => ({
   })),
 }));
 
+// Mock crypto so tests can hand-craft "encrypted" envelopes without real keys.
+// decryptFromBlob simply returns the blob string itself — tests treat the
+// blob field as the raw plaintext JSON to inject.
+vi.mock('@kraki/crypto', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('@kraki/crypto');
+  return {
+    ...actual,
+    decryptFromBlob: vi.fn((payload: { blob: string }) => payload.blob),
+  };
+});
+
 import { RelayClient } from '../relay-client.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -539,6 +550,172 @@ describe('RelayClient set_session_model', () => {
     const sent = ws.sent.map((s: string) => JSON.parse(s));
     const deletedMsg = sent.find((m: { type: string }) => m.type === 'session_deleted');
     expect(deletedMsg).toBeDefined();
+  });
+});
+
+describe('RelayClient processPendingMessages filter', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildClientWithKeys() {
+    const adapter = {
+      ...createAdapter(),
+      sendMessage: vi.fn(() => Promise.resolve()),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      deleteSession: vi.fn(),
+      removeLinkByKrakiId: vi.fn(),
+      markActive: vi.fn(),
+    };
+    const km = createKeyManager();
+    return { adapter, sm, km };
+  }
+
+  /** Connect and complete auth, then return ws and adapter/sm. */
+  function connectWithPending(
+    pendingMessages: Array<Record<string, unknown>>,
+  ): { adapter: Record<string, unknown>; sm: Record<string, unknown>; ws: typeof sockets[number] } {
+    const { adapter, sm, km } = buildClientWithKeys();
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, km);
+    client.connect();
+    sockets[0].emit('open');
+    // The decryptFromBlob mock returns blob field as plaintext, so we put
+    // a JSON-stringified ConsumerMessage in the blob field directly.
+    const envelopes = pendingMessages.map((inner) => ({
+      type: 'unicast',
+      to: 'dev_1',
+      blob: JSON.stringify(inner),
+      keys: { dev_1: 'x' },
+    }));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+      pendingMessages: envelopes,
+    })));
+    return { adapter, sm, ws: sockets[0] };
+  }
+
+  it('processes pending delete_session', () => {
+    const { adapter, sm } = connectWithPending([
+      {
+        type: 'delete_session',
+        sessionId: 'stale_sess',
+        deviceId: 'dev_app',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: {},
+      },
+    ]);
+
+    expect(sm.deleteSession).toHaveBeenCalledWith('stale_sess');
+    expect(sm.removeLinkByKrakiId).toHaveBeenCalledWith('stale_sess');
+    expect(adapter.killSession).toHaveBeenCalledWith('stale_sess');
+  });
+
+  it('drops stale send_input without broadcasting user_message or calling adapter', () => {
+    const { adapter, ws } = connectWithPending([
+      {
+        type: 'send_input',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { text: 'remove the pinned icon' },
+      },
+    ]);
+
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    const userMsg = sent.find((m: { type: string }) => m.type === 'user_message');
+    expect(userMsg).toBeUndefined();
+  });
+
+  it('drops stale approve / deny without calling adapter.respondToPermission', () => {
+    const { adapter } = connectWithPending([
+      {
+        type: 'approve',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { permissionId: 'perm_1' },
+      },
+      {
+        type: 'deny',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 2,
+        timestamp: new Date().toISOString(),
+        payload: { permissionId: 'perm_2' },
+      },
+    ]);
+
+    expect(adapter.respondToPermission).not.toHaveBeenCalled();
+  });
+
+  it('drops stale set_session_mode without applying it', () => {
+    const { adapter, sm } = connectWithPending([
+      {
+        type: 'set_session_mode',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { mode: 'execute' },
+      },
+    ]);
+
+    expect(adapter.setSessionMode).not.toHaveBeenCalled();
+    expect(sm.setMode).not.toHaveBeenCalled();
+  });
+
+  it('processes delete_session even when mixed with stale send_input', () => {
+    const { adapter, sm } = connectWithPending([
+      {
+        type: 'send_input',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { text: 'stale text' },
+      },
+      {
+        type: 'delete_session',
+        sessionId: 'sess_doomed',
+        deviceId: 'dev_app',
+        seq: 2,
+        timestamp: new Date().toISOString(),
+        payload: {},
+      },
+      {
+        type: 'approve',
+        sessionId: 'sess_1',
+        deviceId: 'dev_app',
+        seq: 3,
+        timestamp: new Date().toISOString(),
+        payload: { permissionId: 'perm_x' },
+      },
+    ]);
+
+    expect(sm.deleteSession).toHaveBeenCalledWith('sess_doomed');
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    expect(adapter.respondToPermission).not.toHaveBeenCalled();
   });
 });
 

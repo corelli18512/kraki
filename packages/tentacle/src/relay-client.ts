@@ -965,13 +965,29 @@ export class RelayClient {
 
   /**
    * Process queued unicast envelopes delivered by the relay in auth_ok.
-   * These are messages sent by arms while this tentacle was offline.
-   * Must run before broadcastSessionList so deletes/mode changes take effect first.
+   * These are messages sent by arms while this tentacle was offline — they
+   * may be seconds to days old depending on how long the device was
+   * disconnected (the relay's pending_messages table has a 30-day TTL).
+   *
+   * Currently only `delete_session` is replayed: it's idempotent, time-
+   * insensitive, and the user's explicit intent to remove a session
+   * remains valid no matter how stale. Other types (send_input, approve,
+   * set_session_mode, etc.) carry interactive intent that decays quickly
+   * and could cause confusing behavior if replayed — e.g. a stale
+   * send_input would broadcast a phantom user_message and kick off an
+   * agent turn the user never asked for. Those are logged and dropped
+   * here; deciding which (if any) to replay needs further design.
+   *
+   * Must run before broadcastSessionList so delete_session takes effect
+   * before the arm receives the session list (otherwise the just-deleted
+   * session would appear in the list and then disappear).
    */
   private processPendingMessages(messages?: UnicastEnvelope[]): void {
     if (!messages || messages.length === 0 || !this.keyManager || !this.authInfo) return;
 
     logger.info(`Processing ${messages.length} pending message(s) from relay`);
+    let processed = 0;
+    let skipped = 0;
     for (const envelope of messages) {
       try {
         const decrypted = decryptFromBlob(
@@ -979,11 +995,20 @@ export class RelayClient {
           this.authInfo.deviceId,
           this.keyManager.getKeyPair().privateKey,
         );
-        const inner = JSON.parse(decrypted);
-        this.handleConsumerMessage(inner as ConsumerMessage);
+        const inner = JSON.parse(decrypted) as ConsumerMessage;
+        if (inner.type !== 'delete_session') {
+          logger.debug({ type: inner.type }, 'Skipping stale pending message');
+          skipped += 1;
+          continue;
+        }
+        this.handleConsumerMessage(inner);
+        processed += 1;
       } catch (err) {
         logger.warn({ err }, 'Failed to process pending message');
       }
+    }
+    if (skipped > 0) {
+      logger.info({ processed, skipped }, 'Pending message replay summary');
     }
   }
 
