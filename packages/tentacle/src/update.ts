@@ -362,12 +362,18 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
   const daemonWasRunning = isDaemonRunning();
 
-  // On Windows, a running .exe is locked by the OS and cannot be renamed or
-  // overwritten. Stop the daemon before attempting to replace the binary.
-  if (daemonWasRunning && method === 'sea' && process.platform === 'win32') {
+  // Stop the daemon before the install. This serves two purposes:
+  //  1. On Windows, a running .exe is locked by the OS and cannot be renamed
+  //     or overwritten — without this, SEA updates fail with EBUSY and npm
+  //     -g installs fail when the running process holds the file open.
+  //  2. SIGTERM triggers the daemon's graceful shutdown path, which aborts
+  //     active SDK sessions cleanly so events.jsonl gets a proper `abort`
+  //     event. Skipping this leaves orphaned tool_use blocks in the
+  //     conversation history and the next resume hits CAPIError 400.
+  // Wait briefly for the process to release locks / finish flushing.
+  if (daemonWasRunning) {
     spinner.text = `Stopping daemon before update…`;
     stopDaemon();
-    // Wait for the process to release the file lock
     await waitForProcessExit(500, 10);
   }
 

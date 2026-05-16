@@ -360,6 +360,12 @@ export class CopilotAdapter extends AgentAdapter {
    */
   private static readonly IDLE_FALLBACK_MS = 500;
 
+  /** Max time to wait for a single session.abort() during adapter.stop().
+   *  If exceeded we fall through and let client.stop() kill the SDK process.
+   *  At worst we get the legacy orphaned tool_use behavior for that session;
+   *  any cleanly-aborted sessions still benefit. */
+  private static readonly STOP_ABORT_TIMEOUT_MS = 2_000;
+
   /** Set of attachment ids already broadcast for this session — prevents
    *  re-broadcasting bytes when the same image is shown twice. */
   private broadcastedAttachmentIds = new Map<string, Set<string>>();
@@ -527,6 +533,32 @@ export class CopilotAdapter extends AgentAdapter {
   async stop(): Promise<void> {
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
+
+    // Abort all active sessions first so the SDK writes a clean `abort` event
+    // to events.jsonl for any in-flight tool_use. Without this, killing the
+    // client mid-turn leaves the conversation history with an orphaned
+    // tool_use block, and Claude rejects the next resume with
+    // `messages.N: tool_use ids were found without tool_result blocks`.
+    // Each abort is guarded by a short timeout so a hung session doesn't
+    // hang shutdown — at worst we still get the legacy bad behavior for that
+    // one session, no worse than today.
+    const sessionIds = Array.from(this.sessions.keys());
+    if (sessionIds.length > 0) {
+      logger.debug({ count: sessionIds.length }, 'aborting active sessions before stop');
+      await Promise.all(sessionIds.map(async (sessionId) => {
+        try {
+          await Promise.race([
+            this.abortSession(sessionId),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('abort timeout')), CopilotAdapter.STOP_ABORT_TIMEOUT_MS),
+            ),
+          ]);
+        } catch (err) {
+          logger.warn({ err, sessionId }, 'pre-stop abort failed');
+        }
+      }));
+    }
+
     if (this.client) {
       await this.client.stop();
       this.client = null;
