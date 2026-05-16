@@ -33,10 +33,13 @@ export function SessionPage() {
   const deviceModels = useStore((s) => session ? s.deviceModels.get(session.deviceId) : undefined);
   const deviceModelDetails = useStore((s) => session ? s.deviceModelDetails.get(session.deviceId) : undefined);
 
+  const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
+
   // Navigate home when session is deleted (removed from store while viewing)
+  // but not if it's a pending session (optimistic open before session_created)
   useEffect(() => {
-    if (sessionId && !session) navigate('/', { replace: true });
-  }, [sessionId, session, navigate]);
+    if (sessionId && !session && !isPending) navigate('/', { replace: true });
+  }, [sessionId, session, isPending, navigate]);
 
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
@@ -65,6 +68,17 @@ export function SessionPage() {
     window.addEventListener('focus', doMarkRead);
     return () => window.removeEventListener('focus', doMarkRead);
   }, [sessionId, clearUnread]);
+
+  if (!session && isPending) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="text-center">
+          <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
+          <p className="mt-3 text-sm text-text-secondary">Starting session…</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!session) {
     return (

@@ -25,7 +25,7 @@ import type {
   MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, basename } from 'node:path';
@@ -997,6 +997,40 @@ export class CopilotAdapter extends AgentAdapter {
     }
   }
 
+  /**
+   * Wait for the SDK to finish writing to events.jsonl after a turn completes,
+   * then fire onFlushComplete. Uses offset-based stabilization: stat the file
+   * size and compare to the previous reading. If stable, fire immediately.
+   * Otherwise retry a few times (max ~600ms total).
+   */
+  private signalFlushComplete(sessionId: string): void {
+    const eventsPath = join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
+    const MAX_CHECKS = 3;
+    const CHECK_INTERVAL_MS = 200;
+    let lastSize = -1;
+    let checks = 0;
+
+    const check = () => {
+      let size: number;
+      try { size = statSync(eventsPath).size; } catch { size = 0; }
+
+      if (size === lastSize || checks >= MAX_CHECKS) {
+        if (checks >= MAX_CHECKS && size !== lastSize) {
+          logger.warn({ sessionId }, 'events.jsonl still growing after max wait — signalling flush anyway');
+        }
+        this.onFlushComplete?.(sessionId);
+        return;
+      }
+
+      lastSize = size;
+      checks++;
+      setTimeout(check, CHECK_INTERVAL_MS);
+    };
+
+    // Start first check after a short delay to let the SDK write its final events
+    setTimeout(check, CHECK_INTERVAL_MS);
+  }
+
   /** Resolve all pending permissions/questions and fire callbacks so relay-client broadcasts resolutions. */
   private broadcastPendingResolutions(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
@@ -1266,6 +1300,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.cycleUserAborted.delete(sessionId);
 
       this.onIdle?.(sessionId);
+      this.signalFlushComplete(sessionId);
     });
 
     session.on('assistant.turn_start', () => {
@@ -1315,6 +1350,7 @@ export class CopilotAdapter extends AgentAdapter {
         message: `${requested} is currently unavailable. Session paused — send a message to retry.`,
       });
       this.onIdle?.(sessionId);
+      this.signalFlushComplete(sessionId);
       this.cleanupSessionPermissions(sessionId);
     });
 
@@ -1356,6 +1392,7 @@ export class CopilotAdapter extends AgentAdapter {
         this.idleTimers.delete(sessionId);
         logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
         this.onIdle?.(sessionId);
+        this.signalFlushComplete(sessionId);
       }, CopilotAdapter.IDLE_FALLBACK_MS));
     });
 

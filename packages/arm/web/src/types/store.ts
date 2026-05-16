@@ -116,6 +116,9 @@ export interface AppState {
   // Sessions currently loading initial messages
   loadingSessions: Set<string>;
 
+  // Sessions with outstanding create/import/fork requests (not yet confirmed by session_created)
+  pendingSessions: Set<string>;
+
   // Local session import picker
   localSessions: LocalSession[];
   localSessionsLoading: boolean;
@@ -162,6 +165,8 @@ export interface AppActions {
   setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;
+  addPendingSession: (sessionId: string) => void;
+  removePendingSession: (sessionId: string) => void;
   setLocalSessions: (sessions: LocalSession[]) => void;
   setLocalSessionsLoading: (loading: boolean) => void;
   clearTransientState: () => void;

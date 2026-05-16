@@ -67,6 +67,7 @@ const initialState = {
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
   loadingSessions: new Set<string>(),
+  pendingSessions: new Set<string>(),
   localSessions: [],
   localSessionsLoading: false,
 };
@@ -362,6 +363,20 @@ export const useStore = create<Store>()(persist((set) => ({
       return { loadingSessions: next };
     }),
 
+  addPendingSession: (sessionId) =>
+    set((state) => {
+      const next = new Set(state.pendingSessions);
+      next.add(sessionId);
+      return { pendingSessions: next };
+    }),
+
+  removePendingSession: (sessionId) =>
+    set((state) => {
+      const next = new Set(state.pendingSessions);
+      next.delete(sessionId);
+      return { pendingSessions: next };
+    }),
+
   setLocalSessions: (sessions) => set({ localSessions: sessions }),
 
   setLocalSessionsLoading: (loading) => set({ localSessionsLoading: loading }),
@@ -401,6 +416,7 @@ export const useStore = create<Store>()(persist((set) => ({
     pendingPermissions: new Map(),
     pendingQuestions: new Map(),
     loadingSessions: new Set(),
+    pendingSessions: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
     // sessionPreviews kept — persisted snapshot shown until rebuildPreview refreshes.
     // messages are NOT touched — they're managed by IndexedDB hydration.

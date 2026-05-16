@@ -121,6 +121,9 @@ function createSessionManager(): Record<string, unknown> {
     getMessagesAfterSeq: vi.fn(() => []),
     appendMessage: vi.fn(() => 1),
     setUsage: vi.fn(),
+    getAllLinks: vi.fn(() => []),
+    getLink: vi.fn(() => null),
+    removeLinkByKrakiId: vi.fn(),
   };
 }
 

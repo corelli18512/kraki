@@ -107,6 +107,11 @@ export class EventsWatcher {
     }
   }
 
+  /** Get the byte offset the watcher is currently tracking for a session. */
+  getTrackedOffset(sessionId: string): number | undefined {
+    return this.sessions.get(sessionId)?.offset;
+  }
+
   /**
    * Pause watching — Kraki's adapter is actively writing to events.jsonl.
    * All file change events are ignored and offset advances to end of file.

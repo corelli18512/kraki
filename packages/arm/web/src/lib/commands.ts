@@ -372,6 +372,10 @@ export function importSession(
 ): string {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   state.pendingCreateRequests.add(requestId);
+  // Optimistic navigation — session ID is known (localSessionId)
+  const store = getStore();
+  store.addPendingSession(localSessionId);
+  store.setNavigateToSession(localSessionId);
   send({
     type: 'import_session',
     payload: { requestId, localSessionId, targetDeviceId, ...(meta && { meta }) },

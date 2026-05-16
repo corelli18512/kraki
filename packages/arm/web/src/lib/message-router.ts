@@ -128,6 +128,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         state: 'active',
         messageCount: 0,
       });
+      // Clear pending state — session is now real
+      store.removePendingSession(sid);
       // Set an initial preview so new sessions sort to the top of the list
       updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
@@ -185,6 +187,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'error':
+      // Clear pending state if this error is for an optimistic session
+      if (store.pendingSessions.has(sid)) {
+        store.removePendingSession(sid);
+      }
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
       updatePreview(sid, {

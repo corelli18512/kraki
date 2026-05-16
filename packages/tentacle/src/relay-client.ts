@@ -67,16 +67,22 @@ export class RelayClient {
   private pendingE2eQueue: Partial<ProducerMessage>[] = [];
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
-  private static readonly TRANSIENT_TYPES = new Set([
-    'agent_message_delta',
-    'session_mode_set',
-    'session_title_updated',
-    'session_model_set',
-    'session_pinned',
-    'session_read',
-    // attachment_data carries raw bytes and is regeneratable from the
-    // AttachmentStore — never persisted into messages.jsonl.
-    'attachment_data',
+  /** Message types that write to events.jsonl and should be persisted to messages.jsonl.
+   *  New types default to NOT persisting/pausing the watcher — safer than the inverse. */
+  private static readonly PERSISTENT_TYPES = new Set([
+    'session_created',
+    'agent_message',
+    'user_message',
+    'permission',
+    'permission_resolved',
+    'question',
+    'question_resolved',
+    'tool_start',
+    'tool_complete',
+    'error',
+    'session_ended',
+    'idle',
+    'session_replay_batch',
   ]);
   /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
@@ -850,13 +856,13 @@ export class RelayClient {
     try {
       const krakiSessionId = localSessionId;
 
-      // ── Phase 1: Fast response (~85ms) ────────────────────
+      // ── Phase 1: Prepare locally (~85ms) ──────────────────
       // Parse events.jsonl for backfill + metadata
       const sessionStateDir = join(homedir(), '.copilot', 'session-state', localSessionId);
       const { messages: backfilledMessages, meta: parsedMeta } = parseSessionHistory(sessionStateDir);
 
       // Use metadata from the client (picker already has it) or parsed fallback
-      const source = (clientMeta?.source ?? parsedMeta.cwd === '/' ? 'copilot-cli' : 'copilot-cli') as import('@kraki/protocol').LocalSessionSource;
+      const source: import('@kraki/protocol').LocalSessionSource = clientMeta?.source as import('@kraki/protocol').LocalSessionSource ?? 'copilot-cli';
       const model = parsedMeta.model ?? clientMeta?.model;
       const autoTitle = clientMeta?.summary?.slice(0, 100);
       const cwd = clientMeta?.cwd ?? parsedMeta.cwd ?? '/';
@@ -885,7 +891,20 @@ export class RelayClient {
         linkedAt: new Date().toISOString(),
       });
 
-      // Send session_created immediately — don't wait for adapter
+      // ── Phase 2: Resume adapter (blocking) ────────────────
+      // Clear the requestId so onSessionCreated doesn't send a duplicate session_created
+      if (requestId) this.pendingRequestIds.delete(krakiSessionId);
+
+      let adapterFailed = false;
+      try {
+        await this.adapter.createSession({ sessionId: krakiSessionId, model: parsedMeta.model, cwd });
+      } catch (err) {
+        adapterFailed = true;
+        logger.warn({ err: (err as Error).message, krakiSessionId }, 'SDK resume failed — session imported as read-only');
+      }
+
+      // ── Phase 3: Broadcast to arms ────────────────────────
+      // session_created = session is fully ready (or at least browsable)
       this.send({
         type: 'session_created',
         sessionId: krakiSessionId,
@@ -923,33 +942,30 @@ export class RelayClient {
         });
       }
 
+      // Notify user if adapter failed — session is browsable but not interactive
+      if (adapterFailed) {
+        this.send({
+          type: 'error',
+          sessionId: krakiSessionId,
+          payload: { message: 'Session imported but could not connect to agent — history is browsable, but new messages will not work.' },
+        });
+      }
+
       // Mark idle + broadcast session list
       this.sessionManager.markIdle(krakiSessionId);
       this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
       this.broadcastSessionList();
 
-      logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length }, 'Session imported');
+      logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length, adapterFailed }, 'Session imported');
 
       // Start watching events.jsonl for external changes (CLI, VS Code)
       this.eventsWatcher?.watch(krakiSessionId);
-
-      // ── Phase 2: Background SDK resume (non-blocking) ─────
-      // Clear the requestId so onSessionCreated doesn't send a duplicate session_created
-      if (requestId) this.pendingRequestIds.delete(krakiSessionId);
-
-      this.adapter.createSession({ sessionId: krakiSessionId, model: parsedMeta.model, cwd })
-        .then(() => {
-          logger.debug({ krakiSessionId }, 'SDK resume completed');
-        })
-        .catch((err) => {
-          logger.warn({ err: (err as Error).message, krakiSessionId }, 'SDK resume failed — session imported as idle');
-        });
 
     } catch (err) {
       logger.error({ err, localSessionId }, 'Import session failed');
       this.send({
         type: 'error',
-        sessionId: '',
+        sessionId: localSessionId,
         payload: { message: `Failed to import session: ${(err as Error).message} (requestId: ${requestId})` },
       });
     }
@@ -1215,9 +1231,10 @@ export class RelayClient {
       if (usage) this.sessionManager.setUsage(sessionId, usage);
       this.send({ type: 'idle', sessionId, payload: { usage } });
       this.maybeGenerateTitle(sessionId);
-      // Resume file watcher after a short delay to let the SDK finish
-      // flushing remaining events to disk (usage, idle, etc.)
-      setTimeout(() => this.eventsWatcher?.resume(sessionId), 1000);
+    };
+
+    this.adapter.onFlushComplete = (sessionId) => {
+      this.eventsWatcher?.resume(sessionId);
     };
 
     this.adapter.onUsageUpdate = (sessionId, usage) => {
@@ -1345,7 +1362,7 @@ export class RelayClient {
     // belong in the content stream and would create seq gaps on the arm.
     const parsed: Array<Record<string, unknown>> = [];
     for (const entry of logged) {
-      if (RelayClient.TRANSIENT_TYPES.has(entry.type)) continue;
+      if (!RelayClient.PERSISTENT_TYPES.has(entry.type)) continue;
       try {
         const msg = JSON.parse(entry.payload);
         msg.seq = entry.seq;
@@ -1535,14 +1552,14 @@ export class RelayClient {
     // on reconnect and don't need per-session seq or replay logging.
     const type = enriched.type as string;
     const sessionId = enriched.sessionId as string | undefined;
-    if (sessionId && !RelayClient.TRANSIENT_TYPES.has(type)) {
+    if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
     }
 
     // Advance the events watcher past any events the adapter just wrote,
     // so the watcher only picks up external changes (CLI, VS Code).
-    // Only for data messages — transient metadata (title, pin, etc.) doesn't touch events.jsonl.
-    if (sessionId && this.eventsWatcher && !RelayClient.TRANSIENT_TYPES.has(type)) {
+    // Only for persistent message types — transient metadata doesn't touch events.jsonl.
+    if (sessionId && this.eventsWatcher && RelayClient.PERSISTENT_TYPES.has(type)) {
       this.eventsWatcher.skipToEnd(sessionId);
     }
 

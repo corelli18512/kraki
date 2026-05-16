@@ -115,6 +115,9 @@ export abstract class AgentAdapter {
    *  (broadcast as `attachment_data` chunks) to connected devices. */
   onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
   onIdle: ((sessionId: string) => void) | null = null;
+  /** Called when the adapter has finished all writes to the session's history file
+   *  after a turn completes. Used by EventsWatcher to safely resume watching. */
+  onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
   /** Called when the agent produces a title for a session (e.g. via SDK event). */
