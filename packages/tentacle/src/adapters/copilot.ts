@@ -352,6 +352,10 @@ export class CopilotAdapter extends AgentAdapter {
   private cycleHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
   private turnErrorReported = new Map<string, boolean>();
+  /** Whether the current cycle was interrupted by an explicit user-initiated
+   *  abort. Suppresses empty-cycle detection — the user asked for the turn
+   *  to stop, so producing no output is the expected outcome, not a failure. */
+  private cycleUserAborted = new Map<string, boolean>();
   /**
    * Grace period (ms) after assistant.turn_end before firing a fallback idle.
    * The Copilot CLI has a known bug where session.idle is sometimes not emitted
@@ -718,6 +722,7 @@ export class CopilotAdapter extends AgentAdapter {
     // Reset per-cycle tracking — a new user message starts a fresh cycle
     this.cycleHasOutput.set(sessionId, false);
     this.turnErrorReported.set(sessionId, false);
+    this.cycleUserAborted.delete(sessionId);
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -870,6 +875,12 @@ export class CopilotAdapter extends AgentAdapter {
   async abortSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
+      // Mark BEFORE the abort lands so the subsequent session.idle handler
+      // sees the flag and suppresses empty-cycle detection. If we marked
+      // after session.abort() resolved, the idle event could fire first
+      // (depending on SDK timing) and a false empty-cycle error would
+      // beat us.
+      this.cycleUserAborted.set(sessionId, true);
       this.broadcastPendingResolutions(sessionId);
       await entry.session.abort();
       logger.debug({ sessionId }, 'session aborted');
@@ -966,6 +977,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.turnHasOutput.delete(sessionId);
     this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
+    this.cycleUserAborted.delete(sessionId);
     const inflight = this.sessionToolCallIds.get(sessionId);
     if (inflight) {
       for (const id of inflight) {
@@ -1235,18 +1247,23 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('session.idle', () => {
       this.clearIdleTimer(sessionId);
 
-      // Detect empty cycles — the entire user-message-to-idle cycle had no output
-      // and no error was reported. This catches silent SDK failures (e.g. CLI bug
-      // github/copilot-sdk#794) without false-firing when the agent intentionally
-      // stays silent (e.g. user said "don't say anything").
+      // Detect empty cycles — the entire user-message-to-idle cycle had no
+      // output and no error was reported. This catches silent SDK failures
+      // (e.g. CLI bug github/copilot-sdk#794) without false-firing when:
+      //   - the agent intentionally stays silent ("don't say anything")
+      //   - the user explicitly aborted the turn before output (cycleUserAborted)
       const hasOutput = this.cycleHasOutput.get(sessionId);
       const hadError = this.turnErrorReported.get(sessionId);
-      if (hasOutput === false && !hadError) {
+      const wasAborted = this.cycleUserAborted.get(sessionId);
+      if (hasOutput === false && !hadError && !wasAborted) {
         logger.warn({ sessionId }, 'Empty cycle detected — agent produced no output for entire user message');
         this.onError?.(sessionId, {
           message: 'Agent produced no output. The session may need to be restarted or the model may be unavailable.',
         });
       }
+      // Clear the abort flag — next sendMessage starts a fresh cycle anyway,
+      // but clearing here keeps state tidy if no new sendMessage follows.
+      this.cycleUserAborted.delete(sessionId);
 
       this.onIdle?.(sessionId);
     });

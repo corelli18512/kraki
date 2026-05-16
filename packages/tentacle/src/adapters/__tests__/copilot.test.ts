@@ -699,6 +699,74 @@ describe('CopilotAdapter', () => {
       );
     });
 
+    it('does NOT fire empty-cycle error when user aborted the turn before output', async () => {
+      // Regression: previously, sending a message and clicking stop immediately
+      // would cause a phantom "Agent produced no output" error because the
+      // detector ran on the abort-triggered session.idle. User-initiated aborts
+      // are the user's explicit choice; producing no output is the expected
+      // outcome, not a silent SDK failure.
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+
+      // User sends a message, then immediately clicks stop before any output.
+      await adapter.sendMessage(sessionId, 'do something');
+      await adapter.abortSession(sessionId);
+      // SDK fires the idle event in response to the abort.
+      mockSessions[0]._emit('session.idle', {});
+
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('still fires empty-cycle error on the NEXT cycle after an abort', async () => {
+      // The abort flag must be cleared after the abort-triggered idle fires,
+      // so a subsequent legitimately-empty cycle still gets flagged.
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+
+      // Cycle 1: user sends + aborts immediately. No error fires.
+      await adapter.sendMessage(sessionId, 'first');
+      await adapter.abortSession(sessionId);
+      mockSessions[0]._emit('session.idle', {});
+      expect(spy).not.toHaveBeenCalled();
+
+      // Cycle 2: user sends a normal message, session silently produces nothing.
+      // This IS a real failure case and should still fire.
+      await adapter.sendMessage(sessionId, 'second');
+      mockSessions[0]._emit('session.idle', {});
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ message: expect.stringContaining('no output') }),
+      );
+    });
+
+    it('abort flag does not leak across sessions', async () => {
+      const spy = vi.fn();
+      adapter.onError = spy;
+      await adapter.start();
+      const { sessionId: sidA } = await adapter.createSession({});
+      const { sessionId: sidB } = await adapter.createSession({});
+      // mockSessions[0] = sidA, mockSessions[1] = sidB
+
+      // Abort session A.
+      await adapter.sendMessage(sidA, 'A');
+      await adapter.abortSession(sidA);
+      mockSessions[0]._emit('session.idle', {});
+      expect(spy).not.toHaveBeenCalled();
+
+      // Session B sends a message, gets silently empty. Should still fire — B
+      // was never aborted.
+      await adapter.sendMessage(sidB, 'B');
+      mockSessions[1]._emit('session.idle', {});
+      expect(spy).toHaveBeenCalledWith(
+        sidB,
+        expect.objectContaining({ message: expect.stringContaining('no output') }),
+      );
+    });
+
     it('does not throw when callbacks are null', async () => {
       await adapter.start();
       await adapter.createSession({});
