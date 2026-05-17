@@ -22,10 +22,10 @@ Right now the main supported agent flow is GitHub Copilot CLI.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+curl -fsSL https://app.kraki.chat/install.sh | bash
 
 # Windows (PowerShell)
-irm https://kraki.corelli.cloud/install.ps1 | iex
+irm https://app.kraki.chat/install.ps1 | iex
 
 # or with npm (all platforms)
 npm i -g @kraki/tentacle
@@ -48,7 +48,7 @@ Or [download the binary manually](https://github.com/corelli18512/kraki/releases
 
 The hosted web app lives at:
 
-- `https://kraki.corelli.cloud`
+- `https://app.kraki.chat`
 
 ## What tentacle handles
 

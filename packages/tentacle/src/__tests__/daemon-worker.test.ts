@@ -136,7 +136,7 @@ describe('daemon-worker: startWorker()', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockConfig = {
-      relay: 'wss://kraki.corelli.cloud',
+      relay: 'wss://relay.kraki.chat',
       authMethod: 'github_token',
       device: { name: 'test-machine' },
     };
@@ -212,7 +212,7 @@ describe('daemon-worker: startWorker()', () => {
   it('logs relay and device info on startup', async () => {
     await startWorker();
     expect(mockLoggerFns.info).toHaveBeenCalledWith(
-      expect.objectContaining({ relay: 'wss://kraki.corelli.cloud', device: 'test-machine' }),
+      expect.objectContaining({ relay: 'wss://relay.kraki.chat', device: 'test-machine' }),
       expect.stringContaining('Daemon running'),
     );
   });

@@ -30,7 +30,7 @@ import { makeHeadline } from './tool-headline.js';
 const logger = createLogger('relay-client');
 
 export interface RelayClientOptions {
-  /** Relay WebSocket URL (e.g., wss://kraki.corelli.cloud) */
+  /** Relay WebSocket URL (e.g., wss://relay.kraki.chat) */
   relayUrl: string;
   /** Device info for auth */
   device: DeviceInfo;

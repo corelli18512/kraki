@@ -79,7 +79,7 @@ export async function requestPairingToken(
  * Phone camera scans → opens this URL → web app auto-pairs.
  */
 export function buildPairingUrl(info: PairingInfo, appBaseUrl?: string): string {
-  const base = appBaseUrl ?? process.env.KRAKI_APP_URL ?? 'https://kraki.corelli.cloud';
+  const base = appBaseUrl ?? process.env.KRAKI_APP_URL ?? 'https://app.kraki.chat';
   const params = new URLSearchParams();
   params.set('relay', info.relay);
   params.set('token', info.pairingToken);
@@ -115,7 +115,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
     // Clipboard not available — that's fine
   }
 
-  const appBase = process.env.KRAKI_APP_URL ?? 'https://kraki.corelli.cloud';
+  const appBase = process.env.KRAKI_APP_URL ?? 'https://app.kraki.chat';
   const appLink = `\u001b]8;;${appBase}\u0007${appBase.replace(/^https?:\/\//, '')}\u001b]8;;\u0007`;
 
   try {

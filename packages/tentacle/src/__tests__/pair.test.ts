@@ -3,7 +3,7 @@ import { buildPairingPayload, buildPairingUrl, renderQrToTerminal, type PairingI
 
 describe('Pairing', () => {
   const info: PairingInfo = {
-    relay: 'wss://kraki.corelli.cloud',
+    relay: 'wss://relay.kraki.chat',
     pairingToken: 'pt_abc123def456',
     publicKey: 'MIIBIjANBgkqhkiG9w0BAQE...',
     expiresIn: 300,
@@ -12,7 +12,7 @@ describe('Pairing', () => {
   describe('buildPairingUrl', () => {
     it('should create URL with relay and token params', () => {
       const url = buildPairingUrl(info);
-      expect(url).toContain('https://kraki.corelli.cloud');
+      expect(url).toContain('https://app.kraki.chat');
       expect(url).toContain('relay=');
       expect(url).toContain('token=pt_abc123def456');
       // Public key is NOT in URL (too large for QR)
@@ -29,7 +29,7 @@ describe('Pairing', () => {
     it('should create JSON with relay, token, and key', () => {
       const payload = buildPairingPayload(info);
       const parsed = JSON.parse(payload);
-      expect(parsed.r).toBe('wss://kraki.corelli.cloud');
+      expect(parsed.r).toBe('wss://relay.kraki.chat');
       expect(parsed.t).toBe('pt_abc123def456');
       expect(parsed.k).toBe('MIIBIjANBgkqhkiG9w0BAQE...');
     });
@@ -37,13 +37,13 @@ describe('Pairing', () => {
 
   describe('renderQrToTerminal', () => {
     it('should render output with pairing info', async () => {
-      const output = await renderQrToTerminal('https://kraki.corelli.cloud?token=test');
+      const output = await renderQrToTerminal('https://app.kraki.chat?token=test');
       expect(output).toContain('phone');
       expect(output).toContain('clipboard');
     });
 
     it('should mention clipboard', async () => {
-      const output = await renderQrToTerminal('https://kraki.corelli.cloud?token=test');
+      const output = await renderQrToTerminal('https://app.kraki.chat?token=test');
       // Either "copied to clipboard" or shows link as fallback
       expect(output.length).toBeGreaterThan(50);
     });

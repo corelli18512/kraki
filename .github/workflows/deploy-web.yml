@@ -58,15 +58,15 @@ jobs:
     timeout-minutes: 20
     environment:
       name: beta
-      url: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
+      url: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
     env:
       WEB_DEPLOY_HOST: ${{ vars.WEB_DEPLOY_HOST }}
       WEB_DEPLOY_USER: ${{ vars.WEB_DEPLOY_USER }}
       WEB_DEPLOY_PORT: ${{ vars.WEB_DEPLOY_PORT != '' && vars.WEB_DEPLOY_PORT || '22' }}
       WEB_DEPLOY_PATH: ${{ vars.WEB_DEPLOY_PATH != '' && vars.WEB_DEPLOY_PATH || '/var/www/kraki-beta' }}
       WEB_DEPLOY_KNOWN_HOSTS: ${{ vars.WEB_DEPLOY_KNOWN_HOSTS }}
-      WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
-      VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://kraki.corelli.cloud' }}
+      WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
+      VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://relay.kraki.chat' }}
 
     steps:
       - name: Check out repository
@@ -131,15 +131,15 @@ jobs:
     timeout-minutes: 20
     environment:
       name: production
-      url: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
+      url: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
     env:
       WEB_DEPLOY_HOST: ${{ vars.WEB_DEPLOY_HOST }}
       WEB_DEPLOY_USER: ${{ vars.WEB_DEPLOY_USER }}
       WEB_DEPLOY_PORT: ${{ vars.WEB_DEPLOY_PORT != '' && vars.WEB_DEPLOY_PORT || '22' }}
       WEB_DEPLOY_PATH: ${{ vars.WEB_DEPLOY_PATH != '' && vars.WEB_DEPLOY_PATH || '/var/www/kraki' }}
       WEB_DEPLOY_KNOWN_HOSTS: ${{ vars.WEB_DEPLOY_KNOWN_HOSTS }}
-      WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://kraki.corelli.cloud' }}
-      VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://kraki.corelli.cloud' }}
+      WEBAPP_PUBLIC_URL: ${{ vars.WEBAPP_PUBLIC_URL != '' && vars.WEBAPP_PUBLIC_URL || 'https://app.kraki.chat' }}
+      VITE_WS_URL: ${{ vars.WEBAPP_VITE_WS_URL != '' && vars.WEBAPP_VITE_WS_URL || 'wss://relay.kraki.chat' }}
 
     steps:
       - name: Check out repository

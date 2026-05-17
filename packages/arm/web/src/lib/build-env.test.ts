@@ -10,7 +10,7 @@ describe('build-env', () => {
     });
 
     it('does not flag hosted relay urls', () => {
-      expect(isLocalRelayUrl('wss://kraki.corelli.cloud')).toBe(false);
+      expect(isLocalRelayUrl('wss://relay.kraki.chat')).toBe(false);
       expect(isLocalRelayUrl('wss://relay.example.com')).toBe(false);
       expect(isLocalRelayUrl(undefined)).toBe(false);
     });
@@ -28,7 +28,7 @@ describe('build-env', () => {
     });
 
     it('allows production builds to use hosted relay urls', () => {
-      expect(() => assertSafeProductionRelayUrl('build', 'production', 'wss://kraki.corelli.cloud'))
+      expect(() => assertSafeProductionRelayUrl('build', 'production', 'wss://relay.kraki.chat'))
         .not.toThrow();
     });
   });

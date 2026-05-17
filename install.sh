@@ -1,6 +1,6 @@
 #!/bin/sh
-# Kraki installer — https://kraki.corelli.cloud
-# Usage: curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+# Kraki installer — https://app.kraki.chat
+# Usage: curl -fsSL https://app.kraki.chat/install.sh | bash
 set -e
 
 REPO="corelli18512/kraki"

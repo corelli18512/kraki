@@ -80,8 +80,8 @@ function installToPath(): void {
   }
 }
 
-const OFFICIAL_RELAY = 'wss://kraki.corelli.cloud';
-const OFFICIAL_API = 'https://kraki.corelli.cloud';
+const OFFICIAL_RELAY = 'wss://relay.kraki.chat';
+const OFFICIAL_API = 'https://relay.kraki.chat';
 
 function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
 const icon = '◈';

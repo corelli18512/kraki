@@ -6,7 +6,7 @@ export type MessageHandler = (msg: Message) => void;
 
 const logger = createLogger('transport');
 
-const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://kraki.corelli.cloud';
+const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://relay.kraki.chat';
 const RECONNECT_BASE = 1000;
 const RECONNECT_MAX = 30000;
 const MAX_AUTO_RECONNECT_ATTEMPTS = 5;

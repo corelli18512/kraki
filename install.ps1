@@ -1,5 +1,5 @@
 # Kraki installer for Windows PowerShell
-# Usage: irm https://kraki.corelli.cloud/install.ps1 | iex
+# Usage: irm https://app.kraki.chat/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $repo = "corelli18512/kraki"

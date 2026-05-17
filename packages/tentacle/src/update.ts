@@ -544,7 +544,7 @@ function replaceBinary(source: string, target: string): void {
           'Cannot replace kraki.exe — the file is locked by a running process.\n' +
           '  Stop the daemon with `kraki stop`, close any other Kraki processes, and retry.\n' +
           '  If the problem persists, reinstall:\n' +
-          '  irm https://kraki.corelli.cloud/install.ps1 | iex',
+          '  irm https://app.kraki.chat/install.ps1 | iex',
         );
       }
       replaceBinaryElevated(source, target);
@@ -579,7 +579,7 @@ function replaceBinaryElevated(source: string, target: string): void {
     try { unlinkSync(source); } catch { /* ignore */ }
     throw new Error(
       'Permission denied. To fix, reinstall to a user-writable location:\n' +
-      '  curl -fsSL https://kraki.corelli.cloud/install.sh | bash',
+      '  curl -fsSL https://app.kraki.chat/install.sh | bash',
     );
   }
 }

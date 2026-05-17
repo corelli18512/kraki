@@ -84,7 +84,7 @@ describe('configExists()', () => {
 
 describe('loadConfig() / saveConfig()', () => {
   const sampleConfig = {
-    relay: 'wss://kraki.corelli.cloud',
+    relay: 'wss://relay.kraki.chat',
     authMethod: 'github' as const,
     device: { name: 'my-laptop' },
     logging: { verbosity: 'normal' as const },

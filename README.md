@@ -21,10 +21,10 @@ Install with one command:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+curl -fsSL https://app.kraki.chat/install.sh | bash
 
 # Windows (PowerShell)
-irm https://kraki.corelli.cloud/install.ps1 | iex
+irm https://app.kraki.chat/install.ps1 | iex
 
 # or with npm
 npm i -g @kraki/tentacle
@@ -42,10 +42,10 @@ kraki
 
 ```bash
 # macOS / Linux
-curl -fsSL https://kraki.corelli.cloud/install.sh | bash
+curl -fsSL https://app.kraki.chat/install.sh | bash
 
 # Windows (PowerShell)
-irm https://kraki.corelli.cloud/install.ps1 | iex
+irm https://app.kraki.chat/install.ps1 | iex
 
 # or with npm (all platforms)
 npm i -g @kraki/tentacle

@@ -1,6 +1,6 @@
 # Self-Hosting Kraki
 
-Run your own relay instead of using the hosted one at `kraki.corelli.cloud`.
+Run your own relay instead of using the hosted one at `relay.kraki.chat`.
 
 ## Start the relay
 

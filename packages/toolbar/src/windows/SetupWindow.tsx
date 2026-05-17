@@ -65,7 +65,7 @@ export default function SetupWindow() {
       try {
         relay = await invoke<string>('get_relay_url');
       } catch {
-        relay = 'wss://kraki.corelli.cloud';
+        relay = 'wss://relay.kraki.chat';
       }
       setRelayUrl(relay);
       console.log(`[setup] relay: ${relay}`);

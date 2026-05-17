@@ -83,7 +83,7 @@ vi.mock("../checks.js", () => ({
 // Mock pair module to avoid real WebSocket connection
 vi.mock("../pair.js", () => ({
   requestPairingToken: vi.fn().mockRejectedValue(new Error("no relay")),
-  buildPairingUrl: vi.fn().mockReturnValue("https://kraki.corelli.cloud?token=test"),
+  buildPairingUrl: vi.fn().mockReturnValue("https://app.kraki.chat?token=test"),
   renderQrToTerminal: vi.fn().mockResolvedValue("[QR CODE]"),
 }));
 
@@ -152,7 +152,7 @@ describe("runSetup — login-first flow (official relay)", () => {
     mockWithRetry.mockResolvedValueOnce({ found: true, version: "1.0" });
 
     const result = await runSetup();
-    expect(result.relay).toBe("wss://kraki.corelli.cloud");
+    expect(result.relay).toBe("wss://relay.kraki.chat");
     expect(result.authMethod).toBe("github_token");
   });
 });
@@ -187,9 +187,9 @@ describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
 
 describe("runSetup — edge cases", () => {
   it("gracefully handles pairing failure", async () => {
-    process.env.KRAKI_RELAY_URL = "wss://kraki.corelli.cloud";
+    process.env.KRAKI_RELAY_URL = "wss://relay.kraki.chat";
     mockRelayMethods = ['open'];
-    mockInput.mockResolvedValueOnce("wss://kraki.corelli.cloud");
+    mockInput.mockResolvedValueOnce("wss://relay.kraki.chat");
     mockInput.mockResolvedValueOnce("dev");
     mockWithRetry.mockResolvedValueOnce({ found: true });
 
