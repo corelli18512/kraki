@@ -40,7 +40,10 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "@github/copilot": "1.0.48"
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.9",
