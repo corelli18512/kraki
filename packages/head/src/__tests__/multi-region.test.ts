@@ -355,6 +355,97 @@ describe('AccountApi', () => {
     expect(status).toBe(400);
     expect(data.code).toBe('bad_request');
   });
+
+  // ── /api/edge/announce ────────────────────────────────────
+
+  it('announce should idempotently update an edge region URL', async () => {
+    // First join china to get its service key
+    const issued = storage.issueEdgeJoinToken();
+    const join = await apiPostPublic('/api/edge/join', {
+      token: issued.token,
+      region: 'china',
+      relayUrl: 'wss://old.cn.example.com',
+      displayName: 'China',
+    });
+    const chinaKey: string = join.data.serviceKey;
+    expect(storage.getRegion('china')?.relayUrl).toBe('wss://old.cn.example.com');
+
+    // Announce with a new URL using the existing service key
+    const { status, data } = await apiPost(
+      '/api/edge/announce',
+      { region: 'china', relayUrl: 'wss://new.cn.example.com', displayName: 'China' },
+      chinaKey,
+    );
+    expect(status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.relayUrl).toBe('wss://new.cn.example.com');
+    expect(storage.getRegion('china')?.relayUrl).toBe('wss://new.cn.example.com');
+
+    // Service key was NOT rotated — same key still works
+    const second = await apiPost(
+      '/api/edge/announce',
+      { region: 'china', relayUrl: 'wss://newer.cn.example.com' },
+      chinaKey,
+    );
+    expect(second.status).toBe(200);
+    expect(second.data.ok).toBe(true);
+  });
+
+  it('announce should reject mismatched region for service key', async () => {
+    const issued = storage.issueEdgeJoinToken();
+    const join = await apiPostPublic('/api/edge/join', {
+      token: issued.token,
+      region: 'china',
+      relayUrl: 'wss://cn.example.com',
+    });
+    const chinaKey: string = join.data.serviceKey;
+
+    // Try to announce a different region with china's key
+    const { status, data } = await apiPost(
+      '/api/edge/announce',
+      { region: 'us', relayUrl: 'wss://hijack.example.com' },
+      chinaKey,
+    );
+    expect(status).toBe(403);
+    expect(data.code).toBe('region_mismatch');
+    // us region untouched
+    expect(storage.getRegion('us')?.relayUrl).toBe('wss://us.example.com');
+  });
+
+  it('announce should reject without service key', async () => {
+    const { status, data } = await apiPostPublic('/api/edge/announce', {
+      region: 'china',
+      relayUrl: 'wss://attack.example.com',
+    });
+    expect(status).toBe(401);
+    expect(data.code).toBe('unauthorized');
+  });
+
+  it('announce should reject with invalid service key', async () => {
+    const { status, data } = await apiPost(
+      '/api/edge/announce',
+      { region: 'china', relayUrl: 'wss://attack.example.com' },
+      'ksk_not_a_real_key',
+    );
+    // Top-level service-key check accepts the main SERVICE_KEY too; we use a
+    // bogus key so the main check fails first.
+    expect([401, 403]).toContain(status);
+    expect(['unauthorized', 'region_mismatch']).toContain(data.code);
+  });
+
+  it('announce should reject without region or relayUrl', async () => {
+    const issued = storage.issueEdgeJoinToken();
+    const join = await apiPostPublic('/api/edge/join', {
+      token: issued.token,
+      region: 'china',
+      relayUrl: 'wss://cn.example.com',
+    });
+    const chinaKey: string = join.data.serviceKey;
+
+    const { status, data } = await apiPost('/api/edge/announce', {}, chinaKey);
+    expect(status).toBe(400);
+    expect(data.code).toBe('bad_request');
+  });
 });
 
 describe('RemoteAuthBackend', () => {

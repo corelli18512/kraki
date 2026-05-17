@@ -81,6 +81,9 @@ export class AccountApi {
         case '/api/edge/join':
           if (req.method === 'POST') return await this.handleEdgeJoin(req, res);
           break;
+        case '/api/edge/announce':
+          if (req.method === 'POST') return await this.handleEdgeAnnounce(req, res);
+          break;
       }
     } catch (err) {
       getLogger().error('Account API error', { path, error: (err as Error).message });
@@ -255,6 +258,43 @@ export class AccountApi {
     );
     if (!result.ok) {
       const status = result.code === 'join_token_expired' ? 410 : 401;
+      this.json(res, status, result);
+    } else {
+      this.json(res, 200, result);
+    }
+    return true;
+  }
+
+  /**
+   * Edge announce — idempotent update of an edge region's relay URL.
+   * Authenticated by the region's existing service key (Bearer header).
+   * Edges call this on startup so their `PUBLIC_RELAY_URL` always reflects
+   * the latest config without rotating the service key.
+   */
+  private async handleEdgeAnnounce(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const authHeader = req.headers.authorization ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token) {
+      this.json(res, 401, { ok: false, code: 'unauthorized', message: 'Bearer service key required' });
+      return true;
+    }
+
+    const body = await readBody(req);
+    if (!body?.region || !body?.relayUrl) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'region and relayUrl are required' });
+      return true;
+    }
+
+    const result = this.backend.announceEdgeRegion(
+      token,
+      body.region as string,
+      body.relayUrl as string,
+      body.displayName as string | undefined,
+    );
+    if (!result.ok) {
+      const status = result.code === 'unauthorized' ? 401
+        : result.code === 'region_mismatch' ? 403
+        : 400;
       this.json(res, status, result);
     } else {
       this.json(res, 200, result);

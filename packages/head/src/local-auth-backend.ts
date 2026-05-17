@@ -327,6 +327,46 @@ export class LocalAuthBackend implements AuthBackend {
     return result.valid ? { valid: true, region: result.region } : { valid: false };
   }
 
+  /**
+   * Idempotently update an edge region's relay URL (and optional display
+   * name). Called by edge nodes on startup so their `PUBLIC_RELAY_URL`
+   * always reflects the latest config. Unlike `completeEdgeJoin`, this
+   * does NOT rotate the service key — it's safe to call on every restart.
+   *
+   * Authorisation: the caller's service key must already be registered for
+   * the same region. A mismatch returns an error to prevent one edge from
+   * overwriting another region's URL.
+   */
+  announceEdgeRegion(
+    serviceKey: string,
+    region: string,
+    relayUrl: string,
+    displayName?: string,
+  ): { ok: true; region: string; relayUrl: string } | { ok: false; code: string; message: string } {
+    const validation = this.storage.validateServiceKey(serviceKey);
+    if (!validation.valid) {
+      return { ok: false, code: 'unauthorized', message: 'Invalid service key' };
+    }
+    const normalizedRegion = region.trim().toLowerCase();
+    if (validation.region !== normalizedRegion) {
+      return {
+        ok: false,
+        code: 'region_mismatch',
+        message: `Service key is registered for region '${validation.region}', not '${normalizedRegion}'`,
+      };
+    }
+    const trimmedRelayUrl = relayUrl.trim();
+    if (!trimmedRelayUrl) {
+      return { ok: false, code: 'bad_request', message: 'relayUrl is required' };
+    }
+
+    const existing = this.storage.getRegion(normalizedRegion);
+    const finalDisplay = displayName?.trim() || existing?.displayName || normalizedRegion;
+    this.storage.upsertRegion(normalizedRegion, trimmedRelayUrl, finalDisplay, existing?.enabled ?? true);
+
+    return { ok: true, region: normalizedRegion, relayUrl: trimmedRelayUrl };
+  }
+
   /** Sweep expired pairing tokens. Called periodically by HeadServer. */
   sweepPairingTokens(): void {
     const now = Date.now();

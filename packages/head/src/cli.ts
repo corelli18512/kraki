@@ -379,6 +379,18 @@ if (IS_CONNECTED_MODE) {
   await remoteBackend.refreshConfig();
   logger.info('Connected to account service', { url: ACCOUNT_URL, region: REGION });
 
+  // Announce this edge's region + current relay URL so the account
+  // service's regions table reflects any change to PUBLIC_RELAY_URL.
+  // Idempotent — safe to call on every restart. Service key is unchanged.
+  if (REGION && PUBLIC_RELAY_URL) {
+    const announce = await remoteBackend.announceRegion(REGION, PUBLIC_RELAY_URL, REGION_DISPLAY_NAME || REGION);
+    if (announce.ok) {
+      logger.info('Edge region announced', { region: REGION, relayUrl: PUBLIC_RELAY_URL });
+    } else {
+      logger.warn('Edge region announce failed (continuing)', { code: announce.code, message: announce.message });
+    }
+  }
+
   // Connected mode still needs local storage for devices, pending, push tokens
   if (!storage) storage = new Storage(DB_PATH);
 } else {

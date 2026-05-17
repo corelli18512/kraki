@@ -93,6 +93,33 @@ export class RemoteAuthBackend implements AuthBackend {
     }
   }
 
+  /**
+   * Idempotently announce this edge's region + relay URL to the account
+   * service. Called on startup so a changed `PUBLIC_RELAY_URL` propagates
+   * to `/api/regions` without manual intervention. Does NOT rotate the
+   * service key.
+   */
+  async announceRegion(
+    region: string,
+    relayUrl: string,
+    displayName?: string,
+  ): Promise<{ ok: boolean; code?: string; message?: string }> {
+    const logger = getLogger();
+    try {
+      const result = await this.post<{ ok: boolean; code?: string; message?: string }>(
+        '/api/edge/announce',
+        { region, relayUrl, ...(displayName && { displayName }) },
+      );
+      if (!result.ok) {
+        logger.warn('Edge announce rejected', { region, relayUrl, code: result.code, message: result.message });
+      }
+      return result;
+    } catch (err) {
+      logger.warn('Edge announce failed', { error: (err as Error).message });
+      return { ok: false, code: 'service_unavailable', message: (err as Error).message };
+    }
+  }
+
   // ── HTTP helpers ──────────────────────────────────────
 
   private async post<T = AuthOutcome>(path: string, body: unknown): Promise<T> {
