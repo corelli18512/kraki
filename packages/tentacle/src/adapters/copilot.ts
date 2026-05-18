@@ -1469,14 +1469,6 @@ export class CopilotAdapter extends AgentAdapter {
           return { kind: 'approve-once' };
         }
         logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (discuss mode)');
-        const deniedToolName = (r.toolName as string | undefined)
-          ?? (r.tool_name as string | undefined) ?? 'edit';
-        this.onToolComplete?.(sessionId, {
-          toolName: deniedToolName,
-          result: 'Denied: write blocked in Discuss mode. Switch to Execute mode to make changes.',
-          toolCallId: makeId('tc-denied'),
-          success: false,
-        });
         return { kind: 'reject', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
