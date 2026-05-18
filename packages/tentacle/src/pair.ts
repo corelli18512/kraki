@@ -104,16 +104,29 @@ export function buildPairingPayload(info: PairingInfo): string {
  */
 export async function renderQrToTerminal(url: string): Promise<string> {
   // Copy to clipboard silently
+  let copied = false;
   try {
     const platform = process.platform;
     if (platform === 'darwin') {
-      execSync('pbcopy', { input: url });
+      execSync('pbcopy', { input: url, stdio: ['pipe', 'ignore', 'ignore'] });
+      copied = true;
+    } else if (platform === 'win32') {
+      execSync('clip', { input: url, stdio: ['pipe', 'ignore', 'ignore'] });
+      copied = true;
     } else if (platform === 'linux') {
-      execSync('xclip -selection clipboard', { input: url });
+      try {
+        execSync('xclip -selection clipboard', { input: url, stdio: ['pipe', 'ignore', 'ignore'] });
+        copied = true;
+      } catch {
+        execSync('xsel --clipboard --input', { input: url, stdio: ['pipe', 'ignore', 'ignore'] });
+        copied = true;
+      }
     }
   } catch {
     // Clipboard not available — that's fine
   }
+
+  const clipLine = copied ? '\n  Link copied to clipboard.' : '';
 
   const appBase = process.env.KRAKI_APP_URL ?? 'https://app.kraki.chat';
   const appLink = `\u001b]8;;${appBase}\u0007${appBase.replace(/^https?:\/\//, '')}\u001b]8;;\u0007`;
@@ -126,8 +139,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
         const indented = qrString.split('\n').map(line => '    ' + line).join('\n');
         resolve([
           '',
-          `  Scan with your phone camera, or visit ${appLink} and sign in with GitHub.`,
-          '  Link copied to clipboard.',
+          `  Scan with your phone camera, or visit ${appLink} and sign in with GitHub.${clipLine}`,
           '',
           indented,
         ].join('\n'));
@@ -136,8 +148,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
   } catch {
     return [
       '',
-      `  Open on your phone, or visit ${appLink} and sign in with GitHub.`,
-      '  Link copied to clipboard.',
+      `  Open on your phone, or visit ${appLink} and sign in with GitHub.${clipLine}`,
       '',
       `  ${url}`,
       '',
