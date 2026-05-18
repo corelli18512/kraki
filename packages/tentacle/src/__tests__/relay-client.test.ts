@@ -909,7 +909,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('tool_start with tiny args has headline but NO argsRef (below floor)', () => {
+  it('tool_start with tiny args has headline and inline args but NO argsRef (below floor)', () => {
     const { adapter, ws, cleanup } = buildClientWithStore();
     try {
       ws.sent.length = 0;
@@ -921,7 +921,7 @@ describe('RelayClient tool message lazy-load shape', () => {
       const start = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_start');
       expect(start.payload.headline).toBe('/foo.ts');
       expect(start.payload.argsRef).toBeUndefined();
-      expect(start.payload.args).toBeUndefined();
+      expect(start.payload.args).toEqual({ path: '/foo.ts' });
     } finally { cleanup(); }
   });
 

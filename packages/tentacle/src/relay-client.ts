@@ -1138,6 +1138,8 @@ export class RelayClient {
     this.adapter.onToolStart = (sessionId, event) => {
       const headline = makeHeadline(event.toolName, event.args);
       const argsRef = this.offloadArgs(sessionId, event.toolName, event.args);
+      // Ship args inline when below the offload floor so clients always have source data
+      const inlineArgs = !argsRef && event.args ? event.args : undefined;
       if (event.toolCallId) {
         this.lastArgsByToolCallId.set(event.toolCallId, event.args ?? {});
         if (argsRef) this.lastArgsRefByToolCallId.set(event.toolCallId, argsRef);
@@ -1155,6 +1157,7 @@ export class RelayClient {
           toolName: event.toolName,
           headline,
           ...(argsRef && { argsRef }),
+          ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
         },
       });
@@ -1181,9 +1184,12 @@ export class RelayClient {
     this.adapter.onToolComplete = (sessionId, event) => {
       // Recompute headline from the args we stashed at start; falls back to
       // toolName if args aren't available.
-      const headline = makeHeadline(event.toolName, this.lastArgsByToolCallId.get(event.toolCallId ?? '') ?? {});
+      const stashedArgs = this.lastArgsByToolCallId.get(event.toolCallId ?? '');
+      const headline = makeHeadline(event.toolName, stashedArgs ?? {});
       const resultRef = this.offloadResult(sessionId, event.toolName, event.result);
       const argsRef = this.lastArgsRefByToolCallId.get(event.toolCallId ?? '');
+      // Ship stashed args inline when below the offload floor
+      const inlineArgs = !argsRef && stashedArgs && Object.keys(stashedArgs).length > 0 ? stashedArgs : undefined;
       if (event.toolCallId) {
         this.lastArgsByToolCallId.delete(event.toolCallId);
         this.lastArgsRefByToolCallId.delete(event.toolCallId);
@@ -1201,6 +1207,7 @@ export class RelayClient {
           headline,
           ...(resultRef && { resultRef }),
           ...(argsRef && { argsRef }),
+          ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
           ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
