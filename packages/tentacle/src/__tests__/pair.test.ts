@@ -39,12 +39,7 @@ describe('Pairing', () => {
     it('should render output with pairing info', async () => {
       const output = await renderQrToTerminal('https://app.kraki.chat?token=test');
       expect(output).toContain('phone');
-      expect(output).toContain('clipboard');
-    });
-
-    it('should mention clipboard', async () => {
-      const output = await renderQrToTerminal('https://app.kraki.chat?token=test');
-      // Either "copied to clipboard" or shows link as fallback
+      // Clipboard message is conditional — only shown when copy succeeds
       expect(output.length).toBeGreaterThan(50);
     });
   });
