@@ -15,6 +15,8 @@ export interface SessionUsage {
   cacheWriteTokens: number;
   totalCost: number;
   totalDurationMs: number;
+  /** Prompt tokens used by the last turn — per-turn snapshot, NOT cumulative. */
+  contextTokens?: number;
 }
 
 export interface SessionSummary {

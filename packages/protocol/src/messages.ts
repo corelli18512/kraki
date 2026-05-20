@@ -324,7 +324,10 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   };
 }
 
-/** Sent by tentacle to a device after replaying all buffered messages for a session. */
+/**
+ * Sent by tentacle to a device after replaying all buffered messages for a session.
+ * @deprecated Use `request_session_messages` / `session_messages_batch` instead.
+ */
 export interface SessionReplayBatchMessage extends BaseEnvelope {
   type: 'session_replay_batch';
   payload: {
@@ -336,6 +339,36 @@ export interface SessionReplayBatchMessage extends BaseEnvelope {
     lastSeq: number;
     /** The total highest seq in the session (for detecting if more messages are available). */
     totalLastSeq: number;
+  };
+}
+
+// ── Turn-aware message pagination ───────────────────
+
+/** Sent by app to tentacle to request turn-aligned messages for a session. */
+export interface RequestSessionMessagesMessage extends BaseEnvelope {
+  type: 'request_session_messages';
+  payload: {
+    /** Session to load messages for. */
+    sessionId: string;
+    /** Load messages strictly before this seq. Omit to load from head. */
+    beforeSeq?: number;
+  };
+}
+
+/** Sent by tentacle to a device with turn-aligned messages for a session. */
+export interface SessionMessagesBatchMessage extends BaseEnvelope {
+  type: 'session_messages_batch';
+  payload: {
+    /** The session these messages belong to. */
+    sessionId: string;
+    /** Messages in ascending seq order. Always composed of complete turns. */
+    messages: ProducerMessage[];
+    /** Lowest seq in messages. If 1, no older messages exist. */
+    firstSeq: number;
+    /** Highest seq in messages. */
+    lastSeq: number;
+    /** True if this batch covers the session head. */
+    containsHead: boolean;
   };
 }
 
@@ -442,6 +475,7 @@ export type ProducerMessage =
   | SessionReadMessage
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
+  | SessionMessagesBatchMessage
   | SessionListMessage
   | PermissionResolvedMessage
   | QuestionResolvedMessage
@@ -557,7 +591,10 @@ export interface MarkReadMessage extends BaseEnvelope {
   };
 }
 
-/** Sent by app to tentacle to request replay for a specific session. */
+/**
+ * Sent by app to tentacle to request replay for a specific session.
+ * @deprecated Use `request_session_messages` / `session_messages_batch` instead.
+ */
 export interface RequestSessionReplayMessage extends BaseEnvelope {
   type: 'request_session_replay';
   payload: {
@@ -659,6 +696,7 @@ export type ConsumerMessage =
   | MarkReadMessage
   | MarkUnreadMessage
   | RequestSessionReplayMessage
+  | RequestSessionMessagesMessage
   | RenameSessionMessage
   | PinSessionMessage
   | RequestLocalSessionsMessage

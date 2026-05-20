@@ -82,6 +82,8 @@ export interface SessionMeta {
    *  in place (the bytes weren't recoverable via the new ref path anyway,
    *  since they came from `view`-on-an-image, not show_image). */
   inlineImagesStripped?: boolean;
+  /** Seq numbers of idle messages — used for turn-aligned pagination. */
+  idleSeqs?: number[];
 }
 
 export interface RunRecord {
@@ -629,6 +631,11 @@ export class SessionManager {
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
     appendFileSync(logPath, line, 'utf8');
 
+    if (type === 'idle') {
+      if (!meta.idleSeqs) meta.idleSeqs = [];
+      meta.idleSeqs.push(seq);
+    }
+
     meta.lastSeq = seq;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
@@ -657,6 +664,13 @@ export class SessionManager {
 
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
     appendFileSync(logPath, lines.join('\n') + '\n', 'utf8');
+
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].type === 'idle') {
+        if (!meta.idleSeqs) meta.idleSeqs = [];
+        meta.idleSeqs.push(seq - messages.length + i + 1);
+      }
+    }
 
     meta.lastSeq = seq;
     meta.updatedAt = now;
@@ -850,6 +864,66 @@ export class SessionManager {
       }
     }
     return undefined;
+  }
+
+  // ── Turn-aligned pagination ──────────────────────────
+
+  private backfillIdleSeqs(sessionId: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta || meta.idleSeqs) return;
+
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    if (!existsSync(logPath)) {
+      meta.idleSeqs = [];
+      this.writeMeta(sessionId, meta);
+      return;
+    }
+
+    const idles: number[] = [];
+    const content = readFileSync(logPath, 'utf8');
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line) as LoggedMessage;
+        if (entry.type === 'idle') idles.push(entry.seq);
+      } catch { /* skip corrupt lines */ }
+    }
+    meta.idleSeqs = idles;
+    this.writeMeta(sessionId, meta);
+  }
+
+  findTurnAlignedStart(sessionId: string, endSeqExclusive: number): number {
+    if (endSeqExclusive <= 1) return 1;
+
+    let meta = this.readMeta(sessionId);
+    if (!meta) return 1;
+    if (!meta.idleSeqs) {
+      this.backfillIdleSeqs(sessionId);
+      meta = this.readMeta(sessionId)!;
+    }
+    const idles = meta.idleSeqs ?? [];
+
+    // Binary search: find count of idles with seq < endSeqExclusive
+    let lo = 0, hi = idles.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (idles[mid] < endSeqExclusive) lo = mid + 1;
+      else hi = mid;
+    }
+    let cursor = lo - 1;
+
+    // Step A: anchor at latest idle before endSeqExclusive
+    let candidateStart = cursor >= 0 ? idles[cursor] + 1 : 1;
+
+    // Step B: extend backwards through whole turns until soft cap
+    const TURN_SOFT_CAP = 100;
+    while ((endSeqExclusive - candidateStart) < TURN_SOFT_CAP && candidateStart > 1) {
+      cursor--;
+      if (cursor < 0) { candidateStart = 1; break; }
+      candidateStart = idles[cursor] + 1;
+    }
+
+    return candidateStart;
   }
 
   private readMeta(sessionId: string): SessionMeta | null {
