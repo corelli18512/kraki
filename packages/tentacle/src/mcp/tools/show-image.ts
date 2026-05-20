@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { extname } from 'node:path';
+import { extname, isAbsolute } from 'node:path';
 
 import type { McpToolResult } from '../protocol.js';
 import type { RegisteredTool, ToolHandler } from './index.js';
@@ -32,8 +32,8 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
   if (typeof path !== 'string' || path.length === 0) {
     return errorResult('Argument "path" is required and must be a non-empty string.');
   }
-  if (!path.startsWith('/')) {
-    return errorResult('Argument "path" must be an absolute path (start with "/").');
+  if (!isAbsolute(path)) {
+    return errorResult('Argument "path" must be an absolute path.');
   }
 
   if (!existsSync(path)) {
