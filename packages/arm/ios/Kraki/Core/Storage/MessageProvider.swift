@@ -59,6 +59,9 @@ final class MessageProvider {
         }
         guard let appState else { return }
 
+        // Pull in any persisted history first so getLastSeq reflects
+        // the cache, not just whatever happens to be in memory.
+        appState.messageStore.hydrateFromDisk(sessionId)
         let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
         KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq)")
 
@@ -73,6 +76,121 @@ final class MessageProvider {
                 requestFromTentacle(sessionId: sessionId, afterSeq: afterSeq)
             }
         }
+    }
+
+    // MARK: - Warm-up budget
+
+    /// Budget warm-up — mirrors `runWarmup` in web's ws-client.ts.
+    ///
+    /// Goal: after `session_list` paints the sidebar, pre-fetch messages
+    /// for the sessions the user is likely to open next, while bounding
+    /// total bandwidth.
+    ///
+    /// Algorithm:
+    ///   - **Pass 0 fallback**: if no digest has any recency signal at
+    ///     all (no preview from tentacle AND nothing in our local
+    ///     cache), warm everything with `lastSeq > 0`, 50 msgs each. We
+    ///     pay this cost once; subsequent reloads will have cache
+    ///     timestamps.
+    ///   - **Pass 1 (always, ignores budget)**: warm every session that
+    ///     is `active`, pinned, or whose recency timestamp is within
+    ///     `WARMUP_RECENCY_MS`.
+    ///   - **Pass 2 (fills budget)**: sort `rest` by recency desc,
+    ///     greedily warm each until the next would exceed
+    ///     `WARMUP_BUDGET`. Stop.
+    ///
+    /// "Recency timestamp" is the digest's `preview.timestamp` if the
+    /// tentacle sent one; otherwise the most recent persisted message's
+    /// timestamp from the disk cache. This means a returning user with
+    /// an old cache still gets sensible eager classification even if
+    /// the tentacle preview is missing for some reason.
+    private static let warmupBudget = 500
+    private static let warmupPerSession = 50
+    private static let warmupRecencySeconds: TimeInterval = 24 * 60 * 60
+
+    func runWarmup(digests: [SessionDigest]) {
+        guard let appState else { return }
+        let now = Date()
+
+        struct Entry {
+            let id: String
+            let lastSeq: Int
+            let recency: Date?
+            let eager: Bool
+        }
+
+        var hasAnyRecencySignal = false
+        let cache = appState.messageStore.persistentCache
+
+        let entries: [Entry] = digests.compactMap { (digest: SessionDigest) -> Entry? in
+            guard digest.lastSeq > 0 else { return nil }
+            let isPinned = appState.sessionStore.pinnedSessions.contains(digest.id)
+                || (digest.pinned ?? false)
+            let isActive = digest.state == .active
+
+            let recency: Date? = {
+                if let ts = digest.preview?.timestamp,
+                   let d = Self.parseISO(ts) { return d }
+                if let d = cache.getLastTimestamp(digest.id) { return d }
+                return nil
+            }()
+            if recency != nil { hasAnyRecencySignal = true }
+
+            let withinRecency: Bool = {
+                guard let r = recency else { return false }
+                return now.timeIntervalSince(r) < Self.warmupRecencySeconds
+            }()
+            let eager = isActive || isPinned || withinRecency
+            return Entry(
+                id: digest.id,
+                lastSeq: digest.lastSeq,
+                recency: recency,
+                eager: eager
+            )
+        }
+
+        // Pass 0 fallback — no recency signal anywhere → warm all so the
+        // user isn't stranded with empty cards.
+        if !hasAnyRecencySignal {
+            KLog.d("🔥 warm-up: no recency signal, warming all (\(entries.count) sessions)")
+            for e in entries {
+                requestLatest(sessionId: e.id)
+            }
+            return
+        }
+
+        let eager = entries.filter { $0.eager }
+        let rest = entries.filter { !$0.eager }
+            .sorted { (a, b) in
+                (a.recency ?? .distantPast) > (b.recency ?? .distantPast)
+            }
+
+        // Pass 1 — eager, ignores budget
+        var used = 0
+        for e in eager {
+            requestLatest(sessionId: e.id)
+            used += min(e.lastSeq, Self.warmupPerSession)
+        }
+
+        // Pass 2 — budget fill
+        var filled = 0
+        for e in rest {
+            let cost = min(e.lastSeq, Self.warmupPerSession)
+            if used + cost > Self.warmupBudget { break }
+            requestLatest(sessionId: e.id)
+            used += cost
+            filled += 1
+        }
+
+        KLog.d("🔥 warm-up: eager=\(eager.count) budgetFill=\(filled) skipped=\(rest.count - filled) totalMsgs=\(used) budget=\(Self.warmupBudget)")
+    }
+
+    private static func parseISO(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
     }
 
     // MARK: - Request Before (Pagination)
@@ -154,42 +272,67 @@ final class MessageProvider {
 
     /// Rebuild session preview from messages in the store.
     /// Scans backwards for the last meaningful message.
+    ///
+    /// Forked sessions need their fork timestamp preserved so they sort
+    /// next to other freshly-touched sessions instead of next to their
+    /// parent's old last-message. We detect this by comparing the
+    /// existing preview's timestamp to the one we're about to write —
+    /// if the existing one is newer (e.g. set by the `session_created`
+    /// seed in MessageRouter), we keep its timestamp and only swap the
+    /// text+type.
     func rebuildPreview(sessionId: String) {
         guard let appState else { return }
         let msgs = appState.messageStore.getMessages(sessionId)
         guard !msgs.isEmpty else { return }
+
+        let existing = appState.sessionStore.sessionPreviews[sessionId]
+
+        func write(text: String, type: String, timestamp: String) {
+            // Forked / freshly imported sessions: preserve the newer
+            // existing timestamp so their card doesn't sort by the
+            // parent session's last-message clock.
+            let chosenTs: String = {
+                guard let e = existing,
+                      let existingDate = Self.parseISO(e.timestamp),
+                      let newDate = Self.parseISO(timestamp),
+                      existingDate > newDate else { return timestamp }
+                return e.timestamp
+            }()
+            appState.sessionStore.setPreview(
+                sessionId,
+                text: String(text.prefix(Self.previewMaxLength)),
+                type: type,
+                timestamp: chosenTs
+            )
+        }
 
         for i in stride(from: msgs.count - 1, through: 0, by: -1) {
             let m = msgs[i]
 
             switch m.type {
             case "question":
-                let q = m.question ?? ""
-                appState.sessionStore.setPreview(sessionId, text: String(q.prefix(Self.previewMaxLength)), type: "question", timestamp: m.timestamp ?? "")
+                write(text: m.question ?? "", type: "question", timestamp: m.timestamp ?? "")
                 return
             case "permission":
-                let tool = m.toolName ?? ""
-                appState.sessionStore.setPreview(sessionId, text: String(tool.prefix(Self.previewMaxLength)), type: "permission", timestamp: m.timestamp ?? "")
+                write(text: m.toolName ?? "", type: "permission", timestamp: m.timestamp ?? "")
                 return
             case "error":
-                let errMsg = m.errorMessage ?? "Error"
-                appState.sessionStore.setPreview(sessionId, text: String(errMsg.prefix(Self.previewMaxLength)), type: "error", timestamp: m.timestamp ?? "")
+                write(text: m.errorMessage ?? "Error", type: "error", timestamp: m.timestamp ?? "")
                 return
             case "user_message":
-                let content = m.content ?? ""
-                appState.sessionStore.setPreview(sessionId, text: String(content.prefix(Self.previewMaxLength)), type: "user", timestamp: m.timestamp ?? "")
+                write(text: m.content ?? "", type: "user", timestamp: m.timestamp ?? "")
                 return
             case "answer":
                 let answer = m.answer ?? ""
                 if !answer.isEmpty {
-                    appState.sessionStore.setPreview(sessionId, text: String(answer.prefix(Self.previewMaxLength)), type: "answer", timestamp: m.timestamp ?? "")
+                    write(text: answer, type: "answer", timestamp: m.timestamp ?? "")
                     return
                 }
             case "agent_message":
                 let content = m.content ?? ""
                 let next = i + 1 < msgs.count ? msgs[i + 1] : nil
                 if next == nil || next?.type == "idle" {
-                    appState.sessionStore.setPreview(sessionId, text: String(content.prefix(Self.previewMaxLength)), type: "agent", timestamp: m.timestamp ?? "")
+                    write(text: content, type: "agent", timestamp: m.timestamp ?? "")
                     return
                 }
             default:

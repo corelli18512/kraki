@@ -188,6 +188,13 @@ struct SessionDigest: Codable, Identifiable, Sendable {
     var createdAt: String
     var usage: SessionUsage?
     var pinned: Bool?
+    /// Where this session came from (`copilot-cli`, `vscode`, `imported`,
+    /// or `unknown`). Native Kraki sessions leave this absent.
+    var source: String?
+    /// Sidebar preview pre-computed by tentacle. Carries the last
+    /// meaningful message's text, type, and timestamp so the arm can
+    /// paint the sidebar with zero replay round-trips.
+    var preview: SessionPreview?
 }
 
 // MARK: - Device Types
@@ -215,7 +222,7 @@ struct ModelDetail: Codable, Equatable, Sendable {
 // MARK: - Session Preview
 
 /// Rich preview metadata for session list cards — mirrors web SessionPreview.
-struct SessionPreview: Equatable, Sendable {
+struct SessionPreview: Codable, Equatable, Sendable {
     let text: String
     /// "message", "question", "permission", etc.
     let type: String
@@ -228,4 +235,40 @@ struct ImageAttachment: Codable, Sendable {
     let type: String
     let mimeType: String
     let data: String // base64-encoded
+}
+
+/// Reference to lazy content (image, tool args, tool result) stored on
+/// the tentacle's attachment store. Mirrors the protocol's `ContentRef`
+/// (TypeScript `ContentRef` from `@kraki/protocol`). Bytes ship as
+/// `attachment_data` chunks keyed by `id`.
+struct ContentRef: Codable, Equatable, Sendable {
+    /// Always "content_ref" in v0.17+. Older payloads may still use
+    /// "image_ref"; both are accepted at parse time.
+    let type: String
+    /// Content-addressed sha256 hex (truncated to 32 chars).
+    let id: String
+    let mimeType: String
+    let size: Int
+    let caption: String?
+    let name: String?
+    let width: Int?
+    let height: Int?
+
+    static func from(_ dict: [String: AnyCodable]) -> ContentRef? {
+        guard let type = dict["type"]?.stringValue,
+              (type == "content_ref" || type == "image_ref"),
+              let id = dict["id"]?.stringValue,
+              let mimeType = dict["mimeType"]?.stringValue else { return nil }
+        let size = dict["size"]?.intValue ?? 0
+        return ContentRef(
+            type: type,
+            id: id,
+            mimeType: mimeType,
+            size: size,
+            caption: dict["caption"]?.stringValue,
+            name: dict["name"]?.stringValue,
+            width: dict["width"]?.intValue,
+            height: dict["height"]?.intValue
+        )
+    }
 }
