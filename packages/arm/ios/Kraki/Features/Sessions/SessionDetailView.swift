@@ -26,18 +26,24 @@ struct SessionDetailView: View {
         Group {
             if let session {
                 sessionContent(session)
+            } else if sessionStore.isPending(sessionId) {
+                pendingView
             } else {
                 notFoundView
             }
         }
         .onAppear {
             sessionStore.activeSessionId = sessionId
+            // Pull any persisted history off disk into the in-memory
+            // store before ChatView reads it, so a cold launch shows the
+            // last conversation immediately instead of an empty screen
+            // until a replay batch arrives.
+            appState.messageStore.hydrateFromDisk(sessionId)
             // Snapshot unread state SYNCHRONOUSLY (before scheduling any
             // Task) so ChatView's R3 entry-scroll sees the original value
             // even though markRead's Task may run before ChatView's .task
             // body fires.
-            let liveUnread = sessionStore.unreadCounts[sessionId] ?? 0
-            sessionStore.entryUnreadSnapshots[sessionId] = liveUnread > 0
+            sessionStore.entryUnreadSnapshots[sessionId] = sessionStore.isUnread(sessionId)
             // Defer markRead one runloop turn so ChatView's entry-scroll
             // task can snapshot the unread state before it's cleared.
             Task { @MainActor in
@@ -47,6 +53,13 @@ struct SessionDetailView: View {
         .onDisappear {
             if sessionStore.activeSessionId == sessionId {
                 sessionStore.activeSessionId = nil
+            }
+            // Drop pending bookkeeping when the user backs out of an
+            // optimistic placeholder; the request stays in flight, but
+            // we won't bring them back to a stale spinner if they
+            // navigate forward again.
+            if sessionStore.isPending(sessionId) {
+                sessionStore.removePendingSession(sessionId)
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -97,6 +110,45 @@ struct SessionDetailView: View {
             .animation(.easeInOut(duration: 0.2), value: appState.isReconnecting)
     }
 
+    // MARK: - Pending placeholder
+    //
+    // Shown while we've sent create_session / fork_session /
+    // import_session and are still awaiting the server-side
+    // session_created envelope. Mirrors the web client's
+    // "Starting session…" route at packages/arm/web/src/pages/SessionPage.tsx.
+
+    @ViewBuilder
+    private var pendingView: some View {
+        // Render inside the normal navigation chrome so the chat view
+        // slides in seamlessly when the real session id replaces this
+        // route.
+        VStack(spacing: 16) {
+            if let reason = sessionStore.pendingSessionErrors[sessionId] {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.red)
+                Text("Couldn't start session")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.krakiPrimary)
+                Text("Starting session…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
     // MARK: - Not Found
 
     private var notFoundView: some View {
@@ -113,7 +165,8 @@ struct SessionDetailView: View {
 
     private func markReadIfFocused() {
         guard let session else { return }
-        sessionStore.clearUnread(sessionId)
+        // markRead via the seq pipeline replaces the old clearUnread call.
+        sessionStore.markRead(sessionId, seq: session.lastSeq)
         appState.commandSender?.markRead(sessionId: sessionId, seq: session.lastSeq)
     }
 }

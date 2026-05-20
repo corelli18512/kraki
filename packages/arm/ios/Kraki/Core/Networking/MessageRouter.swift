@@ -19,6 +19,34 @@ import Foundation
 extension SessionDigest {
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String else { return nil }
+
+        // Parse usage if present — tentacle ships full SessionUsage in the
+        // digest so the sidebar shows token totals without waiting for the
+        // next idle frame.
+        let usage: SessionUsage? = {
+            guard let dict = json["usage"] as? [String: Any] else { return nil }
+            guard let input = dict["inputTokens"] as? Int,
+                  let output = dict["outputTokens"] as? Int,
+                  let cacheRead = dict["cacheReadTokens"] as? Int,
+                  let cacheWrite = dict["cacheWriteTokens"] as? Int else { return nil }
+            let cost = (dict["totalCost"] as? Double) ?? Double(dict["totalCost"] as? Int ?? 0)
+            let duration = (dict["totalDurationMs"] as? Double) ?? Double(dict["totalDurationMs"] as? Int ?? 0)
+            return SessionUsage(
+                inputTokens: input, outputTokens: output,
+                cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
+                totalCost: cost, totalDurationMs: duration
+            )
+        }()
+
+        // Parse preview if present — `{ text, type, timestamp }`.
+        let preview: SessionPreview? = {
+            guard let dict = json["preview"] as? [String: Any],
+                  let text = dict["text"] as? String,
+                  let type = dict["type"] as? String,
+                  let timestamp = dict["timestamp"] as? String else { return nil }
+            return SessionPreview(text: text, type: type, timestamp: timestamp)
+        }()
+
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -31,8 +59,10 @@ extension SessionDigest {
             readSeq: json["readSeq"] as? Int ?? 0,
             messageCount: json["messageCount"] as? Int ?? 0,
             createdAt: json["createdAt"] as? String ?? "",
-            usage: nil,
-            pinned: json["pinned"] as? Bool
+            usage: usage,
+            pinned: json["pinned"] as? Bool,
+            source: json["source"] as? String,
+            preview: preview
         )
     }
 }
@@ -46,6 +76,47 @@ final class MessageRouter {
 
     private static let previewMaxLength = 80
 
+    /// Event types that the tentacle persists per-session and stamps
+    /// with the **per-session conversation seq** (small ordinal: 1, 2,
+    /// 3, …). These are the only events whose `seq` field is
+    /// comparable across the session — and therefore the only ones
+    /// that should drive the seq-derived unread state.
+    ///
+    /// Transient streaming events (`active`, `agent_message_delta`,
+    /// `session_read`, `session_mode_set`, …) carry a `seq` from a
+    /// **different** global envelope counter and must be ignored here
+    /// or they'd poison the per-session counter (e.g. a delta seq of
+    /// 126_037 would race ahead of an idle seq of 12 and the badge
+    /// would never light up).
+    ///
+    /// Keep this set in sync with `RelayClient.PERSISTENT_TYPES` in
+    /// `packages/tentacle/src/relay-client.ts`.
+    private static let persistentTypes: Set<String> = [
+        "session_created",
+        "agent_message",
+        "user_message",
+        "permission",
+        "permission_resolved",
+        "question",
+        "question_resolved",
+        "tool_start",
+        "tool_complete",
+        "error",
+        "session_ended",
+        "idle",
+        "session_replay_batch",
+    ]
+
+    /// Subset of `persistentTypes` whose arrival should light up the
+    /// unread badge. Everything else in `persistentTypes` silently
+    /// advances `readSeq` so it never produces a phantom badge
+    /// mid-turn — the badge appears in the same SwiftUI tick that
+    /// `updatePreview` flips the card to the agent's final reply (or
+    /// to permission / question / error text).
+    private static let notifyWorthyTypes: Set<String> = [
+        "idle", "error", "permission", "question"
+    ]
+
     // MARK: Init
 
     init(appState: AppState) {
@@ -56,7 +127,9 @@ final class MessageRouter {
             appState: appState
         )
         self.encryptionHandler.onDecrypted = { [weak self] data in
-            self?.handleDataMessage(data)
+            Task { @MainActor in
+                self?.handleDataMessage(data)
+            }
         }
     }
 
@@ -137,7 +210,9 @@ final class MessageRouter {
         do {
             let result = try encryptionHandler.decryptInbound(data)
             KLog.d("🔓 Decrypted → routing inner message")
-            handleDataMessage(result.message)
+            Task { @MainActor in
+                self.handleDataMessage(result.message)
+            }
         } catch EncryptionError.notAddressedToUs {
             KLog.d("📭 Envelope not addressed to us — skipping")
         } catch {
@@ -148,6 +223,7 @@ final class MessageRouter {
     // MARK: - Data Message Routing
 
     /// Route a decrypted inner message to the appropriate store(s).
+    @MainActor
     func handleDataMessage(_ json: Data) {
         guard let appState,
               let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
@@ -175,6 +251,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "local_sessions_list" {
+            handleLocalSessionsList(dict)
+            return
+        }
+
         // ── All remaining messages require a sessionId ───────────────────
 
         guard let sessionId = dict["sessionId"] as? String else { return }
@@ -187,6 +268,47 @@ final class MessageRouter {
 
         let payload = dict["payload"] as? [String: Any]
         let timestamp = dict["timestamp"] as? String
+
+        // Per-session seq bookkeeping (drives derived unread).
+        //
+        // IMPORTANT: only persistent message types carry a per-session
+        // conversation seq. Transient envelopes (`active`,
+        // `agent_message_delta`, `session_read`, …) carry a seq from a
+        // different global counter and must be ignored here, otherwise
+        // they'd race ahead of the per-session counter and notify-worthy
+        // events (idle with seq=12) would arrive "behind" lastSeq and
+        // never light up the badge. `session_read` echoes are handled
+        // separately via `payload.seq` in the switch below.
+        //
+        // For persistent events the rule is:
+        //   • lastSeq always advances (so the unread accounting is
+        //     accurate).
+        //   • readSeq silently advances for everything EXCEPT
+        //     notify-worthy events (idle / error / permission /
+        //     question). That way the badge only lights up the moment
+        //     a turn-ending / attention-requiring event lands — the
+        //     same SwiftUI tick `updatePreview` flips the card text.
+        //   • While the user is actively viewing the session, readSeq
+        //     advances on every persistent event AND we send
+        //     `mark_read` upstream so other devices stay in sync.
+        if let seq = dict["seq"] as? Int,
+           Self.persistentTypes.contains(type) {
+            let isNotify = Self.notifyWorthyTypes.contains(type)
+            let prevLast = appState.sessionStore.sessions[sessionId]?.lastSeq ?? -1
+            let prevRead = appState.sessionStore.sessions[sessionId]?.readSeq ?? -1
+            appState.sessionStore.bumpLastSeq(sessionId, seq: seq)
+            let isActive = appState.sessionStore.activeSessionId == sessionId
+            let willMark = isActive || !isNotify
+            NSLog("[UNREAD] router type=\(type) sid=\(sessionId.prefix(12)) seq=\(seq) prevLast=\(prevLast) prevRead=\(prevRead) notify=\(isNotify) active=\(isActive) mark=\(willMark)")
+            if willMark {
+                appState.sessionStore.markRead(sessionId, seq: seq)
+            }
+            if isActive {
+                appState.commandSender?.markRead(sessionId: sessionId, seq: seq)
+            }
+        } else if dict["seq"] != nil {
+            NSLog("[UNREAD] router SKIP non-persistent type=\(type) sid=\(sessionId.prefix(12)) seq=\(dict["seq"] ?? "nil")")
+        }
 
         switch type {
 
@@ -220,10 +342,14 @@ final class MessageRouter {
         case "agent_message":
             appState.sessionStore.flushDelta(sessionId)
             appState.messageStore.appendMessage(sessionId, json: json)
+            if let content = payload?["content"] as? String {
+                appState.sessionStore.setAgentTextActivity(sessionId, text: content)
+            }
 
         case "agent_message_delta":
             if let content = payload?["content"] as? String {
                 appState.sessionStore.appendDelta(sessionId, content)
+                appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
 
         // ── Permissions ──────────────────────────────────────────────────
@@ -319,8 +445,38 @@ final class MessageRouter {
 
         // ── Tool events ──────────────────────────────────────────────────
 
-        case "tool_start", "tool_complete":
+        case "tool_start":
             appState.messageStore.appendMessage(sessionId, json: json)
+            if let name = payload?["toolName"] as? String {
+                let headline = payload?["headline"] as? String
+                appState.sessionStore.setCurrentTool(sessionId, toolName: name, headline: headline)
+            }
+            // Mark any ContentRef we can see as awaiting push so views
+            // expanding the chip see a spinner immediately if bytes
+            // haven't arrived yet.
+            registerContentRefs(in: payload, sessionId: sessionId)
+
+        case "tool_complete":
+            appState.messageStore.appendMessage(sessionId, json: json)
+            let name = payload?["toolName"] as? String
+            appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name)
+            registerContentRefs(in: payload, sessionId: sessionId)
+            // Also mark content_ref entries inside the `attachments`
+            // array (e.g. images from `kraki-show_image`).
+            if let arr = payload?["attachments"] as? [[String: Any]] {
+                for att in arr {
+                    if let type = att["type"] as? String,
+                       (type == "content_ref" || type == "image_ref"),
+                       let id = att["id"] as? String {
+                        appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
+                    }
+                }
+            }
+
+        // ── Attachment chunk push ────────────────────────────────────────
+
+        case "attachment_data":
+            handleAttachmentData(payload: payload)
 
         // ── Session state ────────────────────────────────────────────────
 
@@ -345,6 +501,13 @@ final class MessageRouter {
             appState.sessionStore.flushDelta(sessionId)
             appState.messageStore.appendMessage(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
+            // If this error correlates to a pending create/fork/import
+            // by requestId, fail the placeholder so the optimistic
+            // view shows an error state instead of spinning forever.
+            if let requestId = payload?["requestId"] as? String,
+               appState.commandSender?.pendingPlaceholderIds[requestId] != nil {
+                appState.commandSender?.failPendingRequest(requestId, reason: errorText)
+            }
             updatePreview(sessionId, text: errorText, type: "error",
                           timestamp: timestamp, notify: true)
 
@@ -433,22 +596,58 @@ final class MessageRouter {
             // Sync pin
             appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
 
-            // Reconstruct unread from readSeq vs lastSeq
-            if digest.lastSeq > digest.readSeq {
-                if appState.sessionStore.unreadCounts[digest.id] == nil {
-                    appState.sessionStore.unreadCounts[digest.id] = digest.lastSeq - digest.readSeq
-                }
-            } else {
-                appState.sessionStore.clearUnread(digest.id)
+            // Apply sidebar preview from the digest. Tentacle does the
+            // markdown stripping + 80-char truncation for us, so this
+            // is the cheapest possible sidebar paint — no replay
+            // round-trip needed.
+            if let preview = digest.preview {
+                appState.sessionStore.setPreview(
+                    digest.id,
+                    text: preview.text,
+                    type: preview.type,
+                    timestamp: preview.timestamp
+                )
             }
 
-            // Store tentacle info + fetch latest 50 messages
-            appState.messageProvider?.setTentacleInfo(sessionId: digest.id, lastSeq: digest.lastSeq, deviceId: tentacleDeviceId)
-            let fromSeq = max(1, digest.lastSeq - 49)
-            if fromSeq <= digest.lastSeq && digest.lastSeq > 0 {
-                appState.messageProvider?.requestLatest(sessionId: digest.id)
+            // Unread is derived from readSeq/lastSeq directly on each
+            // SessionInfo. We advance both sides monotonically, then
+            // (if the gap is non-empty) ask the persistent cache
+            // whether any messages between them are unread-worthy. If
+            // not — e.g. the gap is pure tool_* / active churn —
+            // silently catch readSeq up so we don't show a phantom
+            // badge.
+            if digest.lastSeq > 0 {
+                appState.sessionStore.bumpLastSeq(digest.id, seq: digest.lastSeq)
             }
+            if digest.readSeq > 0 {
+                appState.sessionStore.markRead(digest.id, seq: digest.readSeq)
+            }
+            if digest.lastSeq > digest.readSeq {
+                let hasUnreadWorthy = appState.messageStore.persistentCache
+                    .hasUnreadWorthy(digest.id, afterSeq: digest.readSeq)
+                let hasCachedGap = appState.messageStore.persistentCache
+                    .getLastSeq(digest.id) >= digest.lastSeq
+                if hasCachedGap && !hasUnreadWorthy {
+                    // We have the gap fully cached and nothing in it is
+                    // a real unread → suppress the badge.
+                    appState.sessionStore.markRead(digest.id, seq: digest.lastSeq)
+                }
+            }
+
+            // Store tentacle info so any later replay request can be
+            // routed to the right producer device.
+            appState.messageProvider?.setTentacleInfo(
+                sessionId: digest.id,
+                lastSeq: digest.lastSeq,
+                deviceId: tentacleDeviceId
+            )
         }
+
+        // Budget warm-up — instead of blindly issuing one replay
+        // request per session, classify by recency + state and stay
+        // within a 500-message bandwidth budget. See
+        // `MessageProvider.runWarmup` for the algorithm.
+        appState.messageProvider?.runWarmup(digests: parsed)
     }
 
     private func handleSessionCreated(
@@ -486,6 +685,20 @@ final class MessageRouter {
             appState.messageStore.appendMessage(sessionId, json: json)
         }
 
+        // Seed an initial preview so the new card has a timestamp and
+        // sorts to the top of the list, mirroring the web client.
+        // The text mirrors what we render in the empty-preview branch
+        // of `SessionCardView.previewText`.
+        let timestamp = dict["timestamp"] as? String
+            ?? ISO8601DateFormatter().string(from: Date())
+        updatePreview(
+            sessionId,
+            text: "Session created",
+            type: "session_created",
+            timestamp: timestamp,
+            notify: false
+        )
+
         let lastSeq = payload?["lastSeq"] as? Int ?? 0
         appState.messageProvider?.setTentacleInfo(
             sessionId: sessionId, lastSeq: lastSeq, deviceId: deviceId
@@ -521,6 +734,18 @@ final class MessageRouter {
         }
     }
 
+    /// Land a `local_sessions_list` response into the device store so
+    /// the import picker can render it.
+    private func handleLocalSessionsList(_ dict: [String: Any]) {
+        guard let appState,
+              let deviceId = dict["deviceId"] as? String else { return }
+        let payload = dict["payload"] as? [String: Any]
+        let arr = payload?["sessions"] as? [[String: Any]] ?? []
+        let parsed = arr.compactMap { LocalSessionSummary.from($0) }
+        appState.deviceStore.localSessions[deviceId] = parsed
+        appState.deviceStore.localSessionsLoading.remove(deviceId)
+    }
+
     private func handleReplayBatch(_ dict: [String: Any]) {
         guard let appState else { return }
         let payload = dict["payload"] as? [String: Any] ?? dict
@@ -553,15 +778,57 @@ final class MessageRouter {
         timestamp: String?,
         notify: Bool = false
     ) {
+        // `notify` retained as a no-op parameter for source
+        // compatibility with existing call sites. Unread state lives
+        // entirely in the seq pipeline now (`bumpLastSeq` / `markRead`),
+        // so a preview update doesn't itself bump anything.
+        _ = notify
         guard let appState else { return }
-        let shouldIncrement = notify
-            && appState.sessionStore.activeSessionId != sessionId
         appState.sessionStore.setSessionPreview(
             sessionId,
             text: truncPreview(text),
             type: type,
-            timestamp: timestamp,
-            incrementUnread: shouldIncrement
+            timestamp: timestamp
+        )
+    }
+
+    // MARK: - Attachment helpers
+
+    /// Inspect a payload dict for `argsRef` / `resultRef` (top-level) and
+    /// register each as awaiting-push so any view that subsequently
+    /// expands the tool chip sees a spinner immediately while bytes
+    /// arrive. No-op if a ref is already in flight or already on disk.
+    @MainActor
+    private func registerContentRefs(in payload: [String: Any]?, sessionId: String) {
+        guard let appState, let payload else { return }
+        for key in ["argsRef", "resultRef"] {
+            if let dict = payload[key] as? [String: Any],
+               let type = dict["type"] as? String,
+               (type == "content_ref" || type == "image_ref"),
+               let id = dict["id"] as? String {
+                appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
+            }
+        }
+    }
+
+    /// Process an inbound `attachment_data` chunk by routing it to the
+    /// attachment store. Errors carried in the chunk envelope are
+    /// surfaced through the store's state machine, not logged here.
+    private func handleAttachmentData(payload: [String: Any]?) {
+        guard let appState, let payload,
+              let id = payload["id"] as? String,
+              let mimeType = payload["mimeType"] as? String else { return }
+        let index = payload["index"] as? Int ?? 0
+        let total = payload["total"] as? Int ?? 1
+        let data = payload["data"] as? String ?? ""
+        let error = payload["error"] as? String
+        appState.attachmentStore.ingestChunk(
+            id: id,
+            index: index,
+            total: total,
+            mimeType: mimeType,
+            data: data,
+            error: error
         )
     }
 }

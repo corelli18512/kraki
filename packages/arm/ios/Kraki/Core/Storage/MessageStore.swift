@@ -3,6 +3,12 @@
 /// Mirrors the message slice of useStore.ts. Messages are stored per session,
 /// deduplicated by seq, and sorted ascending. Pending permissions and questions
 /// are tracked separately for quick lookup by the UI.
+///
+/// In v0.17+ the store is backed by `PersistentMessageCache` so the
+/// in-memory list survives cold launches and the warm-up path can ask
+/// "what's the highest seq I already have?" without a tentacle replay.
+/// Only the canonical content-stream types are persisted (see
+/// `Self.persistentTypes`).
 
 import Foundation
 import Observation
@@ -21,10 +27,68 @@ final class MessageStore {
     /// questionId → pending question
     var pendingQuestions: [String: PendingQuestion] = [:]
 
+    /// Disk-backed cache. Writes happen as a side effect of
+    /// `appendMessage` / `prependMessages`; reads are used by the
+    /// warm-up classifier and the unread-worthy filter.
+    let persistentCache = PersistentMessageCache()
+
+    /// Sessions whose persisted history has been hydrated into
+    /// `messages` since process launch. Hydration is lazy — a session
+    /// is only loaded when something asks for it (session opens,
+    /// preview rebuild, etc.) so launch isn't blocked by O(allSessions)
+    /// disk reads.
+    private var hydratedSessions: Set<String> = []
+
+    /// Message types that get written to disk. Mirrors tentacle's
+    /// `PERSISTENT_TYPES` — anything outside this set is transient
+    /// (deltas, pending_input, attachment_data, active, mode/title/pin
+    /// updates, etc.) and lives only in memory.
+    static let persistentTypes: Set<String> = [
+        "session_created",
+        "agent_message",
+        "user_message",
+        "permission",
+        "permission_resolved",
+        "question",
+        "question_resolved",
+        "tool_start",
+        "tool_complete",
+        "error",
+        "session_ended",
+        "idle",
+        "answer",
+        "approve",
+        "deny",
+        "always_allow",
+    ]
+
+    // MARK: - Hydration
+
+    /// Pull a session's persisted history into the in-memory store on
+    /// demand. Safe to call repeatedly — only the first call per
+    /// session per launch does disk I/O.
+    @discardableResult
+    func hydrateFromDisk(_ sessionId: String) -> [ChatMessage] {
+        if hydratedSessions.contains(sessionId) { return messages[sessionId] ?? [] }
+        hydratedSessions.insert(sessionId)
+        let persisted = persistentCache.getMessages(sessionId)
+        guard !persisted.isEmpty else { return [] }
+        // Merge with any in-memory messages that arrived first (rare —
+        // hydration usually happens before live messages for a given
+        // session, but defend against ordering anyway).
+        let existing = messages[sessionId] ?? []
+        let existingSeqs = Set(existing.map(\.seq))
+        let merged = (existing + persisted.filter { !existingSeqs.contains($0.seq) })
+            .sorted { $0.seq < $1.seq }
+        messages[sessionId] = merged
+        return merged
+    }
+
     // MARK: - Message Operations
 
     /// Append a message, deduplicating by seq.
     func appendMessage(_ sessionId: String, _ message: ChatMessage) {
+        hydrateFromDisk(sessionId)
         var list = messages[sessionId] ?? []
         // Deduplicate: replace existing message with same seq, or append
         if let idx = list.firstIndex(where: { $0.seq == message.seq }) {
@@ -34,10 +98,15 @@ final class MessageStore {
             list.sort { $0.seq < $1.seq }
         }
         messages[sessionId] = list
+
+        if shouldPersist(message) {
+            persistentCache.appendMessage(sessionId, message)
+        }
     }
 
     /// Prepend older messages (from replay), deduplicating by seq.
     func prependMessages(_ sessionId: String, _ older: [ChatMessage]) {
+        hydrateFromDisk(sessionId)
         var existing = messages[sessionId] ?? []
         let existingSeqs = Set(existing.map(\.seq))
         let unique = older.filter { !existingSeqs.contains($0.seq) }
@@ -45,18 +114,31 @@ final class MessageStore {
         existing.append(contentsOf: unique)
         existing.sort { $0.seq < $1.seq }
         messages[sessionId] = existing
+
+        let toPersist = unique.filter(shouldPersist)
+        if !toPersist.isEmpty {
+            persistentCache.appendMessages(sessionId, toPersist)
+        }
+    }
+
+    private func shouldPersist(_ msg: ChatMessage) -> Bool {
+        msg.seq > 0 && Self.persistentTypes.contains(msg.type)
     }
 
     func getMessages(_ sessionId: String) -> [ChatMessage] {
-        messages[sessionId] ?? []
+        hydrateFromDisk(sessionId)
+        return messages[sessionId] ?? []
     }
 
     func getLastSeq(_ sessionId: String) -> Int {
-        messages[sessionId]?.last?.seq ?? 0
+        hydrateFromDisk(sessionId)
+        return messages[sessionId]?.last?.seq ?? 0
     }
 
     func deleteSessionMessages(_ sessionId: String) {
         messages.removeValue(forKey: sessionId)
+        hydratedSessions.remove(sessionId)
+        persistentCache.deleteSession(sessionId)
         // Also clean up permissions/questions for this session
         pendingPermissions = pendingPermissions.filter { $0.value.sessionId != sessionId }
         pendingQuestions = pendingQuestions.filter { $0.value.sessionId != sessionId }
@@ -155,8 +237,10 @@ final class MessageStore {
 
     func reset() {
         messages.removeAll()
+        hydratedSessions.removeAll()
         pendingPermissions.removeAll()
         pendingQuestions.removeAll()
+        persistentCache.deleteAll()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)
