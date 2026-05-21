@@ -181,16 +181,26 @@ final class MessageProvider {
     /// or more whole turns immediately preceding that seq, up to its
     /// soft cap.
     func requestBefore(sessionId: String, beforeSeq: Int) {
-        guard !isLoading(sessionId) else { return }
         guard let appState else { return }
         guard beforeSeq > 1 else { return }
         guard tentacleDeviceMap[sessionId] != nil else { return }
 
-        // If we already have messages below beforeSeq, the slice is
-        // covered — nothing to do.
+        // Dedupe by the specific beforeSeq, not by sessionId, so a
+        // gap-bridge call (e.g. beforeSeq=133) and a tail-extend call
+        // (e.g. beforeSeq=40) can coexist. The previous broad
+        // "anything in flight" check made the gap bridge lose every
+        // race against the chat view's top-spinner auto-load.
+        let loadKey = "\(sessionId):\(beforeSeq)"
+        if inFlightRequests.contains(loadKey) { return }
+
+        // Only short-circuit if the slot immediately below `beforeSeq`
+        // is already in the store. Earlier code skipped on any store
+        // overlap, which let a middle-only cache (e.g. a stale slice
+        // hydrated from disk) silently leave a gap when latest-turn
+        // fetch landed above it. We need to actually walk back from
+        // `beforeSeq`.
         let storeMessages = appState.messageStore.getMessages(sessionId)
-        let storeMinSeq = storeMessages.first?.seq ?? Int.max
-        if storeMinSeq < beforeSeq && storeMinSeq > 1 { return }
+        if storeMessages.contains(where: { $0.seq == beforeSeq - 1 }) { return }
 
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq)
     }
@@ -213,6 +223,20 @@ final class MessageProvider {
 
         KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq), head=\(containsHead)")
 
+        // Snapshot store seqs *before* the prepend so we can spot a
+        // hole between the incoming batch and what we already had.
+        // Anything we have whose seq is strictly below the batch's
+        // lowest seq is "prior content"; if the largest such seq is
+        // not directly contiguous with batch.minSeq we have a gap.
+        let batchMinSeq = messages.map(\.seq).min() ?? 0
+        let priorMaxBelowBatch: Int = {
+            guard batchMinSeq > 0 else { return 0 }
+            let store = appState.messageStore.getMessages(sessionId)
+            var best = 0
+            for m in store where m.seq < batchMinSeq && m.seq > best { best = m.seq }
+            return best
+        }()
+
         if !messages.isEmpty {
             appState.messageStore.prependMessages(sessionId, messages)
             KLog.d("📦 Store now has \(appState.messageStore.getMessages(sessionId).count) msgs for \(sessionId.prefix(12))")
@@ -233,6 +257,17 @@ final class MessageProvider {
         let needsCatchUp = wasHeadRequest && !containsHead
             && lastSeq < (tentacleLastSeq[sessionId] ?? 0)
 
+        // Did we just land a batch above a pre-existing slice that
+        // *isn't* contiguous with it? That means there's a silent
+        // hole between [priorMaxBelowBatch+1 .. batchMinSeq-1] —
+        // happens when disk holds a stale middle slice and the
+        // latest-turn fetch anchors above it. Schedule a one-shot
+        // bridge fetch ending at batchMinSeq; subsequent batches will
+        // re-enter this guard and keep walking the hole closed.
+        let needsGapBridge = batchMinSeq > 0
+            && priorMaxBelowBatch > 0
+            && batchMinSeq > priorMaxBelowBatch + 1
+
         // Clear in-flight tracking for this session
         let keysToRemove = inFlightRequests.filter { $0.hasPrefix("\(sessionId):") }
         for key in keysToRemove {
@@ -246,6 +281,13 @@ final class MessageProvider {
             KLog.d("⚠️ batch didn't reach head; scheduling follow-up requestLatest for \(sessionId.prefix(12))")
             DispatchQueue.main.async { [weak self] in
                 self?.requestLatest(sessionId: sessionId)
+            }
+        }
+
+        if needsGapBridge {
+            KLog.d("🪡 detected gap [\(priorMaxBelowBatch + 1)..\(batchMinSeq - 1)] in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
+            DispatchQueue.main.async { [weak self] in
+                self?.requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
             }
         }
     }
