@@ -70,4 +70,6 @@ export interface ModelDetail {
   supportsReasoningEffort: boolean;
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
+  /** Total token ceiling for the model (e.g. 200000). */
+  contextWindow?: number;
 }

@@ -705,4 +705,172 @@ describe('SessionManager', () => {
       expect(inner.payload.attachments).toHaveLength(1);
     });
   });
+
+  // ── idleSeqs tracking ──────────────────────────────────
+
+  describe('idleSeqs tracking', () => {
+    it('maintains idleSeqs on appendMessage', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'hello' },
+      }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: 'hi' },
+      }));
+      const idleSeq1 = sm.appendMessage(sessionId, 'idle', JSON.stringify({
+        type: 'idle', sessionId, payload: {},
+      }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: 'more' },
+      }));
+      const idleSeq2 = sm.appendMessage(sessionId, 'idle', JSON.stringify({
+        type: 'idle', sessionId, payload: {},
+      }));
+
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.idleSeqs).toEqual([idleSeq1, idleSeq2]);
+    });
+
+    it('maintains idleSeqs on appendMessagesBatch', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      const messages = [
+        { type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: {} }) },
+        { type: 'agent_message', payload: JSON.stringify({ type: 'agent_message', payload: {} }) },
+        { type: 'idle', payload: JSON.stringify({ type: 'idle', payload: {} }) },
+        { type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: {} }) },
+        { type: 'agent_message', payload: JSON.stringify({ type: 'agent_message', payload: {} }) },
+        { type: 'idle', payload: JSON.stringify({ type: 'idle', payload: {} }) },
+      ];
+      sm.appendMessagesBatch(sessionId, messages);
+
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.idleSeqs).toEqual([3, 6]);
+    });
+
+    it('backfills idleSeqs from existing log', () => {
+      const { sessionId } = sm.createSession('copilot');
+
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', payload: {},
+      }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', payload: {},
+      }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({
+        type: 'idle', payload: {},
+      }));
+
+      // Manually remove idleSeqs from meta to simulate pre-existing session
+      const meta = sm.getMeta(sessionId)!;
+      delete meta.idleSeqs;
+      sm['writeMeta'](sessionId, meta);
+
+      // Verify it was removed
+      expect(sm.getMeta(sessionId)!.idleSeqs).toBeUndefined();
+
+      // findTurnAlignedStart triggers backfill
+      sm.findTurnAlignedStart(sessionId, 4);
+
+      const backfilled = sm.getMeta(sessionId)!;
+      expect(backfilled.idleSeqs).toEqual([3]);
+    });
+  });
+
+  // ── findTurnAlignedStart ────────────────────────────────
+
+  describe('findTurnAlignedStart', () => {
+    function buildSession(sm: SessionManager, turns: Array<{ msgCount: number }>): string {
+      const { sessionId } = sm.createSession('copilot');
+      for (const turn of turns) {
+        for (let i = 0; i < turn.msgCount - 1; i++) {
+          sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+            type: 'agent_message', payload: { content: `msg ${i}` },
+          }));
+        }
+        sm.appendMessage(sessionId, 'idle', JSON.stringify({
+          type: 'idle', payload: {},
+        }));
+      }
+      return sessionId;
+    }
+
+    it('anchors at latest idle before endSeqExclusive', () => {
+      // Turn 1: msgs 1-5, idle@5. Turn 2: msgs 6-10, idle@10. Turn 3: msgs 11-50, idle@50.
+      const { sessionId } = sm.createSession('copilot');
+      for (let i = 0; i < 4; i++) sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} })); // seq 5
+      for (let i = 0; i < 4; i++) sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} })); // seq 10
+      for (let i = 0; i < 39; i++) sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} })); // seq 50
+
+      // endSeqExclusive=60 → latest idle before 60 is @50 → candidateStart = 51
+      // 60 - 51 = 9, which is < 100, so extend backwards
+      // cursor goes to idle@10 → candidateStart = 11, 60 - 11 = 49, still < 100
+      // cursor goes to idle@5 → candidateStart = 6, 60 - 6 = 54, still < 100
+      // cursor goes to -1 → candidateStart = 1
+      const start = sm.findTurnAlignedStart(sessionId, 60);
+      // With only 50 messages total and soft cap 100, it should return 1
+      expect(start).toBe(1);
+    });
+
+    it('extends backwards to fill soft cap', () => {
+      // Create a session with enough messages that soft cap matters
+      // 20 turns of 10 messages each = 200 messages, idle at 10,20,...,200
+      const { sessionId } = sm.createSession('copilot');
+      for (let t = 0; t < 20; t++) {
+        for (let i = 0; i < 9; i++) sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+        sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+      }
+      // idles at 10,20,...,200
+
+      // findTurnAlignedStart(sessionId, 201) → anchor at idle@200 → candidateStart=201
+      // Wait, 201 > 200, so latest idle < 201 is @200. candidateStart = 201.
+      // But 201-201 = 0 < 100, extend back: idle@190 → candidateStart=191, 201-191=10 < 100
+      // Continue extending... until we reach candidateStart where 201-candidateStart >= 100
+      // idle@100 → candidateStart=101, 201-101=100 >= 100 → stop
+      const start = sm.findTurnAlignedStart(sessionId, 201);
+      expect(start).toBe(101);
+    });
+
+    it('respects soft cap with many small turns', () => {
+      // 200 turns of 2 messages each (400 messages total), idle at every even seq
+      const { sessionId } = sm.createSession('copilot');
+      for (let t = 0; t < 200; t++) {
+        sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+        sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+      }
+      // idles at 2,4,6,...,400
+
+      // findTurnAlignedStart(sessionId, 401)
+      // anchor at idle@400 → candidateStart=401, 401-401=0 < 100
+      // extend back: idle@398 → candidateStart=399, 401-399=2 < 100
+      // ... keep going until 401-candidateStart >= 100
+      // idle@300 → candidateStart=301, 401-301=100 >= 100 → stop
+      const start = sm.findTurnAlignedStart(sessionId, 401);
+      expect(start).toBe(301);
+    });
+
+    it('returns whole oversized turn when no earlier idle', () => {
+      // Single turn of 200 messages (no idle)
+      const { sessionId } = sm.createSession('copilot');
+      for (let i = 0; i < 200; i++) {
+        sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      }
+
+      const start = sm.findTurnAlignedStart(sessionId, 201);
+      expect(start).toBe(1);
+    });
+
+    it('returns 1 for session with no idles', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+
+      const start = sm.findTurnAlignedStart(sessionId, 3);
+      expect(start).toBe(1);
+    });
+  });
 });

@@ -370,6 +370,24 @@ export class CopilotAdapter extends AgentAdapter {
    *  any cleanly-aborted sessions still benefit. */
   private static readonly STOP_ABORT_TIMEOUT_MS = 2_000;
 
+  private static readonly CONTEXT_WINDOWS: Record<string, number> = {
+    'claude-sonnet-4.6': 200_000,
+    'claude-sonnet-4.5': 200_000,
+    'claude-haiku-4.5': 200_000,
+    'claude-opus-4.7': 200_000,
+    'claude-opus-4.7-1m-internal': 1_000_000,
+    'claude-opus-4.6': 200_000,
+    'claude-opus-4.5': 200_000,
+    'gpt-5.5': 400_000,
+    'gpt-5.4': 400_000,
+    'gpt-5.3-codex': 400_000,
+    'gpt-5.2': 400_000,
+    'gpt-5.2-codex': 400_000,
+    'gpt-5.4-mini': 128_000,
+    'gpt-5-mini': 128_000,
+    'gpt-4.1': 1_000_000,
+  };
+
   /** Set of attachment ids already broadcast for this session — prevents
    *  re-broadcasting bytes when the same image is shown twice. */
   private broadcastedAttachmentIds = new Map<string, Set<string>>();
@@ -941,6 +959,7 @@ export class CopilotAdapter extends AgentAdapter {
         supportsReasoningEffort: m.capabilities?.supports?.reasoningEffort ?? false,
         ...(m.supportedReasoningEfforts && { supportedReasoningEfforts: m.supportedReasoningEfforts }),
         ...(m.defaultReasoningEffort && { defaultReasoningEffort: m.defaultReasoningEffort }),
+        ...(CopilotAdapter.CONTEXT_WINDOWS[m.id] && { contextWindow: CopilotAdapter.CONTEXT_WINDOWS[m.id] }),
       }));
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'listModelDetails failed');
@@ -1433,6 +1452,7 @@ export class CopilotAdapter extends AgentAdapter {
         cacheWriteTokens: prev.cacheWriteTokens + ((data.cacheWriteTokens as number) ?? 0),
         totalCost: prev.totalCost + ((data.cost as number) ?? 0),
         totalDurationMs: prev.totalDurationMs + ((data.duration as number) ?? 0),
+        contextTokens: (data.inputTokens as number) ?? prev.contextTokens,
       };
       this.sessionUsage.set(sessionId, updated);
       this.onUsageUpdate?.(sessionId, updated);
