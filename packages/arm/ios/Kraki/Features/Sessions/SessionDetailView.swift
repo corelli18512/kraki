@@ -39,6 +39,10 @@ struct SessionDetailView: View {
             // last conversation immediately instead of an empty screen
             // until a replay batch arrives.
             appState.messageStore.hydrateFromDisk(sessionId)
+            // Ensure tentacle's view of the latest turn(s) is loaded —
+            // no-op if warm-up already covered this session or if the
+            // disk cache already reaches head.
+            appState.messageProvider?.ensureLoaded(sessionId: sessionId)
             // Snapshot unread state SYNCHRONOUSLY (before scheduling any
             // Task) so ChatView's R3 entry-scroll sees the original value
             // even though markRead's Task may run before ChatView's .task

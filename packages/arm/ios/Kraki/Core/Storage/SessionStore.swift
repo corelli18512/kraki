@@ -24,8 +24,37 @@ struct SessionInfo: Identifiable, Equatable {
     var createdAt: Date
     var usage: SessionUsage?
     var pinned: Bool
+    /// Name of the tool currently in flight in this session's latest turn
+    /// (last `tool_start` without a matching `tool_complete`). Drives the
+    /// per-session activity icon on `AgentAvatar`. Cleared on `idle` or
+    /// once the matching `tool_complete` arrives.
+    var currentToolName: String?
+    /// Short user-facing preview of the in-flight tool (the `headline`
+    /// field of `tool_start`). Used to fill the activity row on the
+    /// session card.
+    var currentToolHeadline: String?
+    /// Latest activity snapshot used to populate the session-card
+    /// "active" row. Cleared to `.none` on idle.
+    var activity: SessionActivity = .none
 
     var displayTitle: String { title ?? autoTitle ?? "New Session" }
+}
+
+/// Coarse-grained "what is this session doing right now?" enum that
+/// drives the at-a-glance activity row on the session card. Mirrors
+/// the chronologically-latest event the agent emitted.
+enum SessionActivity: Equatable {
+    case none
+    /// Tool currently in flight. `toolName` chooses the icon; `headline`
+    /// fills the label (e.g. `$ npm test`).
+    case toolRunning(toolName: String, headline: String?)
+    /// Most recent tool finished but no agent text has arrived after it
+    /// (intermediate state during multi-tool turns). `success == false`
+    /// renders a red ✗ corner badge; anything else renders a green ✓.
+    case toolComplete(toolName: String, headline: String?, success: Bool?)
+    /// Agent is producing free-form text (final message or in-progress
+    /// delta). Icon is the keyboard glyph.
+    case agentText(String)
 }
 
 // MARK: - SessionStore
@@ -35,7 +64,6 @@ final class SessionStore {
     var sessions: [String: SessionInfo] = [:]
     var activeSessionId: String?
     var pinnedSessions: Set<String> = []
-    var unreadCounts: [String: Int] = [:]
     var sessionModes: [String: SessionMode] = [:]
     var sessionUsage: [String: SessionUsage] = [:]
     var sessionPreviews: [String: SessionPreview] = [:]
@@ -43,33 +71,89 @@ final class SessionStore {
     var navigateToSession: String?
     var streamingContent: [String: String] = [:]
 
-    /// Snapshot of `unreadCounts` at the moment a session was opened, captured
-    /// synchronously by SessionDetailView before it schedules markRead. Lets
-    /// ChatView's R3 entry-scroll see the original unread state even though
-    /// markRead may run before its `.task` body fires (both are MainActor
-    /// Tasks scheduled FIFO; SessionDetailView.onAppear runs first, so its
-    /// scheduled Task wins the race against ChatView.task).
-    /// ChatView consumes (and clears) the entry it owns at the start of
-    /// `performEntryScroll`.
+    /// Sessions for which a `create_session` / `fork_session` /
+    /// `import_session` has been sent but no `session_created` has
+    /// arrived yet. Used to render an optimistic "Starting session…"
+    /// placeholder in `SessionDetailView` while waiting. Mirrors the
+    /// web client's `pendingSessions` Set on the store.
+    ///
+    /// For `import_session` the entry is the future session id (which
+    /// equals the localSessionId). For `create_session` / `fork_session`
+    /// the entry is a client-generated UUID placeholder, swapped out
+    /// for the real id once `session_created` arrives.
+    var pendingSessions: Set<String> = []
+
+    /// Optional human-readable error message attached to a pending
+    /// session when its server-side creation failed. The placeholder
+    /// view renders this string in the error state.
+    var pendingSessionErrors: [String: String] = [:]
+
+    /// Snapshot of "was this session unread when we opened it?",
+    /// captured synchronously by `SessionDetailView` before it
+    /// schedules markRead. Lets `ChatView`'s R3 entry-scroll branch
+    /// on the original unread state even though markRead runs first.
+    /// ChatView consumes (and clears) the entry it owns at the start
+    /// of `performEntryScroll`.
     var entryUnreadSnapshots: [String: Bool] = [:]
+
+    /// Sessions currently fetching messages from tentacle (per-session
+    /// in-flight set). Maintained by MessageProvider; views read it to
+    /// show loading affordances (e.g. ChatView's State-A center
+    /// spinner, State-B top spinner).
+    var loadingSessions: Set<String> = []
+
+    func setLoading(_ id: String, _ loading: Bool) {
+        if loading { loadingSessions.insert(id) }
+        else { loadingSessions.remove(id) }
+    }
+
+    func isLoading(_ id: String) -> Bool {
+        loadingSessions.contains(id)
+    }
+
+    // MARK: - Computed unread (seq-derived)
+
+    /// Per-session unread count, derived from `lastSeq − readSeq`.
+    /// Mirrors the WhatsApp / Telegram / Slack model: there is no
+    /// separate counter to drift out of sync; `lastSeq` and `readSeq`
+    /// are both monotonic and authoritative.
+    func unreadCount(_ id: String) -> Int {
+        guard let s = sessions[id] else { return 0 }
+        return max(0, s.lastSeq - s.readSeq)
+    }
+
+    /// Convenience boolean for badge-style consumers (red dot).
+    func isUnread(_ id: String) -> Bool {
+        unreadCount(id) > 0
+    }
 
     // MARK: - Computed
 
-    /// Sessions sorted: pinned first, then by preview timestamp descending,
-    /// then by createdAt. Pinned items float to the top in a single flat list
-    /// (no section header — pin status is shown as an inline badge).
+    /// Sessions sorted: pinned first, then by effective timestamp
+    /// descending (latest preview if any, else session.createdAt),
+    /// then by createdAt as a final tiebreaker. The fallback to
+    /// createdAt for sessions without a live preview keeps freshly-
+    /// created or freshly-imported sessions at the top after a cold
+    /// relaunch, when their in-memory preview entry hasn't been
+    /// seeded yet.
     var sortedSessions: [SessionInfo] {
-        sessions.values.sorted { a, b in
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func effectiveTs(_ s: SessionInfo) -> String {
+            if let t = sessionPreviews[s.id]?.timestamp, !t.isEmpty { return t }
+            return iso.string(from: s.createdAt)
+        }
+        return sessions.values.sorted { a, b in
             if a.pinned != b.pinned { return a.pinned }
-            let aTs = sessionPreviews[a.id]?.timestamp ?? ""
-            let bTs = sessionPreviews[b.id]?.timestamp ?? ""
+            let aTs = effectiveTs(a)
+            let bTs = effectiveTs(b)
             if aTs != bTs { return bTs < aTs }
             return a.createdAt > b.createdAt
         }
     }
 
     var totalUnread: Int {
-        unreadCounts.values.reduce(0, +)
+        sessions.values.reduce(0) { $0 + max(0, $1.lastSeq - $1.readSeq) }
     }
 
     // MARK: - Session CRUD
@@ -91,8 +175,20 @@ final class SessionStore {
             existing.autoTitle = digest.autoTitle
             existing.state = digest.state
             existing.mode = mode
-            existing.lastSeq = digest.lastSeq
-            existing.readSeq = digest.readSeq
+            // Monotonic: never let a digest pull our seqs backward.
+            // This is the standard cross-device pattern — both
+            // counters move forward only, and unread = max(0, last - read).
+            existing.lastSeq = max(existing.lastSeq, digest.lastSeq)
+            existing.readSeq = max(existing.readSeq, digest.readSeq)
+            // Defense in depth: clamp readSeq to lastSeq. A readSeq
+            // greater than lastSeq is logically impossible (you can't
+            // have read past the last known message) and indicates
+            // upstream pollution — e.g. an earlier client bug that
+            // sent a mark_read using a transient envelope seq from a
+            // different counter, which tentacle then persisted. The
+            // clamp guarantees the badge can still light up when a
+            // fresh per-session seq comes in.
+            existing.readSeq = min(existing.readSeq, existing.lastSeq)
             existing.messageCount = digest.messageCount
             existing.usage = digest.usage
             existing.pinned = pinned
@@ -109,11 +205,13 @@ final class SessionStore {
                 state: digest.state,
                 mode: mode,
                 lastSeq: digest.lastSeq,
-                readSeq: digest.readSeq,
+                readSeq: min(digest.readSeq, digest.lastSeq),
                 messageCount: digest.messageCount,
                 createdAt: date,
                 usage: digest.usage,
-                pinned: pinned
+                pinned: pinned,
+                currentToolName: nil,
+                currentToolHeadline: nil
             )
         }
 
@@ -124,20 +222,13 @@ final class SessionStore {
         if pinned {
             pinnedSessions.insert(digest.id)
         }
-
-        // Reconcile unread from readSeq vs lastSeq
-        if digest.lastSeq > digest.readSeq {
-            let count = digest.lastSeq - digest.readSeq
-            if unreadCounts[digest.id] == nil || unreadCounts[digest.id]! < count {
-                unreadCounts[digest.id] = count
-            }
-        }
+        // Unread is computed on demand from lastSeq − readSeq; no
+        // separate state to seed here.
     }
 
     func removeSession(_ id: String) {
         sessions.removeValue(forKey: id)
         pinnedSessions.remove(id)
-        unreadCounts.removeValue(forKey: id)
         sessionModes.removeValue(forKey: id)
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
@@ -163,6 +254,54 @@ final class SessionStore {
 
     func setState(_ id: String, _ state: SessionState) {
         sessions[id]?.state = state
+        // Idle clears any lingering tool-in-flight marker AND the
+        // activity snapshot — at idle, the session-card row falls back
+        // to the standard preview / draft rendering.
+        if state == .idle {
+            sessions[id]?.currentToolName = nil
+            sessions[id]?.currentToolHeadline = nil
+            sessions[id]?.activity = .none
+        }
+    }
+
+    /// Record the tool whose `tool_start` event just arrived. The icon
+    /// (and headline) is later cleared by either the matching
+    /// `tool_complete` (handled in `clearCurrentTool`) or an `idle`
+    /// transition. Also bumps the activity snapshot to `.toolRunning`.
+    func setCurrentTool(_ id: String, toolName: String, headline: String? = nil) {
+        sessions[id]?.currentToolName = toolName
+        sessions[id]?.currentToolHeadline = headline
+        sessions[id]?.activity = .toolRunning(toolName: toolName, headline: headline)
+    }
+
+    /// Clear the current tool indicator. Called on `tool_complete` when
+    /// the completing call matches the active tool, and on session
+    /// teardown / idle. Bumps activity snapshot to `.toolComplete` so
+    /// the icon shows a success/failure badge until something else
+    /// displaces it.
+    func clearCurrentTool(_ id: String, ifMatching toolName: String? = nil, success: Bool? = nil) {
+        guard var info = sessions[id] else { return }
+        if let toolName, info.currentToolName != toolName { return }
+        // Capture the tool we're clearing so the success/failure-icon
+        // state can reference it.
+        let completedName = info.currentToolName
+        let completedHeadline = info.currentToolHeadline
+        info.currentToolName = nil
+        info.currentToolHeadline = nil
+        if let name = completedName {
+            info.activity = .toolComplete(toolName: name, headline: completedHeadline, success: success)
+        }
+        sessions[id] = info
+    }
+
+    /// Update the activity snapshot to "agent producing text". Called on
+    /// `agent_message` (final) and `agent_message_delta` events.
+    func setAgentTextActivity(_ id: String, text: String) {
+        guard !text.isEmpty else { return }
+        // Only meaningful while the session is active; if the message
+        // was already idle-flushed, don't resurrect a stale activity row.
+        guard sessions[id]?.state == .active else { return }
+        sessions[id]?.activity = .agentText(text)
     }
 
     func setUsage(_ id: String, _ usage: SessionUsage) {
@@ -181,19 +320,36 @@ final class SessionStore {
         }
     }
 
-    // MARK: - Unread
+    // MARK: - Read / unread (seq-derived)
 
+    /// Move a session's `readSeq` forward. Monotonic — never moves
+    /// backward, so out-of-order `session_read` echoes from the
+    /// server / other devices are safe. Local "mark as read" calls
+    /// from this device also pass through here.
+    ///
+    /// Additionally clamps `readSeq` to `lastSeq` — a readSeq greater
+    /// than lastSeq is logically impossible and indicates upstream
+    /// pollution (see the same defense in `upsertSession`).
     func markRead(_ id: String, seq: Int) {
-        sessions[id]?.readSeq = seq
-        unreadCounts.removeValue(forKey: id)
+        guard var s = sessions[id] else { return }
+        let clamped = min(seq, s.lastSeq)
+        if clamped > s.readSeq {
+            s.readSeq = clamped
+            sessions[id] = s
+        }
     }
 
-    func incrementUnread(_ id: String) {
-        unreadCounts[id, default: 0] += 1
-    }
-
-    func clearUnread(_ id: String) {
-        unreadCounts.removeValue(forKey: id)
+    /// Move a session's `lastSeq` forward when a new message has been
+    /// observed. Monotonic — never moves backward. Called from the
+    /// message router on every inbound producer envelope that carries
+    /// a `seq`. The unread count is `lastSeq − readSeq`, so advancing
+    /// `lastSeq` is what makes a session light up as unread.
+    func bumpLastSeq(_ id: String, seq: Int) {
+        guard var s = sessions[id] else { return }
+        if seq > s.lastSeq {
+            s.lastSeq = seq
+            sessions[id] = s
+        }
     }
 
     // MARK: - Preview / Draft
@@ -233,13 +389,14 @@ final class SessionStore {
         sessions.removeAll()
         activeSessionId = nil
         pinnedSessions.removeAll()
-        unreadCounts.removeAll()
         sessionModes.removeAll()
         sessionUsage.removeAll()
         sessionPreviews.removeAll()
         drafts.removeAll()
         navigateToSession = nil
         streamingContent.removeAll()
+        loadingSessions.removeAll()
+        entryUnreadSnapshots.removeAll()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)
@@ -247,6 +404,34 @@ final class SessionStore {
     /// Look up a session by ID (alias for sessions[id]).
     func session(for id: String) -> SessionInfo? {
         sessions[id]
+    }
+
+    // MARK: - Pending sessions (optimistic UI)
+
+    /// Mark a session id as pending. The placeholder id is used as a
+    /// navigation token by `SessionDetailView` while the real session
+    /// is being created server-side.
+    func addPendingSession(_ id: String) {
+        pendingSessions.insert(id)
+        pendingSessionErrors.removeValue(forKey: id)
+    }
+
+    /// Clear a pending entry without affecting any real session that
+    /// has since been added under the same id.
+    func removePendingSession(_ id: String) {
+        pendingSessions.remove(id)
+        pendingSessionErrors.removeValue(forKey: id)
+    }
+
+    /// Record a server-side error reason for a pending session so the
+    /// placeholder view can render a friendly error state.
+    func setPendingError(_ id: String, reason: String) {
+        guard pendingSessions.contains(id) else { return }
+        pendingSessionErrors[id] = reason
+    }
+
+    func isPending(_ id: String) -> Bool {
+        pendingSessions.contains(id)
     }
 
     /// Update session state from a string value.
@@ -287,26 +472,27 @@ final class SessionStore {
         let cacheWrite = usage["cacheWriteTokens"] as? Int ?? 0
         let cost = usage["totalCost"] as? Double ?? 0
         let duration = usage["totalDurationMs"] as? Double ?? 0
+        let contextTokens = usage["contextTokens"] as? Int
         let parsed = SessionUsage(
             inputTokens: input, outputTokens: output,
             cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
-            totalCost: cost, totalDurationMs: duration
+            totalCost: cost, totalDurationMs: duration,
+            contextTokens: contextTokens
         )
         setUsage(id, parsed)
     }
 
-    /// Set session preview with optional unread increment.
+    /// Set session preview text — pure data plumbing. Unread is now
+    /// derived from `lastSeq − readSeq` and lives entirely in the
+    /// seq pipeline (see `bumpLastSeq` / `markRead`), so preview
+    /// updates no longer carry an unread side-effect.
     func setSessionPreview(
         _ id: String,
         text: String,
         type: String,
-        timestamp: String?,
-        incrementUnread: Bool = false
+        timestamp: String?
     ) {
         setPreview(id, text: text, type: type, timestamp: timestamp ?? "")
-        if incrementUnread {
-            self.incrementUnread(id)
-        }
     }
 
     /// Upsert a SessionInfo directly (used by handleSessionCreated).

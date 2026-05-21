@@ -23,6 +23,11 @@ final class MessageProvider {
     /// Per-session tentacle device ID.
     private var tentacleDeviceMap: [String: String] = [:]
 
+    /// Sessions whose latest in-flight request asked for the head
+    /// (beforeSeq=nil). Used by `handleBatch` to decide whether to
+    /// schedule a follow-up requestLatest when `containsHead=false`.
+    private var pendingHeadRequests: Set<String> = []
+
     /// Safety timeout handles.
     private var timeoutTasks: [String: DispatchWorkItem] = [:]
 
@@ -47,14 +52,23 @@ final class MessageProvider {
 
     // MARK: - Request Latest
 
-    /// Load latest messages for a session. Called for every session after session_list arrives.
+    /// Load the latest turn (and any prior whole turns that fit in
+    /// tentacle's soft cap) for a session. Called by warm-up and by
+    /// `ensureLoaded` on session open.
+    ///
+    /// Sends `request_session_messages(beforeSeq: nil)` — tentacle
+    /// anchors at the latest turn and walks backward through earlier
+    /// whole turns up to TURN_SOFT_CAP messages. The first batch is
+    /// guaranteed to cover the latest turn (the one that ends with
+    /// session head), so the consumer never has to scan messages for
+    /// a `user_message` sentinel to know "is the latest turn loaded?".
     func requestLatest(sessionId: String) {
         guard !isLoading(sessionId) else {
             KLog.d("⏳ requestLatest(\(sessionId.prefix(12))): already loading")
             return
         }
         guard let totalLastSeq = tentacleLastSeq[sessionId], totalLastSeq > 0 else {
-            KLog.d("⏭️ requestLatest(\(sessionId.prefix(12))): no tentacleLastSeq (keys: \(tentacleLastSeq.keys.map { String($0.prefix(12)) }))")
+            KLog.d("⏭️ requestLatest(\(sessionId.prefix(12))): no tentacleLastSeq")
             return
         }
         guard let appState else { return }
@@ -69,120 +83,87 @@ final class MessageProvider {
             rebuildPreview(sessionId: sessionId)
         }
 
-        if storeLastSeq < totalLastSeq {
-            let afterSeq = max(storeLastSeq, totalLastSeq - Self.latestSize)
-            if afterSeq < totalLastSeq {
-                KLog.d("📨 Requesting replay afterSeq=\(afterSeq) for \(sessionId.prefix(12))")
-                requestFromTentacle(sessionId: sessionId, afterSeq: afterSeq)
-            }
-        }
+        // No-op if our cache is already at head — nothing to fetch.
+        if storeLastSeq >= totalLastSeq { return }
+
+        requestFromTentacle(sessionId: sessionId, beforeSeq: nil)
     }
 
-    // MARK: - Warm-up budget
+    /// Idempotent guard for the on-demand path. Called from the chat
+    /// view's `onAppear`. If the session is already covered through
+    /// head (warm-up did its job, or disk has it), no wire request
+    /// happens. Otherwise behaves identically to `requestLatest`.
+    func ensureLoaded(sessionId: String) {
+        guard let totalLastSeq = tentacleLastSeq[sessionId], totalLastSeq > 0 else { return }
+        guard !isLoading(sessionId) else { return }
+        guard let appState else { return }
 
-    /// Budget warm-up — mirrors `runWarmup` in web's ws-client.ts.
+        appState.messageStore.hydrateFromDisk(sessionId)
+        let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+        if storeLastSeq >= totalLastSeq { return }
+
+        requestFromTentacle(sessionId: sessionId, beforeSeq: nil)
+    }
+
+    // MARK: - Warm-up
+
+    /// Active warm-up rule:
+    ///   - Always warm `active` and `pinned` sessions (no cap).
+    ///   - Plus the top 5 most recent sessions within the last 24h
+    ///     that aren't already covered by active/pinned.
     ///
-    /// Goal: after `session_list` paints the sidebar, pre-fetch messages
-    /// for the sessions the user is likely to open next, while bounding
-    /// total bandwidth.
-    ///
-    /// Algorithm:
-    ///   - **Pass 0 fallback**: if no digest has any recency signal at
-    ///     all (no preview from tentacle AND nothing in our local
-    ///     cache), warm everything with `lastSeq > 0`, 50 msgs each. We
-    ///     pay this cost once; subsequent reloads will have cache
-    ///     timestamps.
-    ///   - **Pass 1 (always, ignores budget)**: warm every session that
-    ///     is `active`, pinned, or whose recency timestamp is within
-    ///     `WARMUP_RECENCY_MS`.
-    ///   - **Pass 2 (fills budget)**: sort `rest` by recency desc,
-    ///     greedily warm each until the next would exceed
-    ///     `WARMUP_BUDGET`. Stop.
-    ///
-    /// "Recency timestamp" is the digest's `preview.timestamp` if the
-    /// tentacle sent one; otherwise the most recent persisted message's
-    /// timestamp from the disk cache. This means a returning user with
-    /// an old cache still gets sensible eager classification even if
-    /// the tentacle preview is missing for some reason.
-    private static let warmupBudget = 500
-    private static let warmupPerSession = 50
+    /// Everything else stays cold and waits for the user to tap it
+    /// (which triggers `ensureLoaded`). No 500-message budget — the
+    /// per-call cost is bounded by tentacle's HARD_CAP=500 already.
+    private static let warmupRecentSlots = 5
     private static let warmupRecencySeconds: TimeInterval = 24 * 60 * 60
 
     func runWarmup(digests: [SessionDigest]) {
         guard let appState else { return }
         let now = Date()
-
-        struct Entry {
-            let id: String
-            let lastSeq: Int
-            let recency: Date?
-            let eager: Bool
-        }
-
-        var hasAnyRecencySignal = false
         let cache = appState.messageStore.persistentCache
 
-        let entries: [Entry] = digests.compactMap { (digest: SessionDigest) -> Entry? in
-            guard digest.lastSeq > 0 else { return nil }
-            let isPinned = appState.sessionStore.pinnedSessions.contains(digest.id)
-                || (digest.pinned ?? false)
+        var eagerIds: Set<String> = []
+        var recencyById: [String: Date] = [:]
+
+        for digest in digests {
+            guard digest.lastSeq > 0 else { continue }
+            // Recency anchor: digest's preview timestamp, else disk
+            // cache's most-recent persisted message timestamp.
+            if let ts = digest.preview?.timestamp, let d = Self.parseISO(ts) {
+                recencyById[digest.id] = d
+            } else if let d = cache.getLastTimestamp(digest.id) {
+                recencyById[digest.id] = d
+            }
             let isActive = digest.state == .active
-
-            let recency: Date? = {
-                if let ts = digest.preview?.timestamp,
-                   let d = Self.parseISO(ts) { return d }
-                if let d = cache.getLastTimestamp(digest.id) { return d }
-                return nil
-            }()
-            if recency != nil { hasAnyRecencySignal = true }
-
-            let withinRecency: Bool = {
-                guard let r = recency else { return false }
-                return now.timeIntervalSince(r) < Self.warmupRecencySeconds
-            }()
-            let eager = isActive || isPinned || withinRecency
-            return Entry(
-                id: digest.id,
-                lastSeq: digest.lastSeq,
-                recency: recency,
-                eager: eager
-            )
-        }
-
-        // Pass 0 fallback — no recency signal anywhere → warm all so the
-        // user isn't stranded with empty cards.
-        if !hasAnyRecencySignal {
-            KLog.d("🔥 warm-up: no recency signal, warming all (\(entries.count) sessions)")
-            for e in entries {
-                requestLatest(sessionId: e.id)
+            let isPinned = (digest.pinned ?? false)
+                || appState.sessionStore.pinnedSessions.contains(digest.id)
+            if isActive || isPinned {
+                eagerIds.insert(digest.id)
             }
-            return
         }
 
-        let eager = entries.filter { $0.eager }
-        let rest = entries.filter { !$0.eager }
+        // Top N most-recent within 24h, not already eager.
+        let cutoff = now.addingTimeInterval(-Self.warmupRecencySeconds)
+        let recentCandidates = digests
+            .filter { d in
+                guard d.lastSeq > 0, !eagerIds.contains(d.id) else { return false }
+                guard let r = recencyById[d.id] else { return false }
+                return r > cutoff
+            }
             .sorted { (a, b) in
-                (a.recency ?? .distantPast) > (b.recency ?? .distantPast)
+                (recencyById[a.id] ?? .distantPast) > (recencyById[b.id] ?? .distantPast)
             }
-
-        // Pass 1 — eager, ignores budget
-        var used = 0
-        for e in eager {
-            requestLatest(sessionId: e.id)
-            used += min(e.lastSeq, Self.warmupPerSession)
+            .prefix(Self.warmupRecentSlots)
+        for d in recentCandidates {
+            eagerIds.insert(d.id)
         }
 
-        // Pass 2 — budget fill
-        var filled = 0
-        for e in rest {
-            let cost = min(e.lastSeq, Self.warmupPerSession)
-            if used + cost > Self.warmupBudget { break }
-            requestLatest(sessionId: e.id)
-            used += cost
-            filled += 1
+        for id in eagerIds {
+            requestLatest(sessionId: id)
         }
 
-        KLog.d("🔥 warm-up: eager=\(eager.count) budgetFill=\(filled) skipped=\(rest.count - filled) totalMsgs=\(used) budget=\(Self.warmupBudget)")
+        KLog.d("🔥 warm-up: \(eagerIds.count) sessions (\(eagerIds.count - recentCandidates.count) active/pinned, \(recentCandidates.count) recent)")
     }
 
     private static func parseISO(_ s: String) -> Date? {
@@ -195,57 +176,42 @@ final class MessageProvider {
 
     // MARK: - Request Before (Pagination)
 
-    /// Load older messages before a given seq. Called from gap marker / scroll-up.
+    /// Load older messages strictly before `beforeSeq`. Sends
+    /// `request_session_messages(beforeSeq: …)`; tentacle returns one
+    /// or more whole turns immediately preceding that seq, up to its
+    /// soft cap.
     func requestBefore(sessionId: String, beforeSeq: Int) {
         guard !isLoading(sessionId) else { return }
         guard let appState else { return }
+        guard beforeSeq > 1 else { return }
+        guard tentacleDeviceMap[sessionId] != nil else { return }
 
-        let loadKey = "\(sessionId):\(beforeSeq)"
-        inFlightRequests.insert(loadKey)
-
-        // Check if we already have older messages in the store
+        // If we already have messages below beforeSeq, the slice is
+        // covered — nothing to do.
         let storeMessages = appState.messageStore.getMessages(sessionId)
         let storeMinSeq = storeMessages.first?.seq ?? Int.max
+        if storeMinSeq < beforeSeq && storeMinSeq > 1 { return }
 
-        // If we have messages below beforeSeq, they're already visible
-        if storeMinSeq < beforeSeq && storeMinSeq > 1 {
-            inFlightRequests.remove(loadKey)
-            return
-        }
-
-        // Request from tentacle
-        guard tentacleDeviceMap[sessionId] != nil else {
-            inFlightRequests.remove(loadKey)
-            return
-        }
-
-        let afterSeq = max(0, beforeSeq - Self.pageSize - 1)
-        appState.commandSender?.requestReplay(
-            sessionId: sessionId,
-            afterSeq: afterSeq,
-            limit: Self.pageSize
-        )
-
-        // Safety timeout: clear loading after 10s
-        let work = DispatchWorkItem { [weak self] in
-            self?.inFlightRequests.remove(loadKey)
-        }
-        timeoutTasks[loadKey] = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
+        requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq)
     }
 
     // MARK: - Handle Batch
 
-    /// Process a replay batch from tentacle. Inserts into store and clears loading.
+    /// Process a turn-aligned batch from tentacle. Inserts into store
+    /// and clears in-flight tracking. If `containsHead == false` after
+    /// asking for head (beforeSeq=nil request), schedule a follow-up
+    /// `requestLatest` to catch up — guards against the rare case
+    /// where a single in-progress turn exceeds tentacle's HARD_CAP.
     func handleBatch(
         sessionId: String,
         messages: [ChatMessage],
         lastSeq: Int,
-        totalLastSeq: Int
+        totalLastSeq: Int,
+        containsHead: Bool
     ) {
         guard let appState else { return }
 
-        KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq)")
+        KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq), head=\(containsHead)")
 
         if !messages.isEmpty {
             appState.messageStore.prependMessages(sessionId, messages)
@@ -259,12 +225,28 @@ final class MessageProvider {
             tentacleLastSeq[sessionId] = totalLastSeq
         }
 
-        // Clear all in-flight keys for this session
+        // Was this batch a "fetch head" request whose response didn't
+        // actually reach head? Schedule a one-shot follow-up to catch
+        // up. Rare — only happens when an in-progress turn exceeds
+        // tentacle's HARD_CAP — but cheap insurance.
+        let wasHeadRequest = pendingHeadRequests.remove(sessionId) != nil
+        let needsCatchUp = wasHeadRequest && !containsHead
+            && lastSeq < (tentacleLastSeq[sessionId] ?? 0)
+
+        // Clear in-flight tracking for this session
         let keysToRemove = inFlightRequests.filter { $0.hasPrefix("\(sessionId):") }
         for key in keysToRemove {
             inFlightRequests.remove(key)
             timeoutTasks[key]?.cancel()
             timeoutTasks.removeValue(forKey: key)
+        }
+        appState.sessionStore.setLoading(sessionId, false)
+
+        if needsCatchUp {
+            KLog.d("⚠️ batch didn't reach head; scheduling follow-up requestLatest for \(sessionId.prefix(12))")
+            DispatchQueue.main.async { [weak self] in
+                self?.requestLatest(sessionId: sessionId)
+            }
         }
     }
 
@@ -452,22 +434,27 @@ final class MessageProvider {
 
     // MARK: - Private
 
-    private func requestFromTentacle(sessionId: String, afterSeq: Int, limit: Int? = nil) {
+    private func requestFromTentacle(sessionId: String, beforeSeq: Int?) {
         guard tentacleDeviceMap[sessionId] != nil else { return }
         guard let appState else { return }
 
-        let loadKey = "\(sessionId):\(afterSeq)"
+        // Use beforeSeq as the dedupe key so head-fetches (nil → "head")
+        // don't collide with paginated older-fetches.
+        let loadKey = "\(sessionId):\(beforeSeq.map(String.init) ?? "head")"
         inFlightRequests.insert(loadKey)
+        if beforeSeq == nil { pendingHeadRequests.insert(sessionId) }
+        appState.sessionStore.setLoading(sessionId, true)
 
-        appState.commandSender?.requestReplay(
+        appState.commandSender?.requestSessionMessages(
             sessionId: sessionId,
-            afterSeq: afterSeq,
-            limit: limit
+            beforeSeq: beforeSeq
         )
 
-        // Safety timeout
-        let work = DispatchWorkItem { [weak self] in
+        // Safety timeout — drop the in-flight marker if no batch arrives.
+        let work = DispatchWorkItem { [weak self, weak appState] in
             self?.inFlightRequests.remove(loadKey)
+            self?.pendingHeadRequests.remove(sessionId)
+            appState?.sessionStore.setLoading(sessionId, false)
         }
         timeoutTasks[loadKey] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
@@ -477,9 +464,11 @@ final class MessageProvider {
 
     func clear() {
         inFlightRequests.removeAll()
+        pendingHeadRequests.removeAll()
         tentacleLastSeq.removeAll()
         tentacleDeviceMap.removeAll()
         for (_, work) in timeoutTasks { work.cancel() }
         timeoutTasks.removeAll()
+        appState?.sessionStore.loadingSessions.removeAll()
     }
 }
