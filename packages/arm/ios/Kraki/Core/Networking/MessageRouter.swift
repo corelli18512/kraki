@@ -31,10 +31,12 @@ extension SessionDigest {
                   let cacheWrite = dict["cacheWriteTokens"] as? Int else { return nil }
             let cost = (dict["totalCost"] as? Double) ?? Double(dict["totalCost"] as? Int ?? 0)
             let duration = (dict["totalDurationMs"] as? Double) ?? Double(dict["totalDurationMs"] as? Int ?? 0)
+            let contextTokens = dict["contextTokens"] as? Int
             return SessionUsage(
                 inputTokens: input, outputTokens: output,
                 cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
-                totalCost: cost, totalDurationMs: duration
+                totalCost: cost, totalDurationMs: duration,
+                contextTokens: contextTokens
             )
         }()
 
@@ -246,6 +248,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "session_messages_batch" {
+            handleSessionMessagesBatch(dict)
+            return
+        }
+
         if type == "device_greeting" {
             handleDeviceGreeting(dict)
             return
@@ -294,20 +301,14 @@ final class MessageRouter {
         if let seq = dict["seq"] as? Int,
            Self.persistentTypes.contains(type) {
             let isNotify = Self.notifyWorthyTypes.contains(type)
-            let prevLast = appState.sessionStore.sessions[sessionId]?.lastSeq ?? -1
-            let prevRead = appState.sessionStore.sessions[sessionId]?.readSeq ?? -1
             appState.sessionStore.bumpLastSeq(sessionId, seq: seq)
             let isActive = appState.sessionStore.activeSessionId == sessionId
-            let willMark = isActive || !isNotify
-            NSLog("[UNREAD] router type=\(type) sid=\(sessionId.prefix(12)) seq=\(seq) prevLast=\(prevLast) prevRead=\(prevRead) notify=\(isNotify) active=\(isActive) mark=\(willMark)")
-            if willMark {
+            if isActive || !isNotify {
                 appState.sessionStore.markRead(sessionId, seq: seq)
             }
             if isActive {
                 appState.commandSender?.markRead(sessionId: sessionId, seq: seq)
             }
-        } else if dict["seq"] != nil {
-            NSLog("[UNREAD] router SKIP non-persistent type=\(type) sid=\(sessionId.prefix(12)) seq=\(dict["seq"] ?? "nil")")
         }
 
         switch type {
@@ -358,6 +359,7 @@ final class MessageRouter {
             appState.messageStore.appendMessage(sessionId, json: json)
             if let permId = payload?["id"] as? String {
                 let toolName = payload?["toolName"] as? String ?? ""
+                let description = payload?["description"] as? String ?? ""
                 let rawArgs = payload?["args"] as? [String: Any]
                 let codedArgs = rawArgs.map { dict in
                     dict.mapValues { AnyCodable($0) }
@@ -365,13 +367,16 @@ final class MessageRouter {
                 let perm = PendingPermission(
                     id: permId,
                     sessionId: sessionId,
-                    description: payload?["description"] as? String ?? "",
+                    description: description,
                     toolName: toolName.isEmpty ? nil : toolName,
                     args: codedArgs,
                     timestamp: Date()
                 )
                 appState.messageStore.addPermission(perm)
-                updatePreview(sessionId, text: toolName, type: "permission",
+                // Prefer the human-readable description; fall back to
+                // the tool name so the preview always says SOMETHING.
+                let previewBody = description.isEmpty ? toolName : description
+                updatePreview(sessionId, text: previewBody, type: "permission",
                               timestamp: timestamp, notify: true)
             }
 
@@ -459,7 +464,8 @@ final class MessageRouter {
         case "tool_complete":
             appState.messageStore.appendMessage(sessionId, json: json)
             let name = payload?["toolName"] as? String
-            appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name)
+            let success = payload?["success"] as? Bool
+            appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name, success: success)
             registerContentRefs(in: payload, sessionId: sessionId)
             // Also mark content_ref entries inside the `attachments`
             // array (e.g. images from `kraki-show_image`).
@@ -759,7 +765,37 @@ final class MessageRouter {
             sessionId: sessionId,
             messages: parsed,
             lastSeq: lastSeq,
-            totalLastSeq: totalLastSeq
+            totalLastSeq: totalLastSeq,
+            containsHead: true
+        )
+    }
+
+    /// Handle the turn-aligned response from tentacle's new
+    /// `request_session_messages` endpoint. Same delivery path as the
+    /// legacy `session_replay_batch` but carries `firstSeq` /
+    /// `containsHead` so the provider can detect "we asked for head but
+    /// didn't get it" (e.g. hard-cap clipped an enormous in-progress
+    /// turn) and recover.
+    private func handleSessionMessagesBatch(_ dict: [String: Any]) {
+        guard let appState else { return }
+        let payload = dict["payload"] as? [String: Any] ?? dict
+        let sessionId = payload["sessionId"] as? String ?? dict["sessionId"] as? String ?? ""
+        let messagesArray = payload["messages"] as? [[String: Any]] ?? []
+        let firstSeq = payload["firstSeq"] as? Int ?? 0
+        let lastSeq = payload["lastSeq"] as? Int ?? 0
+        let containsHead = payload["containsHead"] as? Bool ?? false
+        KLog.d("📦 messages_batch: \(messagesArray.count) for \(sessionId.prefix(12)), firstSeq=\(firstSeq) lastSeq=\(lastSeq) head=\(containsHead)")
+        let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
+        appState.messageProvider?.handleBatch(
+            sessionId: sessionId,
+            messages: parsed,
+            lastSeq: lastSeq,
+            // For the new endpoint, totalLastSeq is implicit: if
+            // containsHead is true, lastSeq equals the session head;
+            // if false, tentacle's head may be higher but we'll rely
+            // on live messages or a follow-up requestLatest to catch up.
+            totalLastSeq: lastSeq,
+            containsHead: containsHead
         )
     }
 

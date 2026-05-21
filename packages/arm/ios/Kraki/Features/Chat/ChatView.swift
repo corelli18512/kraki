@@ -32,6 +32,8 @@ private struct StickyOverlayHeightKey: PreferenceKey {
     }
 }
 
+/// PreferenceKey for the y-position (in chat coord space) of the
+/// `chat-bottom` sentinel — the actual rendered end of all chat rows.
 /// Compact, Equatable snapshot of the metrics we care about from the
 /// ScrollView. Used as the change-trigger value for
 /// `.onScrollGeometryChange`.
@@ -39,6 +41,7 @@ private struct ChatScrollMetrics: Equatable {
     var offsetY: CGFloat
     var viewportHeight: CGFloat
     var insetTop: CGFloat
+    var contentHeight: CGFloat
 }
 
 struct ChatView: View {
@@ -46,6 +49,16 @@ struct ChatView: View {
 
     @Environment(AppState.self) private var appState
     @State private var expandedTurns: Set<String> = []
+
+    /// Height of the top "load older" spinner row (matches the
+    /// HStack frame below). Combined with `topSpinnerSlop` below to
+    /// decide whether the spinner is currently visible enough to
+    /// warrant another auto-load round.
+    private static let topSpinnerHeight: CGFloat = 36
+    /// Extra slack added to spinner-visibility detection so brief
+    /// inset jitter (keyboard, safe-area shifts) doesn't bounce the
+    /// auto-loader off/on.
+    private static let topSpinnerSlop: CGFloat = 24
 
     // MARK: - Scroll Tracers
     //
@@ -59,6 +72,11 @@ struct ChatView: View {
     @State private var scrollOffsetY: CGFloat = 0
     /// Visible viewport height (after content insets).
     @State private var viewportHeight: CGFloat = 0
+    /// Total chat scroll content height (in content space). Used to
+    /// detect "the agent reply for this turn is fully visible" for
+    /// the latest user message — when content's bottom edge is at or
+    /// above the viewport bottom, the pill is suppressed.
+    @State private var chatContentHeight: CGFloat = 0
 
     // MARK: - R3 Entry State
 
@@ -99,6 +117,9 @@ struct ChatView: View {
     /// margin). Used by `stickyHandoffOffset` so the handoff band
     /// matches reality regardless of message length.
     @State private var stickyOverlayHeight: CGFloat = 0
+    /// Whether the sticky overlay bubble is user-expanded past its
+    /// max collapsed height. Resets each time the candidate changes.
+    @State private var stickyExpanded: Bool = false
     /// ScrollPosition binding used for the tap-to-restore action so we
     /// can land the tapped user bubble's top exactly at the viewport
     /// top — the precise threshold where the natural pill-opacity rule
@@ -109,6 +130,28 @@ struct ChatView: View {
     /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
     /// raw content-offset y when issuing programmatic scrolls.
     @State private var chatScrollInsetTop: CGFloat = 0
+
+    // MARK: - Idle anchor lock
+    //
+    // Once a turn completes (sessionIdle), the latest user bubble's
+    // current screen Y is captured into `anchoredScreenY`. From then
+    // on, every layout pass that moves the bubble (e.g. new tool call
+    // arriving in idle mode, expand/collapse of post-bubble content)
+    // is immediately compensated so the bubble's screen position
+    // stays put. The lock releases on:
+    //   • user scrolling (`.onScrollPhaseChange .interacting`)
+    //   • a new user message (R1 followBottom takes over)
+    //   • session switch (the `.task(id:)` block resets state)
+    //
+    // While R1 is active (`growMode != .idle`) the lock is NOT
+    // enforced — streaming owns scroll.
+
+    /// id of the user bubble whose screen Y is being held fixed.
+    @State private var anchoredUserMsgId: String? = nil
+    /// Screen-space Y at which `anchoredUserMsgId`'s bubble top is
+    /// being held. Computed as `bubble.minY - scrollOffsetY` at the
+    /// moment the lock was acquired.
+    @State private var anchoredScreenY: CGFloat? = nil
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var messageStore: MessageStore { appState.messageStore }
@@ -172,22 +215,64 @@ struct ChatView: View {
         filteredMessages.last(where: { $0.type == "user_message" || $0.type == "send_input" })
     }
 
+    /// Is this session currently fetching messages from tentacle?
+    /// Driven by MessageProvider via SessionStore.loadingSessions.
+    private var isLoading: Bool {
+        sessionStore.loadingSessions.contains(sessionId)
+    }
+
+    /// True when we have any cached messages OR we know we've reached
+    /// the very beginning of the conversation. Used by the State-A
+    /// center-spinner gate: while false AND we're loading, the chat
+    /// list + compose footer are hidden and we show a single centered
+    /// spinner. The tentacle's turn-aware endpoint guarantees the
+    /// first batch always contains the latest turn, so this flag
+    /// flips true as soon as the first batch arrives.
+    private var latestTurnLoaded: Bool {
+        !filteredMessages.isEmpty
+    }
+
+    /// State-A: empty + loading. Show centered spinner, hide the
+    /// scroll list and the compose footer.
+    private var showCenterLoading: Bool {
+        !latestTurnLoaded && isLoading
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
-            scrollableMessages(proxy: proxy)
-                .overlay(alignment: .top) {
-                    stickyUserOverlay(proxy: proxy)
+            Group {
+                if showCenterLoading {
+                    centerLoadingView
+                } else {
+                    scrollableMessages(proxy: proxy)
+                        .overlay(alignment: .top) {
+                            stickyUserOverlay(proxy: proxy)
+                        }
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            // Hide the entire compose area while the relay
+                            // channel is broken — the user can't send anything
+                            // anyway and the chat surface is read-only.
+                            if isDeviceOnline && appState.isFullyOnline {
+                                bottomInputArea
+                            }
+                        }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    // Hide the entire compose area while the relay
-                    // channel is broken — the user can't send anything
-                    // anyway and the chat surface is read-only.
-                    if isDeviceOnline && appState.isFullyOnline {
-                        bottomInputArea
-                    }
-                }
-                .background(Color.surfacePrimary)
+            }
+            .background(Color.surfacePrimary)
         }
+    }
+
+    // MARK: - State-A center loading
+
+    private var centerLoadingView: some View {
+        VStack {
+            Spacer()
+            ProgressView()
+                .controlSize(.large)
+                .tint(.krakiPrimary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Scrollable Messages
@@ -195,25 +280,21 @@ struct ChatView: View {
     private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(spacing: 12) {
-                // Load older messages button
+                // Top spinner row — present whenever older messages
+                // exist. While this row sits inside the viewport (i.e.
+                // the user is near the top), the
+                // `.onScrollGeometryChange` action fires `requestBefore`
+                // continuously until either `firstSeq == 1` or the
+                // spinner scrolls out of view.
                 if hasOlderMessages {
-                    Button {
-                        let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? 1
-                        appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.up.circle")
-                                .font(.caption)
-                            Text("Load older messages")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                        }
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.krakiPrimary)
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
+                    .frame(height: Self.topSpinnerHeight)
                 }
 
                 // Message items
@@ -239,6 +320,7 @@ struct ChatView: View {
                                     set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
                                 )
                             )
+                            .id(messageScrollId(final))
                         } else if !turn.thinkingMessages.isEmpty || hasStreaming {
                             // Turn in progress
                             let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
@@ -287,18 +369,26 @@ struct ChatView: View {
                 offsetY: geo.contentOffset.y + geo.contentInsets.top,
                 viewportHeight: geo.containerSize.height
                     - geo.contentInsets.top - geo.contentInsets.bottom,
-                insetTop: geo.contentInsets.top
+                insetTop: geo.contentInsets.top,
+                contentHeight: geo.contentSize.height
             )
         } action: { _, m in
             scrollOffsetY = m.offsetY
             viewportHeight = m.viewportHeight
             chatScrollInsetTop = m.insetTop
+            chatContentHeight = m.contentHeight
             checkLockTransition(proxy: proxy)
+            maybeAutoLoadOlder()
         }
         .onScrollPhaseChange { _, newPhase in
-            // Any direct user contact with the scroll view ends R1.
-            if newPhase == .interacting && growMode != .idle {
-                growMode = .idle
+            // Any direct user contact with the scroll view ends R1
+            // AND releases the idle anchor lock so the user can scroll
+            // freely from this point on.
+            if newPhase == .interacting {
+                if growMode != .idle {
+                    growMode = .idle
+                }
+                releaseIdleAnchor()
             }
         }
         .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
@@ -310,21 +400,42 @@ struct ChatView: View {
             // and surface a sticky candidate that shouldn't exist.
             userBubbleFrames = newFrames
             checkLockTransition(proxy: proxy)
+            enforceIdleAnchor()
         }
         .onChange(of: lastUserMessage?.seq ?? 0) { _, newSeq in
+            // A new user message starts a fresh turn — R1 followBottom
+            // will own scroll until the turn settles, so drop any
+            // existing idle anchor.
+            releaseIdleAnchor()
             handleNewUserMessage(proxy: proxy, seq: newSeq)
         }
         .onChange(of: streaming) { _, _ in
             checkLockTransition(proxy: proxy)
         }
+        .onChange(of: filteredMessages.count) { _, _ in
+            // After each batch lands, if the top spinner is still
+            // visible and older history still exists, kick off the
+            // next page so we keep loading until either the spinner
+            // scrolls out of view or we hit firstSeq=1.
+            maybeAutoLoadOlder()
+        }
         .onChange(of: sessionIdle) { _, idle in
-            // Turn complete — release the lock so the next user
-            // message can trigger a fresh followBottom phase.
+            // Turn complete — release the R1 lock so the next user
+            // message can trigger a fresh followBottom phase, AND
+            // capture the current user bubble's screen Y as the
+            // idle anchor so subsequent layout changes (new tool
+            // calls, expansions) leave the bubble's position
+            // visually fixed.
             if idle && growMode != .idle {
                 growMode = .idle
             }
+            if idle {
+                acquireIdleAnchor()
+            }
         }
         .task(id: sessionId) {
+            // Reset anchor state across session switches.
+            releaseIdleAnchor()
             await performEntryScroll(proxy: proxy)
         }
     }
@@ -346,6 +457,31 @@ struct ChatView: View {
     private var currentScrollAnchor: UnitPoint? {
         if !didInitialScroll { return .bottom }
         return nil
+    }
+
+    // MARK: - Auto-load older messages
+
+    /// Fire `requestBefore` continuously while the top spinner is
+    /// in/near the viewport. Subsumes both web rules:
+    ///   - "auto-load when content fits viewport" — if the content
+    ///     fits, the spinner row is naturally at the top of the
+    ///     viewport, so this triggers.
+    ///   - "auto-load when user scrolls near top" — scrollOffsetY
+    ///     drops below the spinner's threshold the moment it's
+    ///     visible.
+    /// The `messageProvider.isLoading` dedupe prevents thrash; the
+    /// per-batch arrival re-decrements firstSeq and re-evaluates.
+    private func maybeAutoLoadOlder() {
+        guard hasOlderMessages else { return }
+        guard !isLoading else { return }
+
+        let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
+        guard firstSeq > 1 else { return }
+
+        let threshold = Self.topSpinnerHeight + Self.topSpinnerSlop
+        if scrollOffsetY < threshold {
+            appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
+        }
     }
 
     // MARK: - R2: Sticky User Bubble Overlay
@@ -385,6 +521,18 @@ struct ChatView: View {
     /// Pill stays at full opacity while the next user bubble is at
     /// least this far below the viewport top.
     fileprivate static let stickyFadeEnd: CGFloat = 240
+    /// Pill fade-in range for the **manual-scroll** case. When the user
+    /// scrolls past a turn, the pill ramps from 0 → 1 opacity as the
+    /// candidate bubble's top drifts from 0 to this many points above
+    /// the viewport top. Prevents a binary flip the moment the bubble
+    /// crosses the top line.
+    ///
+    /// Note: this offset does NOT apply during R1 streaming — the
+    /// streaming lock fires the moment the bubble touches the top line
+    /// (`topInViewport <= 0`) and the bubble is then snapped + pinned
+    /// to the top as the in-chat anchor. The pill stays hidden during
+    /// streaming because `aboveAmount` is held at 0 by the snap.
+    fileprivate static let stickyActivationOffset: CGFloat = 80
 
     /// User messages currently at-or-above the viewport top, ordered
     /// ascending by content y. The sticky candidate is the LAST element
@@ -422,20 +570,47 @@ struct ChatView: View {
         return userMsgs[idx + 1]
     }
 
-    /// Sticky pill opacity, driven purely by the distance from the
-    /// viewport top to the next user bubble below the candidate.
-    ///   - candidate's own top not yet above viewport top → 0
-    ///   - no next user bubble → 1 (distance is infinite)
-    ///   - distance ≥ stickyFadeEnd  → 1
-    ///   - distance ≤ stickyFadeStart → 0
-    ///   - between → linear ramp
+    /// Sticky pill opacity. Two gates combined via `min`:
+    ///
+    ///   1. **Activation ramp** — fades in as the candidate bubble
+    ///      drifts above the viewport top, reaching full opacity at
+    ///      `stickyActivationOffset` above. While the bubble is still
+    ///      partially in view (between top-of-viewport and the
+    ///      activation offset), the in-chat bubble itself is doing
+    ///      the visual work and the pill stays mostly transparent.
+    ///   2. **Next-bubble fade-out** — when a newer user bubble
+    ///      approaches the viewport top, the pill fades back to 0
+    ///      to avoid double-rendering the active anchor.
     private var stickyOpacity: Double {
         guard let candidate = stickyCandidate,
               let candidateFrame = userBubbleFrames[candidate.id] else { return 0 }
         let aboveAmount = scrollOffsetY - candidateFrame.minY
         if aboveAmount <= 0 { return 0 }
+        let activationProgress = min(aboveAmount / Self.stickyActivationOffset, 1)
+
+        // Suppress the pill when the agent reply for this turn is
+        // fully visible. The reply spans from the candidate's bottom
+        // edge to either the next user bubble's top (non-latest turn)
+        // or the end of chat content (latest turn). If that end is
+        // at or above the viewport bottom, the user can already see
+        // the entire reply in context — floating the bubble adds
+        // no anchoring value.
+        let viewportBottom = scrollOffsetY + viewportHeight
+        let replyEndY: CGFloat
+        if let next = nextUserBubbleAfterCandidate,
+           let nextFrame = userBubbleFrames[next.id] {
+            replyEndY = nextFrame.minY
+        } else {
+            replyEndY = chatContentHeight
+        }
+        if replyEndY > 0, replyEndY <= viewportBottom {
+            return 0
+        }
+
         guard let next = nextUserBubbleAfterCandidate,
-              let nextFrame = userBubbleFrames[next.id] else { return 1 }
+              let nextFrame = userBubbleFrames[next.id] else {
+            return Double(activationProgress)
+        }
         // Visual gap from the pill's bottom edge to the next user
         // bubble's top. The pill renders the candidate's own content,
         // so its rendered height ≈ candidateFrame.height — using that
@@ -443,11 +618,16 @@ struct ChatView: View {
         // overlay height which was prone to staying at 0 in some
         // remount paths.
         let distance = nextFrame.minY - (scrollOffsetY + candidateFrame.height)
-        if distance >= Self.stickyFadeEnd { return 1 }
-        if distance <= Self.stickyFadeStart { return 0 }
-        let span = Self.stickyFadeEnd - Self.stickyFadeStart
-        let progress = (distance - Self.stickyFadeStart) / span
-        return Double(max(0, min(1, progress)))
+        let fadeOutProgress: CGFloat
+        if distance >= Self.stickyFadeEnd {
+            fadeOutProgress = 1
+        } else if distance <= Self.stickyFadeStart {
+            fadeOutProgress = 0
+        } else {
+            let span = Self.stickyFadeEnd - Self.stickyFadeStart
+            fadeOutProgress = (distance - Self.stickyFadeStart) / span
+        }
+        return Double(max(0, min(activationProgress, fadeOutProgress)))
     }
 
     @ViewBuilder
@@ -460,7 +640,7 @@ struct ChatView: View {
         // measurement flicker that occurs when the pill is inserted /
         // removed from the tree on every viewport-top crossing.
         if let msg = stickyCandidate ?? lastUserMessage {
-            StickyUserBubble(message: msg)
+            StickyUserBubble(message: msg, expanded: $stickyExpanded)
                 .padding(.top, Self.stickyMargin)
                 .background(
                     GeometryReader { geo in
@@ -494,6 +674,11 @@ struct ChatView: View {
                 .onPreferenceChange(StickyOverlayHeightKey.self) { h in
                     stickyOverlayHeight = h
                 }
+                .onChange(of: msg.id) { _, _ in
+                    // New candidate → collapse expansion so the pill
+                    // doesn't carry over an unexpected expanded state.
+                    stickyExpanded = false
+                }
         }
     }
 
@@ -523,7 +708,11 @@ struct ChatView: View {
                     }
                 )
         } else {
-            bubble
+            // Tag non-user standalone rows (questions, answers,
+            // session_created, etc.) with a generic scroll id so the
+            // entry-scroll priority chain can target a pending
+            // question card directly.
+            bubble.id(messageScrollId(msg))
         }
     }
 
@@ -532,17 +721,65 @@ struct ChatView: View {
         "user-\(msg.id)"
     }
 
+    /// Stable ScrollView target id for any non-user message bubble
+    /// (used by the entry-scroll priority chain to anchor on a
+    /// pending question or the most-recent finalMessage).
+    private func messageScrollId(_ msg: ChatMessage) -> String {
+        "msg-\(msg.id)"
+    }
+
     // MARK: - R3: Entry Positioning
     //
     // On first non-empty render of a session:
-    //   - if unread → scroll to last user message at viewport top
-    //   - else      → scroll to bottom (keeps existing behavior)
+    //   - if read       → scroll to bottom (common case, no thrash)
+    //   - if unread     → use the priority chain to anchor on the
+    //                     most-useful spot for the user to start reading:
+    //                       1. last unanswered question  → that card at top
+    //                       2. if idle: last user_message / send_input → top
+    //                       3. last turn with a finalMessage → top
+    //                       4. fallback → bottom
     //
     // Race note: SessionDetailView.onAppear calls markRead which clears
     // unreadCounts. SessionDetailView dispatches markRead inside a
     // `Task { @MainActor in ... }` so this .task captures the unread
     // value first. The capture itself is synchronous at the top of this
     // function before any awaits.
+
+    /// Resolve the entry-scroll target for an unread session. Returns
+    /// `nil` to mean "scroll to bottom" (rules 4 or no usable target).
+    private func entryScrollTarget() -> (id: String, anchor: UnitPoint)? {
+        // 1. Last unanswered question (highest priority — user can act)
+        for msg in filteredMessages.reversed() {
+            if msg.type == "question" {
+                let answer = msg.answer ?? ""
+                let resolution = msg.resolution
+                if answer.isEmpty && resolution == nil {
+                    return (messageScrollId(msg), .top)
+                }
+            }
+        }
+
+        // 2. If idle, last user_message / send_input — read your own
+        //    message → agent's reply naturally.
+        if sessionIdle, let target = lastUserMessage {
+            return (userScrollId(target), .top)
+        }
+
+        // 3. Last turn with a finalMessage — read the latest agent reply
+        //    from the start.
+        for msg in filteredMessages.reversed() {
+            if msg.type == "agent_message" {
+                // Only treat as a turn-final if it's the last
+                // agent_message and followed only by idle/standalone
+                // boundary types. Defensive — most "agent_message"
+                // entries in an idle session ARE finals.
+                return (messageScrollId(msg), .top)
+            }
+        }
+
+        // 4. Fallback: bottom.
+        return nil
+    }
 
     private func performEntryScroll(proxy: ScrollViewProxy) async {
         // Reset on session switch (.task(id:) re-runs when sessionId changes)
@@ -573,7 +810,9 @@ struct ChatView: View {
                 sessionStore.entryUnreadSnapshots.removeValue(forKey: sessionId)
                 return snap
             }
-            return (sessionStore.unreadCounts[sessionId] ?? 0) > 0
+            // Derive from seq pipeline (replaces the old unreadCounts dict).
+            guard let s = sessionStore.sessions[sessionId] else { return false }
+            return s.lastSeq > s.readSeq
         }()
 
         // Wait for messages + initial layout. We poll briefly because the
@@ -596,8 +835,8 @@ struct ChatView: View {
         // Refresh baseline now that messages are actually loaded.
         lockedUserSeq = lastUserMessage?.seq ?? 0
 
-        if wasUnread, let target = lastUserMessage {
-            proxy.scrollTo(userScrollId(target), anchor: .top)
+        if wasUnread, let target = entryScrollTarget() {
+            proxy.scrollTo(target.id, anchor: target.anchor)
         } else {
             proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
@@ -620,10 +859,17 @@ struct ChatView: View {
         // permitted after we've seen the new bubble inside the viewport
         // at least once — this prevents an immediate re-LOCK when a
         // previous .lockedAtTop session left scrollOffsetY high.
+        //
+        // Note: we deliberately do NOT wipe userBubbleFrames[msg.id]
+        // here. The plain VStack lays out every row, but `geo.frame(in:
+        // .named("chat"))` is a content-space value that only changes
+        // when the row itself moves — agent-message growth below it
+        // does not move it. SwiftUI dedupes onPreferenceChange on
+        // equal dicts, so a wipe would never be replenished and the
+        // sticky-pill candidate filter would lose this msg forever.
+        // checkLockTransition's `frame.height > 0` guard already
+        // protects against pre-layout samples.
         sawBubbleBelowTop = false
-        // Drop any stale GeometryReader sample so checkLockTransition
-        // waits for a real, post-layout frame before deciding to lock.
-        userBubbleFrames.removeValue(forKey: msg.id)
         scrollToBottomInstant(proxy: proxy)
     }
 
@@ -654,6 +900,21 @@ struct ChatView: View {
         }
         guard sawBubbleBelowTop else { return }
         if topInViewport <= 0 {
+            // The user bubble has reached the top line. Stop auto-
+            // scrolling to the bottom and pin the bubble to the
+            // viewport top as the in-chat visual anchor. We snap
+            // with `proxy.scrollTo(anchor: .top)` to clean up any
+            // overshoot from a chunky streaming tick (which can
+            // land topInViewport at e.g. -40 in one frame).
+            //
+            // While locked here, `aboveAmount` (= scrollOffsetY -
+            // bubble.minY) is held at 0, so `stickyOpacity` stays
+            // at 0 — the floating pill does NOT take over during
+            // streaming. The reply continues streaming into the
+            // area below the visible viewport; the user can
+            // manually scroll down to follow it, and only then
+            // (once they actually scroll past the bubble) does
+            // the pill fade in via the activation ramp.
             proxy.scrollTo(userScrollId(forMsgId: mid), anchor: .top)
             growMode = .lockedAtTop
         }
@@ -678,6 +939,56 @@ struct ChatView: View {
     /// `userScrollId(_:)` for callers that only have the id).
     private func userScrollId(forMsgId mid: String) -> String {
         "user-\(mid)"
+    }
+
+    // MARK: - Idle anchor lock
+
+    /// Capture the latest user bubble's current screen Y so subsequent
+    /// layout changes can compensate scroll and leave it visually fixed.
+    /// Called when the session goes idle (turn complete).
+    private func acquireIdleAnchor() {
+        guard let last = lastUserMessage,
+              let frame = userBubbleFrames[last.id],
+              frame.height > 0 else {
+            return
+        }
+        anchoredUserMsgId = last.id
+        anchoredScreenY = frame.minY - scrollOffsetY
+    }
+
+    /// Drop the idle anchor. Called on user-initiated scroll, on a
+    /// new user message (R1 takes over), and on session switch.
+    private func releaseIdleAnchor() {
+        anchoredUserMsgId = nil
+        anchoredScreenY = nil
+    }
+
+    /// If the idle anchor is active and the anchored bubble has
+    /// moved (content above the bubble grew/shrank, or content
+    /// below pushed it indirectly), compensate scroll so its
+    /// screen Y matches the captured anchor. No-op while R1 is
+    /// driving scroll.
+    private func enforceIdleAnchor() {
+        guard growMode == .idle,
+              let mid = anchoredUserMsgId,
+              let targetScreenY = anchoredScreenY,
+              let frame = userBubbleFrames[mid],
+              frame.height > 0,
+              viewportHeight > 0 else {
+            return
+        }
+        let currentScreenY = frame.minY - scrollOffsetY
+        // Sub-pixel jitter shouldn't trigger a correction; only act
+        // on meaningful drift (>= 0.5pt). Without this guard, the
+        // chained scroll → preference → enforce loop can endlessly
+        // self-trigger by half-pixel rounding.
+        guard abs(currentScreenY - targetScreenY) >= 0.5 else { return }
+        let newContentOffsetY = (frame.minY - targetScreenY) - chatScrollInsetTop
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            chatScrollPosition.scrollTo(y: newContentOffsetY)
+        }
     }
 
     // MARK: - Bottom Input Area
@@ -719,6 +1030,15 @@ struct ChatView: View {
 /// stays readable through the chip.
 private struct StickyUserBubble: View {
     let message: ChatMessage
+    @Binding var expanded: Bool
+
+    /// Max bubble content height before the expand affordance shows up.
+    /// 9% of screen — keeps the pinned bubble compact at the top.
+    private static var maxCollapsedHeight: CGFloat {
+        UIScreen.main.bounds.height * 0.09
+    }
+
+    @State private var naturalHeight: CGFloat = 0
 
     private var content: String? {
         if message.type == "send_input" {
@@ -727,32 +1047,112 @@ private struct StickyUserBubble: View {
         return message.content
     }
 
+    private var needsExpand: Bool {
+        naturalHeight > Self.maxCollapsedHeight + 2
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 0) {
             Spacer(minLength: UIScreen.main.bounds.width * 0.10)
-            VStack(alignment: .trailing, spacing: 4) {
-                if let text = content, !text.isEmpty, text != "[image]" {
-                    Text(markdown(text))
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                } else {
-                    Text("Photo")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.85))
+            textBlock
+                .overlay(alignment: .bottom) {
+                    if needsExpand {
+                        expandButton
+                    }
                 }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .modifier(StickyGlassPillModifier(tint: Color.accentColor))
-            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .modifier(StickyGlassPillModifier(tint: Color.accentColor))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
         }
         .padding(.horizontal, 12)
+        .onPreferenceChange(StickyContentHeightKey.self) { h in
+            naturalHeight = h
+        }
+        .animation(.easeInOut(duration: 0.22), value: expanded)
+    }
+
+    @ViewBuilder
+    private var textBlock: some View {
+        let limit: CGFloat? = (needsExpand && !expanded) ? Self.maxCollapsedHeight : nil
+        textView
+            .background(
+                // Hidden ghost copy at natural size to measure the
+                // intrinsic content height, regardless of the visible
+                // copy's `.frame(maxHeight:)` clamp.
+                textView
+                    .opacity(0)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: StickyContentHeightKey.self,
+                                value: geo.size.height
+                            )
+                        }
+                    )
+            )
+            .frame(maxHeight: limit, alignment: .top)
+            .clipped()
+            .mask(
+                // When collapsed, fade the bottom of the text to fully
+                // transparent so it visually trails off into the chevron
+                // area instead of getting clipped mid-line.
+                LinearGradient(
+                    stops: (needsExpand && !expanded)
+                        ? [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.8),
+                            .init(color: .black.opacity(0), location: 1.0)
+                        ]
+                        : [.init(color: .black, location: 0), .init(color: .black, location: 1)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+    }
+
+    @ViewBuilder
+    private var textView: some View {
+        if let text = content, !text.isEmpty, text != "[image]" {
+            Text(markdown(text))
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        } else {
+            Text("Photo")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.85))
+        }
+    }
+
+    private var expandButton: some View {
+        Button {
+            expanded.toggle()
+        } label: {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .bottom)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, -6)
     }
 
     private func markdown(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         ))) ?? AttributedString(text)
+    }
+}
+
+private struct StickyContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
