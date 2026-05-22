@@ -21,19 +21,6 @@ private struct UserBubbleFramesKey: PreferenceKey {
     }
 }
 
-/// PreferenceKey for the measured height of the R2 sticky overlay
-/// (including its outer top margin). Used by stickyHandoffOffset so
-/// the handoff band matches the actual rendered chip — short messages
-/// don't over-correct, long messages don't under-correct.
-private struct StickyOverlayHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// PreferenceKey for the y-position (in chat coord space) of the
-/// `chat-bottom` sentinel — the actual rendered end of all chat rows.
 /// Compact, Equatable snapshot of the metrics we care about from the
 /// ScrollView. Used as the change-trigger value for
 /// `.onScrollGeometryChange`.
@@ -113,10 +100,6 @@ struct ChatView: View {
     /// from a previous .lockedAtTop session can't trigger an immediate
     /// re-LOCK before the bubble has grown into view.
     @State private var sawBubbleBelowTop: Bool = false
-    /// Measured height of the rendered R2 sticky overlay (chip + top
-    /// margin). Used by `stickyHandoffOffset` so the handoff band
-    /// matches reality regardless of message length.
-    @State private var stickyOverlayHeight: CGFloat = 0
     /// Whether the sticky overlay bubble is user-expanded past its
     /// max collapsed height. Resets each time the candidate changes.
     @State private var stickyExpanded: Bool = false
@@ -346,6 +329,14 @@ struct ChatView: View {
                                     ),
                                     streamingText: hasStreaming ? streaming : nil
                                 )
+                                // Tag the in-progress turn with a scroll id
+                                // when it has a usable agent_message — R3
+                                // priority 3 ("last agent_message at top")
+                                // targets exactly this id. Without the tag,
+                                // an unread session whose latest turn is
+                                // still mid-stream loses its scroll target
+                                // and falls back to defaultScrollAnchor.
+                                .id(latestMsg.map { messageScrollId($0) } ?? "turn-\(turnId)")
                             }
                         }
                     }
@@ -642,14 +633,6 @@ struct ChatView: View {
         if let msg = stickyCandidate ?? lastUserMessage {
             StickyUserBubble(message: msg, expanded: $stickyExpanded)
                 .padding(.top, Self.stickyMargin)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: StickyOverlayHeightKey.self,
-                            value: geo.size.height
-                        )
-                    }
-                )
                 .opacity(stickyOpacity)
                 // Animate only when the pill flips between visible and
                 // hidden (the boundary snap when a candidate crosses
@@ -671,9 +654,6 @@ struct ChatView: View {
                     }
                 }
                 .allowsHitTesting(stickyOpacity > 0.5)
-                .onPreferenceChange(StickyOverlayHeightKey.self) { h in
-                    stickyOverlayHeight = h
-                }
                 .onChange(of: msg.id) { _, _ in
                     // New candidate → collapse expansion so the pill
                     // doesn't carry over an unexpected expanded state.
@@ -795,6 +775,12 @@ struct ChatView: View {
         scrollOffsetY = 0
         growMode = .idle
         lockedMsgId = nil
+        // Capture whether we started empty BEFORE any await. We use
+        // this at the tail to distinguish "fresh load — all messages
+        // are backfill, baseline silently" from "session was already
+        // populated — any seq increase during entry is a NEW user
+        // message that needs retroactive R1 activation".
+        let startedEmpty = filteredMessages.isEmpty
         // Baseline R1 trigger to the current last user-message seq so
         // that the act of opening a session (which exposes existing
         // messages) does not look like a "user just sent a new message".
@@ -832,53 +818,98 @@ struct ChatView: View {
             return
         }
 
-        // Refresh baseline now that messages are actually loaded.
-        lockedUserSeq = lastUserMessage?.seq ?? 0
+        // Re-baseline ONLY for fresh loads — the messages that just
+        // landed are historical backfill and must not trip R1. For
+        // sessions that already had messages, leave the baseline at
+        // its pre-await value so the tail-replay below can detect any
+        // user message that arrived during entry and retroactively
+        // activate R1.
+        if startedEmpty {
+            lockedUserSeq = lastUserMessage?.seq ?? 0
+        }
 
         if wasUnread, let target = entryScrollTarget() {
-            // Unread → land on a specific bubble at the top. The .top
-            // anchor is stable across late content growth below the
-            // target, so a single scrollTo is enough.
-            proxy.scrollTo(target.id, anchor: target.anchor)
-            didInitialScroll = true
+            // Unread → land on a specific bubble at the target's
+            // anchor and keep re-asserting until content stabilizes.
+            // Without the loop, gap-bridge or auto-load prepends that
+            // arrive after the initial scrollTo push the target's
+            // content-space minY past where we anchored — leaving the
+            // user on older content instead of their intended target.
+            stickToTargetInstant(proxy: proxy, target: target)
+            await settleEntry { stickToTargetInstant(proxy: proxy, target: target) }
         } else {
-            // Read → land at the bottom. Content height typically
-            // keeps growing for several hundred ms after the first
-            // batch lands (MarkdownUI reflow, AsyncImage attachments
-            // decoding, MessageBubbleView post-layout sizing, late
-            // safe-area-inset measurement). If we flip
-            // `didInitialScroll = true` right after a single
-            // scrollTo, `currentScrollAnchor` switches to nil and
-            // SwiftUI stops auto-pinning — leaving us frozen above
-            // the eventual bottom by however much content grew.
+            // Read → land at the bottom and keep re-pinning. Content
+            // height typically keeps growing for several hundred ms
+            // after the first batch lands (MarkdownUI reflow,
+            // AsyncImage attachments decoding, MessageBubbleView
+            // post-layout sizing, late safe-area-inset measurement).
+            // If we flip `didInitialScroll = true` right after a
+            // single scrollTo, `currentScrollAnchor` switches to nil
+            // and SwiftUI stops auto-pinning — leaving us frozen
+            // above the eventual bottom by however much content grew.
             //
-            // Strategy: keep re-scrolling to chat-bottom on each
-            // layout tick until either chatContentHeight stops
-            // changing for ~100ms or we hit a 750ms hard cap. While
-            // this loop runs `currentScrollAnchor` is still
+            // While the loop runs `currentScrollAnchor` is still
             // `.bottom`, so defaultScrollAnchor backs us up if a
             // proxy.scrollTo gets dropped. Animations disabled so
             // the repeated re-scrolls are silent corrections, not
             // visible bounces.
             scrollToBottomInstant(proxy: proxy)
-            var prevHeight = chatContentHeight
-            var stableTicks = 0
-            let stabilityTarget = 4   // ~100ms
-            let maxTicks = 30         // ~750ms
-            var ticks = 0
-            while ticks < maxTicks {
-                try? await Task.sleep(for: .milliseconds(25))
-                scrollToBottomInstant(proxy: proxy)
-                if abs(chatContentHeight - prevHeight) < 0.5 {
-                    stableTicks += 1
-                    if stableTicks >= stabilityTarget { break }
-                } else {
-                    stableTicks = 0
-                    prevHeight = chatContentHeight
-                }
-                ticks += 1
+            await settleEntry { scrollToBottomInstant(proxy: proxy) }
+        }
+        didInitialScroll = true
+
+        // Tail step 1: if the session is already idle on entry, capture
+        // the idle anchor now. `onChange(of: sessionIdle)` only fires
+        // on transitions — without this, opening an already-idle
+        // session never acquires the anchor and expand/collapse of
+        // thinking history shifts the user bubble with no
+        // compensation.
+        if sessionIdle {
+            acquireIdleAnchor()
+        }
+
+        // Tail step 2: retroactively activate R1 for any user message
+        // that arrived during the entry-scroll window. We deliberately
+        // skip the fresh-load path (`startedEmpty == true`) because in
+        // that case the seq increase is from backfill, not a live send.
+        if !startedEmpty,
+           let last = lastUserMessage,
+           last.seq > lockedUserSeq {
+            handleNewUserMessage(proxy: proxy, seq: last.seq)
+        }
+    }
+
+    /// Stick the chat to the given target for ~100ms of content
+    /// stability (or 750ms hard cap), re-asserting the position each
+    /// 25ms tick via the caller-supplied closure. Used by both the
+    /// read (bottom) and unread (specific bubble) entry-scroll paths.
+    private func settleEntry(reassert: () -> Void) async {
+        var prevHeight = chatContentHeight
+        var stableTicks = 0
+        let stabilityTarget = 4   // ~100ms quiet
+        let maxTicks = 30         // ~750ms cap
+        var ticks = 0
+        while ticks < maxTicks {
+            try? await Task.sleep(for: .milliseconds(25))
+            reassert()
+            if abs(chatContentHeight - prevHeight) < 0.5 {
+                stableTicks += 1
+                if stableTicks >= stabilityTarget { break }
+            } else {
+                stableTicks = 0
+                prevHeight = chatContentHeight
             }
-            didInitialScroll = true
+            ticks += 1
+        }
+    }
+
+    /// Animation-free scroll to a specific entry target. Mirror of
+    /// `scrollToBottomInstant` but for the unread entry path.
+    private func stickToTargetInstant(proxy: ScrollViewProxy, target: (id: String, anchor: UnitPoint)) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(target.id, anchor: target.anchor)
         }
     }
 
