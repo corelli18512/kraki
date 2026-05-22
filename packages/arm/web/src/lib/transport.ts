@@ -233,9 +233,15 @@ export class KrakiTransport {
     // (current builds) or on the homepage `/` (older builds that ran
     // before the path swap — we still accept the code there so
     // in-flight flows complete cleanly).
+    //
+    // PKCE material is popped unconditionally whenever we see a
+    // `code` parameter — even on state-mismatch — so a stale verifier
+    // can't sit in storage indefinitely if an attacker (or stale tab)
+    // delivers a malformed callback. Treat the callback as the
+    // single-use trigger that consumes the matching verifier.
     if (params.githubCode) {
+      const pkce = consumePkceMaterial();
       if (consumeOAuthState(params.oauthState)) {
-        const pkce = consumePkceMaterial();
         this.githubCode = params.githubCode;
         this.codeVerifier = pkce.codeVerifier;
         this.redirectUri = pkce.redirectUri;

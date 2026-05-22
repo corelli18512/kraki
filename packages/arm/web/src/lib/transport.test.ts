@@ -63,6 +63,25 @@ describe('transport oauth state handling', () => {
     expect(localStorage.getItem(OAUTH_STATE_KEY)).toBeNull();
   });
 
+  it('wipes PKCE material even when state verification fails', () => {
+    // Hygiene: a callback with a bad state shouldn't be able to leave
+    // a stale verifier in storage. Belt-and-suspenders against an
+    // attacker who manages to deliver a malformed callback.
+    storeOAuthState('expected-state');
+    sessionStorage.setItem(OAUTH_VERIFIER_KEY, 'leaked-verifier');
+    sessionStorage.setItem(OAUTH_REDIRECT_KEY, 'https://app.example.com/auth/callback');
+    localStorage.setItem(OAUTH_VERIFIER_KEY, 'leaked-verifier');
+    localStorage.setItem(OAUTH_REDIRECT_KEY, 'https://app.example.com/auth/callback');
+    window.history.replaceState({}, '', '/?code=gh-code&state=wrong-state');
+
+    new KrakiTransport(callbacks);
+
+    expect(sessionStorage.getItem(OAUTH_VERIFIER_KEY)).toBeNull();
+    expect(localStorage.getItem(OAUTH_VERIFIER_KEY)).toBeNull();
+    expect(sessionStorage.getItem(OAUTH_REDIRECT_KEY)).toBeNull();
+    expect(localStorage.getItem(OAUTH_REDIRECT_KEY)).toBeNull();
+  });
+
   it('captures the PKCE verifier + redirect_uri alongside the code', () => {
     storeOAuthState('state-123');
     sessionStorage.setItem(OAUTH_VERIFIER_KEY, 'v-abc');
