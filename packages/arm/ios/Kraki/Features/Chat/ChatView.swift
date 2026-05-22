@@ -836,11 +836,50 @@ struct ChatView: View {
         lockedUserSeq = lastUserMessage?.seq ?? 0
 
         if wasUnread, let target = entryScrollTarget() {
+            // Unread → land on a specific bubble at the top. The .top
+            // anchor is stable across late content growth below the
+            // target, so a single scrollTo is enough.
             proxy.scrollTo(target.id, anchor: target.anchor)
+            didInitialScroll = true
         } else {
-            proxy.scrollTo("chat-bottom", anchor: .bottom)
+            // Read → land at the bottom. Content height typically
+            // keeps growing for several hundred ms after the first
+            // batch lands (MarkdownUI reflow, AsyncImage attachments
+            // decoding, MessageBubbleView post-layout sizing, late
+            // safe-area-inset measurement). If we flip
+            // `didInitialScroll = true` right after a single
+            // scrollTo, `currentScrollAnchor` switches to nil and
+            // SwiftUI stops auto-pinning — leaving us frozen above
+            // the eventual bottom by however much content grew.
+            //
+            // Strategy: keep re-scrolling to chat-bottom on each
+            // layout tick until either chatContentHeight stops
+            // changing for ~100ms or we hit a 750ms hard cap. While
+            // this loop runs `currentScrollAnchor` is still
+            // `.bottom`, so defaultScrollAnchor backs us up if a
+            // proxy.scrollTo gets dropped. Animations disabled so
+            // the repeated re-scrolls are silent corrections, not
+            // visible bounces.
+            scrollToBottomInstant(proxy: proxy)
+            var prevHeight = chatContentHeight
+            var stableTicks = 0
+            let stabilityTarget = 4   // ~100ms
+            let maxTicks = 30         // ~750ms
+            var ticks = 0
+            while ticks < maxTicks {
+                try? await Task.sleep(for: .milliseconds(25))
+                scrollToBottomInstant(proxy: proxy)
+                if abs(chatContentHeight - prevHeight) < 0.5 {
+                    stableTicks += 1
+                    if stableTicks >= stabilityTarget { break }
+                } else {
+                    stableTicks = 0
+                    prevHeight = chatContentHeight
+                }
+                ticks += 1
+            }
+            didInitialScroll = true
         }
-        didInitialScroll = true
     }
 
     // MARK: - R1: Growing-Reply
