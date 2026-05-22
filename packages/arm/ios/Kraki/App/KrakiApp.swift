@@ -23,12 +23,19 @@ struct KrakiApp: App {
                     AppDelegate.pushManager = appState.pushManager
                     Task { await appState.pushManager?.refreshPermissionStatus() }
 
-                    #if DEBUG
-                    // Auto-connect to local relay for dev
                     if appState.connectionStatus == .awaitingLogin {
+                        #if DEBUG
+                        // Auto-connect to local relay for dev (open auth)
                         appState.devConnect()
+                        #else
+                        // Open the WS so we can request auth_info; the
+                        // server's response unlocks the GitHub OAuth
+                        // button on the login screen. No credentials
+                        // are sent here — `bootstrapAuth` decides what
+                        // to do once the socket is up.
+                        appState.connect()
+                        #endif
                     }
-                    #endif
                 }
                 .onChange(of: scenePhase) { _, phase in
                     // On every return-to-foreground, kick a fresh

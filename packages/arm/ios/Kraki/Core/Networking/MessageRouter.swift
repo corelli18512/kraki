@@ -160,6 +160,9 @@ final class MessageRouter {
                 appState?.authManager?.handleAuthChallenge(nonce: nonce)
             }
 
+        case "auth_info_response":
+            appState?.authManager?.handleAuthInfoResponse(message: json)
+
         // ── Device lifecycle ─────────────────────────────────────────────
         case "device_joined":
             if let deviceDict = json["device"] as? [String: Any],
@@ -191,6 +194,17 @@ final class MessageRouter {
         case "push_token_registered":
             appState?.pushManager?.registered = true
             KLog.d("✅ push_token_registered")
+
+        case "preferences_updated":
+            // Live sync from another device (or echo of our own
+            // update). Apply via PreferencesManager — its echo-loop
+            // guard prevents the resulting AppStorage write from
+            // bouncing back to the relay.
+            if let prefs = json["preferences"] as? [String: Any] {
+                Task { @MainActor in
+                    appState?.preferencesManager?.applyRemote(prefs)
+                }
+            }
 
         // ── Encrypted envelopes ──────────────────────────────────────────
         case "unicast", "broadcast":
