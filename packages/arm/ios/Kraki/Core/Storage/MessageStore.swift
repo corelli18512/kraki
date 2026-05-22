@@ -160,6 +160,15 @@ final class MessageStore {
         )
         list[idx] = resolved
         messages[sessionId] = list
+
+        // Persist the resolved user_message. Without this, iOS-sent
+        // user_messages live only in memory and silently disappear
+        // from the on-disk cache across app restarts (we'd hydrate
+        // back into a session whose user-side is missing the turn we
+        // just sent).
+        if shouldPersist(resolved) {
+            persistentCache.appendMessage(sessionId, resolved)
+        }
     }
 
     /// Stamp a resolution on the matching permission message in the message list.
@@ -269,6 +278,14 @@ final class MessageStore {
     func lastAgentMessageContent(_ sessionId: String) -> String? {
         guard let list = messages[sessionId] else { return nil }
         return list.last(where: { $0.type == "agent_message" })?.content
+    }
+
+    /// Get the content of the last user_message for a session. Used by
+    /// the session-card activity row to surface the prompt that
+    /// kicked off the current turn (replaces the generic "Thinking…").
+    func lastUserMessageContent(_ sessionId: String) -> String? {
+        guard let list = messages[sessionId] else { return nil }
+        return list.last(where: { $0.type == "user_message" })?.content
     }
 
     /// Resolve a question with an optional answer string.
