@@ -8,6 +8,10 @@ final class AppState {
     let sessionStore = SessionStore()
     let deviceStore = DeviceStore()
     let messageStore = MessageStore()
+    /// Disk-backed cache + chunk reassembly for ContentRef attachments
+    /// (tool args/result, agent images). Created with a request-pull
+    /// closure that uses our encrypted-send pipeline.
+    private(set) var attachmentStore: AttachmentStore!
 
     // MARK: - Networking
     private(set) var wsClient: WebSocketClient?
@@ -16,16 +20,27 @@ final class AppState {
     private(set) var commandSender: CommandSender?
     private(set) var messageProvider: MessageProvider?
     private(set) var pushManager: PushManager?
+    private(set) var preferencesManager: PreferencesManager?
 
     // MARK: - Connection
     var connectionStatus: ConnectionStatus = .awaitingLogin
     var deviceId: String?
     var user: UserInfo?
+
+    /// App group UserDefaults suite, shared with the NSE.
+    private static let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+    /// Key for the persisted relay URL. Set after a successful auth or a
+    /// `wrong_region` redirect so we can skip the redirect dance on cold launch.
+    private static let relayURLKey = "kraki.relayURL"
+
     #if DEBUG
-    var relayURL: String = "ws://localhost:4400"
+    private static let defaultRelayURL = "ws://localhost:4400"
     #else
-    var relayURL: String = "wss://kraki.corelli.cloud"
+    private static let defaultRelayURL = "wss://relay.kraki.chat"
     #endif
+
+    var relayURL: String = AppState.sharedDefaults.string(forKey: AppState.relayURLKey)
+        ?? AppState.defaultRelayURL
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
@@ -56,6 +71,18 @@ final class AppState {
     }
 
     init() {
+        // attachmentStore is set up first so the request-pull closure
+        // can capture self by weak reference and the rest of setup
+        // (router, ws) can read it.
+        self.attachmentStore = AttachmentStore { [weak self] id, sessionId in
+            guard let self else { return }
+            self.sendEncryptedMessage([
+                "type": "request_attachment",
+                "deviceId": self.deviceId ?? "",
+                "sessionId": sessionId,
+                "payload": ["id": id, "sessionId": sessionId],
+            ])
+        }
         setupNetworking()
     }
 
@@ -73,6 +100,7 @@ final class AppState {
         let sender = CommandSender(appState: self)
         let provider = MessageProvider(appState: self)
         let push = PushManager(appState: self)
+        let prefs = PreferencesManager(appState: self)
 
         client.onMessage = { [weak router] data in
             router?.handleRawMessage(data)
@@ -90,6 +118,7 @@ final class AppState {
         self.commandSender = sender
         self.messageProvider = provider
         self.pushManager = push
+        self.preferencesManager = prefs
     }
 
     func connect() {
@@ -113,12 +142,30 @@ final class AppState {
         connectionStatus = .disconnected
     }
 
+    /// Switch to a new relay URL (e.g. after a `wrong_region` redirect),
+    /// persist it across launches, and reconnect.
+    func redirectToRelay(_ newURL: String) {
+        KLog.d("🔀 Redirecting to relay: \(newURL)")
+        relayURL = newURL
+        Self.sharedDefaults.set(newURL, forKey: Self.relayURLKey)
+        wsClient?.setRelayURL(newURL)
+    }
+
+    /// Clear any persisted relay URL so the next launch falls back to the
+    /// default. Used during logout so a fresh login goes through the
+    /// dispatcher and gets re-pinned to the correct region.
+    func clearStoredRelayURL() {
+        Self.sharedDefaults.removeObject(forKey: Self.relayURLKey)
+        relayURL = Self.defaultRelayURL
+    }
+
     /// Sign the user out: drop the WS, wipe stored credentials, and
     /// reset everything to the pre-login state so RootView routes
     /// back to the login screen.
     func logout() {
         wsClient?.disconnect()
         authManager?.clearStoredCredentials()
+        clearStoredRelayURL()
         deviceId = nil
         user = nil
         githubClientId = nil
@@ -150,13 +197,28 @@ final class AppState {
         switch state {
         case .connected:
             connectionStatus = .authenticating
-            authManager?.authenticate()
+            authManager?.bootstrapAuth()
         case .disconnected:
             if connectionStatus == .connected {
                 connectionStatus = .disconnected
             }
         case .connecting:
             connectionStatus = .connecting
+        }
+    }
+
+    /// Called by AuthManager after the relay answers a pre-auth
+    /// `auth_info` query. Stashes the GitHub OAuth client id and drops
+    /// the connection status back to `.awaitingLogin` so the LoginView
+    /// becomes interactive (otherwise it would be stuck on the
+    /// "Signing you in…" panel waiting for an auth handshake that
+    /// hasn't been initiated yet).
+    func onAuthInfoReceived(githubClientId: String?) {
+        self.githubClientId = githubClientId
+        // If a user-initiated auth (OAuth code, pairing token) raced
+        // ahead of this response, leave its `.authenticating` in place.
+        if connectionStatus == .authenticating {
+            connectionStatus = .awaitingLogin
         }
     }
 
@@ -204,10 +266,17 @@ final class AppState {
             return
         }
 
-        // Determine target tentacle device
+        // Determine target tentacle device. Prefer an explicit
+        // `targetDeviceId` in the envelope (e.g. import or
+        // request_local_sessions, both of which target a specific
+        // tentacle without a sessionId). Fall back to the session's
+        // owning device when a sessionId is present, else broadcast.
         let sessionId = message["sessionId"] as? String
+        let explicitTarget = message["targetDeviceId"] as? String
         let targetDeviceId: String?
-        if let sessionId, let session = sessionStore.sessions[sessionId] {
+        if let explicitTarget {
+            targetDeviceId = explicitTarget
+        } else if let sessionId, let session = sessionStore.sessions[sessionId] {
             targetDeviceId = session.deviceId
         } else {
             targetDeviceId = nil

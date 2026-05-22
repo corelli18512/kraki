@@ -4,13 +4,17 @@
 <dict>
 	<key>aps-environment</key>
 	<string>development</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:app.kraki.chat</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.cloud.corelli.kraki</string>
+		<string>group.chat.kraki.ios</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)cloud.corelli.kraki</string>
+		<string>$(AppIdentifierPrefix)chat.kraki.ios</string>
 	</array>
 </dict>
 </plist>

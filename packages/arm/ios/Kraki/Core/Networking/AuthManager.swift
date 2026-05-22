@@ -47,7 +47,7 @@ final class AuthManager {
     private static let deviceIdKey = "kraki.deviceId"
 
     /// Suite name for the app group UserDefaults shared with the NSE.
-    private static let appGroupSuite = "group.cloud.corelli.kraki"
+    private static let appGroupSuite = "group.chat.kraki.ios"
 
     /// UserDefaults shared between the app and KrakiNotification extension.
     /// The NSE reads `deviceId` from here when decrypting push payloads.
@@ -82,12 +82,57 @@ final class AuthManager {
 
     // MARK: - Auth Flow
 
+    /// Decide what to do on a freshly-opened WS connection.
+    ///
+    /// - If we already have a pairing token (just scanned a QR) or a
+    ///   stored deviceId (returning user), proceed straight to `authenticate()`.
+    ///   The relay's response will include `githubClientId` etc. in
+    ///   `auth_ok`, so no separate fetch is needed.
+    /// - Otherwise we don't know yet what auth methods this relay
+    ///   supports — particularly whether GitHub OAuth is configured —
+    ///   so request `auth_info` first. Release builds land here on
+    ///   first launch; the response unlocks the GitHub button on
+    ///   LoginView via `appState.githubClientId`.
+    func bootstrapAuth() {
+        if pairingToken != nil || storedDeviceId != nil {
+            authenticate()
+        } else {
+            requestAuthInfo()
+        }
+    }
+
+    /// Send a pre-auth `auth_info` request to ask the relay which
+    /// authentication methods it supports and what its GitHub OAuth
+    /// client id is. Response handled by `handleAuthInfoResponse`.
+    func requestAuthInfo() {
+        KLog.d("ℹ️ Requesting auth_info from relay")
+        sendRaw(["type": "auth_info"])
+    }
+
+    /// Process the relay's `auth_info_response`. Stores githubClientId
+    /// on AppState (so the LoginView's GitHub button can present an
+    /// OAuthView with a real client id), then drops connectionStatus
+    /// back to `.awaitingLogin` so the login UI is interactive.
+    /// If the user already had a pairingToken or storedDeviceId when
+    /// the WS came up, `bootstrapAuth` would have skipped this path,
+    /// so we don't need to consider those branches here.
+    func handleAuthInfoResponse(message: [String: Any]) {
+        guard let appState else { return }
+        let clientId = message["githubClientId"] as? String
+        let methods = message["methods"] as? [String] ?? []
+        KLog.d("ℹ️ auth_info_response: methods=\(methods), githubClientId=\(clientId?.prefix(8) ?? "nil")")
+        appState.onAuthInfoReceived(githubClientId: clientId)
+    }
+
     /// Build and send the initial `auth` message.
     ///
     /// Priority order:
     /// 1. Pairing token (explicit user action — scan QR)
     /// 2. Stored device ID (returning user — challenge-response)
-    /// 3. Open auth (new user, no credentials)
+    /// 3. Open auth (new user, no credentials) — only works against
+    ///    relays configured to permit open auth (local dev). Prod
+    ///    rejects this; clients should request `auth_info` first and
+    ///    route the user through GitHub OAuth or pairing instead.
     func authenticate() {
         var signingPublicKey: String?
         var encryptionPublicKey: String?
@@ -201,6 +246,18 @@ final class AuthManager {
         // Mark transport as authenticated
         appState.wsClient?.setAuthenticated(true)
 
+        // Hydrate server-side preferences (theme, etc.) before
+        // notifying AppState — that way any view watching the
+        // `colorScheme` AppStorage key sees the right value on its
+        // first render after login. Web does the same in `auth_ok`'s
+        // `applyPreferences` path.
+        if let userDict = message["user"] as? [String: Any],
+           let prefs = userDict["preferences"] as? [String: Any] {
+            Task { @MainActor in
+                appState.preferencesManager?.applyRemote(prefs)
+            }
+        }
+
         // Notify AppState (populates stores, triggers queue drain, etc.)
         appState.onAuthenticated(
             deviceId: deviceId,
@@ -215,8 +272,23 @@ final class AuthManager {
     func handleAuthError(message: [String: Any]) {
         guard let appState else { return }
 
+        let code = message["code"] as? String
         let reason = message["message"] as? String
             ?? message["reason"] as? String
+
+        // wrong_region: relay tells us our user is pinned to a different
+        // region. The server includes the deviceId it just registered for
+        // us so we can use challenge-response auth at the redirected relay.
+        if code == "wrong_region", let redirect = message["redirect"] as? String {
+            KLog.d("🌏 wrong_region → \(redirect)")
+            if let newDeviceId = message["deviceId"] as? String {
+                storedDeviceId = newDeviceId
+                Self.sharedDefaults.set(newDeviceId, forKey: Self.deviceIdKey)
+                UserDefaults.standard.set(newDeviceId, forKey: Self.deviceIdKey)
+            }
+            appState.redirectToRelay(redirect)
+            return
+        }
 
         if storedDeviceId != nil {
             // Stored credentials were rejected — clear and surface error
@@ -241,8 +313,21 @@ final class AuthManager {
     }
 
     /// Authenticate with a GitHub OAuth code.
-    func authenticateWithGitHubCode(_ code: String) {
+    ///
+    /// `codeVerifier` + `redirectUri` are the PKCE verifier and the
+    /// exact `redirect_uri` value used when starting the OAuth flow.
+    /// Both are forwarded to the relay, which passes them on to
+    /// GitHub's token-exchange endpoint. GitHub requires the verifier
+    /// when the original authorize request was PKCE-protected and
+    /// matches the redirect_uri against the URL used at authorize
+    /// time, defeating code interception and code substitution.
+    func authenticateWithGitHubCode(
+        _ code: String,
+        codeVerifier: String? = nil,
+        redirectUri: String? = nil
+    ) {
         pairingToken = nil
+        appState?.connectionStatus = .authenticating
         // Build and send auth message with github_oauth method
         let device: [String: Any?] = [
             "name": "Kraki iOS",
@@ -251,9 +336,12 @@ final class AuthManager {
             "deviceId": storedDeviceId,
         ]
         let cleanDevice = device.compactMapValues { $0 }
+        var oauthAuth: [String: Any] = ["method": "github_oauth", "code": code]
+        if let codeVerifier { oauthAuth["codeVerifier"] = codeVerifier }
+        if let redirectUri { oauthAuth["redirectUri"] = redirectUri }
         let message: [String: Any] = [
             "type": "auth",
-            "auth": ["method": "github_oauth", "code": code],
+            "auth": oauthAuth,
             "device": cleanDevice,
         ]
         sendRaw(message)
@@ -262,6 +350,7 @@ final class AuthManager {
     /// Authenticate with a pairing token (from QR scan or deep link).
     func authenticateWithPairingToken(_ token: String) {
         pairingToken = token
+        appState?.connectionStatus = .authenticating
         authenticate()
     }
 

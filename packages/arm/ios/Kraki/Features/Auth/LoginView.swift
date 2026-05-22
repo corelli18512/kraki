@@ -167,11 +167,12 @@ struct LoginView: View {
     /// pairing instructions, and Scan QR button.
     @ViewBuilder
     private var actionArea: some View {
-        // GitHub OAuth button — #24292f bg, white text, GitHub mark.
-        // TEMP: shown unconditionally so we can polish its style even
-        // when the local relay has no OAuth client configured. Restore
-        // `if let clientId = appState.githubClientId` for production.
-        Group {
+        // GitHub OAuth button — only shown once the relay has reported
+        // its `githubClientId` via `auth_info_response`. Against a
+        // relay that doesn't have GitHub OAuth configured (e.g. local
+        // dev), `githubClientId` stays nil and we fall through to the
+        // pairing-only layout.
+        if let clientId = appState.githubClientId {
             Button {
                 showOAuth = true
             } label: {
@@ -190,6 +191,7 @@ struct LoginView: View {
             }
             .opacity(showTitle ? 1 : 0)
             .offset(y: showTitle ? 0 : 8)
+            .accessibilityIdentifier("login.github.\(clientId.prefix(8))")
 
             // "or" divider — fade-up, 1.3s delay
             HStack(spacing: 12) {
