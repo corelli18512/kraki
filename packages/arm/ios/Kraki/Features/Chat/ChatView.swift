@@ -286,7 +286,7 @@ struct ChatView: View {
     /// in-memory turns at indices ≥ `renderWindowStartIdx +
     /// renderedTurnCount`.
     private var hasFoldedTurnsBelow: Bool {
-        renderWindowStartIdx + renderedTurnCount < allGroupedTurns.count
+        renderWindowStartIdx + renderedTurnCount < cachedAllTurnCount
     }
 
     /// Whether the rendered window is smaller than the in-memory
@@ -301,13 +301,30 @@ struct ChatView: View {
         sessionStore.streamingContent[sessionId]
     }
 
-    /// Full grouped turn list (all in-memory messages, no windowing).
-    /// Used to determine total turn count and to find a target's
-    /// position relative to the bottom for window-expansion math.
-    private var allGroupedTurns: [TurnItem] {
-        let raw = groupMessagesIntoTurns(filteredMessages)
+    /// **Cached** result of `groupMessagesIntoTurns(filteredMessages)`.
+    /// Recomputed only when `filteredMessages.count` changes (via the
+    /// `.onChange` handler) — never on every body invocation.
+    /// `groupMessagesIntoTurns` is O(n) over all in-memory messages
+    /// (2000+ in long sessions) and accessing it as a plain computed
+    /// property caused the main thread to stall long enough for
+    /// WebSocket heartbeats to time out — symptom: opening the
+    /// session disconnected the relay.
+    @State private var cachedRawTurns: [TurnItem] = []
+    /// Mirror of `cachedRawTurns.count + (streaming-extra-turn ? 1 : 0)`
+    /// for cheap O(1) reads from helpers that only need the total turn
+    /// count (`hasFoldedTurnsBelow`, `handleTopEdgeExpand`,
+    /// `handleBottomEdgeExpand`, `followBottomOnNewTurns`). Kept in
+    /// sync with `allGroupedTurns` in `refreshGroupingCache`.
+    @State private var cachedAllTurnCount: Int = 0
 
-        // Ensure streaming always attaches to a turn group
+    /// Full grouped turn list (all in-memory messages + a synthetic
+    /// streaming turn appended if needed). Reads the cached value
+    /// instead of re-grouping per access — see `cachedRawTurns`.
+    private var allGroupedTurns: [TurnItem] {
+        let raw = cachedRawTurns
+        // Streaming-turn appendage is cheap: just a conditional
+        // append; no message walking. Done at read time so it stays
+        // live without invalidating the (expensive) raw cache.
         guard streaming != nil else { return raw }
         if let last = raw.last, case .turn(let turn) = last, turn.finalMessage == nil {
             return raw
@@ -319,14 +336,29 @@ struct ChatView: View {
     /// Slice = `allGroupedTurns[renderWindowStartIdx ..<
     /// renderWindowStartIdx + renderedTurnCount]`. Bounds-clamped so
     /// late state updates can't crash even if `renderWindowStartIdx`
-    /// drifts past `allGroupedTurns.count`.
+    /// drifts past `cachedAllTurnCount`.
+    ///
+    /// Computed cheaply: slices the cached raw array directly, and
+    /// appends the synthetic streaming turn only if the slice's end
+    /// reaches past the raw count. Avoids the O(n) array copy that
+    /// `allGroupedTurns` does in the streaming case.
     private var grouped: [TurnItem] {
-        let all = allGroupedTurns
-        guard !all.isEmpty else { return [] }
-        let start = max(0, min(renderWindowStartIdx, all.count))
-        let end = min(start + renderedTurnCount, all.count)
+        let raw = cachedRawTurns
+        let total = cachedAllTurnCount
+        guard total > 0 else { return [] }
+        let start = max(0, min(renderWindowStartIdx, total))
+        let end = min(start + renderedTurnCount, total)
         guard start < end else { return [] }
-        return Array(all[start..<end])
+        let rawSliceEnd = min(end, raw.count)
+        var result: [TurnItem] = []
+        if start < rawSliceEnd {
+            result = Array(raw[start..<rawSliceEnd])
+        }
+        if end > raw.count {
+            // Slice extends into the synthetic streaming turn.
+            result.append(.turn(Turn(id: "streaming", thinkingMessages: [], finalMessage: nil, isActive: true)))
+        }
+        return result
     }
 
     /// Whether the session is idle (last message is idle type).
@@ -549,10 +581,24 @@ struct ChatView: View {
             releaseIdleAnchor()
             handleNewUserMessage(proxy: proxy, seq: newSeq)
         }
-        .onChange(of: streaming) { _, _ in
+        .onChange(of: streaming) { oldVal, newVal in
             checkLockTransition(proxy: proxy)
+            // Streaming start/stop toggles whether `allGroupedTurns`
+            // appends the synthetic placeholder turn. Refresh the
+            // count so `cachedAllTurnCount` stays in sync — but only
+            // on start/stop transitions, not per text delta.
+            let was = oldVal != nil
+            let now = newVal != nil
+            if was != now {
+                refreshGroupingCache()
+            }
         }
         .onChange(of: filteredMessages.count) { _, _ in
+            // Recompute the (expensive) raw turn grouping ONCE per
+            // batch instead of on every body re-render. All
+            // downstream rules (followBottom, autoLoad, edge slides,
+            // R3 target window-include) read from the cache.
+            refreshGroupingCache()
             // After each batch lands, if the top spinner is still
             // visible and older history still exists, kick off the
             // next page so we keep loading until either the spinner
@@ -668,7 +714,7 @@ struct ChatView: View {
             }
             lastWindowExpansion = now
 
-            let total = allGroupedTurns.count
+            let total = cachedAllTurnCount
             let beforeStart = renderWindowStartIdx
             let beforeCount = renderedTurnCount
             let newStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
@@ -706,7 +752,7 @@ struct ChatView: View {
         }
         lastWindowExpansion = now
 
-        let total = allGroupedTurns.count
+        let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
         let newStart = min(total - renderedTurnCount,
                             renderWindowStartIdx + Self.renderExpandStep)
@@ -727,8 +773,25 @@ struct ChatView: View {
     /// `renderWindowStartIdx + renderedTurnCount` from the previous
     /// observation. `lastSeenTotalTurns` is updated at the end of this
     /// function so the next call's check uses the post-update total.
+    /// Rebuild the grouping cache. Called once per
+    /// `filteredMessages.count` change (and once at entry). Reading
+    /// `cachedRawTurns` is then free.
+    private func refreshGroupingCache() {
+        let newRaw = groupMessagesIntoTurns(filteredMessages)
+        cachedRawTurns = newRaw
+        // Count includes the synthetic streaming turn if present.
+        let streamingTailNeeded: Bool = {
+            guard streaming != nil else { return false }
+            if let last = newRaw.last, case .turn(let turn) = last, turn.finalMessage == nil {
+                return false
+            }
+            return true
+        }()
+        cachedAllTurnCount = newRaw.count + (streamingTailNeeded ? 1 : 0)
+    }
+
     private func followBottomOnNewTurns() {
-        let newTotal = allGroupedTurns.count
+        let newTotal = cachedAllTurnCount
         defer { lastSeenTotalTurns = newTotal }
         guard didInitialScroll, newTotal > lastSeenTotalTurns else { return }
 
@@ -991,17 +1054,12 @@ struct ChatView: View {
         return messageScrollId(msg)
     }
 
-    /// Expand the rendered window if necessary so the given message
-    /// (typically an unread entry-scroll target) is in the SwiftUI
-    /// tree. Walks `allGroupedTurns` from the bottom looking for the
-    /// item containing `msg`, then ensures `renderedTurnCount` covers
-    /// enough turns to include it.
     /// Position the rendered window so the target message is visible.
     /// Places the target's turn near the top of the window with up to
     /// 2 turns of context above (so backward scroll has something to
     /// reveal). Window grows downward up to `maxRenderedTurns`.
     private func ensureRenderedWindowIncludes(_ msg: ChatMessage) {
-        let all = allGroupedTurns
+        let all = cachedRawTurns
         var idx = -1
         for (i, item) in all.enumerated() {
             switch item {
@@ -1023,8 +1081,8 @@ struct ChatView: View {
         let beforeCount = renderedTurnCount
         let bufferAbove = min(idx, 2)
         renderWindowStartIdx = idx - bufferAbove
-        renderedTurnCount = min(Self.maxRenderedTurns, all.count - renderWindowStartIdx)
-        KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx)/\(all.count); window startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) bufferAbove=\(bufferAbove)")
+        renderedTurnCount = min(Self.maxRenderedTurns, cachedAllTurnCount - renderWindowStartIdx)
+        KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx)/\(cachedAllTurnCount); window startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) bufferAbove=\(bufferAbove)")
     }
 
     /// Stable ScrollView target id for any non-user message bubble
@@ -1102,7 +1160,14 @@ struct ChatView: View {
     }
 
     private func performEntryScroll(proxy: ScrollViewProxy) async {
-        KLog.d("📍entryScroll START sessionId=\(sessionId.prefix(8)) filteredMsgs=\(filteredMessages.count) allTurns=\(allGroupedTurns.count)")
+        // Populate the grouping cache before anything else reads it.
+        // The cache backs `allGroupedTurns`, which dozens of helpers
+        // below touch. Without this initial population, the first
+        // body render would see `cachedRawTurns = []` and render an
+        // empty chat for one frame, plus all helpers downstream would
+        // see allTurns=0 and mis-size the window.
+        refreshGroupingCache()
+        KLog.d("📍entryScroll START sessionId=\(sessionId.prefix(8)) filteredMsgs=\(filteredMessages.count) allTurns=\(cachedAllTurnCount)")
         // Reset on session switch (.task(id:) re-runs when sessionId changes)
         didInitialScroll = false
         // NOTE: don't wipe userBubbleFrames here. By the time this async
@@ -1120,7 +1185,7 @@ struct ChatView: View {
         // anchored to the bottom; the user can scroll up past the
         // spinner to expand the window, which grows up to
         // `maxRenderedTurns` then slides further as needed.
-        let totalTurns = allGroupedTurns.count
+        let totalTurns = cachedAllTurnCount
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurns))
         renderWindowStartIdx = max(0, totalTurns - renderedTurnCount)
         lastWindowExpansion = nil
@@ -1169,11 +1234,16 @@ struct ChatView: View {
             return
         }
 
+        // Refresh the cache now that the polling window is done — new
+        // messages may have arrived during the awaits, and we need
+        // the post-poll turn count to size the window correctly.
+        refreshGroupingCache()
+
         // Re-anchor the render window to the bottom now that we know
         // the real turn count. If `startedEmpty` was true at the top
         // this is the first time we have a valid total to position
         // the window against.
-        let totalTurnsAfterPoll = allGroupedTurns.count
+        let totalTurnsAfterPoll = cachedAllTurnCount
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurnsAfterPoll))
         renderWindowStartIdx = max(0, totalTurnsAfterPoll - renderedTurnCount)
         // Initialize the follow-bottom baseline. Without this, the
@@ -1308,7 +1378,7 @@ struct ChatView: View {
         // `checkLockTransition` to work. If the user was exploring
         // history when a live message arrived, this drags them to
         // the latest turn alongside R1's followBottom scroll.
-        let total = allGroupedTurns.count
+        let total = cachedAllTurnCount
         if total > 0 {
             renderWindowStartIdx = max(0, total - renderedTurnCount)
         }
