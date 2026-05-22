@@ -52,9 +52,21 @@ struct ChatView: View {
     /// The user can scroll up past the rendered window to auto-expand.
     private static let initialRenderTurnCount: Int = 5
     /// Number of additional turns to bring into the rendered window
-    /// each time the top spinner becomes visible and folded in-memory
-    /// turns remain.
+    /// each time the user hits the spinner threshold and folded
+    /// in-memory turns remain.
     private static let renderExpandStep: Int = 5
+    /// Hard cap on the rendered window size. Once the window has
+    /// grown to this size, further top-edge expansion drops an equal
+    /// number of turns from the bottom (sliding window). Conversely
+    /// when the user scrolls toward the bottom-edge of the rendered
+    /// window with folded turns below, the window slides down. Keeps
+    /// layout passes bounded regardless of how much history the user
+    /// scrolls through.
+    private static let maxRenderedTurns: Int = 15
+    /// Distance from the bottom of content (in points) at which the
+    /// bottom-edge expansion rule fires. Mirrors `topSpinnerHeight +
+    /// topSpinnerSlop` semantics for the other end.
+    private static let bottomEdgeSlop: CGFloat = 60
     /// Minimum gap between two consecutive window expansions. Without
     /// throttling, `onScrollGeometryChange` fires fast enough to expand
     /// the entire memory store in one tick once the spinner becomes
@@ -102,25 +114,35 @@ struct ChatView: View {
 
     // MARK: - Render windowing (Phase C)
     //
-    // We render only the last `renderedTurnCount` turns from the
-    // grouped message list. Older turns stay in `messageStore` but
+    // We render a SLIDING window of turns from the grouped message
+    // list — the bounds are `[renderWindowStartIdx, renderWindowStartIdx
+    // + renderedTurnCount)`. Older turns stay in `messageStore` but
     // are not in the SwiftUI tree, so layout passes and R1/R2 frame
     // measurement scale with the visible window rather than the
     // entire session history.
     //
-    // The window auto-expands as the user scrolls toward the top
-    // spinner (see `maybeAutoLoadOlder`), so functionally it looks
-    // like an infinite-scroll-up feed.
+    // The window auto-grows and slides as the user scrolls:
+    //   - Top edge near viewport: expand top. If already at
+    //     `maxRenderedTurns`, slide window up (drop bottom turns).
+    //   - Bottom edge near viewport and folded turns below: slide
+    //     window down (drop top turns).
+    //   - New user message arrives (R1 triggers): snap window to
+    //     latest turns so R1 has the live turn in tree.
 
-    /// Number of latest turns currently rendered. Reset to
-    /// `initialRenderTurnCount` on session entry and grown by
-    /// `renderExpandStep` each time the user scrolls back to the top
-    /// spinner. Network paging only kicks in once the in-memory store
-    /// is exhausted.
+    /// Number of turns currently rendered (slice size). Reset to
+    /// `initialRenderTurnCount` on session entry; grown by
+    /// `renderExpandStep` per expansion up to `maxRenderedTurns`.
+    /// Beyond that the window slides via `renderWindowStartIdx`
+    /// rather than growing.
     @State private var renderedTurnCount: Int = ChatView.initialRenderTurnCount
+    /// Offset within `allGroupedTurns` of the topmost rendered turn.
+    /// Render slice = `allGroupedTurns[startIdx ..< startIdx + renderedTurnCount]`.
+    /// Initialized at session entry to anchor the window at the
+    /// bottom (`max(0, totalTurns - initialRenderTurnCount)`).
+    @State private var renderWindowStartIdx: Int = 0
     /// Timestamp of the last window expansion. Used to debounce so a
-    /// single hit-top doesn't cascade through the entire memory store
-    /// in one render tick.
+    /// single at-edge tick doesn't cascade through the entire memory
+    /// store in one render pass.
     @State private var lastWindowExpansion: Date? = nil
 
     // MARK: - R1 Growing-Reply State
@@ -247,11 +269,24 @@ struct ChatView: View {
         return isLoading
     }
 
+    /// Whether folded turns exist ABOVE the rendered window — i.e.,
+    /// in-memory turns at indices below `renderWindowStartIdx`.
+    private var hasFoldedTurnsAbove: Bool {
+        renderWindowStartIdx > 0
+    }
+
+    /// Whether folded turns exist BELOW the rendered window — i.e.,
+    /// in-memory turns at indices ≥ `renderWindowStartIdx +
+    /// renderedTurnCount`.
+    private var hasFoldedTurnsBelow: Bool {
+        renderWindowStartIdx + renderedTurnCount < allGroupedTurns.count
+    }
+
     /// Whether the rendered window is smaller than the in-memory
     /// turn count — i.e., older turns exist in memory but not in
-    /// the SwiftUI tree.
+    /// the SwiftUI tree. Either above OR below the window counts.
     private var hasFoldedTurns: Bool {
-        allGroupedTurns.count > renderedTurnCount
+        hasFoldedTurnsAbove || hasFoldedTurnsBelow
     }
 
     /// Session streaming content.
@@ -273,15 +308,18 @@ struct ChatView: View {
         return raw + [.turn(Turn(id: "streaming", thinkingMessages: [], finalMessage: nil, isActive: true))]
     }
 
-    /// Grouped turn items, windowed to the last `renderedTurnCount`
-    /// items. This is what the ScrollView ForEach iterates over —
-    /// older turns stay in memory but out of the SwiftUI tree.
+    /// Grouped turn items, windowed via the sliding-window state.
+    /// Slice = `allGroupedTurns[renderWindowStartIdx ..<
+    /// renderWindowStartIdx + renderedTurnCount]`. Bounds-clamped so
+    /// late state updates can't crash even if `renderWindowStartIdx`
+    /// drifts past `allGroupedTurns.count`.
     private var grouped: [TurnItem] {
         let all = allGroupedTurns
-        if all.count > renderedTurnCount {
-            return Array(all.suffix(renderedTurnCount))
-        }
-        return all
+        guard !all.isEmpty else { return [] }
+        let start = max(0, min(renderWindowStartIdx, all.count))
+        let end = min(start + renderedTurnCount, all.count)
+        guard start < end else { return [] }
+        return Array(all[start..<end])
     }
 
     /// Whether the session is idle (last message is idle type).
@@ -554,49 +592,81 @@ struct ChatView: View {
         return nil
     }
 
-    // MARK: - Auto-load older messages
+    // MARK: - Auto-load older messages / window sliding
 
-    /// Fire while the top spinner is in/near the viewport.
+    /// Sliding-window auto-load. Two trigger zones; called from the
+    /// scroll-metrics action.
     ///
-    /// Priority chain:
-    ///   1. If folded turns remain in memory, expand the render
-    ///      window (`renderedTurnCount`) by `renderExpandStep`. This
-    ///      is instant — no network — and brings older turns from
-    ///      `messageStore` into the SwiftUI tree.
-    ///   2. Otherwise, if `firstSeq > 1` and we're not already
-    ///      fetching, request the next page from tentacle.
+    /// **Top edge** (scrollOffsetY < topSpinnerHeight + topSpinnerSlop):
+    ///   1. If there are folded turns ABOVE the rendered window:
+    ///      shift the window up. If size < maxRenderedTurns, also
+    ///      grow it; otherwise drop equivalent turns from the bottom
+    ///      (slide).
+    ///   2. Else if `firstSeq > 1` (more network history): fetch.
     ///
-    /// A 400ms debounce on window expansion stops `onScrollGeometryChange`
-    /// from cascading the entire in-memory store into the window in a
-    /// single tick. Network fetches are already debounced by the
-    /// provider's `isLoading` per-key dedupe.
+    /// **Bottom edge** (scrollOffsetY + viewportHeight >
+    /// chatContentHeight - bottomEdgeSlop):
+    ///   - If there are folded turns BELOW: slide the window down.
+    ///     Drops top turns, adds bottom turns. R1 is guaranteed not
+    ///     to be active here because user-scroll releases R1.
+    ///
+    /// A 400ms debounce on window slides stops `onScrollGeometryChange`
+    /// from cascading shifts in a single render pass.
+    ///
+    /// All slides are gated on `growMode == .idle` so an active R1
+    /// (followBottom or lockedAtTop) doesn't have its anchored bubble
+    /// dropped from the rendered set.
     private func maybeAutoLoadOlder() {
-        // Don't auto-load until entry-scroll has positioned us. During
-        // entry-scroll the content height is still growing and
-        // scrollOffsetY is transiently 0 (top), which would otherwise
-        // trip the spinner-visible threshold and expand the window
-        // before the user has even scrolled.
+        // Don't auto-load until entry-scroll has positioned us.
         guard didInitialScroll else { return }
+        // Don't slide while R1 owns scroll — its anchor bubble must
+        // stay in the rendered window.
+        guard growMode == .idle else { return }
 
-        let threshold = Self.topSpinnerHeight + Self.topSpinnerSlop
-        guard scrollOffsetY < threshold else { return }
+        // Top-edge: expand window upward
+        let topThreshold = Self.topSpinnerHeight + Self.topSpinnerSlop
+        if scrollOffsetY < topThreshold {
+            handleTopEdgeExpand()
+            return
+        }
 
-        // Priority 1: expand window into already-loaded turns.
-        if hasFoldedTurns {
+        // Bottom-edge: slide window downward (only when there's
+        // somewhere below to slide into)
+        let viewportBottomY = scrollOffsetY + viewportHeight
+        let bottomThreshold = chatContentHeight - Self.bottomEdgeSlop
+        if hasFoldedTurnsBelow && viewportBottomY > bottomThreshold {
+            handleBottomEdgeExpand()
+            return
+        }
+    }
+
+    /// Top-edge expansion: grow window upward, or slide up if at cap.
+    private func handleTopEdgeExpand() {
+        // Priority 1: bring folded-above turns into the window.
+        if hasFoldedTurnsAbove {
             let now = Date()
             if let last = lastWindowExpansion,
                now.timeIntervalSince(last) < Self.windowExpandDebounce {
                 return
             }
             lastWindowExpansion = now
+
             let total = allGroupedTurns.count
-            let before = renderedTurnCount
-            renderedTurnCount = min(total, renderedTurnCount + Self.renderExpandStep)
-            KLog.d("🔝autoLoad: window-expand \(before)→\(renderedTurnCount) (allTurns=\(total)) offsetY=\(scrollOffsetY)")
+            let beforeStart = renderWindowStartIdx
+            let beforeCount = renderedTurnCount
+            let newStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
+            if renderedTurnCount < Self.maxRenderedTurns {
+                // Grow: extend top, keep bottom edge fixed.
+                renderedTurnCount = min(Self.maxRenderedTurns,
+                                         renderedTurnCount + Self.renderExpandStep)
+            }
+            // After potential growth, clamp so window stays in bounds.
+            renderWindowStartIdx = min(newStart, max(0, total - renderedTurnCount))
+            KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total))")
             return
         }
 
-        // Priority 2: fetch from network.
+        // Priority 2: network fetch for older history not yet in memory.
         guard !isLoading else { return }
         let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
         guard firstSeq > 1 else {
@@ -605,6 +675,26 @@ struct ChatView: View {
         }
         KLog.d("🔝autoLoad: network-fetch beforeSeq=\(firstSeq) offsetY=\(scrollOffsetY)")
         appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
+    }
+
+    /// Bottom-edge expansion: slide window down to bring folded-below
+    /// turns into view. Drops an equivalent number of turns from the
+    /// top (the user is approaching the bottom; top turns are well
+    /// off-screen).
+    private func handleBottomEdgeExpand() {
+        let now = Date()
+        if let last = lastWindowExpansion,
+           now.timeIntervalSince(last) < Self.windowExpandDebounce {
+            return
+        }
+        lastWindowExpansion = now
+
+        let total = allGroupedTurns.count
+        let beforeStart = renderWindowStartIdx
+        let newStart = min(total - renderedTurnCount,
+                            renderWindowStartIdx + Self.renderExpandStep)
+        renderWindowStartIdx = max(0, newStart)
+        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
     }
 
     // MARK: - R2: Sticky User Bubble Overlay
@@ -849,6 +939,10 @@ struct ChatView: View {
     /// tree. Walks `allGroupedTurns` from the bottom looking for the
     /// item containing `msg`, then ensures `renderedTurnCount` covers
     /// enough turns to include it.
+    /// Position the rendered window so the target message is visible.
+    /// Places the target's turn near the top of the window with up to
+    /// 2 turns of context above (so backward scroll has something to
+    /// reveal). Window grows downward up to `maxRenderedTurns`.
     private func ensureRenderedWindowIncludes(_ msg: ChatMessage) {
         let all = allGroupedTurns
         var idx = -1
@@ -868,11 +962,12 @@ struct ChatView: View {
             KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) NOT FOUND in allTurns(\(all.count))")
             return
         }
-        let turnsFromBottom = all.count - idx
-        KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx) (\(turnsFromBottom) from bottom), renderedTurnCount=\(renderedTurnCount)")
-        if turnsFromBottom > renderedTurnCount {
-            renderedTurnCount = turnsFromBottom
-        }
+        let beforeStart = renderWindowStartIdx
+        let beforeCount = renderedTurnCount
+        let bufferAbove = min(idx, 2)
+        renderWindowStartIdx = idx - bufferAbove
+        renderedTurnCount = min(Self.maxRenderedTurns, all.count - renderWindowStartIdx)
+        KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx)/\(all.count); window startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) bufferAbove=\(bufferAbove)")
     }
 
     /// Stable ScrollView target id for any non-user message bubble
@@ -965,9 +1060,12 @@ struct ChatView: View {
         growMode = .idle
         lockedMsgId = nil
         // Reset the render window for the new session — last 5 turns
-        // by default; the user can scroll up past the spinner to bring
-        // older turns into the SwiftUI tree.
-        renderedTurnCount = Self.initialRenderTurnCount
+        // anchored to the bottom; the user can scroll up past the
+        // spinner to expand the window, which grows up to
+        // `maxRenderedTurns` then slides further as needed.
+        let totalTurns = allGroupedTurns.count
+        renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurns))
+        renderWindowStartIdx = max(0, totalTurns - renderedTurnCount)
         lastWindowExpansion = nil
         // Capture whether we started empty BEFORE any await. We use
         // this at the tail to distinguish "fresh load — all messages
@@ -1013,7 +1111,16 @@ struct ChatView: View {
             didInitialScroll = true
             return
         }
-        KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(allGroupedTurns.count) renderedTurnCount=\(renderedTurnCount) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
+
+        // Re-anchor the render window to the bottom now that we know
+        // the real turn count. If `startedEmpty` was true at the top
+        // this is the first time we have a valid total to position
+        // the window against.
+        let totalTurnsAfterPoll = allGroupedTurns.count
+        renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurnsAfterPoll))
+        renderWindowStartIdx = max(0, totalTurnsAfterPoll - renderedTurnCount)
+
+        KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(totalTurnsAfterPoll) window=[\(renderWindowStartIdx),\(renderWindowStartIdx+renderedTurnCount)) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
 
         // Re-baseline ONLY for fresh loads — the messages that just
         // landed are historical backfill and must not trip R1. For
@@ -1132,6 +1239,16 @@ struct ChatView: View {
         lockedUserSeq = seq
         lockedMsgId = msg.id
         growMode = .followBottom
+        // Snap the render window to the bottom — R1's anchor bubble
+        // (the new user message) MUST be in the rendered tree for
+        // `userBubbleFrames[msg.id]` to be populated and for
+        // `checkLockTransition` to work. If the user was exploring
+        // history when a live message arrived, this drags them to
+        // the latest turn alongside R1's followBottom scroll.
+        let total = allGroupedTurns.count
+        if total > 0 {
+            renderWindowStartIdx = max(0, total - renderedTurnCount)
+        }
         // Reset the visibility gate. LOCK in checkLockTransition is only
         // permitted after we've seen the new bubble inside the viewport
         // at least once — this prevents an immediate re-LOCK when a
