@@ -46,6 +46,21 @@ struct ChatView: View {
     /// inset jitter (keyboard, safe-area shifts) doesn't bounce the
     /// auto-loader off/on.
     private static let topSpinnerSlop: CGFloat = 24
+    /// Number of latest turns to render on session entry. Older turns
+    /// stay in memory but are not in the SwiftUI tree (cheaper layout
+    /// passes, R1/R2 frame measurement only over the visible window).
+    /// The user can scroll up past the rendered window to auto-expand.
+    private static let initialRenderTurnCount: Int = 5
+    /// Number of additional turns to bring into the rendered window
+    /// each time the top spinner becomes visible and folded in-memory
+    /// turns remain.
+    private static let renderExpandStep: Int = 5
+    /// Minimum gap between two consecutive window expansions. Without
+    /// throttling, `onScrollGeometryChange` fires fast enough to expand
+    /// the entire memory store in one tick once the spinner becomes
+    /// visible — defeating the windowing purpose. With debounce the
+    /// user sees one batch at a time as they continue scrolling up.
+    private static let windowExpandDebounce: TimeInterval = 0.4
 
     // MARK: - Scroll Tracers
     //
@@ -70,6 +85,29 @@ struct ChatView: View {
     /// True once the entry-time scroll positioning has been performed for
     /// the current sessionId. Reset when sessionId changes.
     @State private var didInitialScroll = false
+
+    // MARK: - Render windowing (Phase C)
+    //
+    // We render only the last `renderedTurnCount` turns from the
+    // grouped message list. Older turns stay in `messageStore` but
+    // are not in the SwiftUI tree, so layout passes and R1/R2 frame
+    // measurement scale with the visible window rather than the
+    // entire session history.
+    //
+    // The window auto-expands as the user scrolls toward the top
+    // spinner (see `maybeAutoLoadOlder`), so functionally it looks
+    // like an infinite-scroll-up feed.
+
+    /// Number of latest turns currently rendered. Reset to
+    /// `initialRenderTurnCount` on session entry and grown by
+    /// `renderExpandStep` each time the user scrolls back to the top
+    /// spinner. Network paging only kicks in once the in-memory store
+    /// is exhausted.
+    @State private var renderedTurnCount: Int = ChatView.initialRenderTurnCount
+    /// Timestamp of the last window expansion. Used to debounce so a
+    /// single hit-top doesn't cascade through the entire memory store
+    /// in one render tick.
+    @State private var lastWindowExpansion: Date? = nil
 
     // MARK: - R1 Growing-Reply State
     //
@@ -107,7 +145,20 @@ struct ChatView: View {
     /// can land the tapped user bubble's top exactly at the viewport
     /// top — the precise threshold where the natural pill-opacity rule
     /// hides the pill and reveals the original bubble in chat.
-    @State private var chatScrollPosition: ScrollPosition = .init()
+    ///
+    /// **Phase A pre-positioning:** initialized with `.scrollTo(id:
+    /// "chat-bottom", anchor: .bottom)` so the very first paint of the
+    /// ScrollView lands at the chat-bottom sentinel. Without this, the
+    /// `.scrollPosition($pos, anchor: .top)` modifier shadows
+    /// `defaultScrollAnchor(.bottom)` and the initial render starts at
+    /// y=0 (top of content), forcing the entry-scroll task to animate
+    /// down to the bottom — visible as a "scroll into place" delay
+    /// when opening a session.
+    @State private var chatScrollPosition: ScrollPosition = {
+        var pos = ScrollPosition()
+        pos.scrollTo(id: "chat-bottom", anchor: .bottom)
+        return pos
+    }()
     /// Top content inset of the chat scroll view, tracked from
     /// `onScrollGeometryChange` so we can convert between our
     /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
@@ -161,11 +212,22 @@ struct ChatView: View {
         messageStore.messages[sessionId] ?? []
     }
 
-    /// Whether older messages exist (first seq > 1).
+    /// Whether older content can be brought into view — either by
+    /// expanding the render window into already-in-memory turns
+    /// (`hasFoldedTurns`) or by fetching more from tentacle
+    /// (`firstSeq > 1`). Drives the top spinner row's visibility.
     private var hasOlderMessages: Bool {
+        if hasFoldedTurns { return true }
         let seqs = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }
         guard let first = seqs.min() else { return false }
         return first > 1
+    }
+
+    /// Whether the rendered window is smaller than the in-memory
+    /// turn count — i.e., older turns exist in memory but not in
+    /// the SwiftUI tree.
+    private var hasFoldedTurns: Bool {
+        allGroupedTurns.count > renderedTurnCount
     }
 
     /// Session streaming content.
@@ -173,8 +235,10 @@ struct ChatView: View {
         sessionStore.streamingContent[sessionId]
     }
 
-    /// Grouped turn items.
-    private var grouped: [TurnItem] {
+    /// Full grouped turn list (all in-memory messages, no windowing).
+    /// Used to determine total turn count and to find a target's
+    /// position relative to the bottom for window-expansion math.
+    private var allGroupedTurns: [TurnItem] {
         let raw = groupMessagesIntoTurns(filteredMessages)
 
         // Ensure streaming always attaches to a turn group
@@ -182,8 +246,18 @@ struct ChatView: View {
         if let last = raw.last, case .turn(let turn) = last, turn.finalMessage == nil {
             return raw
         }
-        // Append an empty in-progress turn for streaming
         return raw + [.turn(Turn(id: "streaming", thinkingMessages: [], finalMessage: nil, isActive: true))]
+    }
+
+    /// Grouped turn items, windowed to the last `renderedTurnCount`
+    /// items. This is what the ScrollView ForEach iterates over —
+    /// older turns stay in memory but out of the SwiftUI tree.
+    private var grouped: [TurnItem] {
+        let all = allGroupedTurns
+        if all.count > renderedTurnCount {
+            return Array(all.suffix(renderedTurnCount))
+        }
+        return all
     }
 
     /// Whether the session is idle (last message is idle type).
@@ -452,27 +526,42 @@ struct ChatView: View {
 
     // MARK: - Auto-load older messages
 
-    /// Fire `requestBefore` continuously while the top spinner is
-    /// in/near the viewport. Subsumes both web rules:
-    ///   - "auto-load when content fits viewport" — if the content
-    ///     fits, the spinner row is naturally at the top of the
-    ///     viewport, so this triggers.
-    ///   - "auto-load when user scrolls near top" — scrollOffsetY
-    ///     drops below the spinner's threshold the moment it's
-    ///     visible.
-    /// The `messageProvider.isLoading` dedupe prevents thrash; the
-    /// per-batch arrival re-decrements firstSeq and re-evaluates.
+    /// Fire while the top spinner is in/near the viewport.
+    ///
+    /// Priority chain:
+    ///   1. If folded turns remain in memory, expand the render
+    ///      window (`renderedTurnCount`) by `renderExpandStep`. This
+    ///      is instant — no network — and brings older turns from
+    ///      `messageStore` into the SwiftUI tree.
+    ///   2. Otherwise, if `firstSeq > 1` and we're not already
+    ///      fetching, request the next page from tentacle.
+    ///
+    /// A 400ms debounce on window expansion stops `onScrollGeometryChange`
+    /// from cascading the entire in-memory store into the window in a
+    /// single tick. Network fetches are already debounced by the
+    /// provider's `isLoading` per-key dedupe.
     private func maybeAutoLoadOlder() {
-        guard hasOlderMessages else { return }
-        guard !isLoading else { return }
+        let threshold = Self.topSpinnerHeight + Self.topSpinnerSlop
+        guard scrollOffsetY < threshold else { return }
 
+        // Priority 1: expand window into already-loaded turns.
+        if hasFoldedTurns {
+            let now = Date()
+            if let last = lastWindowExpansion,
+               now.timeIntervalSince(last) < Self.windowExpandDebounce {
+                return
+            }
+            lastWindowExpansion = now
+            let total = allGroupedTurns.count
+            renderedTurnCount = min(total, renderedTurnCount + Self.renderExpandStep)
+            return
+        }
+
+        // Priority 2: fetch from network.
+        guard !isLoading else { return }
         let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
         guard firstSeq > 1 else { return }
-
-        let threshold = Self.topSpinnerHeight + Self.topSpinnerSlop
-        if scrollOffsetY < threshold {
-            appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
-        }
+        appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
     }
 
     // MARK: - R2: Sticky User Bubble Overlay
@@ -701,6 +790,44 @@ struct ChatView: View {
         "user-\(msg.id)"
     }
 
+    /// Resolve the appropriate scroll id for any ChatMessage based on
+    /// its type — user/send_input get `userScrollId`, everything else
+    /// gets `messageScrollId`. Used by the entry-scroll priority
+    /// chain so target messages map to their actual SwiftUI id.
+    private func scrollId(for msg: ChatMessage) -> String {
+        if msg.type == "user_message" || msg.type == "send_input" {
+            return userScrollId(msg)
+        }
+        return messageScrollId(msg)
+    }
+
+    /// Expand the rendered window if necessary so the given message
+    /// (typically an unread entry-scroll target) is in the SwiftUI
+    /// tree. Walks `allGroupedTurns` from the bottom looking for the
+    /// item containing `msg`, then ensures `renderedTurnCount` covers
+    /// enough turns to include it.
+    private func ensureRenderedWindowIncludes(_ msg: ChatMessage) {
+        let all = allGroupedTurns
+        var idx = -1
+        for (i, item) in all.enumerated() {
+            switch item {
+            case .standalone(let m):
+                if m.id == msg.id { idx = i }
+            case .turn(let t):
+                if t.finalMessage?.id == msg.id ||
+                   t.thinkingMessages.contains(where: { $0.id == msg.id }) {
+                    idx = i
+                }
+            }
+            if idx >= 0 { break }
+        }
+        guard idx >= 0 else { return }
+        let turnsFromBottom = all.count - idx
+        if turnsFromBottom > renderedTurnCount {
+            renderedTurnCount = turnsFromBottom
+        }
+    }
+
     /// Stable ScrollView target id for any non-user message bubble
     /// (used by the entry-scroll priority chain to anchor on a
     /// pending question or the most-recent finalMessage).
@@ -727,14 +854,16 @@ struct ChatView: View {
 
     /// Resolve the entry-scroll target for an unread session. Returns
     /// `nil` to mean "scroll to bottom" (rules 4 or no usable target).
-    private func entryScrollTarget() -> (id: String, anchor: UnitPoint)? {
+    /// Returns the target ChatMessage so callers can both derive the
+    /// scroll id and ensure the rendered window includes it.
+    private func entryScrollTarget() -> (msg: ChatMessage, anchor: UnitPoint)? {
         // 1. Last unanswered question (highest priority — user can act)
         for msg in filteredMessages.reversed() {
             if msg.type == "question" {
                 let answer = msg.answer ?? ""
                 let resolution = msg.resolution
                 if answer.isEmpty && resolution == nil {
-                    return (messageScrollId(msg), .top)
+                    return (msg, .top)
                 }
             }
         }
@@ -742,7 +871,7 @@ struct ChatView: View {
         // 2. If idle, last user_message / send_input — read your own
         //    message → agent's reply naturally.
         if sessionIdle, let target = lastUserMessage {
-            return (userScrollId(target), .top)
+            return (target, .top)
         }
 
         // 3. Last turn with a finalMessage — read the latest agent reply
@@ -753,7 +882,7 @@ struct ChatView: View {
                 // agent_message and followed only by idle/standalone
                 // boundary types. Defensive — most "agent_message"
                 // entries in an idle session ARE finals.
-                return (messageScrollId(msg), .top)
+                return (msg, .top)
             }
         }
 
@@ -775,6 +904,11 @@ struct ChatView: View {
         scrollOffsetY = 0
         growMode = .idle
         lockedMsgId = nil
+        // Reset the render window for the new session — last 5 turns
+        // by default; the user can scroll up past the spinner to bring
+        // older turns into the SwiftUI tree.
+        renderedTurnCount = Self.initialRenderTurnCount
+        lastWindowExpansion = nil
         // Capture whether we started empty BEFORE any await. We use
         // this at the tail to distinguish "fresh load — all messages
         // are backfill, baseline silently" from "session was already
@@ -835,8 +969,10 @@ struct ChatView: View {
             // arrive after the initial scrollTo push the target's
             // content-space minY past where we anchored — leaving the
             // user on older content instead of their intended target.
-            stickToTargetInstant(proxy: proxy, target: target)
-            await settleEntry { stickToTargetInstant(proxy: proxy, target: target) }
+            ensureRenderedWindowIncludes(target.msg)
+            let scrollTarget = (id: scrollId(for: target.msg), anchor: target.anchor)
+            stickToTargetInstant(proxy: proxy, target: scrollTarget)
+            await settleEntry { stickToTargetInstant(proxy: proxy, target: scrollTarget) }
         } else {
             // Read → land at the bottom and keep re-pinning. Content
             // height typically keeps growing for several hundred ms
