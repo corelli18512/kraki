@@ -488,17 +488,23 @@ export class LocalAuthBackend implements AuthBackend {
 
   private async resolveAuthUser(auth: AuthMethod): Promise<AuthUser | { ok: false; code: string; message: string }> {
     let provider: AuthProvider | undefined;
-    let credentials: { token?: string; githubCode?: string; ip?: string } = {};
+    let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string; ip?: string } = {};
 
     switch (auth.method) {
       case 'github_token':
         provider = this.getProviderForMode('github');
         credentials = { token: auth.token };
         break;
-      case 'github_oauth':
+      case 'github_oauth': {
         provider = this.getProviderForMode('github');
-        credentials = { githubCode: auth.code };
+        const oauthAuth = auth as { method: 'github_oauth'; code: string; codeVerifier?: string; redirectUri?: string };
+        credentials = {
+          githubCode: oauthAuth.code,
+          codeVerifier: typeof oauthAuth.codeVerifier === 'string' ? oauthAuth.codeVerifier : undefined,
+          redirectUri: typeof oauthAuth.redirectUri === 'string' ? oauthAuth.redirectUri : undefined,
+        };
         break;
+      }
       case 'apikey':
         provider = this.getProviderForMode('apikey');
         credentials = { token: auth.key };

@@ -467,12 +467,18 @@ export class KrakiWSClient {
       this.transport.pairingToken,
       this.transport.storedDeviceId,
       this.transport.githubCode,
+      {
+        codeVerifier: this.transport.codeVerifier,
+        redirectUri: this.transport.redirectUri,
+      },
     );
     if (usedToken) {
       this.transport.pairingToken = undefined;
     }
     if (this.transport.githubCode) {
       this.transport.githubCode = undefined;
+      this.transport.codeVerifier = undefined;
+      this.transport.redirectUri = undefined;
     }
   }
 

@@ -73,6 +73,72 @@ describe('GitHubAuthProvider', () => {
       expect(result.message).toContain('Unexpected');
     }
   });
+
+  it('forwards code_verifier and redirect_uri to GitHub when exchanging an OAuth code', async () => {
+    // Intercept the two fetch calls (token-exchange POST, then user-info GET).
+    const seenBodies: string[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('/login/oauth/access_token')) {
+        seenBodies.push(typeof init?.body === 'string' ? init.body : '');
+        return new Response(JSON.stringify({ access_token: 'gho_xyz' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ id: 1, login: 'corelli' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const provider = new GitHubAuthProvider({
+      fetcher,
+      clientId: 'Ov_test',
+      clientSecret: 'sek',
+    });
+    const result = await provider.authenticate({
+      githubCode: 'code_xyz',
+      codeVerifier: 'verifier_42',
+      redirectUri: 'https://app.example.com/auth/callback',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(seenBodies).toHaveLength(1);
+    const body = JSON.parse(seenBodies[0]) as Record<string, string>;
+    expect(body.code).toBe('code_xyz');
+    expect(body.code_verifier).toBe('verifier_42');
+    expect(body.redirect_uri).toBe('https://app.example.com/auth/callback');
+    expect(body.client_id).toBe('Ov_test');
+    expect(body.client_secret).toBe('sek');
+  });
+
+  it('omits code_verifier and redirect_uri from the exchange body when not provided', async () => {
+    let body = '';
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('/login/oauth/access_token')) {
+        body = typeof init?.body === 'string' ? init.body : '';
+        return new Response(JSON.stringify({ access_token: 'gho_xyz' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ id: 1, login: 'a' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const provider = new GitHubAuthProvider({
+      fetcher,
+      clientId: 'Ov_test',
+      clientSecret: 'sek',
+    });
+    await provider.authenticate({ githubCode: 'code_xyz' });
+
+    const parsed = JSON.parse(body) as Record<string, string>;
+    expect(parsed.code_verifier).toBeUndefined();
+    expect(parsed.redirect_uri).toBeUndefined();
+  });
 });
 
 describe('OpenAuthProvider', () => {

@@ -826,7 +826,13 @@ export class HeadServer {
 
       case 'github_oauth': {
         const provider = this.getAuthProviderForMode('github');
-        const result = await provider.authenticate({ githubCode: auth.code, ip: state.ip });
+        const oauthAuth = auth as { method: 'github_oauth'; code: string; codeVerifier?: string; redirectUri?: string };
+        const result = await provider.authenticate({
+          githubCode: oauthAuth.code,
+          codeVerifier: typeof oauthAuth.codeVerifier === 'string' ? oauthAuth.codeVerifier : undefined,
+          redirectUri: typeof oauthAuth.redirectUri === 'string' ? oauthAuth.redirectUri : undefined,
+          ip: state.ip,
+        });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'github_oauth', ip: state.ip, reason: result.message });
           this.sendAuthError(ws, 'auth_rejected', result.message);
