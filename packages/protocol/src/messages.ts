@@ -715,6 +715,20 @@ export interface GithubTokenAuth {
 export interface GithubOAuthAuth {
   method: 'github_oauth';
   code: string;
+  /**
+   * PKCE code verifier — the random string whose SHA-256 hash was sent
+   * as `code_challenge` when this OAuth flow was started. Optional for
+   * back-compat, but required by GitHub's token-exchange endpoint when
+   * a `code_challenge` was originally provided.
+   */
+  codeVerifier?: string;
+  /**
+   * The exact `redirect_uri` the client used in the authorize URL.
+   * GitHub validates this matches at token-exchange time when the
+   * authorize request included one. Optional to preserve back-compat
+   * with older clients that never sent it.
+   */
+  redirectUri?: string;
 }
 
 export interface PairingAuth {

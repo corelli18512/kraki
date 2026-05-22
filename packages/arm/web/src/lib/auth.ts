@@ -15,6 +15,7 @@ export async function sendAuth(
   pairingToken: string | undefined,
   storedDeviceId: string | undefined,
   githubCode: string | undefined,
+  githubOAuthExtras?: { codeVerifier?: string; redirectUri?: string },
 ): Promise<boolean> {
   const deviceName = `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
 
@@ -36,9 +37,12 @@ export async function sendAuth(
       device,
     });
   } else if (githubCode) {
+    const oauthAuth: Record<string, unknown> = { method: 'github_oauth', code: githubCode };
+    if (githubOAuthExtras?.codeVerifier) oauthAuth.codeVerifier = githubOAuthExtras.codeVerifier;
+    if (githubOAuthExtras?.redirectUri) oauthAuth.redirectUri = githubOAuthExtras.redirectUri;
     send({
       type: 'auth',
-      auth: { method: 'github_oauth', code: githubCode },
+      auth: oauthAuth,
       device,
     });
   } else if (storedDeviceId) {

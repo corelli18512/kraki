@@ -47,6 +47,19 @@ export interface AuthCredentials {
   channelKey?: string;
   /** GitHub OAuth authorization code (exchanged for access token) */
   githubCode?: string;
+  /**
+   * PKCE code verifier matching the `code_challenge` used to obtain
+   * `githubCode`. Required by GitHub's token-exchange endpoint when
+   * the authorize request was PKCE-protected. Public clients (web,
+   * mobile) should always send this.
+   */
+  codeVerifier?: string;
+  /**
+   * Exact `redirect_uri` the client passed to GitHub's authorize
+   * endpoint. GitHub matches this at token-exchange time to defeat
+   * code substitution. Optional but recommended.
+   */
+  redirectUri?: string;
   /** IP address of the connecting device (set by the server, not the client) */
   ip?: string;
 }
@@ -83,24 +96,37 @@ export class GitHubAuthProvider implements AuthProvider {
   /**
    * Exchange a GitHub OAuth authorization code for an access token.
    * Requires clientId and clientSecret to be configured.
+   *
+   * `codeVerifier` and `redirectUri` are forwarded to GitHub when
+   * provided. GitHub requires `code_verifier` whenever the original
+   * authorize request included a `code_challenge` (PKCE), and validates
+   * `redirect_uri` against the URL used at authorize time when it was
+   * supplied. Public clients (web, mobile) should always send both.
    */
-  async exchangeCode(code: string): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
+  async exchangeCode(
+    code: string,
+    opts?: { codeVerifier?: string; redirectUri?: string },
+  ): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
     if (!this.clientId || !this.clientSecret) {
       return { ok: false, message: 'GitHub OAuth not configured (missing client_id/client_secret)' };
     }
 
     try {
+      const body: Record<string, string> = {
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        code,
+      };
+      if (opts?.codeVerifier) body.code_verifier = opts.codeVerifier;
+      if (opts?.redirectUri) body.redirect_uri = opts.redirectUri;
+
       const res = await this.fetcher('https://github.com/login/oauth/access_token', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify({
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          code,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -126,7 +152,10 @@ export class GitHubAuthProvider implements AuthProvider {
 
     // If a GitHub OAuth code is provided, exchange it for an access token first
     if (!token && credentials.githubCode) {
-      const exchange = await this.exchangeCode(credentials.githubCode);
+      const exchange = await this.exchangeCode(credentials.githubCode, {
+        codeVerifier: credentials.codeVerifier,
+        redirectUri: credentials.redirectUri,
+      });
       if (!exchange.ok) {
         return { ok: false, message: exchange.message };
       }

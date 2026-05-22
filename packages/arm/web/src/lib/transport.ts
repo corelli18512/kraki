@@ -56,6 +56,11 @@ export interface TransportCallbacks {
 }
 
 export const OAUTH_STATE_KEY = 'kraki_oauth_state';
+export const OAUTH_VERIFIER_KEY = 'kraki_oauth_verifier';
+export const OAUTH_REDIRECT_KEY = 'kraki_oauth_redirect';
+
+/** Path the SPA uses as its GitHub OAuth redirect URI. */
+export const OAUTH_CALLBACK_PATH = '/auth/callback';
 
 function safeGetItem(storage: Storage | undefined, key: string): string | null {
   if (!storage) return null;
@@ -107,16 +112,77 @@ export function consumeOAuthState(returnedState: string | undefined): boolean {
   return !!returnedState && (returnedState === sessionState || returnedState === localState);
 }
 
-/** Generate a random OAuth state param and store it persistently for CSRF protection */
-export function startOAuthFlow(clientId: string): void {
+function storePkceMaterial(verifier: string, redirectUri: string): void {
+  for (const storage of [getSessionStorage(), getLocalStorage()]) {
+    safeSetItem(storage, OAUTH_VERIFIER_KEY, verifier);
+    safeSetItem(storage, OAUTH_REDIRECT_KEY, redirectUri);
+  }
+}
+
+/**
+ * Pop the stored PKCE verifier + redirect URI used to start this
+ * OAuth flow. Removes from both session and local storage so a stale
+ * code can't be replayed against a freshly-generated verifier.
+ */
+export function consumePkceMaterial(): { codeVerifier?: string; redirectUri?: string } {
+  const verifier = safeGetItem(getSessionStorage(), OAUTH_VERIFIER_KEY)
+    ?? safeGetItem(getLocalStorage(), OAUTH_VERIFIER_KEY) ?? undefined;
+  const redirectUri = safeGetItem(getSessionStorage(), OAUTH_REDIRECT_KEY)
+    ?? safeGetItem(getLocalStorage(), OAUTH_REDIRECT_KEY) ?? undefined;
+  for (const storage of [getSessionStorage(), getLocalStorage()]) {
+    safeRemoveItem(storage, OAUTH_VERIFIER_KEY);
+    safeRemoveItem(storage, OAUTH_REDIRECT_KEY);
+  }
+  return { codeVerifier: verifier ?? undefined, redirectUri: redirectUri ?? undefined };
+}
+
+/** Generate a high-entropy PKCE code verifier (RFC 7636 §4.1). 43–128 chars. */
+function generateCodeVerifier(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return base64UrlEncode(bytes);
+}
+
+/** SHA-256 the verifier, base64url-encode the digest. PKCE S256 challenge. */
+async function deriveCodeChallenge(verifier: string): Promise<string> {
+  const buf = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return base64UrlEncode(new Uint8Array(digest));
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Start the GitHub OAuth flow.
+ *
+ * Builds a CSRF state + PKCE verifier/challenge, persists both, and
+ * navigates to GitHub's authorize endpoint with a fixed dedicated
+ * callback path (`/auth/callback`). The same callback path is the
+ * one that future Universal Links / App Links setups will claim, so
+ * mobile clients can intercept the same URL without changing the
+ * OAuth App config.
+ */
+export async function startOAuthFlow(clientId: string): Promise<void> {
   const state = crypto.randomUUID();
   storeOAuthState(state);
-  const redirectUri = window.location.origin + window.location.pathname;
+
+  const verifier = generateCodeVerifier();
+  const challenge = await deriveCodeChallenge(verifier);
+
+  const redirectUri = window.location.origin + OAUTH_CALLBACK_PATH;
+  storePkceMaterial(verifier, redirectUri);
+
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     scope: 'read:user',
     state,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
   });
   window.location.href = `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
@@ -126,6 +192,10 @@ export class KrakiTransport {
   private _url: string;
   pairingToken?: string;
   githubCode?: string;
+  /** PKCE verifier matching the challenge sent at authorize time. */
+  codeVerifier?: string;
+  /** The exact redirect_uri used at authorize time — required at exchange. */
+  redirectUri?: string;
   storedDeviceId?: string;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = RECONNECT_BASE;
@@ -158,19 +228,32 @@ export class KrakiTransport {
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;
 
-    // Validate and extract GitHub OAuth code from callback
+    // Validate and extract GitHub OAuth code from callback. The
+    // callback may arrive on the dedicated `/auth/callback` path
+    // (current builds) or on the homepage `/` (older builds that ran
+    // before the path swap — we still accept the code there so
+    // in-flight flows complete cleanly).
     if (params.githubCode) {
       if (consumeOAuthState(params.oauthState)) {
+        const pkce = consumePkceMaterial();
         this.githubCode = params.githubCode;
+        this.codeVerifier = pkce.codeVerifier;
+        this.redirectUri = pkce.redirectUri;
       } else {
         getStore().setLastError('GitHub sign-in could not be verified. Please try again.');
         logger.warn('OAuth state mismatch — ignoring code');
       }
     }
 
-    // Clean URL params after reading (don't leak pairing token or OAuth code in address bar)
+    // Clean URL params after reading (don't leak pairing token or
+    // OAuth code in address bar). When we landed on the dedicated
+    // OAuth callback path, also redirect back to root so a refresh
+    // doesn't restart the OAuth attempt on a stale code.
     if (params.token || params.githubCode) {
-      window.history.replaceState({}, '', window.location.pathname);
+      const cleanPath = window.location.pathname === OAUTH_CALLBACK_PATH
+        ? '/'
+        : window.location.pathname;
+      window.history.replaceState({}, '', cleanPath);
     }
   }
 

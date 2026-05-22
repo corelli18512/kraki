@@ -61,7 +61,7 @@ export function DashboardPage() {
 
         {clientId && (
           <button
-            onClick={() => startOAuthFlow(clientId)}
+            onClick={() => { void startOAuthFlow(clientId); }}
             className="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-[#24292f] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#32383f] dark:bg-[#f0f0f0] dark:text-[#24292f] dark:hover:bg-[#d0d0d0] animate-fade-up"
           >
             <GitHubMark className="h-5 w-5" />
