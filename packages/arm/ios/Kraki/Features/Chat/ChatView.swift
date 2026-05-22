@@ -70,15 +70,29 @@ struct ChatView: View {
 
     /// User-bubble frames in the "chat" content coordinate space.
     @State private var userBubbleFrames: [String: CGRect] = [:]
+    /// Coalesced scroll metrics. Bundling these into a single state
+    /// value (rather than 4 separate `@State` vars) means each scroll
+    /// event causes ONE observable change for SwiftUI to react to,
+    /// rather than four. Eliminates the
+    /// `<OnScrollGeometryChange Modifier> tried to update multiple times
+    /// per frame` runtime warning.
+    @State private var scrollMetrics: ChatScrollMetrics = ChatScrollMetrics(
+        offsetY: 0, viewportHeight: 0, insetTop: 0, contentHeight: 0
+    )
     /// Content-space y of the viewport top (after content insets).
-    @State private var scrollOffsetY: CGFloat = 0
+    private var scrollOffsetY: CGFloat { scrollMetrics.offsetY }
     /// Visible viewport height (after content insets).
-    @State private var viewportHeight: CGFloat = 0
+    private var viewportHeight: CGFloat { scrollMetrics.viewportHeight }
+    /// Top content inset of the chat scroll view, tracked from
+    /// `onScrollGeometryChange` so we can convert between our
+    /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
+    /// raw content-offset y when issuing programmatic scrolls.
+    private var chatScrollInsetTop: CGFloat { scrollMetrics.insetTop }
     /// Total chat scroll content height (in content space). Used to
     /// detect "the agent reply for this turn is fully visible" for
     /// the latest user message — when content's bottom edge is at or
     /// above the viewport bottom, the pill is suppressed.
-    @State private var chatContentHeight: CGFloat = 0
+    private var chatContentHeight: CGFloat { scrollMetrics.contentHeight }
 
     // MARK: - R3 Entry State
 
@@ -159,11 +173,6 @@ struct ChatView: View {
         pos.scrollTo(id: "chat-bottom", anchor: .bottom)
         return pos
     }()
-    /// Top content inset of the chat scroll view, tracked from
-    /// `onScrollGeometryChange` so we can convert between our
-    /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
-    /// raw content-offset y when issuing programmatic scrolls.
-    @State private var chatScrollInsetTop: CGFloat = 0
 
     // MARK: - Idle anchor lock
     //
@@ -215,12 +224,27 @@ struct ChatView: View {
     /// Whether older content can be brought into view — either by
     /// expanding the render window into already-in-memory turns
     /// (`hasFoldedTurns`) or by fetching more from tentacle
-    /// (`firstSeq > 1`). Drives the top spinner row's visibility.
+    /// (`firstSeq > 1`). Used by the auto-load rule.
     private var hasOlderMessages: Bool {
         if hasFoldedTurns { return true }
         let seqs = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }
         guard let first = seqs.min() else { return false }
         return first > 1
+    }
+
+    /// Whether to show the top spinner row. Only true during an
+    /// actual network fetch — window expansion (priority 1 of
+    /// `maybeAutoLoadOlder`) is synchronous and doesn't warrant a
+    /// spinner. Once the fetch completes `isLoading` flips false
+    /// and the spinner disappears.
+    private var showTopSpinner: Bool {
+        // Need both: there's actually more network history to load
+        // (otherwise spinner is misleading) AND we're currently
+        // fetching. Without the first guard we'd briefly flash the
+        // spinner if `isLoading` is true for some unrelated reason.
+        let seqs = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }
+        guard let first = seqs.min(), first > 1 else { return false }
+        return isLoading
     }
 
     /// Whether the rendered window is smaller than the in-memory
@@ -337,13 +361,13 @@ struct ChatView: View {
     private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(spacing: 12) {
-                // Top spinner row — present whenever older messages
-                // exist. While this row sits inside the viewport (i.e.
-                // the user is near the top), the
-                // `.onScrollGeometryChange` action fires `requestBefore`
-                // continuously until either `firstSeq == 1` or the
-                // spinner scrolls out of view.
-                if hasOlderMessages {
+                // Top spinner row — visible only while a NETWORK fetch
+                // is in flight. Window expansion (priority 1 of
+                // `maybeAutoLoadOlder`) is synchronous and needs no
+                // spinner. Threshold detection lives in
+                // `maybeAutoLoadOlder` via scrollOffsetY, so the
+                // spinner's presence is not needed for the trigger.
+                if showTopSpinner {
                     HStack {
                         Spacer()
                         ProgressView()
@@ -438,12 +462,18 @@ struct ChatView: View {
                 contentHeight: geo.contentSize.height
             )
         } action: { _, m in
-            scrollOffsetY = m.offsetY
-            viewportHeight = m.viewportHeight
-            chatScrollInsetTop = m.insetTop
-            chatContentHeight = m.contentHeight
-            checkLockTransition(proxy: proxy)
-            maybeAutoLoadOlder()
+            // Single observable mutation per scroll event. Helpers
+            // that themselves mutate scroll position (checkLockTransition's
+            // proxy.scrollTo, maybeAutoLoadOlder's renderedTurnCount bump)
+            // are deferred to the next runloop turn so they don't
+            // re-fire this action inside the same render pass — which is
+            // what produced the "tried to update multiple times per frame"
+            // runtime warning.
+            scrollMetrics = m
+            Task { @MainActor in
+                checkLockTransition(proxy: proxy)
+                maybeAutoLoadOlder()
+            }
         }
         .onScrollPhaseChange { _, newPhase in
             // Any direct user contact with the scroll view ends R1
@@ -541,6 +571,13 @@ struct ChatView: View {
     /// single tick. Network fetches are already debounced by the
     /// provider's `isLoading` per-key dedupe.
     private func maybeAutoLoadOlder() {
+        // Don't auto-load until entry-scroll has positioned us. During
+        // entry-scroll the content height is still growing and
+        // scrollOffsetY is transiently 0 (top), which would otherwise
+        // trip the spinner-visible threshold and expand the window
+        // before the user has even scrolled.
+        guard didInitialScroll else { return }
+
         let threshold = Self.topSpinnerHeight + Self.topSpinnerSlop
         guard scrollOffsetY < threshold else { return }
 
@@ -553,14 +590,20 @@ struct ChatView: View {
             }
             lastWindowExpansion = now
             let total = allGroupedTurns.count
+            let before = renderedTurnCount
             renderedTurnCount = min(total, renderedTurnCount + Self.renderExpandStep)
+            KLog.d("🔝autoLoad: window-expand \(before)→\(renderedTurnCount) (allTurns=\(total)) offsetY=\(scrollOffsetY)")
             return
         }
 
         // Priority 2: fetch from network.
         guard !isLoading else { return }
         let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
-        guard firstSeq > 1 else { return }
+        guard firstSeq > 1 else {
+            KLog.d("🔝autoLoad: skip network (firstSeq=\(firstSeq) — already at session start)")
+            return
+        }
+        KLog.d("🔝autoLoad: network-fetch beforeSeq=\(firstSeq) offsetY=\(scrollOffsetY)")
         appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
     }
 
@@ -821,8 +864,12 @@ struct ChatView: View {
             }
             if idx >= 0 { break }
         }
-        guard idx >= 0 else { return }
+        guard idx >= 0 else {
+            KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) NOT FOUND in allTurns(\(all.count))")
+            return
+        }
         let turnsFromBottom = all.count - idx
+        KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx) (\(turnsFromBottom) from bottom), renderedTurnCount=\(renderedTurnCount)")
         if turnsFromBottom > renderedTurnCount {
             renderedTurnCount = turnsFromBottom
         }
@@ -857,12 +904,21 @@ struct ChatView: View {
     /// Returns the target ChatMessage so callers can both derive the
     /// scroll id and ensure the rendered window includes it.
     private func entryScrollTarget() -> (msg: ChatMessage, anchor: UnitPoint)? {
-        // 1. Last unanswered question (highest priority — user can act)
+        // 1. Last unanswered question — but ONLY if it's still
+        //    "pending": no user message has been sent after it. A
+        //    question with no answer + no resolution + a later user
+        //    message has been superseded (user typed a follow-up
+        //    instead of answering). Without this guard, the rule
+        //    pulls users back into ancient history every time they
+        //    re-open a session that ever contained an unanswered
+        //    question.
+        let lastUserSeq = lastUserMessage?.seq ?? -1
         for msg in filteredMessages.reversed() {
             if msg.type == "question" {
                 let answer = msg.answer ?? ""
                 let resolution = msg.resolution
-                if answer.isEmpty && resolution == nil {
+                if answer.isEmpty && resolution == nil && msg.seq > lastUserSeq {
+                    KLog.d("entryScrollTarget=\(msg.id.prefix(8)) type=question seq=\(msg.seq) anchor=top (priority 1: pending unanswered question)")
                     return (msg, .top)
                 }
             }
@@ -871,6 +927,7 @@ struct ChatView: View {
         // 2. If idle, last user_message / send_input — read your own
         //    message → agent's reply naturally.
         if sessionIdle, let target = lastUserMessage {
+            KLog.d("entryScrollTarget=\(target.id.prefix(8)) type=\(target.type) seq=\(target.seq) anchor=top (priority 2: idle+lastUser)")
             return (target, .top)
         }
 
@@ -882,15 +939,18 @@ struct ChatView: View {
                 // agent_message and followed only by idle/standalone
                 // boundary types. Defensive — most "agent_message"
                 // entries in an idle session ARE finals.
+                KLog.d("entryScrollTarget=\(msg.id.prefix(8)) type=agent_message seq=\(msg.seq) anchor=top (priority 3: lastAgentMessage)")
                 return (msg, .top)
             }
         }
 
         // 4. Fallback: bottom.
+        KLog.d("entryScrollTarget=nil → fallback to chat-bottom")
         return nil
     }
 
     private func performEntryScroll(proxy: ScrollViewProxy) async {
+        KLog.d("📍entryScroll START sessionId=\(sessionId.prefix(8)) filteredMsgs=\(filteredMessages.count) allTurns=\(allGroupedTurns.count)")
         // Reset on session switch (.task(id:) re-runs when sessionId changes)
         didInitialScroll = false
         // NOTE: don't wipe userBubbleFrames here. By the time this async
@@ -901,7 +961,7 @@ struct ChatView: View {
         // On a fresh mount, @State defaults to [:] anyway. On a
         // session-id swap within the same mount, the next preference
         // fire will overwrite with new-session frames.
-        scrollOffsetY = 0
+        scrollMetrics = ChatScrollMetrics(offsetY: 0, viewportHeight: scrollMetrics.viewportHeight, insetTop: scrollMetrics.insetTop, contentHeight: scrollMetrics.contentHeight)
         growMode = .idle
         lockedMsgId = nil
         // Reset the render window for the new session — last 5 turns
@@ -934,6 +994,7 @@ struct ChatView: View {
             guard let s = sessionStore.sessions[sessionId] else { return false }
             return s.lastSeq > s.readSeq
         }()
+        KLog.d("📍entryScroll wasUnread=\(wasUnread) startedEmpty=\(startedEmpty) lockedUserSeq=\(lockedUserSeq) sessionIdle=\(sessionIdle)")
 
         // Wait for messages + initial layout. We poll briefly because the
         // first non-empty render may arrive after this task starts.
@@ -948,9 +1009,11 @@ struct ChatView: View {
         try? await Task.sleep(for: .milliseconds(30))
 
         guard !filteredMessages.isEmpty else {
+            KLog.d("📍entryScroll → still empty after poll, bailing")
             didInitialScroll = true
             return
         }
+        KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(allGroupedTurns.count) renderedTurnCount=\(renderedTurnCount) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
 
         // Re-baseline ONLY for fresh loads — the messages that just
         // landed are historical backfill and must not trip R1. For
@@ -969,10 +1032,16 @@ struct ChatView: View {
             // arrive after the initial scrollTo push the target's
             // content-space minY past where we anchored — leaving the
             // user on older content instead of their intended target.
+            let beforeCount = renderedTurnCount
             ensureRenderedWindowIncludes(target.msg)
+            if renderedTurnCount != beforeCount {
+                KLog.d("📍entryScroll ensureRenderedWindowIncludes bumped \(beforeCount)→\(renderedTurnCount)")
+            }
             let scrollTarget = (id: scrollId(for: target.msg), anchor: target.anchor)
+            KLog.d("📍entryScroll unread branch → scrollTo id=\(scrollTarget.id) anchor=\(scrollTarget.anchor) targetFrame=\(userBubbleFrames[target.msg.id].map { "minY=\($0.minY) h=\($0.height)" } ?? "nil")")
             stickToTargetInstant(proxy: proxy, target: scrollTarget)
             await settleEntry { stickToTargetInstant(proxy: proxy, target: scrollTarget) }
+            KLog.d("📍entryScroll unread settle done → offsetY=\(scrollOffsetY) viewportH=\(viewportHeight) contentH=\(chatContentHeight) targetFrame=\(userBubbleFrames[target.msg.id].map { "minY=\($0.minY) h=\($0.height)" } ?? "nil")")
         } else {
             // Read → land at the bottom and keep re-pinning. Content
             // height typically keeps growing for several hundred ms
@@ -989,8 +1058,10 @@ struct ChatView: View {
             // proxy.scrollTo gets dropped. Animations disabled so
             // the repeated re-scrolls are silent corrections, not
             // visible bounces.
+            KLog.d("📍entryScroll read branch → scrollTo chat-bottom")
             scrollToBottomInstant(proxy: proxy)
             await settleEntry { scrollToBottomInstant(proxy: proxy) }
+            KLog.d("📍entryScroll read settle done → offsetY=\(scrollOffsetY) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
         }
         didInitialScroll = true
 
