@@ -10,6 +10,10 @@
 /// via `KeychainManager`.
 
 import Foundation
+#if os(iOS)
+import AuthenticationServices
+import UIKit
+#endif
 
 // DeviceSummary is defined in Core/Protocol/ProtocolTypes.swift
 
@@ -62,6 +66,15 @@ final class AuthManager {
 
     /// A one-time pairing token (e.g. from a QR code scan or deep link).
     var pairingToken: String?
+
+    #if os(iOS)
+    /// Live ASWebAuthenticationSession + its presentation provider. Held
+    /// strongly while the OAuth sheet is up — the system retains them
+    /// weakly, so without a strong reference they'd dealloc and the
+    /// sheet would fail with `presentationContextNotProvided`.
+    private var oauthSession: ASWebAuthenticationSession?
+    private var oauthContextProvider: OAuthPresentationContextProvider?
+    #endif
 
     // MARK: Init
 
@@ -296,10 +309,20 @@ final class AuthManager {
             appState.onAuthFailed(
                 error: reason ?? "Authentication failed. Please scan a new pairing QR code."
             )
+            // The WS may still be alive; re-fetch auth_info so the
+            // login screen knows whether GitHub OAuth is available
+            // (otherwise the user lands on a credential-less login
+            // page with no way to sign in until they relaunch the app).
+            if appState.connectionStatus == .awaitingLogin {
+                requestAuthInfo()
+            }
         } else {
             appState.onAuthFailed(
                 error: reason ?? "Authentication failed. Scan a pairing QR code to get started."
             )
+            if appState.connectionStatus == .awaitingLogin {
+                requestAuthInfo()
+            }
         }
     }
 
@@ -328,12 +351,32 @@ final class AuthManager {
     ) {
         pairingToken = nil
         appState?.connectionStatus = .authenticating
-        // Build and send auth message with github_oauth method
+
+        // Mint / load our key pair NOW so the relay can register the
+        // device with our public keys on first auth. Without this the
+        // relay creates a device row with null publicKey, and any
+        // subsequent challenge-response auth (e.g. after a wrong_region
+        // redirect) has nothing to verify the signed nonce against —
+        // the user appears to "sign in" but lands back on the login
+        // screen because the redirected challenge auth silently fails.
+        var signingPublicKey: String?
+        var encryptionPublicKey: String?
+        do {
+            let signing = try keychain.getOrCreateSigningKey()
+            signingPublicKey = try crypto.exportPublicKeySPKI(signing.publicKey)
+            let encryption = try keychain.getOrCreateEncryptionKey()
+            encryptionPublicKey = try crypto.exportPublicKeySPKI(encryption.publicKey)
+        } catch {
+            KLog.d("⚠️ Key generation failed for GitHub OAuth: \(error)")
+        }
+
         let device: [String: Any?] = [
             "name": "Kraki iOS",
             "role": "app",
             "kind": "ios",
             "deviceId": storedDeviceId,
+            "publicKey": signingPublicKey,
+            "encryptionKey": encryptionPublicKey,
         ]
         let cleanDevice = device.compactMapValues { $0 }
         var oauthAuth: [String: Any] = ["method": "github_oauth", "code": code]
@@ -354,6 +397,120 @@ final class AuthManager {
         authenticate()
     }
 
+    #if os(iOS)
+    // MARK: - GitHub OAuth
+
+    /// Start the GitHub OAuth flow directly — no intermediate sheet.
+    ///
+    /// Called from the LoginView's GitHub button. Builds the authorize
+    /// URL with PKCE + a fresh CSRF state, opens
+    /// `ASWebAuthenticationSession` against the prod web's
+    /// `/auth/callback` (intercepted via the Associated Domains
+    /// entitlement claiming `webcredentials:app.kraki.chat`), and on
+    /// success forwards the code + verifier + redirect_uri to the
+    /// relay via `authenticateWithGitHubCode`.
+    func startGitHubOAuth(clientId: String) {
+        // Defeat double-tap — if a session is already in flight, bail.
+        guard oauthSession == nil else {
+            KLog.d("🎫 OAuth session already in flight; ignoring start")
+            return
+        }
+        // Flip the spinner state FIRST and yield to the runloop so
+        // SwiftUI gets a render pass before we kick off the heavy
+        // ASWebAuthenticationSession setup. Without this, session
+        // creation + presentationContextProvider lookup + AASA
+        // validation all run synchronously before SwiftUI can repaint,
+        // leaving the button looking dead for ~100–300 ms.
+        appState?.isOAuthInFlight = true
+        DispatchQueue.main.async { [weak self] in
+            self?.startGitHubOAuthImpl(clientId: clientId)
+        }
+    }
+
+    private func startGitHubOAuthImpl(clientId: String) {
+        let csrfState = UUID().uuidString
+        let verifier = PKCE.generateCodeVerifier()
+        let challenge = PKCE.deriveChallenge(verifier: verifier)
+        let redirectURL = "https://\(Self.oauthCallbackHost)\(Self.oauthCallbackPath)"
+
+        var components = URLComponents(string: "https://github.com/login/oauth/authorize")!
+        components.queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "scope", value: "read:user"),
+            URLQueryItem(name: "state", value: csrfState),
+            URLQueryItem(name: "redirect_uri", value: redirectURL),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+        ]
+        guard let authURL = components.url else {
+            KLog.d("🎫 Failed to build authorize URL")
+            appState?.isOAuthInFlight = false
+            return
+        }
+
+        let callback: ASWebAuthenticationSession.Callback = .https(
+            host: Self.oauthCallbackHost,
+            path: Self.oauthCallbackPath
+        )
+
+        let session = ASWebAuthenticationSession(
+            url: authURL,
+            callback: callback
+        ) { [weak self] callbackURL, error in
+            guard let self else { return }
+            // Drop the strong refs the moment the system sheet resolves.
+            self.oauthSession = nil
+            self.oauthContextProvider = nil
+            // OAuth window closed (success/cancel/error). The spinner
+            // is now owned by `.authenticating` for the success path,
+            // or we drop back to `.awaitingLogin` UI for cancel/error.
+            self.appState?.isOAuthInFlight = false
+
+            if let asError = error as? ASWebAuthenticationSessionError {
+                if asError.code == .canceledLogin {
+                    KLog.d("🎫 OAuth cancelled by user")
+                    return
+                }
+                KLog.d("🎫 OAuth failed: \(asError.localizedDescription)")
+                self.appState?.onAuthFailed(error: asError.localizedDescription)
+                return
+            }
+            if let error {
+                KLog.d("🎫 OAuth failed: \(error.localizedDescription)")
+                self.appState?.onAuthFailed(error: error.localizedDescription)
+                return
+            }
+
+            guard let callbackURL,
+                  let cb = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+                  let code = cb.queryItems?.first(where: { $0.name == "code" })?.value,
+                  let returned = cb.queryItems?.first(where: { $0.name == "state" })?.value,
+                  returned == csrfState else {
+                KLog.d("🎫 Invalid OAuth callback")
+                self.appState?.onAuthFailed(error: "Invalid callback from GitHub")
+                return
+            }
+
+            self.authenticateWithGitHubCode(code, codeVerifier: verifier, redirectUri: redirectURL)
+        }
+
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = scene.windows.first {
+            let provider = OAuthPresentationContextProvider(anchor: window)
+            self.oauthContextProvider = provider
+            session.presentationContextProvider = provider
+        }
+        session.prefersEphemeralWebBrowserSession = false
+        self.oauthSession = session
+        session.start()
+    }
+
+    /// Callback URL pieces — kept in lockstep with the AASA file at
+    /// `https://app.kraki.chat/.well-known/apple-app-site-association`.
+    private static let oauthCallbackHost = "app.kraki.chat"
+    private static let oauthCallbackPath = "/auth/callback"
+    #endif
+
     // MARK: - Helpers
 
     private func sendRaw(_ dict: [String: Any]) {
@@ -362,3 +519,16 @@ final class AuthManager {
         appState?.wsClient?.sendRaw(string)
     }
 }
+
+#if os(iOS)
+/// Trivial bridge — ASWebAuthenticationSession needs an
+/// `ASPresentationAnchor` provider it can call back into to learn
+/// which window to mount the system browser sheet on. It holds the
+/// provider weakly, so AuthManager keeps a strong reference for the
+/// duration of the session.
+private final class OAuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private let anchor: ASPresentationAnchor
+    init(anchor: ASPresentationAnchor) { self.anchor = anchor }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { anchor }
+}
+#endif
