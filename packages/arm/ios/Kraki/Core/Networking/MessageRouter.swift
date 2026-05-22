@@ -654,6 +654,18 @@ final class MessageRouter {
         // within a 500-message bandwidth budget. See
         // `MessageProvider.runWarmup` for the algorithm.
         appState.messageProvider?.runWarmup(digests: parsed)
+
+        // Self-heal the currently-open chat. Warm-up only covers
+        // active+pinned+top-5/24h, so if the user is viewing a
+        // session outside that set when a reconnect lands, the chat
+        // view would otherwise stay frozen at whatever was in the
+        // store before the disconnect. ensureLoaded is idempotent —
+        // no-op when storeLastSeq already ≥ tentacleLastSeq, and
+        // no-op when another tentacle owns the active session (the
+        // owning tentacle's session_list arrival will trigger it).
+        if let active = appState.sessionStore.activeSessionId {
+            appState.messageProvider?.ensureLoaded(sessionId: active)
+        }
     }
 
     private func handleSessionCreated(

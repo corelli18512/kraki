@@ -268,27 +268,47 @@ final class MessageProvider {
             && priorMaxBelowBatch > 0
             && batchMinSeq > priorMaxBelowBatch + 1
 
-        // Clear in-flight tracking for this session
-        let keysToRemove = inFlightRequests.filter { $0.hasPrefix("\(sessionId):") }
-        for key in keysToRemove {
-            inFlightRequests.remove(key)
-            timeoutTasks[key]?.cancel()
-            timeoutTasks.removeValue(forKey: key)
+        // Clear in-flight tracking for the *specific* request this
+        // batch answers — not every in-flight key for the session.
+        // requestBefore now dedupes by (sessionId, beforeSeq), so a
+        // sibling page-older request can be in flight at the same
+        // time as a head fetch and must not be evicted just because
+        // the head batch landed.
+        //
+        // Identification heuristic:
+        //   - Head request response → "sessionId:head"
+        //   - "before X" request response → "sessionId:(lastSeq+1)"
+        //   (tentacle's response to beforeSeq=X always has lastSeq=X-1)
+        let respondingKey = wasHeadRequest
+            ? "\(sessionId):head"
+            : "\(sessionId):\(lastSeq + 1)"
+        if inFlightRequests.remove(respondingKey) != nil {
+            timeoutTasks[respondingKey]?.cancel()
+            timeoutTasks.removeValue(forKey: respondingKey)
         }
-        appState.sessionStore.setLoading(sessionId, false)
+        // Only flip the session-wide loading flag off when *no* other
+        // request for this session is still pending. Otherwise the
+        // top-spinner / center-spinner would briefly flicker even
+        // though a sibling fetch is still resolving.
+        let stillLoading = inFlightRequests.contains { $0.hasPrefix("\(sessionId):") }
+        if !stillLoading {
+            appState.sessionStore.setLoading(sessionId, false)
+        }
 
+        // Sync follow-up dispatches: we're already on the main queue
+        // (WS receive → MessageRouter → MessageProvider), and the
+        // bridge / catch-up calls just enqueue another WS send. Doing
+        // them synchronously prevents a one-runloop-turn window where
+        // setLoading drops to false and the chat view's auto-load can
+        // race in to send a duplicate before our follow-up registers.
         if needsCatchUp {
-            KLog.d("⚠️ batch didn't reach head; scheduling follow-up requestLatest for \(sessionId.prefix(12))")
-            DispatchQueue.main.async { [weak self] in
-                self?.requestLatest(sessionId: sessionId)
-            }
+            KLog.d("⚠️ batch didn't reach head; firing follow-up requestLatest for \(sessionId.prefix(12))")
+            requestLatest(sessionId: sessionId)
         }
 
         if needsGapBridge {
             KLog.d("🪡 detected gap [\(priorMaxBelowBatch + 1)..\(batchMinSeq - 1)] in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
-            DispatchQueue.main.async { [weak self] in
-                self?.requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
-            }
+            requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
         }
     }
 
