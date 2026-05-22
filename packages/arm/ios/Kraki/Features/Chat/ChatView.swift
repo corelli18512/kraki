@@ -144,6 +144,13 @@ struct ChatView: View {
     /// single at-edge tick doesn't cascade through the entire memory
     /// store in one render pass.
     @State private var lastWindowExpansion: Date? = nil
+    /// Total turn count last observed by the follow-bottom rule. Used
+    /// to detect "was the rendered window at the bottom edge before
+    /// this update?". Required because `.onChange(of: count)` only
+    /// gives us new value, not old — and we need to know whether the
+    /// window's bottom matched the PREVIOUS total to decide whether to
+    /// slide on growth. Reset on session entry alongside the window.
+    @State private var lastSeenTotalTurns: Int = 0
 
     // MARK: - R1 Growing-Reply State
     //
@@ -551,6 +558,16 @@ struct ChatView: View {
             // next page so we keep loading until either the spinner
             // scrolls out of view or we hit firstSeq=1.
             maybeAutoLoadOlder()
+            // If new turns appeared at the BOTTOM AND the rendered
+            // window was previously anchored to the bottom (i.e., the
+            // user wasn't exploring history), slide the window down
+            // to keep the latest turns visible. Without this rule,
+            // new messages arriving while the user is on the chat
+            // screen end up folded below the rendered window and
+            // become invisible — symptom: R2 pill shows an OLD user
+            // message because the actual latest user message isn't
+            // even rendered.
+            followBottomOnNewTurns()
         }
         .onChange(of: sessionIdle) { _, idle in
             // Turn complete — release the R1 lock so the next user
@@ -695,6 +712,46 @@ struct ChatView: View {
                             renderWindowStartIdx + Self.renderExpandStep)
         renderWindowStartIdx = max(0, newStart)
         KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
+    }
+
+    /// When new turns arrive (live agent reply, user reply, tool
+    /// events), keep the rendered window pinned to the bottom — but
+    /// ONLY if the window was already at the bottom edge. This is the
+    /// "auto-follow latest" behavior users expect: open a chat, see
+    /// new messages appear in real time. If the user has scrolled up
+    /// to explore history, the window stays put so we don't drag them
+    /// out of context.
+    ///
+    /// The "was at bottom edge" check is `windowBottomBefore >=
+    /// lastSeenTotalTurns`, where windowBottomBefore is
+    /// `renderWindowStartIdx + renderedTurnCount` from the previous
+    /// observation. `lastSeenTotalTurns` is updated at the end of this
+    /// function so the next call's check uses the post-update total.
+    private func followBottomOnNewTurns() {
+        let newTotal = allGroupedTurns.count
+        defer { lastSeenTotalTurns = newTotal }
+        guard didInitialScroll, newTotal > lastSeenTotalTurns else { return }
+
+        let windowBottomBefore = renderWindowStartIdx + renderedTurnCount
+        guard windowBottomBefore >= lastSeenTotalTurns else {
+            // Window was NOT at the bottom — user is exploring
+            // history. Leave the window where it is.
+            return
+        }
+        let beforeStart = renderWindowStartIdx
+        let beforeCount = renderedTurnCount
+        // If the top edge is already at the start of the session and
+        // we have room to grow, prefer growing the window over sliding
+        // (sliding would drop the very first turn the user wants to
+        // see). Once we hit the cap, fall through to sliding.
+        if renderWindowStartIdx == 0 && renderedTurnCount < Self.maxRenderedTurns {
+            renderedTurnCount = min(Self.maxRenderedTurns, newTotal)
+        } else {
+            renderWindowStartIdx = max(0, newTotal - renderedTurnCount)
+        }
+        if renderWindowStartIdx != beforeStart || renderedTurnCount != beforeCount {
+            KLog.d("📌followBottom slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (total \(lastSeenTotalTurns)→\(newTotal))")
+        }
     }
 
     // MARK: - R2: Sticky User Bubble Overlay
@@ -1119,6 +1176,12 @@ struct ChatView: View {
         let totalTurnsAfterPoll = allGroupedTurns.count
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurnsAfterPoll))
         renderWindowStartIdx = max(0, totalTurnsAfterPoll - renderedTurnCount)
+        // Initialize the follow-bottom baseline. Without this, the
+        // first `followBottomOnNewTurns()` call would see
+        // `lastSeenTotalTurns = 0` and treat the window as "at
+        // bottom" unconditionally, dragging the user to the bottom
+        // on first new message even mid-history-exploration.
+        lastSeenTotalTurns = totalTurnsAfterPoll
 
         KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(totalTurnsAfterPoll) window=[\(renderWindowStartIdx),\(renderWindowStartIdx+renderedTurnCount)) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
 
