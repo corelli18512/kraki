@@ -431,11 +431,10 @@ export class CopilotAdapter extends AgentAdapter {
     '  write, etc.) in the current session. Explain what you intend to do before',
     '  each action so the operator can decide.',
     '- **discuss**: Read operations, shell commands, web fetches, and MCP tools',
-    '  are auto-approved. Write operations are auto-denied (the tool returns a',
-    '  rejection feedback), with one exception: writes to a file named `plan.md`',
-    '  (in any directory) are auto-approved. Discuss proposed changes before',
-    '  attempting writes. Do not use shell (sed, tee, echo >, scripts, etc.) to',
-    '  modify files — use the edit/create tools instead, which respect the mode.',
+    '  are auto-approved. Write operations require operator approval — the',
+    '  operator sees each write and can approve it, deny it, or switch to',
+    '  execute mode. Exception: writes to a file named `plan.md` (in any',
+    '  directory) are auto-approved.',
     '- **execute**: All tool calls are auto-approved. Be efficient and execute',
     '  directly without asking for confirmation. If unsure about intent or',
     '  approach, ask the operator for clarification before proceeding.',
@@ -1488,8 +1487,8 @@ export class CopilotAdapter extends AgentAdapter {
           logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (discuss mode allow list)');
           return { kind: 'approve-once' };
         }
-        logger.debug({ sessionId, toolKind, mode, filePath }, 'write denied (discuss mode)');
-        return { kind: 'reject', feedback: 'No edit allowed in Discuss mode. Switch to Execute mode to make changes.' };
+        // Non-allowed writes fall through to the permission prompt below
+        // so the operator can approve, deny, or switch to execute mode.
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');

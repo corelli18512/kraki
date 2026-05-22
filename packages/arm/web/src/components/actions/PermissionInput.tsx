@@ -56,7 +56,7 @@ export function PermissionInput({ permission }: { permission: PendingPermission 
           </button>
           {isWriteInDiscuss ? (
             <button
-              onClick={() => wsClient.setSessionMode(sessionId, 'execute')}
+              onClick={() => { wsClient.setSessionMode(sessionId, 'execute'); wsClient.approve(id, sessionId); }}
               className="flex-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-600 transition-all hover:bg-amber-500/20 active:scale-[0.98] dark:text-amber-400"
             >
               Switch to Execute
