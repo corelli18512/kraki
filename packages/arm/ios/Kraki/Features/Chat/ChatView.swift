@@ -740,10 +740,23 @@ struct ChatView: View {
         appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
     }
 
-    /// Bottom-edge expansion: slide window down to bring folded-below
-    /// turns into view. Drops an equivalent number of turns from the
-    /// top (the user is approaching the bottom; top turns are well
-    /// off-screen).
+    /// Bottom-edge expansion: snap the window straight to the latest
+    /// content. Per-step sliding (5 turns at a time) was too slow for
+    /// the common case "I want to see the latest" — the user would
+    /// drag, hit bottom of rendered, slide one step, drag again, etc.
+    /// When the user's gesture says "go down", honor it in one shot.
+    ///
+    /// The window slides as far as possible: `startIdx = total -
+    /// renderedTurnCount`. R1's `lockedMsgId` is guaranteed not in the
+    /// dropped top turns because R1 isn't active here (R1 is gated by
+    /// `growMode == .idle` check in `maybeAutoLoadOlder`'s caller).
+    ///
+    /// We also nudge the scroll position to `chat-bottom`. Without
+    /// this, the user's viewport-top row is in the dropped top turns,
+    /// so SwiftUI's `anchor: .top` tracking loses its anchor and
+    /// scroll position becomes unpredictable. Explicitly scrolling
+    /// to the chat-bottom sentinel matches the user's gesture
+    /// intent ("show me the latest").
     private func handleBottomEdgeExpand() {
         let now = Date()
         if let last = lastWindowExpansion,
@@ -754,10 +767,11 @@ struct ChatView: View {
 
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
-        let newStart = min(total - renderedTurnCount,
-                            renderWindowStartIdx + Self.renderExpandStep)
-        renderWindowStartIdx = max(0, newStart)
-        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
+        renderWindowStartIdx = max(0, total - renderedTurnCount)
+        // Programmatic scroll to the new bottom — necessary because
+        // the snap may have dropped the user's viewport-top row.
+        chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
+        KLog.d("🔻autoLoad bottom-edge SNAP startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total)) scrolled to chat-bottom")
     }
 
     /// When new turns arrive (live agent reply, user reply, tool
