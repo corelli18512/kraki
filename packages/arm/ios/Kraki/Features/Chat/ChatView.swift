@@ -1370,6 +1370,11 @@ struct ChatView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
+            // Drive scroll through the binding — `.scrollPosition`
+            // attached to the ScrollView takes precedence over
+            // `proxy.scrollTo`, which is silently ignored. The proxy
+            // call is kept as a belt-and-suspenders fallback.
+            chatScrollPosition.scrollTo(id: target.id, anchor: target.anchor)
             proxy.scrollTo(target.id, anchor: target.anchor)
         }
     }
@@ -1472,6 +1477,16 @@ struct ChatView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
+            // The `.scrollPosition($chatScrollPosition, anchor: .top)`
+            // modifier on the ScrollView takes precedence over
+            // `proxy.scrollTo` calls — proxy.scrollTo is silently
+            // ignored when the binding is attached. Drive scroll
+            // through the binding instead. Confirmed working via the
+            // bottom-edge SNAP rule which uses the same mechanism.
+            chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
+            // Keep the proxy.scrollTo as a belt-and-suspenders for any
+            // SwiftUI version where the binding-driven scroll doesn't
+            // resolve to the chat-bottom row id.
             proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
     }
