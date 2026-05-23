@@ -88,6 +88,23 @@ final class MessageStore {
 
     /// Append a message, deduplicating by seq.
     func appendMessage(_ sessionId: String, _ message: ChatMessage) {
+        // Defensive guard against the "active envelope pollution" bug
+        // class: storing transient envelope types (whose `seq` field
+        // comes from the relay's global event counter, not the
+        // per-session conversation counter) inflates `getLastSeq` and
+        // breaks `MessageProvider.requestLatest`'s short-circuit. The
+        // visible symptom is "chat stops receiving messages after
+        // reconnect" because the client thinks it's ahead of tentacle.
+        //
+        // Rule: only persistent types (with real per-session seqs) and
+        // the `pending_input` optimistic placeholder (with `seq == 0`)
+        // belong here.
+        let isPersistent = Self.persistentTypes.contains(message.type)
+        let isOptimisticPlaceholder = message.type == "pending_input" && message.seq == 0
+        guard isPersistent || isOptimisticPlaceholder else {
+            KLog.d("⚠️ appendMessage rejected: type=\(message.type) seq=\(message.seq) — not persistent and not a placeholder")
+            return
+        }
         hydrateFromDisk(sessionId)
         var list = messages[sessionId] ?? []
         // Deduplicate: replace existing message with same seq, or append
@@ -132,7 +149,38 @@ final class MessageStore {
 
     func getLastSeq(_ sessionId: String) -> Int {
         hydrateFromDisk(sessionId)
-        return messages[sessionId]?.last?.seq ?? 0
+        // Find the largest seq among PERSISTENT messages only. Belt-
+        // and-suspenders alongside the type guard in `appendMessage`:
+        // if any non-persistent entry ever slipped past the guard
+        // (legacy on-disk pollution, unforeseen path), it must not
+        // raise the reported lastSeq — otherwise
+        // `MessageProvider.requestLatest`'s
+        // `storeLastSeq >= tentacleLastSeq` short-circuit would fire
+        // spuriously and we'd permanently stop pulling new messages.
+        let list = messages[sessionId] ?? []
+        var best = 0
+        for m in list where Self.persistentTypes.contains(m.type) && m.seq > best {
+            best = m.seq
+        }
+        return best
+    }
+
+    /// Drop all in-memory messages for `sessionId` whose seq is
+    /// strictly greater than `seq`. Used by tentacle-restart recovery
+    /// in `MessageProvider.setTentacleInfo`: if the relay reports a
+    /// per-session lastSeq lower than what we have, our cache holds
+    /// stale messages from a previous tentacle incarnation (or
+    /// polluted entries from a pre-fix build). Purging the tail lets
+    /// `requestLatest` proceed instead of short-circuiting.
+    func dropMessagesAboveSeq(_ sessionId: String, seq: Int) {
+        guard var list = messages[sessionId], !list.isEmpty else { return }
+        let before = list.count
+        list.removeAll { $0.seq > seq }
+        guard list.count != before else { return }
+        messages[sessionId] = list
+        // Also walk the disk cache so we don't re-hydrate the polluted
+        // entries on the next launch.
+        persistentCache.dropMessagesAboveSeq(sessionId, seq: seq)
     }
 
     func deleteSessionMessages(_ sessionId: String) {
