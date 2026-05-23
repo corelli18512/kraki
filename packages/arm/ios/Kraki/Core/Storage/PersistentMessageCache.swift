@@ -124,6 +124,28 @@ final class PersistentMessageCache {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Drop every message in this session's cache file whose seq is
+    /// strictly greater than `seq`. Used by tentacle-restart recovery
+    /// so we don't re-hydrate stale tail entries on next launch.
+    /// Reads the file, filters, rewrites — cheap because the file is
+    /// capped at MAX_PERSISTED_PER_SESSION lines.
+    func dropMessagesAboveSeq(_ sessionId: String, seq: Int) {
+        let url = fileURL(sessionId)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let all = decodeLines(data)
+        let kept = all.filter { $0.seq <= seq }
+        guard kept.count != all.count else { return }
+        let encoder = JSONEncoder()
+        let lines = kept.compactMap { msg -> String? in
+            guard let payload = try? encoder.encode(msg),
+                  let str = String(data: payload, encoding: .utf8) else { return nil }
+            return str
+        }.joined(separator: "\n")
+        let payload = lines.isEmpty ? Data() : (lines + "\n").data(using: .utf8) ?? Data()
+        try? payload.write(to: url, options: .atomic)
+    }
+
     /// Drop every cached file. Called on logout / reset.
     func deleteAll() {
         try? FileManager.default.removeItem(at: cacheDir)

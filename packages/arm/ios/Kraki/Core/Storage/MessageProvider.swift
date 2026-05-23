@@ -40,7 +40,22 @@ final class MessageProvider {
     // MARK: - Configuration
 
     /// Update tentacle metadata from session_list.
+    ///
+    /// Tentacle-restart recovery: if the reported `lastSeq` is LOWER
+    /// than what our in-memory store believes (post-`getLastSeq` which
+    /// already filters to persistent types), our cache holds stale
+    /// entries from a previous tentacle incarnation or pollution from
+    /// pre-fix builds. Purge anything above the tentacle's lastSeq so
+    /// `requestLatest`'s `storeLastSeq >= tentacleLastSeq` guard
+    /// doesn't short-circuit and silently swallow the gap.
     func setTentacleInfo(sessionId: String, lastSeq: Int, deviceId: String) {
+        if let appState, lastSeq > 0 {
+            let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+            if storeLastSeq > lastSeq {
+                KLog.d("🧹 setTentacleInfo(\(sessionId.prefix(12))): store=\(storeLastSeq) > tentacle=\(lastSeq) — purging stale tail")
+                appState.messageStore.dropMessagesAboveSeq(sessionId, seq: lastSeq)
+            }
+        }
         tentacleLastSeq[sessionId] = lastSeq
         tentacleDeviceMap[sessionId] = deviceId
     }

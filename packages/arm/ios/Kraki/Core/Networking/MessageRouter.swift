@@ -515,7 +515,17 @@ final class MessageRouter {
 
         case "active":
             appState.sessionStore.updateState(sessionId, state: "active")
-            appState.messageStore.appendMessage(sessionId, json: json)
+            // NOTE: We deliberately do NOT call `messageStore.appendMessage`
+            // here. `active` is a TRANSIENT envelope (see the comment at
+            // L297) whose `seq` field comes from the relay's GLOBAL event
+            // counter, not the per-session conversation counter. Storing
+            // it pollutes `messageStore.getLastSeq(sessionId)` with foreign
+            // seqs, which then makes `MessageProvider.requestLatest`'s
+            // `storeLastSeq >= tentacleLastSeq` short-circuit fire
+            // spuriously — and we permanently stop fetching new messages
+            // after reconnect. Compounding fact: `MessageBubbleView`
+            // explicitly filters out `active` from rendering anyway, so
+            // persisting it had zero UI value.
 
         case "error":
             appState.sessionStore.flushDelta(sessionId)
@@ -563,9 +573,13 @@ final class MessageRouter {
             break // Display is handled by the user_message round-trip.
 
         default:
-            if payload != nil {
-                appState.messageStore.appendMessage(sessionId, json: json)
-            }
+            // Future / unknown message types fall through here. We
+            // deliberately do NOT auto-persist them — same reason as
+            // `case "active"` above: an unknown type could be a
+            // transient envelope with a global-counter seq that
+            // would silently pollute `getLastSeq`. If a new persistent
+            // type is added, give it an explicit case + handler.
+            break
         }
     }
 
