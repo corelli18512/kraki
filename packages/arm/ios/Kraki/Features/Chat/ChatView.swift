@@ -261,19 +261,25 @@ struct ChatView: View {
         return first > 1
     }
 
-    /// Whether to show the top spinner row. Only true during an
-    /// actual network fetch — window expansion (priority 1 of
-    /// `maybeAutoLoadOlder`) is synchronous and doesn't warrant a
-    /// spinner. Once the fetch completes `isLoading` flips false
-    /// and the spinner disappears.
+    /// Whether to show the top spinner row. True whenever more
+    /// content exists ABOVE the rendered window — either folded
+    /// in-memory turns (`hasFoldedTurnsAbove`) or older history
+    /// still in tentacle (`firstSeq > 1`). Acts as a persistent
+    /// "more above" visual indicator AND as the trigger zone for
+    /// top-edge auto-load.
     private var showTopSpinner: Bool {
-        // Need both: there's actually more network history to load
-        // (otherwise spinner is misleading) AND we're currently
-        // fetching. Without the first guard we'd briefly flash the
-        // spinner if `isLoading` is true for some unrelated reason.
+        if hasFoldedTurnsAbove { return true }
         let seqs = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }
-        guard let first = seqs.min(), first > 1 else { return false }
-        return isLoading
+        guard let first = seqs.min() else { return false }
+        return first > 1
+    }
+
+    /// Whether to show the bottom spinner row. True whenever folded
+    /// in-memory turns exist BELOW the rendered window. Mirror of
+    /// `showTopSpinner`. Hidden when the window includes the latest
+    /// turn (no more below to reveal).
+    private var showBottomSpinner: Bool {
+        hasFoldedTurnsBelow
     }
 
     /// Whether folded turns exist ABOVE the rendered window — i.e.,
@@ -438,12 +444,14 @@ struct ChatView: View {
     private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(spacing: 12) {
-                // Top spinner row — visible only while a NETWORK fetch
-                // is in flight. Window expansion (priority 1 of
-                // `maybeAutoLoadOlder`) is synchronous and needs no
-                // spinner. Threshold detection lives in
-                // `maybeAutoLoadOlder` via scrollOffsetY, so the
-                // spinner's presence is not needed for the trigger.
+                // Top spinner row — persistent visual indicator that
+                // more content exists ABOVE the rendered window.
+                // Visible whenever `hasFoldedTurnsAbove` (folded
+                // in-memory turns) OR `firstSeq > 1` (older history
+                // still in tentacle). Hidden only at session start
+                // (no more to load above). Acts as both an indicator
+                // and the layout space for `topSpinnerHeight +
+                // topSpinnerSlop` threshold in `maybeAutoLoadOlder`.
                 if showTopSpinner {
                     HStack {
                         Spacer()
@@ -453,6 +461,7 @@ struct ChatView: View {
                         Spacer()
                     }
                     .frame(height: Self.topSpinnerHeight)
+                    .id("top-spinner")
                 }
 
                 // Message items
@@ -515,6 +524,22 @@ struct ChatView: View {
                             }
                         }
                     }
+                }
+
+                // Bottom spinner row — persistent visual indicator that
+                // more content exists BELOW the rendered window
+                // (folded in-memory turns). Hidden when window
+                // includes the latest turn. Mirror of the top spinner.
+                if showBottomSpinner {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.krakiPrimary)
+                        Spacer()
+                    }
+                    .frame(height: Self.topSpinnerHeight)
+                    .id("bottom-spinner")
                 }
 
                 // Bottom anchor
@@ -704,6 +729,14 @@ struct ChatView: View {
     }
 
     /// Top-edge expansion: grow window upward, or slide up if at cap.
+    /// Preserves the user's visible position by capturing the
+    /// topmost-visible user bubble id BEFORE the state mutation and
+    /// explicitly scrolling back to it AFTER. Without this, SwiftUI's
+    /// `.scrollPosition(anchor: .top)` would re-anchor to whichever
+    /// row ends up at viewport top after the prepend (typically the
+    /// newly-rendered top-spinner or first new turn), making the
+    /// chat jump to the top of the loaded content instead of staying
+    /// where the user was reading.
     private func handleTopEdgeExpand() {
         // Priority 1: bring folded-above turns into the window.
         if hasFoldedTurnsAbove {
@@ -713,6 +746,10 @@ struct ChatView: View {
                 return
             }
             lastWindowExpansion = now
+
+            // Anchor preservation: capture the topmost-visible user
+            // bubble BEFORE state change.
+            let anchorBubbleId = topmostVisibleUserBubbleId()
 
             let total = cachedAllTurnCount
             let beforeStart = renderWindowStartIdx
@@ -725,7 +762,18 @@ struct ChatView: View {
             }
             // After potential growth, clamp so window stays in bounds.
             renderWindowStartIdx = min(newStart, max(0, total - renderedTurnCount))
-            KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total))")
+
+            // Restore anchor: scroll the previously-visible user
+            // bubble back to viewport top. The bubble's row identity
+            // is preserved across the prepend (ForEach diff by
+            // turn.id keeps existing rows stable), so SwiftUI can
+            // resolve the scrollTo to its new content-space minY.
+            if let anchorId = anchorBubbleId {
+                chatScrollPosition.scrollTo(id: userScrollId(forMsgId: anchorId), anchor: .top)
+                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchored=user-\(anchorId.prefix(8))")
+            } else {
+                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchored=nil (no visible bubble)")
+            }
             return
         }
 
@@ -1495,6 +1543,21 @@ struct ChatView: View {
     /// `userScrollId(_:)` for callers that only have the id).
     private func userScrollId(forMsgId mid: String) -> String {
         "user-\(mid)"
+    }
+
+    /// id of the topmost user bubble whose top edge is at or below the
+    /// current viewport top. Used by `handleTopEdgeExpand` to anchor
+    /// scroll position so that prepending older turns doesn't visually
+    /// jump the user to the top of the newly-loaded content.
+    ///
+    /// Returns nil if no user bubble qualifies (e.g., viewport
+    /// contains only agent/tool rows with no user bubble in or below
+    /// it). Caller falls back to SwiftUI's default behavior.
+    private func topmostVisibleUserBubbleId() -> String? {
+        let candidates = userBubbleFrames
+            .filter { $0.value.minY >= scrollOffsetY && $0.value.height > 0 }
+            .sorted { $0.value.minY < $1.value.minY }
+        return candidates.first?.key
     }
 
     // MARK: - Idle anchor lock
