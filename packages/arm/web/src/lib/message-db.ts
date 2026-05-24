@@ -9,7 +9,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import type { ChatMessage } from '../types/store';
 
 const DB_NAME = 'kraki-messages';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_NAME = 'messages';
 
 interface StoredMessage {
@@ -38,6 +38,37 @@ function getDB(): Promise<IDBPDatabase> {
           if (db.objectStoreNames.contains('pending-questions')) {
             db.deleteObjectStore('pending-questions');
           }
+        }
+        // v4 purges orphaned `pending_input` rows. A previous version
+        // of this code persisted optimistic placeholders to IDB; they
+        // all share seq=0 and could not be resolved across a reload
+        // (no clientId). We now skip IDB writes for pending_input
+        // entirely, but existing users may carry stale rows. Sweep
+        // them out on first open.
+        if (oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
+          // upgrade runs inside a versionchange transaction; we have
+          // access to STORE_NAME via the transaction parameter normally,
+          // but idb's upgrade callback exposes the existing store via
+          // db.transaction. We use the versionchange tx that openDB
+          // provides via the second arg of the callback in newer idb
+          // versions; here we re-acquire it through db.transaction
+          // which is valid during upgrade.
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          const store = tx.objectStore(STORE_NAME);
+          // Iterate via openCursor and delete rows whose stored data
+          // is a pending_input. The compound key has seq=0 for these,
+          // and the only persistent type with seq=0 ever written was
+          // pending_input, so deleting by seq=0 is safe.
+          void (async () => {
+            let cursor = await store.openCursor();
+            while (cursor) {
+              const stored = cursor.value as StoredMessage;
+              if (stored.seq === 0 || stored.data?.type === 'pending_input') {
+                await cursor.delete();
+              }
+              cursor = await cursor.continue();
+            }
+          })();
         }
       },
     });

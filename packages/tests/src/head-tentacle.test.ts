@@ -854,6 +854,58 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 
+  // ── Extra: send_input clientId round-trip ─────────────
+  //
+  // Verifies the protocol contract added in the clientId-based pending
+  // correlation refactor: tentacle echoes `send_input.payload.clientId`
+  // verbatim into the corresponding `user_message.payload.clientId`
+  // broadcast, allowing clients to resolve their optimistic pending
+  // placeholders unambiguously.
+
+  it("tentacle echoes send_input.clientId into user_message.clientId broadcast", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+    const clientId = "client-uuid-test-abc-123";
+    app.sendUnicast(tentacleId, {
+      type: "send_input",
+      sessionId,
+      payload: { text: "hello with cid", clientId },
+    }, km.getCompactPublicKey());
+
+    const echoed = await app.waitFor("user_message");
+    expect(echoed.sessionId).toBe(sessionId);
+    expect(echoed.payload.content).toBe("hello with cid");
+    expect(echoed.payload.clientId).toBe(clientId);
+
+    app.close();
+  });
+
+  it("tentacle omits clientId in user_message broadcast when send_input has none (legacy back-compat)", async () => {
+    const app = await connectApp(env.port);
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+    app.sendUnicast(tentacleId, {
+      type: "send_input",
+      sessionId,
+      payload: { text: "legacy no cid" },
+    }, km.getCompactPublicKey());
+
+    const echoed = await app.waitFor("user_message");
+    expect(echoed.payload.content).toBe("legacy no cid");
+    expect(echoed.payload.clientId).toBeUndefined();
+
+    app.close();
+  });
+
   // ── Extra: device_joined enables immediate E2E without reconnect ──
 
   it("tentacle connects first → app joins → tentacle receives device_joined → greeting + data arrive", async () => {
