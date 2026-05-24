@@ -39,7 +39,11 @@ struct MessageInputView: View {
 
     // Voice
     @State private var speech = SpeechRecognizer()
-    @State private var voiceMode = false
+    /// Persists across sessions + app launches on this device. The
+    /// user's last keyboard-vs-mic choice carries over so they don't
+    /// have to re-toggle when opening any other session. Per-device
+    /// (not synced) — matches the local-only nature of voice input.
+    @AppStorage("kraki.input.voiceMode") private var voiceMode = false
     @State private var isPressing = false
     @State private var cancelArmed = false
 
