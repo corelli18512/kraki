@@ -142,16 +142,22 @@ struct MessageBubbleView: View {
             ToolActivityView(
                 type: .start,
                 toolName: message.toolName ?? "tool",
-                args: message.args,
-                result: nil
+                headline: message.headline,
+                argsRef: message.argsRef,
+                resultRef: nil,
+                inlineArgs: message.args,
+                sessionId: message.sessionId ?? ""
             )
 
         case "tool_complete":
             ToolActivityView(
                 type: .complete,
                 toolName: message.toolName ?? "tool",
-                args: message.args,
-                result: message.result
+                headline: message.headline,
+                argsRef: message.argsRef,
+                resultRef: message.resultRef,
+                inlineArgs: message.args,
+                sessionId: message.sessionId ?? ""
             )
 
         case "approve", "deny", "always_allow":
@@ -168,7 +174,7 @@ struct MessageBubbleView: View {
     private func userBubble(content: String?, attachments: [ImageAttachment]?, timestamp: String?) -> some View {
         let showText = content != nil && content != "[image]"
         return HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.10)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let content {
                     Text(markdownContent(content))
@@ -198,7 +204,7 @@ struct MessageBubbleView: View {
         let text = message.payload["text"]?.stringValue
         let showText = text != nil && text != "[image]"
         return HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.25)
+            Spacer(minLength: UIScreen.main.bounds.width * 0.10)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let text {
                     Text(text)
@@ -350,7 +356,7 @@ struct MessageBubbleView: View {
         atBubbleTop: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             content()
         }
         .padding(.horizontal, 16)
@@ -369,16 +375,60 @@ struct MessageBubbleView: View {
 
     // MARK: - Streaming Text (cascade word fade)
 
+    private struct StreamToken {
+        let text: String
+        let headingLevel: Int
+    }
+
+    private func streamTokens(_ text: String) -> [StreamToken] {
+        var tokens: [StreamToken] = []
+        let lines = text.components(separatedBy: "\n")
+        for (li, line) in lines.enumerated() {
+            let level = streamHeadingLevel(line)
+            let content = level > 0 ? String(line.dropFirst(level + 1)) : line
+            for w in content.splitKeepingSpaces() {
+                tokens.append(StreamToken(text: w, headingLevel: level))
+            }
+            if li < lines.count - 1 {
+                tokens.append(StreamToken(text: "\n", headingLevel: 0))
+            }
+        }
+        return tokens
+    }
+
+    private func streamHeadingLevel(_ line: String) -> Int {
+        var level = 0
+        for ch in line {
+            if ch == "#", level < 6 { level += 1 } else { break }
+        }
+        guard level > 0 else { return 0 }
+        let afterIdx = line.index(line.startIndex, offsetBy: level)
+        return afterIdx < line.endIndex && line[afterIdx] == " " ? level : 0
+    }
+
+    private func streamHeadingFont(level: Int) -> Font {
+        switch level {
+        case 1: return .title2.bold()
+        case 2: return .title3.bold()
+        case 3: return .headline
+        case 4: return .subheadline.bold()
+        default: return .footnote.bold()
+        }
+    }
+
     private func streamingTextView(_ text: String) -> some View {
         TimelineView(.animation) { timeline in
-            let words = text.splitKeepingSpaces()
+            let tokens = streamTokens(text)
             let now = timeline.date
             let elapsed = now.timeIntervalSince(batchTimestamp)
-            let totalSolid = min(words.count, solidCharCount + Int(elapsed * 30))
+            let totalSolid = min(tokens.count, solidCharCount + Int(elapsed * 30))
 
-            Text(words.enumerated().reduce(AttributedString()) { result, pair in
-                let (i, word) = pair
-                var attr = AttributedString(word)
+            Text(tokens.enumerated().reduce(AttributedString()) { result, pair in
+                let (i, tok) = pair
+                var attr = AttributedString(tok.text)
+                if tok.headingLevel > 0 {
+                    attr.font = streamHeadingFont(level: tok.headingLevel)
+                }
                 if i >= totalSolid {
                     let fadeIndex = i - totalSolid
                     let opacity = max(0, min(1, 1.0 - Double(fadeIndex) / 3.0))
@@ -392,7 +442,7 @@ struct MessageBubbleView: View {
             .textSelection(.enabled)
             .onChange(of: text.count) { oldCount, newCount in
                 if newCount > oldCount {
-                    solidCharCount = max(0, words.count - 3)
+                    solidCharCount = max(0, tokens.count - 3)
                     batchTimestamp = .now
                 }
             }
@@ -587,10 +637,13 @@ struct MessageBubbleView: View {
 
     @ViewBuilder
     private func imageGrid(attachments: [ImageAttachment]?) -> some View {
-        let images = attachments?.filter { $0.type == "image" } ?? []
-        if !images.isEmpty {
+        let inlineImages = (attachments ?? []).filter { $0.type == "image" }
+        let refImages = message.contentRefAttachments.filter {
+            $0.mimeType.hasPrefix("image/")
+        }
+        if !inlineImages.isEmpty || !refImages.isEmpty {
             HStack(spacing: 6) {
-                ForEach(Array(images.enumerated()), id: \.offset) { _, img in
+                ForEach(Array(inlineImages.enumerated()), id: \.offset) { _, img in
                     if let imageData = Data(base64Encoded: img.data),
                        let uiImage = UIImage(data: imageData) {
                         Image(uiImage: uiImage)
@@ -599,6 +652,9 @@ struct MessageBubbleView: View {
                             .frame(maxHeight: 192)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                }
+                ForEach(refImages, id: \.id) { ref in
+                    LazyImageView(ref: ref, sessionId: message.sessionId ?? "")
                 }
             }
         }
@@ -625,6 +681,50 @@ struct MessageBubbleView: View {
     }
 
     private func markdownContent(_ text: String) -> AttributedString {
+        // SwiftUI's `AttributedString(markdown:)` with `.inlineOnly*`
+        // does not parse block-level constructs like headings, so a
+        // line like "# Title" would render with a literal '#'. Parse
+        // headings line-by-line, applying a font run; everything
+        // else still goes through inline markdown so bold/italic/
+        // links continue to render.
+        var result = AttributedString()
+        let lines = text.components(separatedBy: "\n")
+        for (idx, line) in lines.enumerated() {
+            result.append(renderMarkdownLine(line))
+            if idx < lines.count - 1 {
+                result.append(AttributedString("\n"))
+            }
+        }
+        return result
+    }
+
+    private func renderMarkdownLine(_ line: String) -> AttributedString {
+        var level = 0
+        for ch in line {
+            if ch == "#", level < 6 { level += 1 } else { break }
+        }
+        if level > 0, level < line.count {
+            let afterHashes = line.index(line.startIndex, offsetBy: level)
+            if line[afterHashes] == " " {
+                let content = line[line.index(after: afterHashes)...]
+                    .drop(while: { $0 == " " })
+                var attr = inlineMarkdown(String(content))
+                let font: Font
+                switch level {
+                case 1: font = .title2.bold()
+                case 2: font = .title3.bold()
+                case 3: font = .headline
+                case 4: font = .subheadline.bold()
+                default: font = .footnote.bold()
+                }
+                attr.font = font
+                return attr
+            }
+        }
+        return inlineMarkdown(line)
+    }
+
+    private func inlineMarkdown(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         ))) ?? AttributedString(text)
@@ -685,6 +785,9 @@ extension String {
 // MARK: - ToolLineView
 
 private struct ToolLineView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
+
     let message: ChatMessage
     var showPill: Bool = false
 
@@ -692,7 +795,16 @@ private struct ToolLineView: View {
 
     private var toolName: String { message.toolName ?? "tool" }
     private var isComplete: Bool { message.type == "tool_complete" }
-    private var isError: Bool { message.result?.hasPrefix("Error") == true }
+    /// Best-effort: the per-call success flag from v0.17+ is preferred
+    /// over heuristics on the (now lazy) result body.
+    private var isError: Bool {
+        if let success = message.payload["success"]?.boolValue {
+            return !success
+        }
+        return false
+    }
+
+    private var attachmentStore: AttachmentStore { appState.attachmentStore }
 
     private var isAskUser: Bool {
         toolName == "ask_user" || toolName == "ask"
@@ -700,6 +812,35 @@ private struct ToolLineView: View {
 
     private var questionText: String? {
         message.payload["questionText"]?.stringValue
+    }
+
+    /// Tinted pill background derived from the session hue so the
+    /// tool-name pill picks up the bubble's color. Sits close to the
+    /// section's own tint (small lightness delta) so the pill reads
+    /// as a soft chip rather than a high-contrast badge.
+    private var pillTintColor: Color {
+        let hue = stringToHue(message.sessionId ?? toolName) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.45 : 0.32,
+            l: colorScheme == .dark ? 0.20 : 0.93
+        )
+        return Color(hue: h, saturation: s, brightness: b)
+    }
+
+    /// Slightly contrasting card background for the expanded dialog.
+    /// Sits as a near-invisible shade-shift on top of the section's
+    /// tint — just enough to read as an inset surface, but designed
+    /// to blend with the section rather than stand out. Delta against
+    /// the section's lightness is intentionally tiny (~0.01).
+    private var expandedDialogBackground: Color {
+        let hue = stringToHue(message.sessionId ?? toolName) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.40 : 0.30,
+            l: colorScheme == .dark ? 0.115 : 0.978
+        )
+        return Color(hue: h, saturation: s, brightness: b)
     }
 
     var body: some View {
@@ -749,83 +890,62 @@ private struct ToolLineView: View {
 
     @ViewBuilder
     private var regularToolBody: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-        } label: {
-            regularToolRow
-        }
-        .buttonStyle(.plain)
+        ToolChipHeader(
+            toolName: toolName,
+            headline: toolDetail,
+            status: chipStatus,
+            isExpandable: hasExpandableContent,
+            isExpanded: expanded,
+            onTap: {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            },
+            pillTint: pillTintColor
+        )
 
         if expanded {
             expandedBody
+                .onAppear { triggerLazyFetches() }
         }
     }
 
-    @ViewBuilder
-    private var regularToolRow: some View {
-        HStack(spacing: 6) {
-            statusIcon
-            Text(toolName)
-                .font(.system(size: 12, design: .monospaced))
-                .fontWeight(.medium)
-                .foregroundStyle(.blue)
-
-            if let detail = toolDetail, !detail.isEmpty {
-                Text(detail)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 0)
-
-            if hasExpandableContent {
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(expanded ? 0 : -90))
-            }
-        }
-        .contentShape(Rectangle())
+    private var chipStatus: ToolChipStatus {
+        if !isComplete { return .running }
+        return isError ? .failure : .success
     }
 
-    @ViewBuilder
-    private var statusIcon: some View {
-        if isComplete {
-            if isError {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-        } else {
-            ProgressView()
-                .controlSize(.mini)
-        }
-    }
-
+    /// Tentacle-composed headline preferred; fall back to inline args
+    /// for permission-prompt path (still ships args eagerly).
     private var toolDetail: String? {
-        if isAskUser { return nil } // question text shown inline instead
-        guard let args = message.args else { return nil }
-        if let cmd = args["command"]?.stringValue { return "$ \(cmd)" }
-        if let path = args["path"]?.stringValue { return path }
+        if isAskUser { return nil }
+        if let h = message.headline, !h.isEmpty { return h }
+        if let args = message.args {
+            if let cmd = args["command"]?.stringValue { return "$ \(cmd)" }
+            if let path = args["path"]?.stringValue { return path }
+        }
         return nil
     }
 
     private var hasExpandableContent: Bool {
         if isAskUser { return message.result != nil }
-        return message.args != nil || (message.result != nil && !message.result!.isEmpty)
+        return message.argsRef != nil
+            || message.resultRef != nil
+            || message.args != nil
+    }
+
+    private func triggerLazyFetches() {
+        guard let sid = message.sessionId else { return }
+        if let r = message.argsRef {
+            attachmentStore.requestIfNeeded(id: r.id, sessionId: sid)
+        }
+        if let r = message.resultRef {
+            attachmentStore.requestIfNeeded(id: r.id, sessionId: sid)
+        }
     }
 
     @ViewBuilder
     private var expandedBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             if isAskUser {
-                // Show answer for ask_user
                 if let result = message.result, !result.isEmpty {
                     Text(result)
                         .font(.system(size: 12, design: .monospaced))
@@ -833,42 +953,246 @@ private struct ToolLineView: View {
                         .textSelection(.enabled)
                 }
             } else {
-                // Regular tool: show args + result
-                if let args = message.args {
-                    let oldStr = args["old_str"]?.stringValue ?? ""
-                    let newStr = args["new_str"]?.stringValue ?? ""
-                    if !oldStr.isEmpty || !newStr.isEmpty {
-                        SimpleDiffView(oldText: oldStr, newText: newStr)
-                    } else {
-                        let detail = args.sorted { $0.key < $1.key }
-                            .map { "\($0.key): \($0.value)" }
-                            .joined(separator: "\n")
-                        Text(detail)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
+                argsBlock
+                resultBlock
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(expandedDialogBackground, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 2)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
 
-                if let result = message.result, !result.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Result")
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-                        ScrollView {
-                            Text(result)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(maxHeight: 200)
-                    }
+    @ViewBuilder
+    private var argsBlock: some View {
+        if toolName == "edit" || toolName == "edit_file" {
+            if let ref = message.argsRef {
+                EditDiffView(ref: ref)
+            } else if let inline = message.args, !inline.isEmpty {
+                InlineEditDiffView(args: inline)
+            }
+        } else if let ref = message.argsRef {
+            lazyRefBlock(title: "Arguments", ref: ref)
+        } else if let args = message.args, !args.isEmpty {
+            // Permission-prompt path keeps args inline. Render each key
+            // as its own labeled block so command/description/result
+            // share a consistent caption-then-monospaced-value style.
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(args.sorted { $0.key < $1.key }, id: \.key) { entry in
+                    labeledBlock(title: entry.key, content: entry.value.stringValue ?? "\(entry.value)")
                 }
             }
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    @ViewBuilder
+    private var resultBlock: some View {
+        if toolName == "edit" {
+            // The edit tool's result is just a boilerplate
+            // "File … updated with changes." confirmation that's
+            // redundant once the diff is shown. Suppress it.
+            EmptyView()
+        } else if let ref = message.resultRef {
+            lazyRefBlock(title: "Result", ref: ref)
+        }
+    }
+
+    /// Shared label + monospaced-content layout used by `argsBlock`
+    /// inline-args and `lazyRefBlock` so the command/description/Result
+    /// trio reads with a single visual rhythm.
+    @ViewBuilder
+    private func labeledBlock(title: String, content: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            Text(content)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func lazyRefBlock(title: String, ref: ContentRef) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            switch attachmentStore.state(for: ref.id) {
+            case .ready(_, let data):
+                ScrollView {
+                    Text(String(data: data, encoding: .utf8) ?? "(non-utf8)")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
+                // Always show scroll indicators so users have a clear
+                // signal when a result is taller than the 200pt cap.
+                .scrollIndicators(.visible)
+                // Without this, SwiftUI proposes a flexible height to
+                // the ScrollView and a sibling tool entry expanding can
+                // make the parent VStack reallocate space — the
+                // ScrollView then grows up to its 200pt cap regardless
+                // of how short its actual content is. `fixedSize` forces
+                // the ScrollView to claim its content-driven intrinsic
+                // height (capped by the outer `maxHeight: 200` frame).
+                .fixedSize(horizontal: false, vertical: true)
+            case .error(let reason):
+                Text("Couldn't load: \(reason)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            case .awaitingChunks, .fetching, .none:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Loading…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - InlineEditDiffView
+
+private struct InlineEditDiffView: View {
+    let args: [String: AnyCodable]
+
+    var body: some View {
+        let path = args["path"]?.stringValue
+        let oldStr = args["old_str"]?.stringValue ?? ""
+        let newStr = args["new_str"]?.stringValue ?? ""
+        VStack(alignment: .leading, spacing: 2) {
+            if let path {
+                Text(path)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            DiffBlockView(old: oldStr, new: newStr)
+        }
+    }
+}
+
+// MARK: - DiffBlockView
+
+private struct DiffBlockView: View {
+    let old: String
+    let new: String
+
+    var body: some View {
+        let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let newLines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(oldLines.enumerated()), id: \.offset) { _, line in
+                diffLine(prefix: "-", text: line, color: .red)
+            }
+            ForEach(Array(newLines.enumerated()), id: \.offset) { _, line in
+                diffLine(prefix: "+", text: line, color: .green)
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func diffLine(prefix: String, text: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(prefix)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(color)
+            Text(text.isEmpty ? " " : text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .background(color.opacity(0.12))
+    }
+}
+
+// MARK: - EditDiffView
+
+/// Renders the `edit` tool's arguments as a unified diff instead of
+/// raw JSON. Loads the args attachment, extracts `old_str` / `new_str`,
+/// and renders the change with red `-` lines and green `+` lines.
+private struct EditDiffView: View {
+    @Environment(AppState.self) private var appState
+    let ref: ContentRef
+
+    private var attachmentStore: AttachmentStore { appState.attachmentStore }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            switch attachmentStore.state(for: ref.id) {
+            case .ready(_, let data):
+                readyBody(data: data)
+            case .error(let reason):
+                Text("Couldn't load: \(reason)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            case .awaitingChunks, .fetching, .none:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Loading…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func readyBody(data: Data) -> some View {
+        if let parsed = parse(data: data) {
+            VStack(alignment: .leading, spacing: 2) {
+                if let path = parsed.path {
+                    Text(path)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                diffBlock(old: parsed.oldStr, new: parsed.newStr)
+            }
+        } else {
+            // Fallback: render the raw JSON if we can't parse it.
+            Text(String(data: data, encoding: .utf8) ?? "(non-utf8)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func diffBlock(old: String, new: String) -> some View {
+        DiffBlockView(old: old, new: new)
+    }
+
+    private struct EditArgs {
+        var path: String?
+        var oldStr: String
+        var newStr: String
+    }
+
+    private func parse(data: Data) -> EditArgs? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let oldStr = (json["old_str"] as? String) ?? (json["oldStr"] as? String)
+        let newStr = (json["new_str"] as? String) ?? (json["newStr"] as? String)
+        guard let oldStr, let newStr else { return nil }
+        return EditArgs(
+            path: json["path"] as? String,
+            oldStr: oldStr,
+            newStr: newStr
+        )
     }
 }
 
