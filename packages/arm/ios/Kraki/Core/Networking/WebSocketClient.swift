@@ -23,7 +23,7 @@ final class WebSocketClient: NSObject {
 
     // MARK: Configuration
 
-    private let relayURL: String
+    private(set) var relayURL: String
 
     private static let reconnectBase: TimeInterval = 1.0
     private static let reconnectMax: TimeInterval = 30.0
@@ -98,6 +98,14 @@ final class WebSocketClient: NSObject {
             delegateQueue: .main
         )
         task = session?.webSocketTask(with: url)
+        // Raise the WS frame size limit. iOS default is 1 MB which
+        // is too small for our session_messages_batch payloads —
+        // a single batch containing one long agent reply can easily
+        // exceed 1.5 MB, causing receive to fail with "Message too
+        // long" and the connection to drop. 16 MB gives plenty of
+        // headroom while staying well below what URLSession enforces
+        // as an absolute upper bound.
+        task?.maximumMessageSize = 16 * 1024 * 1024
         task?.resume()
     }
 
@@ -110,6 +118,27 @@ final class WebSocketClient: NSObject {
         session = nil
         reconnectAttempts = 0
         state = .disconnected
+    }
+
+    /// Switch the relay URL (typically after a `wrong_region` redirect)
+    /// and reconnect. Cleanly tears down the current connection first
+    /// so the reconnect path doesn't auto-retry against the old URL.
+    func setRelayURL(_ newURL: String) {
+        guard newURL != relayURL else { return }
+        relayURL = newURL
+        intentionalClose = true
+        cleanup()
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+        session?.invalidateAndCancel()
+        session = nil
+        reconnectAttempts = 0
+        reconnectDelay = Self.reconnectBase
+        // Reconnect to the new URL on the next runloop tick so callers
+        // can finish updating any state before we touch the network.
+        DispatchQueue.main.async { [weak self] in
+            self?.connect()
+        }
     }
 
     /// Send an `Encodable` message — gated by `isAuthenticated`.
