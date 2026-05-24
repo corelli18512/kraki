@@ -154,6 +154,13 @@ struct ChatView: View {
     /// the user sees a vertical jump whenever the topmost-visible
     /// bubble wasn't already at viewport top at expand time.
     @State private var pendingAnchorRestore: (id: String, screenY: CGFloat)? = nil
+    /// Most recent observed scroll phase. Used to gate window
+    /// expansion to settled scroll only — without this gate, a
+    /// single user flick produces many `top-edge expand` triggers
+    /// during the deceleration window, each landing the user at a
+    /// different content-space position. With the gate, one
+    /// flick = at most one expansion (fired when motion settles).
+    @State private var scrollPhase: ScrollPhase = .idle
     /// Total turn count last observed by the follow-bottom rule. Used
     /// to detect "was the rendered window at the bottom edge before
     /// this update?". Required because `.onChange(of: count)` only
@@ -626,6 +633,17 @@ struct ChatView: View {
                 }
                 releaseIdleAnchor()
             }
+            scrollPhase = newPhase
+            // When scroll fully settles, give the expansion rule one
+            // chance to fire. This is the "expansion on settled
+            // scroll" gate: cascading expansions during deceleration
+            // are suppressed; instead a single fire happens when the
+            // user's motion stops.
+            if newPhase == .idle {
+                Task { @MainActor in
+                    maybeAutoLoadOlder()
+                }
+            }
         }
         .onPreferenceChange(UserBubbleFramesKey.self) { newFrames in
             // Plain VStack lays out every row eagerly, so `newFrames`
@@ -764,6 +782,16 @@ struct ChatView: View {
         // Don't slide while R1 owns scroll — its anchor bubble must
         // stay in the rendered window.
         guard growMode == .idle else { return }
+        // Gate on settled scroll. A single user flick produces many
+        // `onScrollGeometryChange` ticks during deceleration; firing
+        // expansion on each of them cascades through several
+        // different anchor bubbles at different content positions,
+        // making the chat appear to jump around. By only firing
+        // when scroll motion has fully settled, one flick yields at
+        // most one expansion. The `.onScrollPhaseChange .idle`
+        // handler also calls this function once after settle, so
+        // expansion still happens reliably.
+        guard scrollPhase == .idle else { return }
 
         // Top-edge: expand window upward
         let topThreshold = Self.topSpinnerHeight + Self.topSpinnerSlop
@@ -1611,18 +1639,29 @@ struct ChatView: View {
         "user-\(mid)"
     }
 
-    /// id of the topmost user bubble whose top edge is at or below the
-    /// current viewport top. Used by `handleTopEdgeExpand` to anchor
-    /// scroll position so that prepending older turns doesn't visually
-    /// jump the user to the top of the newly-loaded content.
+    /// id of the topmost user bubble whose top edge is INSIDE the
+    /// current viewport (between viewport top and viewport bottom).
+    /// Used by `handleTopEdgeExpand` to anchor scroll position so that
+    /// prepending older turns doesn't visually jump the user.
     ///
-    /// Returns nil if no user bubble qualifies (e.g., viewport
-    /// contains only agent/tool rows with no user bubble in or below
-    /// it). Caller falls back to SwiftUI's default behavior.
+    /// Important: the filter requires the bubble to actually be in
+    /// the viewport, not just below scrollOffsetY. Otherwise, in a
+    /// long agent message with no user bubbles in view, the picker
+    /// would return a bubble far below the viewport, and the
+    /// restoration math would yank the scroll to a position
+    /// unrelated to what the user is looking at.
+    ///
+    /// Returns nil if no user bubble is in the viewport (e.g.,
+    /// inside a long agent reply). Caller falls back to SwiftUI's
+    /// default anchor behavior.
     private func topmostVisibleUserBubbleId() -> String? {
-        let candidates = userBubbleFrames
-            .filter { $0.value.minY >= scrollOffsetY && $0.value.height > 0 }
-            .sorted { $0.value.minY < $1.value.minY }
+        let viewportTop = scrollOffsetY
+        let viewportBottom = scrollOffsetY + viewportHeight
+        let candidates = userBubbleFrames.filter { (_, frame) in
+            frame.height > 0
+                && frame.minY >= viewportTop
+                && frame.minY < viewportBottom
+        }.sorted { $0.value.minY < $1.value.minY }
         return candidates.first?.key
     }
 
