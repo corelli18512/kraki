@@ -422,6 +422,9 @@ struct ChatView: View {
                         .overlay(alignment: .top) {
                             stickyUserOverlay(proxy: proxy)
                         }
+                        .overlay(alignment: .bottomTrailing) {
+                            jumpToLatestButton
+                        }
                         .safeAreaInset(edge: .bottom, spacing: 0) {
                             // Hide the entire compose area while the relay
                             // channel is broken — the user can't send anything
@@ -433,6 +436,32 @@ struct ChatView: View {
                 }
             }
             .background(Color.surfacePrimary)
+        }
+    }
+
+    /// Floating circular button (bottom-trailing) that jumps to the
+    /// latest content. Visible only when the rendered window doesn't
+    /// already include the latest turn — i.e., the user is in
+    /// history and the bottom spinner would otherwise be visible
+    /// too. Tapping snaps the window to the bottom and scrolls to
+    /// the chat-bottom sentinel in one shot, so the user doesn't
+    /// have to repeatedly swipe-down through 50+ turns.
+    @ViewBuilder
+    private var jumpToLatestButton: some View {
+        if hasFoldedTurnsBelow {
+            Button(action: { jumpToLatest() }) {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        Circle().fill(Color.krakiPrimary)
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+            }
+            .padding(.trailing, 16)
+            .padding(.bottom, 12)
+            .transition(.scale.combined(with: .opacity))
         }
     }
 
@@ -824,23 +853,12 @@ struct ChatView: View {
         appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
     }
 
-    /// Bottom-edge expansion: snap the window straight to the latest
-    /// content. Per-step sliding (5 turns at a time) was too slow for
-    /// the common case "I want to see the latest" — the user would
-    /// drag, hit bottom of rendered, slide one step, drag again, etc.
-    /// When the user's gesture says "go down", honor it in one shot.
-    ///
-    /// The window slides as far as possible: `startIdx = total -
-    /// renderedTurnCount`. R1's `lockedMsgId` is guaranteed not in the
-    /// dropped top turns because R1 isn't active here (R1 is gated by
-    /// `growMode == .idle` check in `maybeAutoLoadOlder`'s caller).
-    ///
-    /// We also nudge the scroll position to `chat-bottom`. Without
-    /// this, the user's viewport-top row is in the dropped top turns,
-    /// so SwiftUI's `anchor: .top` tracking loses its anchor and
-    /// scroll position becomes unpredictable. Explicitly scrolling
-    /// to the chat-bottom sentinel matches the user's gesture
-    /// intent ("show me the latest").
+    /// Bottom-edge expansion: slide window down by `renderExpandStep`
+    /// per debounced trigger, exposing the next folded-below turns.
+    /// Symmetric with top-edge: scroll-down feels like incremental
+    /// exploration, not a teleport. For the "I want to see latest
+    /// now" intent the user can tap the floating jump-to-latest
+    /// button instead.
     private func handleBottomEdgeExpand() {
         let now = Date()
         if let last = lastWindowExpansion,
@@ -851,11 +869,22 @@ struct ChatView: View {
 
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
+        let newStart = min(total - renderedTurnCount,
+                            renderWindowStartIdx + Self.renderExpandStep)
+        renderWindowStartIdx = max(0, newStart)
+        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
+    }
+
+    /// Jump-to-latest: snap the window to the bottom and scroll to
+    /// the chat-bottom sentinel. Used by the floating button when
+    /// folded turns exist below the rendered window (i.e., the user
+    /// is somewhere in history and wants to return to the latest).
+    private func jumpToLatest() {
+        let total = cachedAllTurnCount
+        let beforeStart = renderWindowStartIdx
         renderWindowStartIdx = max(0, total - renderedTurnCount)
-        // Programmatic scroll to the new bottom — necessary because
-        // the snap may have dropped the user's viewport-top row.
         chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
-        KLog.d("🔻autoLoad bottom-edge SNAP startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total)) scrolled to chat-bottom")
+        KLog.d("⏬jumpToLatest startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
     }
 
     /// When new turns arrive (live agent reply, user reply, tool
