@@ -42,9 +42,15 @@ export function sendInput(
 ): void {
   const store = getStore();
   const timestamp = new Date().toISOString();
+  // Generate a stable correlation id. Tentacle echoes this back inside
+  // the resulting `user_message.payload.clientId`, letting us resolve
+  // the right pending placeholder even with multiple in-flight sends,
+  // reconnects, or multi-device scenarios.
+  const clientId = crypto.randomUUID();
   store.appendMessage(sessionId, {
     type: 'pending_input',
-    id: `pending-${Date.now()}`,
+    id: clientId,
+    clientId,
     sessionId,
     text,
     timestamp,
@@ -55,7 +61,7 @@ export function sendInput(
   send({
     type: 'send_input',
     sessionId,
-    payload: { text, ...(attachments?.length && { attachments }) },
+    payload: { text, clientId, ...(attachments?.length && { attachments }) },
   });
 }
 

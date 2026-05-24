@@ -17,6 +17,12 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'er
 export interface PendingInputMessage {
   type: 'pending_input';
   id: string;
+  /** Client-generated correlation id (UUID). Echoed back inside the
+   *  resulting `user_message` broadcast so this placeholder can be
+   *  resolved unambiguously. `id` and `clientId` are typically the
+   *  same value; `clientId` is kept as a separate field for clarity
+   *  and to survive future changes to how `id` is generated. */
+  clientId: string;
   sessionId: string;
   text: string;
   timestamp: string;
@@ -140,7 +146,17 @@ export interface AppActions {
   removeDevice: (deviceId: string) => void;
   setDeviceOnline: (deviceId: string, online: boolean) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
-  resolvePendingInput: (sessionId: string, seq?: number) => void;
+  /** Replace a pending_input with the matching `user_message` broadcast.
+   *  When `clientId` is provided, the pending with that exact id is
+   *  resolved; otherwise the first pending (legacy fallback for clients
+   *  or replays without clientId) is resolved. `serverContent` overrides
+   *  the pending's local text if present. */
+  resolvePendingInput: (
+    sessionId: string,
+    seq: number,
+    clientId?: string,
+    serverContent?: string,
+  ) => boolean;
   appendDelta: (sessionId: string, content: string) => void;
   flushDelta: (sessionId: string) => void;
   addPermission: (perm: PendingPermission) => void;

@@ -554,13 +554,17 @@ export class RelayClient {
     try {
       switch (msg.type) {
         case 'send_input':
-          // Broadcast user_message back to apps (round-trip confirmation)
+          // Broadcast user_message back to apps (round-trip confirmation).
+          // Echo the optional `clientId` so the originating client can
+          // correlate this broadcast with its optimistic pending_input
+          // placeholder (see UserMessage.payload.clientId).
           this.send({
             type: 'user_message',
             sessionId,
             payload: {
               content: msg.payload.text,
               ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
+              ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
             },
           });
           this.sessionManager.markActive(sessionId);

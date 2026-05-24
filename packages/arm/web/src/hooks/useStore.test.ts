@@ -205,6 +205,158 @@ describe('useStore', () => {
       expect(useStore.getState().messages.get('sess-1')).toHaveLength(1);
       expect(useStore.getState().messages.get('sess-2')).toHaveLength(1);
     });
+
+    it('appendMessage dedups by [type, seq] when seq > 0 (defends against relay re-broadcasts)', () => {
+      useStore.getState().appendMessage('sess-1', mockMessage);
+      const updated = { ...mockMessage, payload: { content: 'updated content' } } as ChatMessage;
+      useStore.getState().appendMessage('sess-1', updated);
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect(msgs).toHaveLength(1);
+      expect((msgs![0] as typeof mockMessage).payload.content).toBe('updated content');
+    });
+
+    it('appendMessage does NOT dedup pending_input (seq=0)', () => {
+      const pendingA = {
+        type: 'pending_input' as const,
+        id: 'cid-a',
+        clientId: 'cid-a',
+        sessionId: 'sess-1',
+        text: 'first',
+        timestamp: new Date().toISOString(),
+      };
+      const pendingB = { ...pendingA, id: 'cid-b', clientId: 'cid-b', text: 'second' };
+      useStore.getState().appendMessage('sess-1', pendingA);
+      useStore.getState().appendMessage('sess-1', pendingB);
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect(msgs).toHaveLength(2);
+    });
+  });
+
+  describe('pending input resolution', () => {
+    const makePending = (clientId: string, text: string, sessionId = 'sess-1') => ({
+      type: 'pending_input' as const,
+      id: clientId,
+      clientId,
+      sessionId,
+      text,
+      timestamp: new Date().toISOString(),
+    });
+
+    it('resolves by clientId and replaces pending with user_message', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
+      const ok = useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'hello');
+      expect(ok).toBe(true);
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect(msgs).toHaveLength(1);
+      const resolved = msgs![0] as { type: string; seq: number; payload: { content: string } };
+      expect(resolved.type).toBe('user_message');
+      expect(resolved.seq).toBe(5);
+      expect(resolved.payload.content).toBe('hello');
+    });
+
+    it('uses serverContent when provided (overrides pending text)', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'local'));
+      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'authoritative');
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect((msgs![0] as { payload: { content: string } }).payload.content).toBe('authoritative');
+    });
+
+    it('falls back to pending text when serverContent is undefined', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'local-only'));
+      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', undefined);
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect((msgs![0] as { payload: { content: string } }).payload.content).toBe('local-only');
+    });
+
+    it('returns false and does nothing when clientId does not match any pending', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
+      const ok = useStore.getState().resolvePendingInput('sess-1', 5, 'cid-other', 'hello');
+      expect(ok).toBe(false);
+      const msgs = useStore.getState().messages.get('sess-1');
+      expect(msgs).toHaveLength(1);
+      expect(msgs![0].type).toBe('pending_input');
+    });
+
+    it('returns false when session has no messages', () => {
+      const ok = useStore.getState().resolvePendingInput('sess-empty', 1, 'cid-1', 'x');
+      expect(ok).toBe(false);
+    });
+
+    it('rapid-send: two pendings with distinct clientIds are resolved independently', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'first message'));
+      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'second message'));
+
+      // Server acks the first send
+      useStore.getState().resolvePendingInput('sess-1', 1, 'cid-a', 'first message');
+      let msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0].type).toBe('user_message');
+      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
+      expect(msgs[1].type).toBe('pending_input');
+
+      // Server acks the second send
+      useStore.getState().resolvePendingInput('sess-1', 2, 'cid-b', 'second message');
+      msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(2);
+      expect(msgs.every((m) => m.type === 'user_message')).toBe(true);
+      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
+      expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second message');
+    });
+
+    it('rapid-send acks arriving out of order (cid-b first, then cid-a) still attribute content correctly', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'first message'));
+      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'second message'));
+
+      // Out-of-order: server acks the second one first with seq=2
+      useStore.getState().resolvePendingInput('sess-1', 2, 'cid-b', 'second message');
+      // Then the first with seq=1
+      useStore.getState().resolvePendingInput('sess-1', 1, 'cid-a', 'first message');
+
+      const msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(2);
+      // List is sorted by seq → seq=1 comes first
+      expect((msgs[0] as { seq: number }).seq).toBe(1);
+      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
+      expect((msgs[1] as { seq: number }).seq).toBe(2);
+      expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second message');
+    });
+
+    it('legacy fallback: no clientId resolves the first pending in the list', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'oldest'));
+      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'newer'));
+      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, undefined);
+      expect(ok).toBe(true);
+      const msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(2);
+      // First pending (cid-a) is resolved using its own text
+      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('oldest');
+      expect(msgs[1].type).toBe('pending_input');
+      expect((msgs[1] as { clientId: string }).clientId).toBe('cid-b');
+    });
+
+    it('sorts list by seq after resolve (handles transient events that landed mid-flight)', () => {
+      // Pending added first, then a tool event with a real seq came in,
+      // then the user_message ack arrives.
+      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
+      const toolEvent = {
+        type: 'tool_start' as const,
+        sessionId: 'sess-1',
+        deviceId: '',
+        seq: 7,
+        timestamp: new Date().toISOString(),
+        payload: { id: 'tool-1', name: 'shell', args: {} },
+      } as unknown as ChatMessage;
+      useStore.getState().appendMessage('sess-1', toolEvent);
+      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'hello');
+
+      const msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(2);
+      // user_message (seq=5) sorted before tool_start (seq=7)
+      expect((msgs[0] as { type: string; seq: number }).type).toBe('user_message');
+      expect((msgs[0] as { seq: number }).seq).toBe(5);
+      expect((msgs[1] as { type: string; seq: number }).type).toBe('tool_start');
+      expect((msgs[1] as { seq: number }).seq).toBe(7);
+    });
   });
 
   describe('streaming deltas', () => {

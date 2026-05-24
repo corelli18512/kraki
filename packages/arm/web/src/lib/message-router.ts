@@ -409,15 +409,23 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'user_message': {
-      // Resolve pending_input when tentacle confirms receipt via user_message broadcast
-      const hadPending = store.messages.get(sid)?.some((m) => m.type === 'pending_input');
-      store.resolvePendingInput(sid, msg.seq);
-      if (!hadPending) {
+      // Tentacle broadcasts `user_message` for every `send_input` it
+      // receives, as round-trip confirmation. If our pending placeholder
+      // is still around, we resolve it in place; otherwise we append
+      // (covers history replays and messages from other devices).
+      //
+      // Resolution is by `clientId` round-tripped through tentacle. The
+      // legacy fallback (first pending) handles older clients and
+      // historical messages without clientId.
+      const payload = (msg.payload ?? {}) as Record<string, unknown>;
+      const clientId = typeof payload.clientId === 'string' ? payload.clientId : undefined;
+      const serverContent = typeof payload.content === 'string' ? payload.content : undefined;
+      const resolved = store.resolvePendingInput(sid, msg.seq, clientId, serverContent);
+      if (!resolved) {
         store.appendMessage(sid, msg);
       }
-      const userContent = (msg.payload as Record<string, unknown>).content;
-      if (typeof userContent === 'string') {
-        updatePreview(sid, { text: truncPreview(userContent), type: 'user', timestamp: msg.timestamp }, false);
+      if (serverContent !== undefined) {
+        updatePreview(sid, { text: truncPreview(serverContent), type: 'user', timestamp: msg.timestamp }, false);
       }
       break;
     }
