@@ -1,23 +1,26 @@
 #if os(iOS)
-/// MessageInputView — Edge-to-edge bottom bar with text + voice modes.
+/// MessageInputView — Floating bottom input, iMessage-style.
 ///
-/// Layout: a single full-width liquid-glass surface that rounds only the
-/// top corners and extends through the home-indicator safe area, containing
+/// No enclosing bar. Three pill-shaped components sit side by side
+/// above the home indicator, each with its own glass/material chrome:
 ///   ① Optional pending action row (permission buttons / question choices)
-///   ② Input row: voice toggle (left) + text field OR hold-to-talk pill
-///   ③ Optional expanded mode picker (its own row when expanded)
-///   ④ Bottom toolbar: image attach, collapsed mode pill, send/stop
+///   ② A single unified input row:
+///       [image attach] [voice/keyboard toggle + text field
+///        (or hold-to-talk pill)] [send button with mode swipe]
 ///
-/// The mic toggle lives inline at the leading edge of the input row so it
-/// stays right next to the typing cursor (WeChat/Doubao style). Tapping it
-/// swaps the text field for a press-and-hold "Hold to Talk" pill that drives
-/// on-device transcription via SpeechRecognizer. Drag-up while holding arms
-/// cancellation. Release with text fills the draft and auto-switches back to
-/// text mode for review/send.
+/// In voice mode, the input box's INNER content morphs into a
+/// press-and-hold "Hold to Talk" prompt — the box's outer chrome
+/// (voice/keyboard toggle, mode-color strip, send icon, glass
+/// background) stays exactly the same so the size doesn't shift.
+/// The voice toggle still flips back to keyboard mode. The send
+/// icon dims (no draft text yet) but is still tap-able once
+/// transcription fills the draft.
 ///
-/// The mode picker's expanded segmented control is too wide to share a row
-/// with the image-attach + send buttons, so when expanded it flows onto its
-/// own dedicated row above the bottom toolbar.
+/// The send/stop button doubles as the mode selector: dragging it
+/// horizontally reveals an adjacent mode color through the liquid-glass
+/// capsule (max one block of travel, momentum-friendly). The fully
+/// expanded segmented control lives in the session settings sheet
+/// (SessionInfoSheet) for explicit mode changes.
 
 import SwiftUI
 import PhotosUI
@@ -40,10 +43,101 @@ struct MessageInputView: View {
     @State private var isPressing = false
     @State private var cancelArmed = false
 
-    // Mode picker expansion is lifted here so the expanded picker can flow
-    // onto its own row inside the compose card (it's too wide to share a
-    // row with the image-attach + send buttons).
-    @State private var modePickerExpanded = false
+    // Hold-to-talk vs mode-swipe arbitration (voice mode only).
+    // The hold-to-talk gesture pivots into one of these branches
+    // within the first 200ms of a touch, then stays there for the
+    // rest of that touch. `holdDwellTask` is the 200ms timer that
+    // fires the RECORD pivot if no horizontal motion happens first.
+    @State private var holdDwellTask: Task<Void, Never>? = nil
+    @State private var holdPivot: HoldGesturePivot? = nil
+
+    private enum HoldGesturePivot {
+        case record
+        case modeSwipe
+    }
+
+    // Mode swipe — the send icon doubles as the mode selector.
+    // Swiping it horizontally cycles SessionMode (looping). The input
+    // box's glass tint blends between adjacent mode colors live during
+    // the swipe; on release a tap = send, a flick or 40% drag = mode
+    // commit. Visual swipe travel is clamped to ±`modeStepWidth`.
+    //
+    // `rawDragX` is the live horizontal drag translation (clamped).
+    // `dragStartMode` snapshots the mode at gesture start so tint
+    // math is stable across the drag.
+    @State private var rawDragX: CGFloat = 0
+    @State private var dragStartMode: SessionMode? = nil
+    @State private var measuredInputBoxWidth: CGFloat = 0
+
+    // Mode-change toast (liquid-glass capsule above the send icon).
+    // Only triggered by an actual user-initiated commit (via the
+    // swipe), not by sync from the server or initial load.
+    @State private var showModeToast = false
+    @State private var modeToastMode: SessionMode = .discuss
+    @State private var modeToastTask: Task<Void, Never>? = nil
+
+    private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+    private static let inputBoxHeight: CGFloat = 42
+    private static let commitDistanceFraction: CGFloat = 0.4
+    private static let momentumVelocity: CGFloat = 500   // pt/s
+
+    /// Width of one "step" — clamped to the measured input box width
+    /// so a full-distance swipe can fully replace the visible mode
+    /// color with the adjacent one. Falls back to a sane default
+    /// while the box hasn't been measured yet.
+    private var modeStepWidth: CGFloat {
+        max(80, measuredInputBoxWidth)
+    }
+
+    private var currentSessionMode: SessionMode {
+        appState.sessionStore.sessionModes[sessionId]
+            ?? session?.mode
+            ?? .discuss
+    }
+
+    /// The mode whose color tint is centered. We snapshot the start
+    /// mode at gesture start so tint math stays stable across the drag
+    /// (in-drag commits would otherwise re-anchor the interpolation).
+    private var tintBaseMode: SessionMode {
+        dragStartMode ?? currentSessionMode
+    }
+
+    /// Live tint color for the input box: blends linearly between the
+    /// base mode's color and the adjacent mode's color based on the
+    /// drag progress (rawDragX / modeStepWidth, clamped to ±1). At
+    /// rest this is just the current mode's color.
+    private var inputBoxModeTint: Color {
+        let modes = Self.allModes
+        let count = modes.count
+        let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
+        let progress = max(-1, min(1, rawDragX / modeStepWidth))
+        if progress == 0 { return Color.modeColor(modes[baseIdx]) }
+        // Drag RIGHT (positive dx) → previous mode tint enters.
+        let neighborIdx: Int = progress > 0
+            ? ((baseIdx - 1) % count + count) % count
+            : ((baseIdx + 1) % count + count) % count
+        return Self.blendColors(
+            Color.modeColor(modes[baseIdx]),
+            Color.modeColor(modes[neighborIdx]),
+            t: abs(progress)
+        )
+    }
+
+    private static func blendColors(_ a: Color, _ b: Color, t: CGFloat) -> Color {
+        let ua = UIColor(a)
+        let ub = UIColor(b)
+        var (r1, g1, b1, a1): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        var (r2, g2, b2, a2): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        let tt = max(0, min(1, t))
+        return Color(
+            red: Double(r1 + (r2 - r1) * tt),
+            green: Double(g1 + (g2 - g1) * tt),
+            blue: Double(b1 + (b2 - b1) * tt),
+            opacity: Double(a1 + (a2 - a1) * tt)
+        )
+    }
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
@@ -58,9 +152,6 @@ struct MessageInputView: View {
     /// not freeform speech).
     private var canShowVoiceToggle: Bool { pendingPermission == nil }
 
-    /// Mode picker only makes sense in normal compose state.
-    private var canShowModePicker: Bool { pendingPermission == nil && pendingQuestion == nil }
-
     var body: some View {
         composeCard
             .overlay(alignment: .top) {
@@ -69,6 +160,13 @@ struct MessageInputView: View {
                         .offset(y: -96)
                         .transition(.scale.combined(with: .opacity))
                 }
+            }
+            .overlay(alignment: .topTrailing) {
+                // Mode-change toast — floats above the send icon
+                // with a small gap (~10pt) above the input row.
+                modeToast
+                    .offset(x: -23, y: -32)
+                    .allowsHitTesting(false)
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isPressing)
             .onChange(of: sessionActive) { _, active in
@@ -80,6 +178,14 @@ struct MessageInputView: View {
     }
 
     // MARK: - Compose Card
+    //
+    // iMessage-style floating layout: no enclosing bar. The image
+    // attach button, the input box capsule, and the send button each
+    // have their own glass/material chrome and sit side-by-side with a
+    // small horizontal gutter. Bottom placement is handled by the
+    // parent's `safeAreaInset(edge: .bottom)`, which positions us
+    // above the home indicator; a small bottom pad keeps the pills
+    // from kissing the safe-area boundary.
 
     @ViewBuilder
     private var composeCard: some View {
@@ -91,54 +197,146 @@ struct MessageInputView: View {
                 questionChoicesRow(q, choices: choices)
             }
 
-            // ② Input row (mic toggle + text field, OR hold-to-talk pill)
+            // ② Single unified input row:
+            //    [image attach] [voice/keyboard toggle + text field or
+            //    hold-to-talk pill] [send button with mode swipe]
             inputRow
-
-            // ③ Bottom toolbar (image + mode picker fills middle + send)
-            bottomToolbar
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity)
-        .background(alignment: .top) {
-            ComposeCardGlassBackground()
-        }
     }
 
-    // MARK: - Input Row (mic toggle + text field / hold-to-talk pill)
+    // MARK: - Unified Input Row
 
     private var inputRow: some View {
-        HStack(spacing: 4) {
-            if canShowVoiceToggle {
-                voiceToggleButton
-            }
-            if voiceMode {
-                holdToTalkPill
-            } else {
-                textFieldForMode
-            }
-        }
-    }
-
-    // MARK: - Bottom Toolbar
-
-    private var bottomToolbar: some View {
         HStack(spacing: 8) {
             imageAttachButton
-            if canShowModePicker {
-                ModePickerView(sessionId: sessionId, expanded: $modePickerExpanded)
-                    .frame(maxWidth: .infinity)
-            } else {
-                Spacer(minLength: 0)
-            }
-            if !voiceMode {
-                actionButtonForMode
-            }
+            inputBox
         }
         .animation(.easeInOut(duration: 0.2), value: voiceMode)
     }
 
-    // MARK: - Voice Toggle (lives inside the input row, leading edge)
+    /// The input box. Voice/keyboard toggle on the LEFT, content in
+    /// the middle (text field in text mode, hold-to-talk pill in voice
+    /// mode), and the send icon on the RIGHT. The whole box has a
+    /// liquid-glass capsule background tinted by the current session
+    /// mode color (blends live during swipe on the send icon).
+    ///
+    /// Voice/keyboard toggle on the LEFT, content in the middle
+    /// (text field in text mode, hold-to-talk prompt in voice mode),
+    /// send icon on the RIGHT. The chrome (glass + mode-color strip)
+    /// and outer dimensions are identical in both modes — only the
+    /// middle content swaps. This way pressing the mic just morphs
+    /// the input box's content without resizing or losing the swipe
+    /// strip / voice toggle / send icon.
+    private var inputBox: some View {
+        HStack(spacing: 0) {
+            if canShowVoiceToggle {
+                voiceToggleButton
+            }
+            if voiceMode {
+                holdToTalkPrompt
+            } else {
+                textFieldForMode
+            }
+            sendIconButton
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.inputBoxHeight)
+        .background { inputBoxGlassBackground }
+        .contentShape(Capsule())
+        // In text mode the whole input box is swipeable for mode
+        // changes. In voice mode the hold-to-talk gesture owns the
+        // prompt area and handles its own pivot to a mode swipe via
+        // the 200ms dwell rule, so we don't attach the parent swipe
+        // (it would race with the hold-to-talk).
+        .simultaneousGesture(voiceMode ? nil : inputBoxModeSwipeGesture)
+        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+    }
+
+    @ViewBuilder
+    private var inputBoxGlassBackground: some View {
+        let shape = Capsule()
+        ZStack(alignment: .bottom) {
+            // Plain iOS 26 liquid glass capsule — no full-box tint;
+            // the mode color lives only in the thin strip below.
+            if #available(iOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: shape)
+            } else {
+                shape.fill(.ultraThinMaterial)
+            }
+
+            // Thin mode-color strip pinned to the bottom edge of the
+            // capsule. Renders 3 horizontal blocks (prev / base /
+            // next mode) wider than the box; offset by `rawDragX` so
+            // it slides with the finger, peeking the adjacent
+            // colors in from the swipe direction. Clipped to the
+            // capsule so the colors hug the bottom curvature.
+            swipeBottomStrip
+                .clipShape(shape)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var swipeBottomStrip: some View {
+        GeometryReader { proxy in
+            let modes = Self.allModes
+            let count = modes.count
+            let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
+            let prevIdx = ((baseIdx - 1) % count + count) % count
+            let nextIdx = ((baseIdx + 1) % count + count) % count
+            let w = proxy.size.width
+            let stripHeight: CGFloat = 1.5
+            let opacity: Double = 0.95
+            HStack(spacing: 0) {
+                Color.modeColor(modes[prevIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+                Color.modeColor(modes[baseIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+                Color.modeColor(modes[nextIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+            }
+            // The 3-block strip is anchored so the BASE block fully
+            // covers the visible window at rest (`rawDragX == 0`).
+            // `rawDragX` then slides the strip with the finger up to
+            // ±w, peeking the adjacent block fully into view.
+            .offset(x: -w + rawDragX)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .onAppear { measuredInputBoxWidth = w }
+            .onChange(of: w) { _, newW in measuredInputBoxWidth = newW }
+        }
+    }
+
+    /// Horizontal swipe gesture that cycles SessionMode, attached to
+    /// the WHOLE input box (not just the send icon) so the user can
+    /// swipe anywhere on the box. Uses `simultaneousGesture` so taps
+    /// on the inner TextField, voice toggle, and send icon still
+    /// reach their own gesture handlers. `minimumDistance: 10`
+    /// prevents an incidental finger jiggle from triggering a swipe.
+    /// The horizontal-vs-vertical guard runs only at the FIRST motion
+    /// event so once we've committed to a horizontal swipe, vertical
+    /// drift doesn't cancel it.
+    private var inputBoxModeSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                if dragStartMode == nil {
+                    // Lock in: only start a swipe if the first
+                    // motion is more horizontal than vertical.
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > abs(dy) else { return }
+                }
+                handleModeSwipeChanged(value.translation.width)
+            }
+            .onEnded { value in
+                guard dragStartMode != nil else { return }
+                handleModeSwipeEnded(value.velocity.width)
+            }
+    }
+
+    // MARK: - Voice Toggle (lives inside the input box, leading edge)
 
     private var voiceToggleButton: some View {
         Button {
@@ -146,19 +344,80 @@ struct MessageInputView: View {
                 voiceMode.toggle()
                 if voiceMode { isFocused = false }
             }
+            // Proactively prompt for mic + speech-recognition
+            // permissions the first time the user switches into
+            // voice mode. The system prompts only appear if not
+            // previously granted, so this is a no-op on subsequent
+            // toggles. Calling it BEFORE first press-to-talk avoids
+            // a crash on cold mic-session start.
+            if voiceMode {
+                speech.requestPermissionsIfNeeded()
+            }
         } label: {
-            Image(systemName: voiceMode ? "keyboard" : "mic.fill")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 44, height: 44)
+            LucideIcon(voiceMode ? .keyboard : .mic, size: 22, strokeWidth: 2.25, color: .secondary)
+                .frame(width: 40, height: Self.inputBoxHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Nudge inward so the icon doesn't kiss the capsule's left
+        // rounded edge — more breathing room on the leading side.
+        .padding(.leading, 6)
     }
 
-    // MARK: - Hold to Talk Pill
+    // MARK: - Send Icon (trailing edge of input box)
+    //
+    // Inline icon button — tap to send (or stop while active). The
+    // horizontal mode-swipe gesture lives on the parent input box
+    // (`inputBoxModeSwipeGesture`), so this button only needs to
+    // handle the tap action; SwiftUI's simultaneousGesture coordinator
+    // routes taps here and drags to the parent.
 
-    private var holdToTalkPill: some View {
+    private var sendIconButton: some View {
+        Button(action: handleSendOrStopTap) {
+            sendIconGlyph
+                .frame(width: 34, height: Self.inputBoxHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity((isIdle && !canSend) ? 0.4 : 1)
+        // Nudge inward from the trailing edge — mirrors the toggle's
+        // leading inset so the two icons sit symmetric and don't
+        // crowd the capsule's rounded ends.
+        .padding(.trailing, 6)
+    }
+
+    @ViewBuilder
+    private var sendIconGlyph: some View {
+        let tint = Color.modeColor(currentSessionMode)
+        ZStack {
+            Image(systemName: "arrow.right")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(tint)
+                .scaleEffect(isIdle ? 1 : 0)
+                .opacity(isIdle ? 1 : 0)
+
+            LucideIcon(.square, size: 12, strokeWidth: 0, color: tint)
+                .frame(width: 12, height: 12)
+                .background(tint)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .scaleEffect(isIdle ? 0 : 1)
+                .opacity(isIdle ? 0 : 1)
+        }
+        .animation(.easeInOut(duration: 0.4), value: isIdle)
+        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+    }
+
+    // MARK: - Hold to Talk Prompt
+    //
+    // Replaces the text field's content area in voice mode. Same
+    // height as the text field so the surrounding input box (with
+    // its voice toggle, mode-color strip, send icon, and glass
+    // background) keeps the same size and shape. The user
+    // press-and-holds anywhere across this center label to record;
+    // drag-up while holding arms cancellation (visualized by the
+    // tint shift on the label).
+
+    private var holdToTalkPrompt: some View {
         let activeTint: Color = cancelArmed ? .red : .krakiPrimary
         let label: String = isPressing
             ? (cancelArmed ? "Release to cancel" : "Recording…")
@@ -167,70 +426,113 @@ struct MessageInputView: View {
             ? (cancelArmed ? "xmark.circle.fill" : "waveform")
             : "mic.fill"
 
-        return HStack(spacing: 8) {
+        return HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
             Text(label)
                 .font(.subheadline)
         }
         .foregroundStyle(isPressing ? activeTint : .secondary)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 44)
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .background(holdToTalkPillBackground(tint: activeTint))
+        .frame(height: Self.inputBoxHeight)
+        .contentShape(Rectangle())
         .scaleEffect(isPressing ? 0.98 : 1)
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isPressing)
         .animation(.easeInOut(duration: 0.15), value: cancelArmed)
         .gesture(holdToTalkGesture)
     }
 
-    @ViewBuilder
-    private func holdToTalkPillBackground(tint: Color) -> some View {
-        if #available(iOS 26.0, *) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(isPressing ? tint.opacity(0.18) : Color.clear)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(isPressing ? tint.opacity(0.18) : Color(.tertiarySystemBackground))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke((isPressing ? tint : .secondary).opacity(0.25), lineWidth: 1)
-                )
-        }
-    }
-
+    // The hold-to-talk gesture is a 3-state machine that coexists
+    // with the horizontal mode-swipe gesture on the same surface:
+    //
+    //  Touch-down → DWELL (200ms timer).
+    //   ├── 200ms passes with no significant horizontal motion →
+    //   │     pivot RECORD: start speech, drag-up arms cancel.
+    //   ├── |dx| ≥ 10pt AND |dx| > |dy| BEFORE 200ms elapses →
+    //   │     pivot MODE_SWIPE: cancel dwell, forward to
+    //   │     handleModeSwipeChanged; release calls
+    //   │     handleModeSwipeEnded (momentum + spring + commit).
+    //   └── Release before 200ms with sub-threshold motion →
+    //         quick tap on the prompt area, no-op.
+    //
+    // Because the gesture pivots into exactly one branch and stays
+    // there for the rest of the touch, there's no ambiguity: a flick
+    // can't accidentally start recording, and a long press can't
+    // accidentally switch modes.
     private var holdToTalkGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if !isPressing {
-                    isPressing = true
-                    cancelArmed = false
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    speech.startRecording()
+                if let pivot = holdPivot {
+                    switch pivot {
+                    case .record:
+                        cancelArmed = value.translation.height < -60
+                    case .modeSwipe:
+                        handleModeSwipeChanged(value.translation.width)
+                    }
+                    return
                 }
-                cancelArmed = value.translation.height < -60
+
+                // Not yet pivoted. Schedule the dwell timer on first
+                // contact, then check whether horizontal motion has
+                // already crossed the pivot threshold.
+                if holdDwellTask == nil {
+                    holdDwellTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(200))
+                        guard !Task.isCancelled else { return }
+                        // 200ms elapsed without a horizontal pivot →
+                        // commit to RECORD.
+                        holdPivot = .record
+                        isPressing = true
+                        cancelArmed = false
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        speech.startRecording()
+                    }
+                }
+
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if abs(dx) >= 10, abs(dx) > abs(dy) {
+                    holdDwellTask?.cancel()
+                    holdDwellTask = nil
+                    holdPivot = .modeSwipe
+                    handleModeSwipeChanged(dx)
+                }
             }
-            .onEnded { _ in
-                speech.stopRecording()
-                let cancelled = cancelArmed
-                // Brief delay so the recognizer can flush its final partial.
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(180))
-                    if !cancelled {
-                        let captured = speech.transcript
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !captured.isEmpty {
-                            let prior = text
-                            let merged = prior.isEmpty ? captured : (prior + " " + captured)
-                            sessionStore.setDraft(sessionId, merged)
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                voiceMode = false
+            .onEnded { value in
+                holdDwellTask?.cancel()
+                holdDwellTask = nil
+                let pivot = holdPivot
+                holdPivot = nil
+
+                switch pivot {
+                case .record:
+                    speech.stopRecording()
+                    let cancelled = cancelArmed
+                    // Brief delay so the recognizer can flush its
+                    // final partial.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(180))
+                        if !cancelled {
+                            let captured = speech.transcript
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !captured.isEmpty {
+                                let prior = text
+                                let merged = prior.isEmpty ? captured : (prior + " " + captured)
+                                sessionStore.setDraft(sessionId, merged)
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    voiceMode = false
+                                }
                             }
                         }
+                        isPressing = false
+                        cancelArmed = false
                     }
-                    isPressing = false
-                    cancelArmed = false
+                case .modeSwipe:
+                    handleModeSwipeEnded(value.velocity.width)
+                case .none:
+                    // Tap or sub-threshold motion before pivot →
+                    // nothing to do.
+                    break
                 }
             }
     }
@@ -296,7 +598,7 @@ struct MessageInputView: View {
                     Image(uiImage: uiImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(height: 32)
+                        .frame(height: Self.inputBoxHeight)
                         .frame(maxWidth: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -308,10 +610,9 @@ struct MessageInputView: View {
                     .offset(x: 4, y: -4)
                 }
             } else {
-                LucideIcon(.imagePlus, size: 18, color: .secondary)
-                    .frame(width: 36, height: 36)
+                LucideIcon(.imagePlus, size: 22, strokeWidth: 2.25, color: .secondary)
+                    .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
                     .modifier(GlassCircleModifier())
-                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
         }
@@ -334,51 +635,38 @@ struct MessageInputView: View {
 
         return TextField(placeholder, text: Binding(
             get: { text },
-            set: { sessionStore.setDraft(sessionId, $0) }
+            set: { newValue in
+                // Intercept newline insertions and treat them as a
+                // submit. With `axis: .vertical`, the soft keyboard's
+                // return key inserts `\n` into the text by default
+                // and `.onSubmit` does not fire — so the user has no
+                // way to send via the keyboard. Stripping the `\n` and
+                // calling the submit handler routes the return key
+                // through the same path as the in-app send icon,
+                // matching `.submitLabel(.send)`'s visual hint.
+                if newValue.hasSuffix("\n") {
+                    let trimmed = String(newValue.dropLast())
+                    sessionStore.setDraft(sessionId, trimmed)
+                    handleModeSubmit()
+                } else {
+                    sessionStore.setDraft(sessionId, newValue)
+                }
+            }
         ), axis: .vertical)
-        .lineLimit(1...6)
+        // Caps the input box at ~2.5 visible lines. SwiftUI's lineLimit
+        // is integer-only, so we use a max of 3 wrapped lines and rely
+        // on the keyboard-return → send interception above to keep the
+        // average case to 1–2 lines of organic content.
+        .lineLimit(1...3)
         .textFieldStyle(.plain)
         .font(.system(size: 16))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
         .focused($isFocused)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.6)
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }
-    }
-
-    // MARK: - Mode-Aware Action Button
-
-    @ViewBuilder
-    private var actionButtonForMode: some View {
-        if pendingPermission != nil {
-            Button { handlePermissionDenyWithReason() } label: {
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.red.opacity(hasText ? 0.85 : 0.3))
-                    )
-            }
-            .disabled(!hasText)
-        } else if pendingQuestion != nil {
-            Button { handleQuestionAnswer() } label: {
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.krakiPrimary.opacity(hasText ? 0.85 : 0.3))
-                    )
-            }
-            .disabled(!hasText)
-        } else {
-            sendStopButton
-        }
     }
 
     // MARK: - Permission Action Row
@@ -468,32 +756,135 @@ struct MessageInputView: View {
         isFocused = false
     }
 
-    // MARK: - Send / Stop Button
+    // MARK: - Send-icon action handlers (wired to the UIKit gesture capture)
 
-    private var sendStopButton: some View {
-        Button {
-            if isIdle { handleSend() }
-            else { appState.commandSender?.abortSession(sessionId: sessionId) }
-        } label: {
-            ZStack {
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-                    .scaleEffect(isIdle ? 1 : 0)
-                    .opacity(isIdle ? 1 : 0)
-
-                LucideIcon(.square, size: 14, strokeWidth: 0, color: .white)
-                    .frame(width: 14, height: 14)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 2))
-                    .scaleEffect(isIdle ? 0 : 1)
-                    .opacity(isIdle ? 0 : 1)
-            }
-            .frame(width: 36, height: 36)
-            .animation(.easeInOut(duration: 0.5), value: isIdle)
+    private func handleSendOrStopTap() {
+        if pendingPermission != nil {
+            handlePermissionDenyWithReason()
+        } else if pendingQuestion != nil {
+            handleQuestionAnswer()
+        } else if isIdle {
+            guard canSend else { return }
+            handleSend()
+        } else {
+            appState.commandSender?.abortSession(sessionId: sessionId)
         }
-        .modifier(GlassSendButtonModifier(tint: Color.krakiPrimary, enabled: canSend || !isIdle))
-        .disabled(isIdle && !canSend)
+    }
+
+    private func handleModeSwipeChanged(_ dx: CGFloat) {
+        if dragStartMode == nil { dragStartMode = currentSessionMode }
+        // Rubber-band beyond ±modeStepWidth so the strip can over-
+        // travel slightly with momentum (then snap back via spring),
+        // but the "useful" range still tops out at one full step.
+        let limit = modeStepWidth
+        if abs(dx) <= limit {
+            rawDragX = dx
+        } else {
+            let excess = abs(dx) - limit
+            let rubber = excess / (1 + excess / 80) * 0.4
+            rawDragX = (dx > 0 ? 1 : -1) * (limit + rubber)
+        }
+    }
+
+    private func handleModeSwipeEnded(_ velocity: CGFloat) {
+        let modes = Self.allModes
+        let count = modes.count
+        let baseMode = dragStartMode ?? currentSessionMode
+        let baseIdx = modes.firstIndex(of: baseMode) ?? 1
+
+        let dx = rawDragX
+        let distanceCommit = abs(dx) >= Self.commitDistanceFraction * modeStepWidth
+        // Momentum commit: a fast flick in the same direction as the
+        // drag wins even if the finger only moved a short distance.
+        let velocityCommit = abs(velocity) >= Self.momentumVelocity
+            && dx != 0
+            && (velocity > 0) == (dx > 0)
+        let shouldCommit = distanceCommit || velocityCommit
+
+        // Resolve commit direction & visual target offset.
+        //   Drag RIGHT (dx > 0) → previous mode peeked in from left
+        //   → commit step −1, strip ends at +stepWidth (prev block
+        //   fully covers the window).
+        //   Drag LEFT  (dx < 0) → next mode → step +1, strip ends at
+        //   −stepWidth.
+        let commitStep: Int = shouldCommit ? (dx > 0 ? -1 : 1) : 0
+        let targetOffset: CGFloat = commitStep == 0
+            ? 0
+            : -CGFloat(commitStep) * modeStepWidth
+
+        // Fire commit + haptic at release start (not after the spring
+        // settles) so the send arrow color begins its own cross-fade
+        // animation immediately as the strip springs into place. The
+        // strip itself stays anchored to `dragStartMode` for the
+        // duration of the spring (so its visual content is stable),
+        // and the silent rebase in the completion handler swaps it
+        // over to the new mode at offset 0 — by which time the
+        // currentSessionMode color matches the visible block, so the
+        // swap is invisible.
+        if commitStep != 0 {
+            let targetIdx = ((baseIdx + commitStep) % count + count) % count
+            let newMode = modes[targetIdx]
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: newMode)
+            presentModeToast(newMode)
+        }
+
+        // Physical spring driven by the gesture's exit velocity:
+        // .interpolatingSpring with non-zero `initialVelocity` carries
+        // the swipe momentum into the rest position, so a hard fling
+        // overshoots+settles and a soft drop just eases home. The
+        // velocity is normalized by the remaining distance so units
+        // make sense to the spring.
+        let remaining = targetOffset - rawDragX
+        let normalizedVelocity = remaining == 0 ? 0 : Double(velocity / remaining)
+        let physicsSpring: Animation = .interpolatingSpring(
+            mass: 1,
+            stiffness: 180,
+            damping: 22,
+            initialVelocity: normalizedVelocity
+        )
+
+        withAnimation(physicsSpring) {
+            rawDragX = targetOffset
+        } completion: {
+            // Silent rebase: strip rebuilds with the new
+            // currentSessionMode at the center, rawDragX = 0 leaves
+            // it visually identical (same color is already centered).
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                dragStartMode = nil
+                rawDragX = 0
+            }
+        }
+    }
+
+    // MARK: - Mode-Change Toast
+
+    private func presentModeToast(_ mode: SessionMode) {
+        modeToastMode = mode
+        modeToastTask?.cancel()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+            showModeToast = true
+        }
+        modeToastTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1300))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                showModeToast = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var modeToast: some View {
+        if showModeToast {
+            ModeChangeToast(mode: modeToastMode)
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.85, anchor: .bottom).combined(with: .opacity),
+                    removal: .opacity.combined(with: .scale(scale: 0.92, anchor: .bottom))
+                ))
+        }
     }
 
     // MARK: - Actions
@@ -571,76 +962,12 @@ private struct WaveformBar: View {
 
 // MARK: - Glass Modifiers (iOS 26 liquid glass with fallback)
 
-/// Edge-to-edge bottom bar of liquid glass: a separate background view that
-/// rounds only the top corners (subtly) and ignores the bottom safe area so
-/// the glass reaches the device's bottom edge. We use a sibling background
-/// view here (rather than a `.background(...)` modifier on the content)
-/// because `safeAreaInset` ignores `.ignoresSafeArea` requests on the inset
-/// content itself; the only reliable way to extend through is to place an
-/// independently-positioned background that opts out of the safe area.
-private struct ComposeCardGlassBackground: View {
-    private static let topRadius: CGFloat = 12
-
-    private var shape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: Self.topRadius,
-            bottomLeadingRadius: 0,
-            bottomTrailingRadius: 0,
-            topTrailingRadius: Self.topRadius,
-            style: .continuous
-        )
-    }
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Color.clear
-                .glassEffect(.regular, in: shape)
-                .ignoresSafeArea(.container, edges: .bottom)
-        } else {
-            shape
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea(.container, edges: .bottom)
-        }
-    }
-}
-
-private struct GlassTextFieldModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular)
-        } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-        }
-    }
-}
-
 private struct GlassCircleModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: Circle())
         } else {
             content.background(.ultraThinMaterial, in: Circle())
-        }
-    }
-}
-
-private struct GlassSendButtonModifier: ViewModifier {
-    let tint: Color
-    let enabled: Bool
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .buttonStyle(.glass(.regular.tint(tint)))
-                .opacity(enabled ? 1 : 0.4)
-        } else {
-            content
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(tint)
-                        .opacity(enabled ? 1 : 0.4)
-                )
         }
     }
 }
@@ -666,4 +993,57 @@ private struct GlassChoiceButtonModifier: ViewModifier {
     }
 }
 
+// MARK: - Mode-Change Toast
+
+/// Tiny liquid-glass capsule that pops above the send button when the
+/// user commits a mode change via the swipe. Shows a mode-colored dot
+/// next to the mode name so the user gets a clear visual confirmation
+/// of the new mode without having to read the strip color.
+private struct ModeChangeToast: View {
+    let mode: SessionMode
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.modeColor(mode))
+                .frame(width: 7, height: 7)
+            // Sizing trick: render the longest mode name invisibly
+            // to fix the label width, then overlay the actual mode
+            // name on top. This way the toast doesn't reflow when
+            // names of different lengths swap in rapid succession.
+            Text(Self.widestModeName)
+                .font(Self.labelFont)
+                .hidden()
+                .overlay {
+                    Text(mode.rawValue.capitalized)
+                        .font(Self.labelFont)
+                        .foregroundStyle(Color.modeColor(mode).opacity(0.85))
+                        .contentTransition(.opacity)
+                }
+        }
+        // Slightly longer easeInOut + softer curve for a smoother
+        // crossfade between mode labels and dot colors during rapid
+        // swipes.
+        .animation(.easeInOut(duration: 0.35), value: mode)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background {
+            if #available(iOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: Capsule())
+            } else {
+                Capsule().fill(.ultraThinMaterial)
+            }
+        }
+        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+    }
+
+    private static let labelFont: Font = .system(size: 13, weight: .medium)
+
+    /// Longest of the four mode names, used to pin the label width.
+    private static let widestModeName: String = {
+        ["Safe", "Discuss", "Execute", "Delegate"].max(by: { $0.count < $1.count }) ?? "Delegate"
+    }()
+}
+
 #endif
+
