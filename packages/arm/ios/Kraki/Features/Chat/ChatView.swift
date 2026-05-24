@@ -144,6 +144,16 @@ struct ChatView: View {
     /// single at-edge tick doesn't cascade through the entire memory
     /// store in one render pass.
     @State private var lastWindowExpansion: Date? = nil
+    /// Anchor capture for top-edge expansion: the bubble id and its
+    /// pre-expand `screenY` (i.e., `bubble.minY - scrollOffsetY`).
+    /// Set synchronously in `handleTopEdgeExpand` BEFORE the state
+    /// mutation; consumed asynchronously by the next
+    /// `UserBubbleFramesKey` preference fire (post-layout) which
+    /// scrolls to `newBubble.minY - screenY` so the bubble lands at
+    /// the exact same screen Y as before the prepend. Without this
+    /// the user sees a vertical jump whenever the topmost-visible
+    /// bubble wasn't already at viewport top at expand time.
+    @State private var pendingAnchorRestore: (id: String, screenY: CGFloat)? = nil
     /// Total turn count last observed by the follow-bottom rule. Used
     /// to detect "was the rendered window at the bottom edge before
     /// this update?". Required because `.onChange(of: count)` only
@@ -596,6 +606,21 @@ struct ChatView: View {
             // which then wrongly satisfy `f.minY <= scrollOffsetY`
             // and surface a sticky candidate that shouldn't exist.
             userBubbleFrames = newFrames
+            // Consume a pending anchor restore if one was queued by
+            // the previous top-edge expansion. By now SwiftUI has laid
+            // out the new turns and updated the anchor bubble's
+            // content-space minY in `newFrames`. We compute
+            // `newMinY - screenY` to land the bubble at the same
+            // screen position as before the prepend — preserving the
+            // user's view across expansion.
+            if let pending = pendingAnchorRestore,
+               let newFrame = newFrames[pending.id],
+               newFrame.height > 0 {
+                let targetY = newFrame.minY - pending.screenY
+                chatScrollPosition.scrollTo(y: max(0, targetY))
+                KLog.d("🪝anchorRestore consumed user-\(pending.id.suffix(8)) → scrollY=\(targetY) (newMinY=\(newFrame.minY) screenY=\(pending.screenY))")
+                pendingAnchorRestore = nil
+            }
             checkLockTransition(proxy: proxy)
             enforceIdleAnchor()
         }
@@ -748,8 +773,23 @@ struct ChatView: View {
             lastWindowExpansion = now
 
             // Anchor preservation: capture the topmost-visible user
-            // bubble BEFORE state change.
-            let anchorBubbleId = topmostVisibleUserBubbleId()
+            // bubble + its current screen Y (relative to viewport top)
+            // BEFORE state change. Restoration happens in
+            // `onPreferenceChange(UserBubbleFramesKey)` after the new
+            // layout pass produces the bubble's new content-space
+            // minY — at which point we can compute the exact y to
+            // scroll to so the bubble lands at the same screen
+            // position as before. Without the two-phase approach,
+            // SwiftUI's `scrollTo(anchor: .top)` would force the
+            // bubble to viewport top regardless of its prior screen
+            // position — visible as a jump whenever the bubble was
+            // mid-viewport rather than at the top edge.
+            let anchorCapture: (id: String, screenY: CGFloat)? = {
+                guard let id = topmostVisibleUserBubbleId(),
+                      let frame = userBubbleFrames[id] else { return nil }
+                let screenY = frame.minY - scrollOffsetY
+                return (id, screenY)
+            }()
 
             let total = cachedAllTurnCount
             let beforeStart = renderWindowStartIdx
@@ -763,16 +803,12 @@ struct ChatView: View {
             // After potential growth, clamp so window stays in bounds.
             renderWindowStartIdx = min(newStart, max(0, total - renderedTurnCount))
 
-            // Restore anchor: scroll the previously-visible user
-            // bubble back to viewport top. The bubble's row identity
-            // is preserved across the prepend (ForEach diff by
-            // turn.id keeps existing rows stable), so SwiftUI can
-            // resolve the scrollTo to its new content-space minY.
-            if let anchorId = anchorBubbleId {
-                chatScrollPosition.scrollTo(id: userScrollId(forMsgId: anchorId), anchor: .top)
-                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchored=user-\(anchorId.prefix(8))")
+            // Queue the restore for the next preference fire.
+            if let cap = anchorCapture {
+                pendingAnchorRestore = cap
+                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchorPending=user-\(cap.id.suffix(8)) screenY=\(cap.screenY)")
             } else {
-                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchored=nil (no visible bubble)")
+                KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchorPending=nil (no visible bubble)")
             }
             return
         }
@@ -1251,6 +1287,7 @@ struct ChatView: View {
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurns))
         renderWindowStartIdx = max(0, totalTurns - renderedTurnCount)
         lastWindowExpansion = nil
+        pendingAnchorRestore = nil
         // Capture whether we started empty BEFORE any await. We use
         // this at the tail to distinguish "fresh load — all messages
         // are backfill, baseline silently" from "session was already
