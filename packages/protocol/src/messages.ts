@@ -179,6 +179,12 @@ export interface UserMessage extends BaseEnvelope {
   payload: {
     content: string;
     attachments?: Attachment[];
+    /** Echoed back from the originating `send_input.payload.clientId`,
+     *  if any. Used by clients to correlate this broadcast with the
+     *  pending placeholder they inserted optimistically on Send. Absent
+     *  on legacy clients or historical replays — clients must fall back
+     *  to a positional heuristic in that case. */
+    clientId?: string;
   };
 }
 
@@ -491,6 +497,13 @@ export interface SendInputMessage extends BaseEnvelope {
   payload: {
     text: string;
     attachments?: Attachment[];
+    /** Client-generated correlation id (UUID). When present, tentacle
+     *  echoes it back inside the resulting `user_message` broadcast,
+     *  allowing the originating client to resolve its pending
+     *  placeholder unambiguously — even with multiple in-flight sends,
+     *  reconnects, or multi-device scenarios. Optional for back-compat
+     *  with older clients. */
+    clientId?: string;
   };
 }
 

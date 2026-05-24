@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Store, ChatMessage, PendingPermission, PendingQuestion, ConnectionStatus } from '../types/store';
+import type { Store, ChatMessage, PendingPermission, PendingQuestion, ConnectionStatus, PendingInputMessage } from '../types/store';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 
@@ -158,43 +158,100 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   appendMessage: (sessionId, message) => {
-    // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
-    import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
+    // pending_input is optimistic, transient UI — never persist it.
+    // The compound IDB key is [sessionId, seq] and ALL pending_input
+    // messages have seq=0, so writing them would collide-and-overwrite
+    // each other on rapid send. After resolve, the resulting
+    // user_message has a real seq and goes through updateSessionMessages.
+    if (message.type !== 'pending_input') {
+      // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
+      import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
+    }
     set((state) => {
       const nextMsgs = new Map(state.messages);
-      const list = [...(nextMsgs.get(sessionId) ?? []), message];
+      const existing = nextMsgs.get(sessionId) ?? [];
+      // Dedup by [type, seq] for server-broadcast messages. The relay
+      // can re-broadcast on reconnect (or in edge cases like a
+      // user_message echoed twice when the resolve path also fired),
+      // and silently duplicating bubbles is the visible failure mode.
+      // pending_input has seq=0 by convention — never dedup against
+      // it; pendings are keyed by `clientId` in `resolvePendingInput`.
+      const hasRealSeq = 'seq' in message && typeof message.seq === 'number' && message.seq > 0;
+      if (hasRealSeq) {
+        const dupIdx = existing.findIndex(
+          (m) => m.type === message.type && 'seq' in m && (m as { seq?: number }).seq === message.seq,
+        );
+        if (dupIdx >= 0) {
+          const replaced = [...existing];
+          replaced[dupIdx] = message;
+          nextMsgs.set(sessionId, replaced);
+          return { messages: nextMsgs };
+        }
+      }
+      const list = [...existing, message];
       nextMsgs.set(sessionId, list);
       return { messages: nextMsgs };
     });
   },
 
-  resolvePendingInput: (sessionId, seq) => {
+  resolvePendingInput: (sessionId, seq, clientId, serverContent) => {
+    let resolved = false;
     set((state) => {
       const msgs = state.messages.get(sessionId);
       if (!msgs) return state;
-      const hasPending = msgs.some((m) => m.type === 'pending_input');
-      if (!hasPending) return state;
-      const resolved = msgs.map((m) =>
-        m.type === 'pending_input'
-          ? {
-              type: 'user_message' as const,
-              sessionId: m.sessionId,
-              deviceId: '',
-              seq: seq ?? 0,
-              timestamp: m.timestamp,
-              payload: {
-                content: m.text,
-                ...(m.attachments?.length && { attachments: m.attachments }),
-              },
-            }
-          : m,
-      );
-      const next = new Map(state.messages);
-      next.set(sessionId, resolved);
-      // Sync resolved messages to IndexedDB
-      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, resolved)).catch((e) => { console.error('[Kraki:idb]', e); });
-      return { messages: next };
+      // Identify the right pending:
+      //   1. With clientId: exact match by clientId (new clients ↔ new tentacle).
+      //   2. Without clientId, with serverContent: match the first
+      //      pending whose local text equals the server's content. This
+      //      handles "new client → old tentacle" (which strips the
+      //      clientId but echoes the same text) without inappropriately
+      //      claiming user_messages broadcast by other devices.
+      //   3. Without either: no resolve. Caller will appendMessage.
+      let idx = -1;
+      if (clientId) {
+        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.clientId === clientId);
+      } else if (serverContent !== undefined) {
+        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.text === serverContent);
+      }
+      if (idx < 0) return state;
+
+      const pending = msgs[idx] as PendingInputMessage;
+      const next = [...msgs];
+      next[idx] = {
+        type: 'user_message' as const,
+        sessionId: pending.sessionId,
+        deviceId: '',
+        seq,
+        timestamp: pending.timestamp,
+        payload: {
+          content: serverContent ?? pending.text,
+          ...(pending.attachments?.length && { attachments: pending.attachments }),
+        },
+      };
+      // Re-sort: pending_input (seq=0) always lives at the tail — it
+      // is logically "in-flight, not yet assigned a real seq" and
+      // should appear AFTER any resolved messages, regardless of their
+      // numeric seq. Among resolved messages, sort by server seq so
+      // that a user_message arriving after a transient event (e.g. a
+      // tool_start that was inserted between the optimistic pending
+      // and the server's ack) slots into the correct position.
+      next.sort((a, b) => {
+        const pendA = a.type === 'pending_input';
+        const pendB = b.type === 'pending_input';
+        if (pendA && !pendB) return 1;
+        if (!pendA && pendB) return -1;
+        const sa = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
+        const sb = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
+        return sa - sb;
+      });
+
+      const map = new Map(state.messages);
+      map.set(sessionId, next);
+      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, next)).catch((e) => { console.error('[Kraki:idb]', e); });
+      resolved = true;
+      return { messages: map };
     });
+    return resolved;
   },
 
   appendDelta: (sessionId, content) =>
