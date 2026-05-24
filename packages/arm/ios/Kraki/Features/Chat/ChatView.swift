@@ -782,31 +782,42 @@ struct ChatView: View {
         // Don't slide while R1 owns scroll — its anchor bubble must
         // stay in the rendered window.
         guard growMode == .idle else { return }
-        // Gate on settled scroll. A single user flick produces many
-        // `onScrollGeometryChange` ticks during deceleration; firing
-        // expansion on each of them cascades through several
-        // different anchor bubbles at different content positions,
-        // making the chat appear to jump around. By only firing
-        // when scroll motion has fully settled, one flick yields at
-        // most one expansion. The `.onScrollPhaseChange .idle`
-        // handler also calls this function once after settle, so
-        // expansion still happens reliably.
-        guard scrollPhase == .idle else { return }
 
-        // Top-edge: expand window upward
+        // Top-edge: expand window upward. Gated on settled scroll
+        // because momentum cascades into multiple top-edge fires
+        // landing the user at unpredictable scroll positions
+        // depending on which anchor bubble is current at each tick.
+        // The `.onScrollPhaseChange .idle` callback also calls
+        // `maybeAutoLoadOlder()` so this fires reliably after the
+        // user's motion settles.
         let topThreshold = Self.topSpinnerHeight + Self.topSpinnerSlop
         if scrollOffsetY < topThreshold {
+            guard scrollPhase == .idle else { return }
             handleTopEdgeExpand()
             return
         }
 
-        // Bottom-edge: slide window downward (only when there's
-        // somewhere below to slide into)
+        // Bottom-edge: slide window downward.
+        //
+        // Intentionally NOT gated on settled scroll. Bottom-edge
+        // slides don't have anchor preservation, so they don't
+        // create the same cascading-position problem as top-edge.
+        // The user reaching the bottom of rendered content with
+        // hasFoldedTurnsBelow=true is a clear "load more"
+        // intent — fire immediately, not after settle.
         let viewportBottomY = scrollOffsetY + viewportHeight
         let bottomThreshold = chatContentHeight - Self.bottomEdgeSlop
         if hasFoldedTurnsBelow && viewportBottomY > bottomThreshold {
             handleBottomEdgeExpand()
             return
+        }
+        // Diagnostic: log near-bottom-edge near-misses so we can
+        // see when conditions aren't met during apparent-stuck cases.
+        if hasFoldedTurnsBelow && scrollPhase == .idle {
+            let gap = chatContentHeight - viewportBottomY
+            if gap < 200 {
+                KLog.d("🔻bottom-edge near-miss gap=\(gap) (viewportBottomY=\(viewportBottomY) contentH=\(chatContentHeight) threshold=\(bottomThreshold))")
+            }
         }
     }
 
