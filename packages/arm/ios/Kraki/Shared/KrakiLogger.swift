@@ -3,14 +3,19 @@
 /// All output is gated behind `#if DEBUG` — compiles to nothing in release.
 /// Use `KLog.d(...)` for debug messages.
 ///
-/// Writes via `os_log` to the unified logging system (subsystem
-/// `cloud.corelli.kraki`, category `debug`) AND mirrors to stdout so that
-/// either `xcrun simctl spawn booted log stream` or `--console-pty` works.
+/// Writes via three channels so logs are visible everywhere:
+///   - `os_log` to the unified logging system (subsystem
+///     `chat.kraki.ios`, category `debug`) — visible in Console.app
+///     and `xcrun simctl spawn booted log stream`.
+///   - `print` to stdout — visible when attached to Xcode debugger.
+///   - `NSLog` to syslog — visible via `idevicesyslog` for real
+///     devices connected via USB (os_log .debug entries are not
+///     persisted to syslog relay).
 
 import Foundation
 import os.log
 
-private let krakiOSLog = OSLog(subsystem: "cloud.corelli.kraki", category: "debug")
+private let krakiOSLog = OSLog(subsystem: "chat.kraki.ios", category: "debug")
 
 enum KLog {
     static func d(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
@@ -19,6 +24,7 @@ enum KLog {
         let line = "🦑 [\(filename):\(line)] \(message())"
         os_log("%{public}s", log: krakiOSLog, type: .debug, line)
         print(line)
+        NSLog("%@", line)
         #endif
     }
 }
