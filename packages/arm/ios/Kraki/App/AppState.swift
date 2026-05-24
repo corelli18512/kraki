@@ -39,8 +39,27 @@ final class AppState {
     private static let defaultRelayURL = "wss://relay.kraki.chat"
     #endif
 
-    var relayURL: String = AppState.sharedDefaults.string(forKey: AppState.relayURLKey)
-        ?? AppState.defaultRelayURL
+    /// The relay URL the app will connect to.
+    ///
+    /// Priority order:
+    ///   1. Persisted URL in shared defaults (set after a successful
+    ///      auth or `wrong_region` redirect).
+    ///   2. `KRAKI_RELAY_URL` env var (debug-build convenience for
+    ///      pointing a development build at prod — set in the Xcode
+    ///      scheme's Run > Environment Variables when capturing
+    ///      device logs against a real-data session).
+    ///   3. `defaultRelayURL` for the current build configuration.
+    private static func resolveDefaultRelayURL() -> String {
+        if let persisted = AppState.sharedDefaults.string(forKey: AppState.relayURLKey) {
+            return persisted
+        }
+        if let env = ProcessInfo.processInfo.environment["KRAKI_RELAY_URL"], !env.isEmpty {
+            return env
+        }
+        return defaultRelayURL
+    }
+
+    var relayURL: String = AppState.resolveDefaultRelayURL()
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
@@ -52,6 +71,13 @@ final class AppState {
     /// to the login screen — instead we surface status ambiently in
     /// the brand header.
     var hasCompletedInitialConnect: Bool = false
+
+    /// True from the moment the user taps "Sign in with GitHub" until
+    /// `ASWebAuthenticationSession`'s completion handler fires (success,
+    /// error, or user cancel). Drives the LoginView's spinner so the
+    /// tap doesn't appear unresponsive while the system browser sheet
+    /// is materialising.
+    var isOAuthInFlight: Bool = false
 
     /// True while the WS layer is actively trying to (re)connect after
     /// a drop, or sitting authenticated-pending-handshake. Used by the
