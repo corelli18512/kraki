@@ -609,7 +609,7 @@ struct ChatView: View {
                 insetTop: geo.contentInsets.top,
                 contentHeight: geo.contentSize.height
             )
-        } action: { _, m in
+        } action: { oldM, m in
             // Single observable mutation per scroll event. Helpers
             // that themselves mutate scroll position (checkLockTransition's
             // proxy.scrollTo, maybeAutoLoadOlder's renderedTurnCount bump)
@@ -618,9 +618,24 @@ struct ChatView: View {
             // what produced the "tried to update multiple times per frame"
             // runtime warning.
             scrollMetrics = m
+            // Viewport shrank (keyboard came up, or the input box grew
+            // an extra line, or any other safe-area inset change) and
+            // the user was previously at or near the bottom → re-pin
+            // to chat-bottom so the latest message stays visible
+            // above the new compose / keyboard region instead of
+            // getting buried beneath it. Threshold mirrors the
+            // bottom-edge auto-load slop so brief inset jitter
+            // doesn't yank scroll around.
+            let viewportShrunk = m.viewportHeight + 1 < oldM.viewportHeight
+            let wasAtBottom = oldM.contentHeight > 0
+                && (oldM.offsetY + oldM.viewportHeight)
+                    >= oldM.contentHeight - Self.bottomEdgeSlop
             Task { @MainActor in
                 checkLockTransition(proxy: proxy)
                 maybeAutoLoadOlder()
+                if viewportShrunk && wasAtBottom && growMode == .idle {
+                    scrollToBottomInstant(proxy: proxy)
+                }
             }
         }
         .onScrollPhaseChange { _, newPhase in

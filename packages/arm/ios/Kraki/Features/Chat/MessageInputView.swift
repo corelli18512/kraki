@@ -232,7 +232,7 @@ struct MessageInputView: View {
     /// the input box's content without resizing or losing the swipe
     /// strip / voice toggle / send icon.
     private var inputBox: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .bottom, spacing: 0) {
             if canShowVoiceToggle {
                 voiceToggleButton
             }
@@ -244,7 +244,14 @@ struct MessageInputView: View {
             sendIconButton
         }
         .frame(maxWidth: .infinity)
-        .frame(height: Self.inputBoxHeight)
+        // `minHeight` (not fixed `height`) so the TextField's
+        // `.lineLimit(1...3)` can actually expand vertically when the
+        // user types past one line. With the previous fixed height,
+        // the TextField was constrained to a single line regardless
+        // of content. HStack `alignment: .bottom` keeps the voice
+        // toggle and send icon pinned to the bottom edge while the
+        // text grows upward (iMessage-style).
+        .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
         .contentShape(Capsule())
         // In text mode the whole input box is swipeable for mode
