@@ -22,7 +22,11 @@ enum KLog {
         #if DEBUG
         let filename = (file as NSString).lastPathComponent
         let line = "🦑 [\(filename):\(line)] \(message())"
-        os_log("%{public}s", log: krakiOSLog, type: .debug, line)
+        // Use .info instead of .debug — `.debug` from custom
+        // subsystems is suppressed from the syslog relay by default
+        // on iOS, so `idevicesyslog` on real devices wouldn't see
+        // our messages. `.info` is persisted and forwarded.
+        os_log("%{public}s", log: krakiOSLog, type: .info, line)
         print(line)
         NSLog("%@", line)
         #endif
