@@ -10,6 +10,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
+    // Default: simulate successful find (App Data granted)
+    setTimeout(() => cb(null), 0);
+    const { EventEmitter } = require('node:events');
+    return new EventEmitter();
+  }),
 }));
 
 vi.mock('@inquirer/prompts', () => ({
@@ -48,7 +54,7 @@ vi.mock('node:net', () => ({
   }),
 }));
 
-import { execSync } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
 import { input } from '@inquirer/prompts';
 import { existsSync, promises as fsp } from 'node:fs';
 import { createConnection } from 'node:net';
@@ -56,6 +62,7 @@ import { platform, homedir } from 'node:os';
 import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
+const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
 const mockReaddir = fsp.readdir as unknown as ReturnType<typeof vi.fn>;
@@ -245,13 +252,14 @@ describe('warmupTccPermissions()', () => {
     expect(result).toEqual([]);
   });
 
-  it('probes all 7 protected folders plus Local Network on darwin', async () => {
+  it('probes all 7 protected folders plus App Data and Local Network on darwin', async () => {
     mockReaddir.mockResolvedValue([]);
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(8);
-    // 7 folder probes + 1 network probe
+    expect(result).toHaveLength(9);
+    // 7 folder probes + 1 App Data + 1 network probe
     expect(result.slice(0, 7).every(r => r.status === 'granted')).toBe(true);
-    expect(result[7]).toMatchObject({ label: 'Local Network', path: '(network)', status: 'granted' });
+    expect(result[7]).toMatchObject({ label: 'App Data', path: '(file provider)', status: 'granted' });
+    expect(result[8]).toMatchObject({ label: 'Local Network', path: '(network)', status: 'granted' });
     expect(mockReaddir).toHaveBeenCalledTimes(7);
   });
 
@@ -291,12 +299,14 @@ describe('warmupTccPermissions()', () => {
       (label) => { starts.push(label); },
       (r) => { results.push(`${r.label}:${r.status}`); },
     );
-    expect(starts).toHaveLength(8);
-    expect(results).toHaveLength(8);
+    expect(starts).toHaveLength(9);
+    expect(results).toHaveLength(9);
     expect(starts[0]).toBe('~/Documents');
     expect(results[0]).toBe('~/Documents:granted');
-    expect(starts[7]).toBe('Local Network');
-    expect(results[7]).toBe('Local Network:granted');
+    expect(starts[7]).toBe('App Data');
+    expect(results[7]).toBe('App Data:granted');
+    expect(starts[8]).toBe('Local Network');
+    expect(results[8]).toBe('Local Network:granted');
   });
 
   it('uses absolute paths under homedir', async () => {
@@ -318,7 +328,7 @@ describe('warmupTccPermissions()', () => {
       return [];
     });
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(8);
+    expect(result).toHaveLength(9);
     expect(result[1].status).toBe('denied');
     expect(result[0].status).toBe('granted');
     expect(result[2].status).toBe('granted');
@@ -350,5 +360,37 @@ describe('warmupTccPermissions()', () => {
     const result = await warmupTccPermissions();
     const net = result.find(r => r.label === 'Local Network');
     expect(net).toMatchObject({ label: 'Local Network', status: 'granted' });
+  });
+
+  it('reports App Data granted when find succeeds', async () => {
+    mockReaddir.mockResolvedValue([]);
+    // Default execFile mock already succeeds
+    const result = await warmupTccPermissions();
+    const appData = result.find(r => r.label === 'App Data');
+    expect(appData).toMatchObject({ label: 'App Data', path: '(file provider)', status: 'granted' });
+  });
+
+  it('reports App Data denied when find returns EPERM', async () => {
+    mockReaddir.mockResolvedValue([]);
+    const { EventEmitter } = require('node:events');
+    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
+      setTimeout(() => cb(Object.assign(new Error('perm'), { code: 'EPERM' })), 0);
+      return new EventEmitter();
+    });
+    const result = await warmupTccPermissions();
+    const appData = result.find(r => r.label === 'App Data');
+    expect(appData).toMatchObject({ label: 'App Data', status: 'denied' });
+  });
+
+  it('reports App Data missing when iCloud Drive folder does not exist', async () => {
+    mockReaddir.mockResolvedValue([]);
+    // existsSync returns false only for the iCloud Drive path
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('Mobile Documents')) return false;
+      return true;
+    });
+    const result = await warmupTccPermissions();
+    const appData = result.find(r => r.label === 'App Data');
+    expect(appData).toMatchObject({ label: 'App Data', status: 'missing' });
   });
 });

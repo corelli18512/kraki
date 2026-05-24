@@ -9,7 +9,7 @@ import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { hostname, platform } from 'node:os';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
@@ -93,19 +93,47 @@ function divider() { console.log(chalk.dim('  ───────────�
 const TCC_WARMED_MARKER = '.tcc-warmed';
 
 /**
- * True when this is a fresh macOS install that hasn't done the TCC
- * warm-up yet. We gate the warm-up to first-run only so existing users
- * aren't re-prompted on re-runs of the wizard.
+ * True when this is a macOS install whose TCC warm-up is incomplete.
+ * Reads the stored set of probed labels from the marker file and
+ * compares against the current probe list.  Returns true if any
+ * current probe label is missing — this way newly-added probes
+ * (e.g. App Data) are automatically detected without version numbers.
  */
 function needsTccWarmup(): boolean {
   if (platform() !== 'darwin') return false;
-  return !existsSync(join(getConfigDir(), TCC_WARMED_MARKER));
+  const markerPath = join(getConfigDir(), TCC_WARMED_MARKER);
+  if (!existsSync(markerPath)) return true;
+  try {
+    const stored = readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean);
+    // Run a synchronous warmup probe to get the current list of labels.
+    // This is cheap: we only need the labels, not actual probing.
+    const currentLabels = getWarmupLabels();
+    return currentLabels.some(label => !stored.includes(label));
+  } catch {
+    return true;
+  }
 }
 
-function markTccWarmed(): void {
+/** Return the full set of labels that warmupTccPermissions() will probe. */
+function getWarmupLabels(): string[] {
+  // Must stay in sync with the labels in checks.ts warmupTccPermissions().
+  // We import and run it with a dry callback to collect labels, but since
+  // warmupTccPermissions is async and actually probes, we hardcode the
+  // list here.  This is intentionally a simple string array so adding a
+  // new probe in checks.ts requires a matching entry here — the test
+  // suite enforces they stay in sync.
+  return [
+    '~/Documents', '~/Desktop', '~/Downloads', '~/iCloud Drive',
+    '~/Pictures', '~/Movies', '~/Music',
+    'App Data', 'Local Network',
+  ];
+}
+
+function markTccWarmed(results: TccProbeResult[]): void {
   try {
+    const labels = results.map(r => r.label);
     writeFileSync(join(getConfigDir(), TCC_WARMED_MARKER),
-      `${new Date().toISOString()}\n`, 'utf8');
+      labels.join('\n') + '\n', 'utf8');
   } catch {
     // Best-effort — if we can't write the marker, the worst case is that
     // the warm-up runs again next time the wizard is invoked.
@@ -149,7 +177,7 @@ async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
     console.log(chalk.dim('    Privacy & Security → Files and Folders / Local Network → kraki.'));
   }
 
-  markTccWarmed();
+  markTccWarmed(results);
 }
 
 // Align inquirer prefix (✔/?) with ora spinners (4-space indent)

@@ -5,7 +5,7 @@
  * Provides a retry mechanism for interactive setup flows.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
 import { existsSync, promises as fsp } from 'node:fs';
 import { createConnection } from 'node:net';
 import { homedir, platform } from 'node:os';
@@ -167,6 +167,42 @@ async function probeFolder(absPath: string): Promise<TccProbeStatus> {
 }
 
 /**
+ * Probe macOS "App Data" TCC (kTCCServiceSystemPolicyAppData) by spawning
+ * /usr/bin/find against the iCloud Drive FileProvider path.
+ *
+ * A Node readdir from the parent process triggers per-folder TCC, but the
+ * separate AppData category is only triggered when a *child process*
+ * accesses a FileProvider-managed path. The Copilot agent regularly runs
+ * `find` / `glob` which hits this code path — so we pre-trigger it here
+ * during setup to avoid a surprise prompt mid-session.
+ *
+ * We use `-maxdepth 0` so find only stats the root directory without
+ * actually traversing it.
+ */
+async function probeAppData(): Promise<TccProbeStatus> {
+  const target = join(homedir(), 'Library/Mobile Documents/com~apple~CloudDocs');
+  if (!existsSync(target)) return 'missing';
+
+  return new Promise((resolve) => {
+    const child = execFile(
+      '/usr/bin/find',
+      [target, '-maxdepth', '0'],
+      { timeout: 30_000 },
+      (err) => {
+        if (!err) { resolve('granted'); return; }
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EPERM' || code === 'EACCES') { resolve('denied'); return; }
+        // Exit code 1 from find usually means permission denied on the path
+        if (err.code === null && (err as { status?: number }).status === 1) { resolve('denied'); return; }
+        resolve('denied');
+      },
+    );
+    // Safety: if the child somehow hangs beyond the timeout, kill it
+    child.on('error', () => resolve('denied'));
+  });
+}
+
+/**
  * Probe macOS Local Network TCC by making a brief TCP connection to a
  * LAN-routable address. macOS surfaces the "Local Network" permission
  * prompt when a signed binary first attempts a local-network operation.
@@ -235,6 +271,16 @@ export async function warmupTccPermissions(
     results.push(result);
     onResult?.(result);
   }
+
+  // App Data (FileProvider) — child-process access to iCloud Drive triggers
+  // kTCCServiceSystemPolicyAppData, a separate TCC category from folder access.
+  // Probe after folders since it's file-related but uses a different mechanism.
+  const appDataLabel = 'App Data';
+  onStart?.(appDataLabel);
+  const appDataStatus = await probeAppData();
+  const appDataResult: TccProbeResult = { label: appDataLabel, path: '(file provider)', status: appDataStatus };
+  results.push(appDataResult);
+  onResult?.(appDataResult);
 
   // Local Network — probe after folders so the network dialog doesn't
   // interleave with folder dialogs.
