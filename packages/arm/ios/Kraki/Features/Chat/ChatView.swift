@@ -1102,6 +1102,23 @@ struct ChatView: View {
         if aboveAmount <= 0 { return 0 }
         let activationProgress = min(aboveAmount / Self.stickyActivationOffset, 1)
 
+        // Suppress when the agent reply for this turn hasn't crossed
+        // into the pill's footprint yet. The reply starts at the
+        // candidate's bottom edge in content space; in screen-Y that
+        // is `candidateFrame.maxY - scrollOffsetY`. If that point sits
+        // at or below the pill's bottom, the user is still scrolled
+        // inside the candidate's own body and the in-chat bubble is
+        // already doing the visual work — floating would just hover
+        // over the same content (or empty space below it).
+        let pillRenderedHeight = min(
+            candidateFrame.height,
+            StickyUserBubble.maxCollapsedHeight + StickyUserBubble.verticalPadding
+        )
+        let agentTopScreenY = candidateFrame.maxY - scrollOffsetY
+        if agentTopScreenY >= pillRenderedHeight {
+            return 0
+        }
+
         // Suppress the pill when the agent reply for this turn is
         // fully visible. The reply spans from the candidate's bottom
         // edge to either the next user bubble's top (non-latest turn)
@@ -1784,9 +1801,14 @@ private struct StickyUserBubble: View {
 
     /// Max bubble content height before the expand affordance shows up.
     /// 9% of screen — keeps the pinned bubble compact at the top.
-    private static var maxCollapsedHeight: CGFloat {
+    fileprivate static var maxCollapsedHeight: CGFloat {
         UIScreen.main.bounds.height * 0.09
     }
+
+    /// Total vertical padding wrapping the pill content (10pt top + 10pt
+    /// bottom — see `.padding(.vertical, 10)` in `body`). Exposed so the
+    /// containing view can reason about the pill's full rendered height.
+    fileprivate static let verticalPadding: CGFloat = 20
 
     @State private var naturalHeight: CGFloat = 0
 
