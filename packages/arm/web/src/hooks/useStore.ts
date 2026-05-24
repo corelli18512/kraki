@@ -158,8 +158,15 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   appendMessage: (sessionId, message) => {
-    // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
-    import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
+    // pending_input is optimistic, transient UI — never persist it.
+    // The compound IDB key is [sessionId, seq] and ALL pending_input
+    // messages have seq=0, so writing them would collide-and-overwrite
+    // each other on rapid send. After resolve, the resulting
+    // user_message has a real seq and goes through updateSessionMessages.
+    if (message.type !== 'pending_input') {
+      // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
+      import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
+    }
     set((state) => {
       const nextMsgs = new Map(state.messages);
       const existing = nextMsgs.get(sessionId) ?? [];
@@ -192,11 +199,20 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const msgs = state.messages.get(sessionId);
       if (!msgs) return state;
-      // Match by clientId when provided; fall back to first pending
-      // (legacy clients / historical replays without clientId).
-      const idx = clientId
-        ? msgs.findIndex((m) => m.type === 'pending_input' && m.clientId === clientId)
-        : msgs.findIndex((m) => m.type === 'pending_input');
+      // Identify the right pending:
+      //   1. With clientId: exact match by clientId (new clients ↔ new tentacle).
+      //   2. Without clientId, with serverContent: match the first
+      //      pending whose local text equals the server's content. This
+      //      handles "new client → old tentacle" (which strips the
+      //      clientId but echoes the same text) without inappropriately
+      //      claiming user_messages broadcast by other devices.
+      //   3. Without either: no resolve. Caller will appendMessage.
+      let idx = -1;
+      if (clientId) {
+        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.clientId === clientId);
+      } else if (serverContent !== undefined) {
+        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.text === serverContent);
+      }
       if (idx < 0) return state;
 
       const pending = msgs[idx] as PendingInputMessage;

@@ -321,17 +321,38 @@ describe('useStore', () => {
       expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second message');
     });
 
-    it('legacy fallback: no clientId resolves the first pending in the list', () => {
+    it('legacy fallback: no clientId but matching content resolves the right pending', () => {
       useStore.getState().appendMessage('sess-1', makePending('cid-a', 'oldest'));
       useStore.getState().appendMessage('sess-1', makePending('cid-b', 'newer'));
-      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, undefined);
+      // Old tentacle echoed the user_message without clientId but
+      // preserved the content. We resolve by content match.
+      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, 'newer');
       expect(ok).toBe(true);
       const msgs = useStore.getState().messages.get('sess-1')!;
       expect(msgs).toHaveLength(2);
-      // First pending (cid-a) is resolved using its own text
-      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('oldest');
+      // Order: resolved user_message (seq=1) first, the remaining pending (cid-a) at tail.
+      expect(msgs[0].type).toBe('user_message');
+      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('newer');
       expect(msgs[1].type).toBe('pending_input');
-      expect((msgs[1] as { clientId: string }).clientId).toBe('cid-b');
+      expect((msgs[1] as { clientId: string }).clientId).toBe('cid-a');
+    });
+
+    it('no clientId and no content match: returns false (caller will append)', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'mine'));
+      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, 'from someone else');
+      expect(ok).toBe(false);
+      const msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].type).toBe('pending_input');
+    });
+
+    it('no clientId and no serverContent: returns false (caller will append)', () => {
+      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'mine'));
+      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, undefined);
+      expect(ok).toBe(false);
+      const msgs = useStore.getState().messages.get('sess-1')!;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].type).toBe('pending_input');
     });
 
     it('sorts list by seq after resolve (handles transient events that landed mid-flight)', () => {

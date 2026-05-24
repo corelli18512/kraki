@@ -368,7 +368,7 @@ describe('sendInput', () => {
     expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second');
   });
 
-  it('round-trip: user_message from another device (no clientId) appends instead of resolving our pending', () => {
+  it('round-trip: user_message from another device (no clientId, different content) appends instead of stealing our pending', () => {
     seedSession('sess-1');
     const send = vi.fn();
     commands.sendInput('sess-1', 'mine', send);
@@ -378,7 +378,8 @@ describe('sendInput', () => {
     const sendEncrypted = vi.fn();
 
     // Another device sends a message (no clientId on the broadcast).
-    // It must not steal our pending — it should append.
+    // Content does not match our pending text → must NOT resolve our
+    // pending. Append instead, pending stays in-flight.
     handleDataMessage(
       {
         type: 'user_message',
@@ -391,19 +392,17 @@ describe('sendInput', () => {
       { replayingSessions: new Set(), cmdState, sendEncrypted },
     );
 
-    // Wait — the legacy fallback would resolve our pending here. That's
-    // the documented degraded behaviour for messages without clientId.
-    // We at least require that the resolved message carries the
-    // *server* content, not our stale pending text.
-    const msgs = useStore.getState().messages.get('sess-1')!;
-    const resolved = msgs.find((m) => m.type === 'user_message') as {
-      payload: { content: string };
-    } | undefined;
-    expect(resolved).toBeDefined();
-    expect(resolved!.payload.content).toBe('from someone else');
+    let msgs = useStore.getState().messages.get('sess-1')!;
+    expect(msgs).toHaveLength(2);
+    // Pending still in-flight, other device's message appended.
+    const pendings = msgs.filter((m) => m.type === 'pending_input');
+    const others = msgs.filter((m) => m.type === 'user_message');
+    expect(pendings).toHaveLength(1);
+    expect((pendings[0] as { clientId: string }).clientId).toBe(cidA);
+    expect(others).toHaveLength(1);
+    expect((others[0] as { payload: { content: string } }).payload.content).toBe('from someone else');
 
-    // Now our own ack lands. There is no pending with cidA anymore
-    // (legacy fallback consumed it), so it should append, not resolve.
+    // Our own ack arrives with clientId → resolves our pending cleanly.
     handleDataMessage(
       {
         type: 'user_message',
@@ -416,11 +415,42 @@ describe('sendInput', () => {
       { replayingSessions: new Set(), cmdState, sendEncrypted },
     );
 
-    const finalMsgs = useStore.getState().messages.get('sess-1')!;
-    const userMessages = finalMsgs.filter((m) => m.type === 'user_message');
+    msgs = useStore.getState().messages.get('sess-1')!;
+    const userMessages = msgs.filter((m) => m.type === 'user_message');
     expect(userMessages).toHaveLength(2);
-    expect(((userMessages[0] as { payload: { content: string } }).payload.content)).toBe('from someone else');
-    expect(((userMessages[1] as { payload: { content: string } }).payload.content)).toBe('mine');
+    // Sorted by seq: other device's seq=1 first, ours seq=2 second.
+    expect((userMessages[0] as { payload: { content: string } }).payload.content).toBe('from someone else');
+    expect((userMessages[1] as { payload: { content: string } }).payload.content).toBe('mine');
+    expect(msgs.filter((m) => m.type === 'pending_input')).toHaveLength(0);
+  });
+
+  it('back-compat: new client + old tentacle (clientId stripped, content preserved) still resolves our pending', () => {
+    seedSession('sess-1');
+    const send = vi.fn();
+    commands.sendInput('sess-1', 'hello', send);
+
+    const cmdState = new commands.CommandState();
+    const sendEncrypted = vi.fn();
+
+    // Simulate an old tentacle: relayed user_message has no clientId,
+    // but the content matches our pending's text.
+    handleDataMessage(
+      {
+        type: 'user_message',
+        sessionId: 'sess-1',
+        deviceId: 'dev-t',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { content: 'hello' },
+      } as InnerMessage,
+      { replayingSessions: new Set(), cmdState, sendEncrypted },
+    );
+
+    const msgs = useStore.getState().messages.get('sess-1')!;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].type).toBe('user_message');
+    expect((msgs[0] as { seq: number }).seq).toBe(1);
+    expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('hello');
   });
 
   it('round-trip: duplicate user_message broadcast (relay re-send) does not create a duplicate bubble', () => {
