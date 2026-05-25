@@ -114,7 +114,7 @@ jobs:
           ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "mkdir -p '$WEB_DEPLOY_PATH'"
 
-          rsync -az --delete -e "$SSH_RSYNC" \
+          rsync -az --delete --exclude='.well-known/' -e "$SSH_RSYNC" \
             packages/arm/web/dist/ \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/"
 
@@ -187,7 +187,7 @@ jobs:
           ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "mkdir -p '$WEB_DEPLOY_PATH'"
 
-          rsync -az --delete -e "$SSH_RSYNC" \
+          rsync -az --delete --exclude='.well-known/' -e "$SSH_RSYNC" \
             packages/arm/web/dist/ \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/"
 
