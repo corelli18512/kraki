@@ -28,6 +28,14 @@ private struct ChatScrollMetrics: Equatable {
     var offsetY: CGFloat
     var viewportHeight: CGFloat
     var insetTop: CGFloat
+    /// Bottom content inset reported by the ScrollView — typically
+    /// equals the height of the `.safeAreaInset(edge: .bottom)`
+    /// content (input bar + safe area). SwiftUI's `contentSize.height`
+    /// includes this region as phantom scrollable space, so the
+    /// actual content bottom in scroll-Y coordinates is
+    /// `contentHeight - insetBottom`. Without subtracting this,
+    /// any "near the bottom of content" check is unreachable.
+    var insetBottom: CGFloat
     var contentHeight: CGFloat
 }
 
@@ -89,7 +97,7 @@ struct ChatView: View {
     /// `<OnScrollGeometryChange Modifier> tried to update multiple times
     /// per frame` runtime warning.
     @State private var scrollMetrics: ChatScrollMetrics = ChatScrollMetrics(
-        offsetY: 0, viewportHeight: 0, insetTop: 0, contentHeight: 0
+        offsetY: 0, viewportHeight: 0, insetTop: 0, insetBottom: 0, contentHeight: 0
     )
     /// Content-space y of the viewport top (after content insets).
     private var scrollOffsetY: CGFloat { scrollMetrics.offsetY }
@@ -100,11 +108,21 @@ struct ChatView: View {
     /// `scrollOffsetY` (which includes insets) and `ScrollPosition`'s
     /// raw content-offset y when issuing programmatic scrolls.
     private var chatScrollInsetTop: CGFloat { scrollMetrics.insetTop }
-    /// Total chat scroll content height (in content space). Used to
-    /// detect "the agent reply for this turn is fully visible" for
-    /// the latest user message — when content's bottom edge is at or
-    /// above the viewport bottom, the pill is suppressed.
+    /// Bottom content inset (input bar + safe area). See
+    /// `ChatScrollMetrics.insetBottom`.
+    private var chatScrollInsetBottom: CGFloat { scrollMetrics.insetBottom }
+    /// Total chat scroll content height as reported by SwiftUI
+    /// (includes the bottom inset region as phantom space). For
+    /// "where does the actual content end" use
+    /// `effectiveContentBottom` below.
     private var chatContentHeight: CGFloat { scrollMetrics.contentHeight }
+    /// Effective content end in scroll-Y coordinates — the largest
+    /// `viewportBottomY` the user can reach at max scroll. Computed
+    /// as `contentHeight - insetBottom` to strip out the phantom
+    /// scrollable space SwiftUI adds for the safe-area inset.
+    private var effectiveContentBottom: CGFloat {
+        chatContentHeight - chatScrollInsetBottom
+    }
 
     // MARK: - R3 Entry State
 
@@ -607,6 +625,7 @@ struct ChatView: View {
                 viewportHeight: geo.containerSize.height
                     - geo.contentInsets.top - geo.contentInsets.bottom,
                 insetTop: geo.contentInsets.top,
+                insetBottom: geo.contentInsets.bottom,
                 contentHeight: geo.contentSize.height
             )
         } action: { oldM, m in
@@ -627,9 +646,10 @@ struct ChatView: View {
             // bottom-edge auto-load slop so brief inset jitter
             // doesn't yank scroll around.
             let viewportShrunk = m.viewportHeight + 1 < oldM.viewportHeight
+            let oldEffectiveBottom = oldM.contentHeight - oldM.insetBottom
             let wasAtBottom = oldM.contentHeight > 0
                 && (oldM.offsetY + oldM.viewportHeight)
-                    >= oldM.contentHeight - Self.bottomEdgeSlop
+                    >= oldEffectiveBottom - Self.bottomEdgeSlop
             Task { @MainActor in
                 checkLockTransition(proxy: proxy)
                 maybeAutoLoadOlder()
@@ -820,8 +840,16 @@ struct ChatView: View {
         // The user reaching the bottom of rendered content with
         // hasFoldedTurnsBelow=true is a clear "load more"
         // intent — fire immediately, not after settle.
+        //
+        // Use `effectiveContentBottom` (= contentHeight − insetBottom)
+        // not `contentHeight` directly: SwiftUI's `geo.contentSize.height`
+        // includes the `.safeAreaInset(.bottom)` region as phantom
+        // scrollable space that the user can never actually reach.
+        // Threshold against raw `contentHeight` is unreachable on any
+        // device where the input bar + safe area is taller than the
+        // slop — i.e., always.
         let viewportBottomY = scrollOffsetY + viewportHeight
-        let bottomThreshold = chatContentHeight - Self.bottomEdgeSlop
+        let bottomThreshold = effectiveContentBottom - Self.bottomEdgeSlop
         if hasFoldedTurnsBelow && viewportBottomY > bottomThreshold {
             handleBottomEdgeExpand()
             return
@@ -829,9 +857,9 @@ struct ChatView: View {
         // Diagnostic: log near-bottom-edge near-misses so we can
         // see when conditions aren't met during apparent-stuck cases.
         if hasFoldedTurnsBelow && scrollPhase == .idle {
-            let gap = chatContentHeight - viewportBottomY
+            let gap = effectiveContentBottom - viewportBottomY
             if gap < 200 {
-                KLog.d("🔻bottom-edge near-miss gap=\(gap) (viewportBottomY=\(viewportBottomY) contentH=\(chatContentHeight) threshold=\(bottomThreshold))")
+                KLog.d("🔻bottom-edge near-miss gap=\(gap) (viewportBottomY=\(viewportBottomY) effectiveBottom=\(effectiveContentBottom) insetBottom=\(chatScrollInsetBottom) threshold=\(bottomThreshold))")
             }
         }
     }
@@ -1126,13 +1154,20 @@ struct ChatView: View {
         // at or above the viewport bottom, the user can already see
         // the entire reply in context — floating the bubble adds
         // no anchoring value.
+        //
+        // For the "latest turn" case, use `effectiveContentBottom`
+        // not `chatContentHeight`: the latter includes phantom
+        // scrollable space behind the `.safeAreaInset(.bottom)`
+        // input bar that the viewport can never reach, so a raw
+        // comparison would never satisfy the suppression at any
+        // scroll position.
         let viewportBottom = scrollOffsetY + viewportHeight
         let replyEndY: CGFloat
         if let next = nextUserBubbleAfterCandidate,
            let nextFrame = userBubbleFrames[next.id] {
             replyEndY = nextFrame.minY
         } else {
-            replyEndY = chatContentHeight
+            replyEndY = effectiveContentBottom
         }
         if replyEndY > 0, replyEndY <= viewportBottom {
             return 0
@@ -1376,7 +1411,7 @@ struct ChatView: View {
         // On a fresh mount, @State defaults to [:] anyway. On a
         // session-id swap within the same mount, the next preference
         // fire will overwrite with new-session frames.
-        scrollMetrics = ChatScrollMetrics(offsetY: 0, viewportHeight: scrollMetrics.viewportHeight, insetTop: scrollMetrics.insetTop, contentHeight: scrollMetrics.contentHeight)
+        scrollMetrics = ChatScrollMetrics(offsetY: 0, viewportHeight: scrollMetrics.viewportHeight, insetTop: scrollMetrics.insetTop, insetBottom: scrollMetrics.insetBottom, contentHeight: scrollMetrics.contentHeight)
         growMode = .idle
         lockedMsgId = nil
         // Reset the render window for the new session — last 5 turns
