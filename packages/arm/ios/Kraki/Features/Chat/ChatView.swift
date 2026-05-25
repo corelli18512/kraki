@@ -402,6 +402,47 @@ struct ChatView: View {
         return result
     }
 
+    /// Snap a candidate `renderWindowStartIdx` value backward to the
+    /// nearest `.standalone(user_message)` (or `send_input` /
+    /// `pending_input`) at or before `idx`. Guarantees the rendered
+    /// window always begins on a turn-pair boundary — i.e., the first
+    /// rendered row is a user-side bubble, never a mid-turn agent
+    /// reply. Without this, slicing by raw item index lands on a
+    /// `.turn(...)` half the time (because the grouped list
+    /// alternates user-standalone / agent-turn), which:
+    ///
+    ///   • makes `topmostVisibleUserBubbleId()` return nil for some
+    ///     scroll positions (no user bubble at the top of the
+    ///     rendered set), so anchor preservation captures no anchor
+    ///     and the top-edge expand cascades.
+    ///   • shows "spinner above an agent reply" instead of the user
+    ///     message that started that turn — which is visually wrong
+    ///     and prevents the user from knowing which question the
+    ///     agent is answering.
+    ///
+    /// Snapping is always **backward** (never skips content): if the
+    /// caller wanted to slide the window to `idx` but `idx` lands
+    /// mid-turn, we shift to `idx-1` (or further) until we hit a
+    /// user-side standalone. Returns 0 if no user-side standalone
+    /// exists at or before `idx`.
+    private func snapStartIdxToUserMessage(_ idx: Int) -> Int {
+        guard idx > 0 else { return 0 }
+        let raw = cachedRawTurns
+        let cap = min(idx, raw.count - 1)
+        guard cap >= 0 else { return 0 }
+        var i = cap
+        while i > 0 {
+            if case .standalone(let msg) = raw[i],
+               msg.type == "user_message" ||
+                msg.type == "send_input" ||
+                msg.type == "pending_input" {
+                return i
+            }
+            i -= 1
+        }
+        return 0
+    }
+
     /// Whether the session is idle (last message is idle type).
     private var sessionIdle: Bool {
         guard let last = filteredMessages.last else { return true }
@@ -823,7 +864,7 @@ struct ChatView: View {
     /// Flip to `false` when done. Logs include: every gate evaluation,
     /// every state mutation, every preference fire, every scroll
     /// offset transition while a restore is pending.
-    private static let diagScrollCascade: Bool = true
+    private static let diagScrollCascade: Bool = false
 
     private func phaseDescription(_ phase: ScrollPhase) -> String {
         switch phase {
@@ -959,8 +1000,12 @@ struct ChatView: View {
                 renderedTurnCount = min(Self.maxRenderedTurns,
                                          renderedTurnCount + Self.renderExpandStep)
             }
-            // After potential growth, clamp so window stays in bounds.
-            renderWindowStartIdx = min(newStart, max(0, total - renderedTurnCount))
+            // After potential growth, clamp so window stays in bounds,
+            // then snap backward to the nearest user-message standalone
+            // so the rendered window always starts with a user bubble
+            // (anchor preservation depends on this).
+            let clamped = min(newStart, max(0, total - renderedTurnCount))
+            renderWindowStartIdx = snapStartIdxToUserMessage(clamped)
             if Self.diagScrollCascade {
                 KLog.d("🔝expand POST offsetY=\(scrollOffsetY) startIdx=\(renderWindowStartIdx) size=\(renderedTurnCount)")
             }
@@ -1004,7 +1049,11 @@ struct ChatView: View {
         let beforeStart = renderWindowStartIdx
         let newStart = min(total - renderedTurnCount,
                             renderWindowStartIdx + Self.renderExpandStep)
-        renderWindowStartIdx = max(0, newStart)
+        // Snap to user-message boundary so the rendered window's first
+        // row is always a user bubble (matches top-edge symmetric
+        // behaviour; keeps the bottommost dropped turn a complete
+        // turn-pair instead of a half-pair).
+        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, newStart))
         KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
     }
 
@@ -1015,7 +1064,7 @@ struct ChatView: View {
     private func jumpToLatest() {
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
-        renderWindowStartIdx = max(0, total - renderedTurnCount)
+        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, total - renderedTurnCount))
         chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
         KLog.d("⏬jumpToLatest startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
     }
@@ -1070,7 +1119,7 @@ struct ChatView: View {
         if renderWindowStartIdx == 0 && renderedTurnCount < Self.maxRenderedTurns {
             renderedTurnCount = min(Self.maxRenderedTurns, newTotal)
         } else {
-            renderWindowStartIdx = max(0, newTotal - renderedTurnCount)
+            renderWindowStartIdx = snapStartIdxToUserMessage(max(0, newTotal - renderedTurnCount))
         }
         if renderWindowStartIdx != beforeStart || renderedTurnCount != beforeCount {
             KLog.d("📌followBottom slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (total \(lastSeenTotalTurns)→\(newTotal))")
@@ -1364,7 +1413,7 @@ struct ChatView: View {
         let beforeStart = renderWindowStartIdx
         let beforeCount = renderedTurnCount
         let bufferAbove = min(idx, 2)
-        renderWindowStartIdx = idx - bufferAbove
+        renderWindowStartIdx = snapStartIdxToUserMessage(idx - bufferAbove)
         renderedTurnCount = min(Self.maxRenderedTurns, cachedAllTurnCount - renderWindowStartIdx)
         KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx)/\(cachedAllTurnCount); window startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) bufferAbove=\(bufferAbove)")
     }
@@ -1471,7 +1520,7 @@ struct ChatView: View {
         // `maxRenderedTurns` then slides further as needed.
         let totalTurns = cachedAllTurnCount
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurns))
-        renderWindowStartIdx = max(0, totalTurns - renderedTurnCount)
+        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, totalTurns - renderedTurnCount))
         lastWindowExpansion = nil
         pendingAnchorRestore = nil
         // Capture whether we started empty BEFORE any await. We use
@@ -1530,7 +1579,7 @@ struct ChatView: View {
         // the window against.
         let totalTurnsAfterPoll = cachedAllTurnCount
         renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurnsAfterPoll))
-        renderWindowStartIdx = max(0, totalTurnsAfterPoll - renderedTurnCount)
+        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, totalTurnsAfterPoll - renderedTurnCount))
         // Initialize the follow-bottom baseline. Without this, the
         // first `followBottomOnNewTurns()` call would see
         // `lastSeenTotalTurns = 0` and treat the window as "at
@@ -1670,7 +1719,7 @@ struct ChatView: View {
         // the latest turn alongside R1's followBottom scroll.
         let total = cachedAllTurnCount
         if total > 0 {
-            renderWindowStartIdx = max(0, total - renderedTurnCount)
+            renderWindowStartIdx = snapStartIdxToUserMessage(max(0, total - renderedTurnCount))
         }
         // Reset the visibility gate. LOCK in checkLockTransition is only
         // permitted after we've seen the new bubble inside the viewport
