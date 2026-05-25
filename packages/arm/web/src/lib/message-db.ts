@@ -23,7 +23,7 @@ let dbPromise: Promise<IDBPDatabase> | null = null;
 function getDB(): Promise<IDBPDatabase> {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion, _newVersion, tx) {
+      upgrade(db, oldVersion) {
         if (oldVersion < 1) {
           const store = db.createObjectStore(STORE_NAME, { keyPath: ['sessionId', 'seq'] });
           store.createIndex('sessionId', 'sessionId', { unique: false });
@@ -39,33 +39,14 @@ function getDB(): Promise<IDBPDatabase> {
             db.deleteObjectStore('pending-questions');
           }
         }
-        // v4 purges orphaned `pending_input` rows. A previous version
-        // persisted optimistic placeholders to IDB; they all share
-        // seq=0 and could not be resolved across a reload (no
-        // clientId). We now skip IDB writes for pending_input
-        // entirely, but existing users may carry stale rows.
-        //
-        // Use the versionchange transaction `tx` provided by idb —
-        // creating a new transaction (or fire-and-forget async work)
-        // inside upgrade is invalid and would reject the openDB.
-        if (oldVersion >= 1 && oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
-          const store = tx.objectStore(STORE_NAME);
-          // Synchronous cursor walk inside the versionchange tx.
-          // Fire-and-forget the promise chain — `openDB` waits for
-          // `tx.done` internally before resolving, so the deletions
-          // complete before the DB is usable. Errors are surfaced via
-          // the transaction's abort.
-          void (async () => {
-            let cursor = await store.openCursor();
-            while (cursor) {
-              const stored = cursor.value as StoredMessage;
-              if (stored.seq === 0 || stored.data?.type === 'pending_input') {
-                cursor.delete();
-              }
-              cursor = await cursor.continue();
-            }
-          })();
-        }
+        // v4: no schema change. Bump was originally introduced to
+        // sweep orphan `pending_input` rows (seq=0) from earlier code
+        // that persisted them, but consumers already filter to
+        // `seq > 0` (getMessagesInRange uses a key range starting
+        // at seq=1; checkUnreadFromDb filters `seq > readSeq`),
+        // so the orphans are invisible dead data. The version bump
+        // stays so we don't downgrade users who already opened the
+        // new web — IDB does not allow opening a v4 DB with v3 code.
       },
     });
   }
