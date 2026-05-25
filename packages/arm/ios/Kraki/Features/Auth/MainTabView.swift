@@ -5,6 +5,7 @@ import SwiftUI
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
     @State private var sessionPath = NavigationPath()
+    @State private var devicePath = NavigationPath()
     @State private var selectedTab: Int = 0
     @State private var showNewSession = false
 
@@ -30,6 +31,19 @@ struct MainTabView: View {
             // Clear so it can fire again next time.
             appState.sessionStore.navigateToSession = nil
         }
+        .onChange(of: appState.deviceStore.navigateToDeviceId) { _, target in
+            guard let target else { return }
+            // Switch to Devices tab and push the requested device detail.
+            // Also pop the session navigation stack so when the user
+            // taps back to the Sessions tab they land on the list, not
+            // on the chat they were viewing.
+            selectedTab = 1
+            sessionPath = NavigationPath()
+            devicePath = NavigationPath()
+            devicePath.append(DeviceNavID(id: target))
+            // Clear so it can fire again next time.
+            appState.deviceStore.navigateToDeviceId = nil
+        }
     }
 
     // MARK: - Sub-views (shared)
@@ -45,7 +59,7 @@ struct MainTabView: View {
     }
 
     private var devicesContent: some View {
-        NavigationStack {
+        NavigationStack(path: $devicePath) {
             DeviceListView()
         }
     }
@@ -103,11 +117,15 @@ struct MainTabView: View {
                 Label("New Session", systemImage: "plus")
             }
         }
-        .onChange(of: selectedTab) { _, newValue in
+        .onChange(of: selectedTab) { oldValue, newValue in
             if newValue == 3 {
                 showNewSession = true
-                // Reset so the search tab can be triggered again.
-                DispatchQueue.main.async { selectedTab = 0 }
+                // Snap selection back synchronously so we don't flash
+                // the empty Color.clear content of the +tab. The
+                // previous DispatchQueue.async approach left a one-
+                // runloop window where SwiftUI rendered the +tab's
+                // empty body before resetting selection.
+                selectedTab = oldValue
             }
         }
     }

@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>aps-environment</key>
+	<string>production</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:app.kraki.chat</string>
+		<string>webcredentials:app.kraki.chat</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.chat.kraki.ios</string>

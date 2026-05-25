@@ -16,10 +16,10 @@
 /// File layout:
 ///   <ApplicationSupport>/MessageCache/<sessionId>.jsonl
 ///
-/// The class is intentionally synchronous — writes are tiny appends and
-/// disk I/O lives on the main actor's runloop just like every other
-/// store mutation. If the cache becomes hot enough to matter we can
-/// move writes to a serial queue later.
+/// Disk writes (append + truncation) are dispatched to a serial
+/// background queue so the main actor never blocks on file I/O during
+/// message bursts. Reads (`getMessages`, etc.) remain synchronous —
+/// they're only invoked off the hot path (warm-up, hydration).
 import Foundation
 
 final class PersistentMessageCache {
@@ -33,6 +33,18 @@ final class PersistentMessageCache {
     /// Whether on-disk files are valid JSONL. Set to true once the cache
     /// directory has been ensured. Subsequent writes skip the check.
     private var directoryReady = false
+
+    /// All disk writes (append + truncation) run on this serial queue
+    /// so the main actor never blocks on file I/O — important during
+    /// live message/tool bursts where truncation can otherwise rewrite
+    /// the full file synchronously on the runloop.
+    private let ioQueue = DispatchQueue(label: "kraki.MessageCache.io", qos: .utility)
+
+    /// Per-session line count, maintained in memory so `truncateIfNeeded`
+    /// doesn't have to read the full file just to count newlines. Reset
+    /// (re-counted from disk) lazily on first append per session per
+    /// process.
+    private var lineCounts: [String: Int] = [:]
 
     private lazy var cacheDir: URL = {
         let fm = FileManager.default
@@ -152,6 +164,17 @@ final class PersistentMessageCache {
         directoryReady = false
     }
 
+    /// Block until every queued write on the I/O queue has finished.
+    /// Used by `AppState.handleBackground()` so messages written
+    /// during a burst right before backgrounding aren't lost if iOS
+    /// suspends the process before the async writes flush.
+    /// Callers should wrap this in a `beginBackgroundTask` so iOS
+    /// gives us the few extra seconds needed to complete the
+    /// dispatch.
+    func drainSync() {
+        ioQueue.sync { /* drain — empty body runs after all pending async work */ }
+    }
+
     // MARK: - Internal
 
     private func fileURL(_ sessionId: String) -> URL {
@@ -170,46 +193,61 @@ final class PersistentMessageCache {
     private func appendLines(_ sessionId: String, messages: [ChatMessage]) {
         let encoder = JSONEncoder()
         var blob = Data()
+        var lineCount = 0
         for m in messages {
             guard let line = try? encoder.encode(m) else { continue }
             blob.append(line)
             blob.append(0x0A)  // newline
+            lineCount += 1
         }
         guard !blob.isEmpty else { return }
 
         let url = fileURL(sessionId)
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            try? blob.write(to: url, options: .atomic)
-            return
-        }
-
-        if let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            do {
-                try handle.seekToEnd()
-                try handle.write(contentsOf: blob)
-            } catch {
-                // Fallback: rewrite the whole file by appending in memory.
-                var existing = (try? Data(contentsOf: url)) ?? Data()
-                existing.append(blob)
-                try? existing.write(to: url, options: .atomic)
+        // Off-load the actual file write + truncation pass to the
+        // serial I/O queue so the main actor doesn't pay the cost of
+        // a potentially full-file rewrite during message bursts.
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: url.path) {
+                try? blob.write(to: url, options: .atomic)
+            } else if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                do {
+                    try handle.seekToEnd()
+                    try handle.write(contentsOf: blob)
+                } catch {
+                    // Fallback: rewrite the whole file by appending in memory.
+                    var existing = (try? Data(contentsOf: url)) ?? Data()
+                    existing.append(blob)
+                    try? existing.write(to: url, options: .atomic)
+                }
             }
+            self.updateLineCountAndMaybeTruncate(sessionId, url: url, addedLines: lineCount)
         }
-
-        // Bound the on-disk file at MAX_PERSISTED_PER_SESSION lines.
-        // Cheap to check via line count of the file; only rewrites when
-        // the cap is exceeded.
-        truncateIfNeeded(sessionId, url: url)
     }
 
-    private func truncateIfNeeded(_ sessionId: String, url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        // Quick line count via newline scan (no JSON parsing).
-        var newlines = 0
-        for byte in data where byte == 0x0A { newlines += 1 }
-        if newlines <= Self.MAX_PERSISTED_PER_SESSION { return }
+    /// Bound the on-disk file at MAX_PERSISTED_PER_SESSION lines,
+    /// reading the existing file only when we cross the cap. The
+    /// per-session line count is cached so we don't re-scan the file
+    /// on every append; we only re-count from disk once per process
+    /// (lazy bootstrap).
+    private func updateLineCountAndMaybeTruncate(_ sessionId: String, url: URL, addedLines: Int) {
+        let current: Int
+        if let cached = lineCounts[sessionId] {
+            current = cached + addedLines
+        } else if let data = try? Data(contentsOf: url) {
+            var n = 0
+            for byte in data where byte == 0x0A { n += 1 }
+            current = n
+        } else {
+            current = addedLines
+        }
+        lineCounts[sessionId] = current
+        guard current > Self.MAX_PERSISTED_PER_SESSION else { return }
 
+        // Cap exceeded: rewrite with only the newest N lines.
+        guard let data = try? Data(contentsOf: url) else { return }
         let parsed = decodeLines(data)
         let keep = Array(parsed.suffix(Self.MAX_PERSISTED_PER_SESSION))
         let encoder = JSONEncoder()
@@ -220,6 +258,7 @@ final class PersistentMessageCache {
             rewritten.append(0x0A)
         }
         try? rewritten.write(to: url, options: .atomic)
+        lineCounts[sessionId] = keep.count
     }
 
     private func decodeLines(_ data: Data) -> [ChatMessage] {

@@ -150,6 +150,11 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var model: String? { payload["model"]?.stringValue }
     var title: String? { payload["title"]?.stringValue }
     var autoTitle: String? { payload["autoTitle"]?.stringValue }
+    /// Correlation id round-tripped through tentacle for pending_input
+    /// resolution. Present on pending_input placeholders and on
+    /// user_message broadcasts that resulted from a `send_input`
+    /// carrying it. Absent on legacy/imported messages.
+    var clientId: String? { payload["clientId"]?.stringValue }
 
     var choices: [String]? {
         payload["choices"]?.arrayValue?.compactMap { $0.stringValue }
@@ -166,6 +171,35 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         }
     }
 
+    /// Tentacle-composed short header for tool messages (v0.17+).
+    /// Read directly without per-tool client logic.
+    var headline: String? { payload["headline"]?.stringValue }
+
+    /// Lazy ref to the tool's args JSON (v0.17+). Absent for trivially
+    /// small args that ship inline. Backed by the attachment pipeline.
+    var argsRef: ContentRef? {
+        guard let dict = payload["argsRef"]?.dictValue else { return nil }
+        return ContentRef.from(dict)
+    }
+
+    /// Lazy ref to the tool's result body (v0.17+). Always present on
+    /// `tool_complete` except when the tool produced no result.
+    var resultRef: ContentRef? {
+        guard let dict = payload["resultRef"]?.dictValue else { return nil }
+        return ContentRef.from(dict)
+    }
+
+    /// Content-ref typed entries in the message's `attachments` array
+    /// (used for tool-produced images via `kraki-show_image`). Inline
+    /// image attachments are still surfaced via `attachments`.
+    var contentRefAttachments: [ContentRef] {
+        guard let arr = payload["attachments"]?.arrayValue else { return [] }
+        return arr.compactMap { item -> ContentRef? in
+            guard let dict = item.dictValue else { return nil }
+            return ContentRef.from(dict)
+        }
+    }
+
     var args: [String: AnyCodable]? {
         payload["args"]?.dictValue
     }
@@ -178,10 +212,12 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
               let cacheWrite = dict["cacheWriteTokens"]?.intValue,
               let cost = dict["totalCost"]?.doubleValue,
               let duration = dict["totalDurationMs"]?.doubleValue else { return nil }
+        let contextTokens = dict["contextTokens"]?.intValue
         return SessionUsage(
             inputTokens: input, outputTokens: output,
             cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
-            totalCost: cost, totalDurationMs: duration
+            totalCost: cost, totalDurationMs: duration,
+            contextTokens: contextTokens
         )
     }
 

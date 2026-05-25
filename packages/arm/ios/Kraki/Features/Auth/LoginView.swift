@@ -12,7 +12,6 @@ struct LoginView: View {
     @Environment(AppState.self) private var appState
 
     @State private var showPairing = false
-    @State private var showOAuth = false
 
     // Animation states
     @State private var clipRadius: CGFloat = 0
@@ -79,12 +78,17 @@ struct LoginView: View {
                 ZStack {
                     if isConnecting {
                         inlineStatusPanel
+                            .transition(.opacity)
                     } else {
                         VStack(spacing: 0) { actionArea }
+                            .transition(.opacity)
                     }
                 }
                 .frame(minHeight: 220)
-                .animation(.easeInOut(duration: 0.25), value: isConnecting)
+                // Instant flip on tap → spinner with no fade delay.
+                // The reverse direction (spinner → login) keeps a brief
+                // cross-fade so OAuth cancel doesn't feel jarring.
+                .animation(isConnecting ? nil : .easeInOut(duration: 0.2), value: isConnecting)
 
                 // Relay URL pill — hidden on the login screen to keep
                 // the page clean. Layout-only placeholder preserves
@@ -117,16 +121,10 @@ struct LoginView: View {
         }
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
-        .onAppear { startAnimations() }
+        .task { await runIntroAnimations() }
         .fullScreenCover(isPresented: $showPairing) {
             PairingView()
                 .environment(appState)
-        }
-        .sheet(isPresented: $showOAuth) {
-            if let clientId = appState.githubClientId {
-                OAuthView(clientId: clientId)
-                    .environment(appState)
-            }
         }
     }
 
@@ -135,6 +133,7 @@ struct LoginView: View {
     /// True while the auth/connect handshake is in flight. Drives the
     /// in-place swap of the action area for a status panel.
     private var isConnecting: Bool {
+        if appState.isOAuthInFlight { return true }
         switch appState.connectionStatus {
         case .connecting, .authenticating: return true
         default: return false
@@ -145,6 +144,7 @@ struct LoginView: View {
     /// what's actually happening rather than echoing an internal state
     /// name.
     private var statusHeadline: String {
+        if appState.isOAuthInFlight { return "Signing you in…" }
         switch appState.connectionStatus {
         case .connecting:     return "Connecting to relay…"
         case .authenticating: return "Signing you in…"
@@ -153,6 +153,9 @@ struct LoginView: View {
     }
 
     private var statusSubline: String {
+        if appState.isOAuthInFlight {
+            return "Opening GitHub to confirm your sign-in."
+        }
         switch appState.connectionStatus {
         case .connecting:
             return "Establishing a secure channel to your relay."
@@ -174,7 +177,7 @@ struct LoginView: View {
         // pairing-only layout.
         if let clientId = appState.githubClientId {
             Button {
-                showOAuth = true
+                appState.authManager?.startGitHubOAuth(clientId: clientId)
             } label: {
                 HStack(spacing: 8) {
                     GitHubMark()
@@ -283,8 +286,15 @@ struct LoginView: View {
     }
 
     // MARK: - Staggered Animations (matching web CSS timings)
+    //
+    // Driven by a single cancellable `.task` so the staggered fade
+    // ins cleanly abort if the view disappears mid-animation
+    // (previously, three fire-and-forget `DispatchQueue.asyncAfter`
+    // closures could outlive the view and mutate state of a
+    // never-shown LoginView).
 
-    private func startAnimations() {
+    @MainActor
+    private func runIntroAnimations() async {
         // Logo: circle-clip reveal over 4s, blur-to-clear over 3s — both start immediately
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 4)) {
             clipRadius = 1.5 // circle scale >1 to fill the square
@@ -295,26 +305,19 @@ struct LoginView: View {
         }
 
         // Title: fade-up at 1s
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            withAnimation(.easeOut(duration: 1)) {
-                showTitle = true
-            }
-        }
+        try? await Task.sleep(for: .seconds(1))
+        if Task.isCancelled { return }
+        withAnimation(.easeOut(duration: 1)) { showTitle = true }
 
-        // Subtitle (OAuth available only) + GitHub button: same 1s timing
         // "or" divider: fade-up at 1.3s
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
-            withAnimation(.easeOut(duration: 1)) {
-                showDivider = true
-            }
-        }
+        try? await Task.sleep(for: .milliseconds(300))
+        if Task.isCancelled { return }
+        withAnimation(.easeOut(duration: 1)) { showDivider = true }
 
         // Instructions + relay URL: fade-up at 1.6s
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation(.easeOut(duration: 1)) {
-                showInstructions = true
-            }
-        }
+        try? await Task.sleep(for: .milliseconds(300))
+        if Task.isCancelled { return }
+        withAnimation(.easeOut(duration: 1)) { showInstructions = true }
     }
 }
 

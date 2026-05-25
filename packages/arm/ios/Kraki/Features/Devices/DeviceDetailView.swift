@@ -149,7 +149,7 @@ struct DeviceDetailView: View {
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                appState.sendEncryptedMessage(["type": "remove_device", "deviceId": device.id])
+                appState.commandSender?.removeDevice(deviceId: device.id)
             }
         } message: {
             Text("Are you sure you want to remove \(device.name)? The device will need to reconnect and re-authenticate to appear again.")

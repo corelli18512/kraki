@@ -12,6 +12,12 @@ struct QuestionCardView: View {
 
     @State private var freeformText = ""
     @FocusState private var isTextFieldFocused: Bool
+    /// Question id we already auto-focused for. Prevents re-focusing
+    /// on every view re-appearance when the same question stays on
+    /// screen (which would steal focus from any other text field the
+    /// user just tapped) while still autofocusing the FIRST time a
+    /// brand-new question card appears.
+    @State private var autoFocusedQuestionId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -88,7 +94,13 @@ struct QuestionCardView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onAppear {
-            isTextFieldFocused = true
+            // Only autofocus the first time this question appears.
+            // Repeated re-renders (parent recompose, scroll on/off
+            // screen) shouldn't yank the keyboard focus back here.
+            if autoFocusedQuestionId != question.id {
+                autoFocusedQuestionId = question.id
+                isTextFieldFocused = true
+            }
         }
         .sensoryFeedback(.impact(flexibility: .solid, intensity: 0.5), trigger: question.id)
     }
@@ -122,7 +134,7 @@ struct QuestionStackView: View {
                 }
                 .padding(.horizontal)
             }
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.4)
+            .frame(maxHeight: WindowSize.height * 0.4)
         }
     }
 }

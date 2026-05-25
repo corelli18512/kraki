@@ -34,6 +34,10 @@ struct MessageInputView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var imageMimeType: String = "image/jpeg"
+    /// Surfaces image-attach failures (too large after compression,
+    /// unsupported format, etc.) so the user sees that the picker
+    /// didn't silently swallow their selection.
+    @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @FocusState private var isFocused: Bool
 
@@ -178,6 +182,18 @@ struct MessageInputView: View {
             }
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
+            }
+            .alert(
+                "Couldn't attach image",
+                isPresented: Binding(
+                    get: { imageAttachError != nil },
+                    set: { if !$0 { imageAttachError = nil } }
+                ),
+                presenting: imageAttachError
+            ) { _ in
+                Button("OK", role: .cancel) { imageAttachError = nil }
+            } message: { error in
+                Text(error)
             }
     }
 
@@ -527,11 +543,29 @@ struct MessageInputView: View {
                             let captured = speech.transcript
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                             if !captured.isEmpty {
+                                // Push-to-talk = WhatsApp model:
+                                // release IS the send action. Merge
+                                // the captured transcript into any
+                                // pre-existing draft so a half-typed
+                                // message isn't lost, write it
+                                // through `setDraft` so the bound
+                                // `text` reflects the merged value,
+                                // then fire `handleSend` directly.
+                                // Falls back to draft-only if for
+                                // some reason we can't send (no
+                                // active session, etc.).
                                 let prior = text
                                 let merged = prior.isEmpty ? captured : (prior + " " + captured)
                                 sessionStore.setDraft(sessionId, merged)
+                                // Flip back to keyboard mode FIRST
+                                // so the user sees the text land in
+                                // the input box for a tick before
+                                // the send animation kicks off.
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                     voiceMode = false
+                                }
+                                if canSend {
+                                    handleSend()
                                 }
                             }
                         }
@@ -754,7 +788,8 @@ struct MessageInputView: View {
 
     private func handlePermissionDenyWithReason() {
         guard hasText, let perm = pendingPermission else { return }
-        appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
+        let reason = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id, reason: reason)
         sessionStore.setDraft(sessionId, "")
         isFocused = false
     }
@@ -925,8 +960,20 @@ struct MessageInputView: View {
 
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
-        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-        guard let uiImage = UIImage(data: data) else { return }
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            await MainActor.run {
+                imageAttachError = "Couldn't read that image."
+                selectedPhoto = nil
+            }
+            return
+        }
+        guard let uiImage = UIImage(data: data) else {
+            await MainActor.run {
+                imageAttachError = "That file isn't a supported image format."
+                selectedPhoto = nil
+            }
+            return
+        }
 
         let maxDimension: CGFloat = 1024
         let maxSize = 3 * 1024 * 1024
@@ -941,8 +988,20 @@ struct MessageInputView: View {
 
         if let compressed = targetImage.jpegData(compressionQuality: 0.8), compressed.count <= maxSize {
             imageData = compressed; imageMimeType = "image/jpeg"
-        } else if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
+            return
+        }
+        if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
             imageData = compressed; imageMimeType = "image/jpeg"
+            return
+        }
+        // Both compression attempts still exceeded the 3 MB cap.
+        // Surface an explicit error and reset the picker so the user
+        // can pick a smaller / different image instead of sending a
+        // message with a silently missing attachment.
+        await MainActor.run {
+            imageAttachError = "That image is too large to send (over 3 MB after compression). Try a smaller picture."
+            selectedPhoto = nil
+            imageData = nil
         }
     }
 }

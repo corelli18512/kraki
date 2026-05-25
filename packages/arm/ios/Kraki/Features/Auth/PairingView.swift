@@ -276,8 +276,14 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // `stopRunning()` is a synchronous, potentially blocking call —
+        // doing it on the main thread can briefly freeze the UI when
+        // the user dismisses the pairing sheet. Move it to the same
+        // background queue we use for startRunning().
         if captureSession.isRunning {
-            captureSession.stopRunning()
+            DispatchQueue.global(qos: .userInitiated).async { [captureSession] in
+                captureSession.stopRunning()
+            }
         }
     }
 
@@ -295,7 +301,10 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
         let output = AVCaptureMetadataOutput()
         if captureSession.canAddOutput(output) {
             captureSession.addOutput(output)
-            output.setMetadataObjectsDelegate(self, queue: .main)
+            // Deliver metadata on a dedicated background queue so the
+            // capture pipeline isn't stalled by main-thread work; we
+            // hop back to main inside the delegate for UI callbacks.
+            output.setMetadataObjectsDelegate(self, queue: DispatchQueue(label: "kraki.qr.metadata"))
             output.metadataObjectTypes = [.qr]
         }
 
@@ -317,13 +326,17 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
             return
         }
         hasReported = true
-        captureSession.stopRunning()
-
-        // Haptic feedback on successful scan
-        let generator = UINotificationFeedbackGenerator()
-        generator.notificationOccurred(.success)
-
-        onScan?(.success(value))
+        // Stop the session off-main and hop back to main for haptics
+        // and the SwiftUI callback. Otherwise the synchronous
+        // stopRunning() blocks the UI for a frame on dismiss.
+        DispatchQueue.global(qos: .userInitiated).async { [captureSession] in
+            captureSession.stopRunning()
+        }
+        DispatchQueue.main.async { [weak self] in
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            self?.onScan?(.success(value))
+        }
     }
 }
 

@@ -2,6 +2,122 @@
 /// Helpers — Utility functions for formatting dates, numbers, and text.
 
 import Foundation
+import UIKit
+
+// MARK: - Shared ISO8601 Formatters
+//
+// Cached static formatters used by hot-path code (session sort,
+// command timestamps, message stamping). Allocating a new
+// `ISO8601DateFormatter` per call is surprisingly expensive — these
+// statics shave it off entirely.
+
+enum ISO8601 {
+    /// Primary formatter: full ISO-8601 with fractional seconds, the
+    /// format the relay and tentacle emit.
+    static let withFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// Fallback formatter without fractional seconds — older relay
+    /// versions and some manual fixtures use this shape.
+    static let withoutFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// Parse an ISO-8601 string, trying both formatter variants.
+    /// Tolerant of "Z" vs "+00:00" suffix differences across relay
+    /// versions and manual inputs.
+    static func parse(_ string: String) -> Date? {
+        withFractional.date(from: string) ?? withoutFractional.date(from: string)
+    }
+
+    /// Stamp the current instant in the canonical relay format.
+    static func now() -> String {
+        withFractional.string(from: Date())
+    }
+}
+
+// MARK: - Window/scene size helper
+//
+// `UIScreen.main.bounds` is wrong on iPad split-view, slide-over,
+// and Stage Manager — it returns the device-wide size regardless of
+// the app's actual window. These helpers return the size of the
+// currently key window's scene, falling back to UIScreen.main.bounds
+// only when no window can be located (background/launch states).
+//
+// For static reads (one-shot layout calculation that doesn't need
+// to re-fire on resize), use `WindowSize.width` / `.height`. For
+// SwiftUI views that should refresh when the user resizes the
+// window (iPad Split View / Stage Manager), inject and observe
+// `WindowSizeObserver.shared`; it republishes the size on
+// `UIWindowScene.didUpdateCoordinateSpaceNotification`.
+
+enum WindowSize {
+    static var width: CGFloat { current().width }
+    static var height: CGFloat { current().height }
+
+    static func current() -> CGSize {
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first,
+           let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+            return window.bounds.size
+        }
+        return UIScreen.main.bounds.size
+    }
+}
+
+import Observation
+
+/// Observable wrapper around `WindowSize` that republishes whenever
+/// the active window scene's coordinate space changes (iPad Split
+/// View resize, Stage Manager move, rotation). Inject with
+/// `.environment(WindowSizeObserver.shared)` and read via the
+/// observed `size` property to make SwiftUI re-layout on resize.
+@MainActor
+@Observable
+final class WindowSizeObserver {
+    static let shared = WindowSizeObserver()
+
+    private(set) var size: CGSize = WindowSize.current()
+
+    private init() {
+        // UIKit doesn't expose a single "window resized" notification
+        // we can rely on across iPad Split View, Stage Manager, and
+        // rotation. We hook the closest signals — device orientation
+        // changes (rotation) and app foreground — and re-sample the
+        // window size on each. Views needing pixel-perfect resize
+        // reactivity should still use `GeometryReader` in the parent;
+        // this observer is a coarse net for components that read the
+        // window size for layout heuristics.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSceneChange),
+            name: UIDevice.orientationDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSceneChange),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleSceneChange() {
+        let next = WindowSize.current()
+        if next != size {
+            size = next
+        }
+    }
+}
 
 // MARK: - Relative Timestamps
 
@@ -80,10 +196,17 @@ func getArgsSummary(toolName: String?, args: [String: AnyCodable]?) -> String? {
     case "fetch_url":
         return args["url"]?.stringValue
     default:
-        for (_, v) in args {
-            if let s = v.stringValue, !s.isEmpty, s.count < 200 {
-                return s
-            }
+        // Walk well-known argument names first, then fall back to a
+        // deterministic sorted iteration. Without the sort, the
+        // returned headline could differ across runs depending on
+        // dictionary hash ordering, which makes UI snapshots and
+        // logs noisy.
+        let preferredKeys = ["query", "path", "file", "url", "name", "id", "key"]
+        for k in preferredKeys {
+            if let s = args[k]?.stringValue, !s.isEmpty, s.count < 200 { return s }
+        }
+        for k in args.keys.sorted() {
+            if let s = args[k]?.stringValue, !s.isEmpty, s.count < 200 { return s }
         }
         return nil
     }

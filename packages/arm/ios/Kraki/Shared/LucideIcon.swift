@@ -55,7 +55,15 @@ struct LucideIcon: View {
                 )
             }
         }
+        // Supersample the Canvas at 2× the display size, then scale
+        // back down. Rendering at higher internal resolution and
+        // letting SwiftUI/Metal downsample produces noticeably
+        // sharper strokes (better anti-aliasing of the stroke
+        // edges) than rendering directly at the target size.
+        .frame(width: size * 2, height: size * 2)
+        .scaleEffect(0.5)
         .frame(width: size, height: size)
+        .drawingGroup()
     }
 }
 
@@ -122,6 +130,16 @@ enum LucideIconType {
     case circleSlash
     case shieldQuestion
     case messageCircleQuestion
+    case squareTerminal
+    case chevronsLeftRightEllipsis
+    case searchCode
+    case fileSearch
+    case squareMousePointer
+    case keyboard
+    case mic
+    case sendHorizontal
+    case circleUser
+    case bookText
 
     var elements: [SVGElement] {
         switch self {
@@ -301,6 +319,74 @@ enum LucideIconType {
                 .path("M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"),
                 .path("M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"),
                 .path("M12 17h.01"),
+            ]
+        case .squareTerminal:
+            return [
+                .path("m7 11 2-2-2-2"),
+                .path("M11 13h4"),
+                .rect(x: 3, y: 3, width: 18, height: 18, rx: 2),
+            ]
+        case .chevronsLeftRightEllipsis:
+            return [
+                .path("M12 12h.01"),
+                .path("M16 12h.01"),
+                .path("m17 7 5 5-5 5"),
+                .path("m7 7-5 5 5 5"),
+                .path("M8 12h.01"),
+            ]
+        case .searchCode:
+            return [
+                .path("m13 13.5 2-2.5-2-2.5"),
+                .path("m21 21-4.3-4.3"),
+                .path("M9 8.5 7 11l2 2.5"),
+                .circle(cx: 11, cy: 11, r: 8),
+            ]
+        case .fileSearch:
+            return [
+                .path("M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"),
+                .path("M14 2v5a1 1 0 0 0 1 1h5"),
+                .circle(cx: 11.5, cy: 14.5, r: 2.5),
+                .path("M13.3 16.3 15 18"),
+            ]
+        case .squareMousePointer:
+            return [
+                .path("M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"),
+                .path("M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"),
+            ]
+        case .keyboard:
+            return [
+                .path("M10 8h.01"),
+                .path("M12 12h.01"),
+                .path("M14 8h.01"),
+                .path("M16 12h.01"),
+                .path("M18 8h.01"),
+                .path("M6 8h.01"),
+                .path("M7 16h10"),
+                .path("M8 12h.01"),
+                .rect(x: 2, y: 4, width: 20, height: 16, rx: 2),
+            ]
+        case .mic:
+            return [
+                .path("M12 19v3"),
+                .path("M19 10v2a7 7 0 0 1-14 0v-2"),
+                .rect(x: 9, y: 2, width: 6, height: 13, rx: 3),
+            ]
+        case .sendHorizontal:
+            return [
+                .path("M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z"),
+                .path("M6 12h16"),
+            ]
+        case .circleUser:
+            return [
+                .circle(cx: 12, cy: 12, r: 10),
+                .circle(cx: 12, cy: 10, r: 3),
+                .path("M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"),
+            ]
+        case .bookText:
+            return [
+                .path("M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"),
+                .path("M8 11h8"),
+                .path("M8 7h6"),
             ]
         }
     }

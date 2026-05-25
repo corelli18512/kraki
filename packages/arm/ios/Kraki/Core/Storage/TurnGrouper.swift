@@ -172,6 +172,10 @@ func groupMessagesIntoTurns(
             flushTurn(turnComplete: true)
         } else if thinkingTypes.contains(msg.type) {
             // Questions: merge into the preceding ask_user tool_start
+            // so the question + answer render inline in the tool chip
+            // rather than as a separate bubble. The tool_complete that
+            // follows carries the answer in `payload.result` (or
+            // similar), which the askUserBody view renders.
             if msg.type == "question" {
                 // Find the preceding tool_start for ask_user and attach question text
                 if let startIdx = currentThinking.lastIndex(where: {
@@ -207,6 +211,14 @@ func groupMessagesIntoTurns(
                         let completeArgs = msg.args ?? [:]
                         var mergedPayload = msg.payload
                         mergedPayload["toolName"] = msg.payload["toolName"] ?? startMsg.payload["toolName"]
+                        // Carry over argsRef from tool_start: tentacle only
+                        // ships the lazy ref on tool_start, but the view
+                        // renders tool_complete and needs to fetch args
+                        // (e.g. to show an `edit` diff).
+                        if mergedPayload["argsRef"] == nil,
+                           let ar = startMsg.payload["argsRef"] {
+                            mergedPayload["argsRef"] = ar
+                        }
                         // Carry over question metadata from tool_start (merged from question message)
                         if let qt = startMsg.payload["questionText"] { mergedPayload["questionText"] = qt }
                         if let qc = startMsg.payload["questionChoices"] { mergedPayload["questionChoices"] = qc }
@@ -240,14 +252,19 @@ func groupMessagesIntoTurns(
         }
     }
 
-    // Append streaming content as synthetic agent_message in the current turn
+    // Append streaming content as synthetic agent_message in the current turn.
+    // We use a negative sentinel seq (-1) to flag this synthetic
+    // entry — Int.max would be a valid seq value the persistence
+    // layer could try to write and that would break head/gap
+    // detection forever if it leaked. Negative sentinels are
+    // explicitly rejected by `appendMessage`'s seq check.
     if let streaming = streamingContent, !streaming.isEmpty {
         let syntheticMessage = ChatMessage(
             type: "agent_message",
-            seq: Int.max,
+            seq: -1,
             sessionId: nil,
             deviceId: nil,
-            timestamp: ISO8601DateFormatter().string(from: Date()),
+            timestamp: ISO8601.now(),
             payload: ["content": AnyCodable(streaming)]
         )
         currentThinking.append(syntheticMessage)

@@ -72,6 +72,14 @@ struct AnyCodable: Codable, Equatable, @unchecked Sendable, CustomStringConverti
         case let s as String:                try container.encode(s)
         case let arr as [AnyCodable]:        try container.encode(arr)
         case let dict as [String: AnyCodable]: try container.encode(dict)
+        // Tolerate raw collections that callers occasionally hand us
+        // directly (e.g. from JSONSerialization or sloppy bridging).
+        // Without these branches the previous default-case fall-through
+        // would silently encode them as `null`, losing the user's data.
+        case let arr as [Any]:
+            try container.encode(arr.map { AnyCodable($0) })
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable($0) })
         default:                             try container.encodeNil()
         }
     }
@@ -171,30 +179,35 @@ struct SessionUsage: Codable, Equatable, Sendable {
     var cacheWriteTokens: Int
     var totalCost: Double
     var totalDurationMs: Double
+    /// Prompt tokens used by the last turn — per-turn snapshot, NOT
+    /// cumulative. Compared against `ModelDetail.contextWindow` to
+    /// produce the context-utilisation read on the session info sheet.
+    /// Optional: older tentacles / non-Copilot adapters may omit it.
+    var contextTokens: Int?
 }
 
 /// Compact session metadata sent in session_list for sync.
 struct SessionDigest: Codable, Identifiable, Sendable {
     let id: String
     let agent: String
-    var model: String?
-    var title: String?
-    var autoTitle: String?
+    var model: String? = nil
+    var title: String? = nil
+    var autoTitle: String? = nil
     var state: SessionState
     var mode: SessionMode
     var lastSeq: Int
     var readSeq: Int
     var messageCount: Int
     var createdAt: String
-    var usage: SessionUsage?
-    var pinned: Bool?
+    var usage: SessionUsage? = nil
+    var pinned: Bool? = nil
     /// Where this session came from (`copilot-cli`, `vscode`, `imported`,
     /// or `unknown`). Native Kraki sessions leave this absent.
-    var source: String?
+    var source: String? = nil
     /// Sidebar preview pre-computed by tentacle. Carries the last
     /// meaningful message's text, type, and timestamp so the arm can
     /// paint the sidebar with zero replay round-trips.
-    var preview: SessionPreview?
+    var preview: SessionPreview? = nil
 }
 
 // MARK: - Device Types
@@ -217,6 +230,10 @@ struct ModelDetail: Codable, Equatable, Sendable {
     let supportsReasoningEffort: Bool
     var supportedReasoningEfforts: [ReasoningEffort]?
     var defaultReasoningEffort: ReasoningEffort?
+    /// Total token ceiling for the model (e.g. 200_000 for sonnet-4.6).
+    /// Pairs with `SessionUsage.contextTokens` to render context
+    /// utilisation. Optional: adapters that don't know it omit it.
+    var contextWindow: Int?
 }
 
 // MARK: - Session Preview

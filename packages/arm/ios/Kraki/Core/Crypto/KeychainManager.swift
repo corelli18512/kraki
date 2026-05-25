@@ -9,7 +9,7 @@
 ///
 /// Sharing with the NSE: when `accessGroup` is nil (default), iOS uses the FIRST
 /// entry in the `keychain-access-groups` entitlement. Both the host app and
-/// `KrakiNotification` declare `$(AppIdentifierPrefix)cloud.corelli.kraki`, so
+/// `KrakiNotification` declare `$(AppIdentifierPrefix)chat.kraki.ios`, so
 /// keys are placed in that shared group automatically — the NSE can read them
 /// without specifying the group either.
 ///
@@ -20,6 +20,26 @@
 
 import Foundation
 import Security
+
+// MARK: - SecKey bridging
+
+/// Bridge a `CFTypeRef` returned from Keychain APIs to a Swift
+/// `SecKey`, but only after a runtime CoreFoundation type ID check.
+///
+/// Swift's `as?` cast for CoreFoundation types is a no-op (the
+/// compiler explicitly warns about it: "conditional downcast to
+/// CoreFoundation type 'SecKey' will always succeed"), which makes
+/// the conditional cast pattern useless as a safety net. The
+/// `CFGetTypeID == SecKeyGetTypeID()` check IS the actual runtime
+/// check; the subsequent `as!` is just the bridge once the type is
+/// proven correct. Centralising it here means call sites never have
+/// to write `as!` themselves and the contract is documented in one
+/// place.
+@usableFromInline
+func bridgeToSecKey(_ ref: CFTypeRef) -> SecKey? {
+    guard CFGetTypeID(ref) == SecKeyGetTypeID() else { return nil }
+    return (ref as! SecKey)
+}
 
 // MARK: - Errors
 
@@ -45,8 +65,8 @@ public enum KeychainError: Error, CustomStringConvertible {
 
 public final class KeychainManager {
 
-    private static let signingKeyTag    = "cloud.corelli.kraki.signing-key"
-    private static let encryptionKeyTag = "cloud.corelli.kraki.encryption-key"
+    private static let signingKeyTag    = "chat.kraki.ios.signing-key"
+    private static let encryptionKeyTag = "chat.kraki.ios.encryption-key"
 
     /// Optional app group for shared keychain access (app ↔ notification extension).
     private let accessGroup: String?
@@ -145,9 +165,10 @@ public final class KeychainManager {
             throw KeychainError.loadFailed(status)
         }
 
-        // swiftlint:disable:next force_cast
-        let privateKey = ref as! SecKey
-        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+        // Bridge through the centralised helper so we never inline
+        // an `as!` cast in call sites.
+        guard let privateKey = bridgeToSecKey(ref),
+              let publicKey = SecKeyCopyPublicKey(privateKey) else {
             throw KeychainError.unexpectedData
         }
 

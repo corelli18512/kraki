@@ -8,7 +8,7 @@ import Observation
 
 // MARK: - SessionInfo
 
-struct SessionInfo: Identifiable, Equatable {
+struct SessionInfo: Identifiable, Equatable, Codable {
     let id: String
     var deviceId: String
     var deviceName: String
@@ -38,6 +38,101 @@ struct SessionInfo: Identifiable, Equatable {
     var activity: SessionActivity = .none
 
     var displayTitle: String { title ?? autoTitle ?? "New Session" }
+
+    // MARK: - Codable
+    //
+    // Persistent cache (PersistentSessionCache) encodes/decodes via these
+    // keys. Transient fields (`activity`, `currentToolName`,
+    // `currentToolHeadline`) are intentionally omitted — on cold launch
+    // the "what's running now" state is stale and gets refilled by the
+    // live message stream.
+
+    private enum CodingKeys: String, CodingKey {
+        case id, deviceId, deviceName, agent, model, title, autoTitle
+        case state, mode, lastSeq, readSeq, messageCount, createdAt, usage, pinned
+    }
+
+    init(
+        id: String,
+        deviceId: String,
+        deviceName: String,
+        agent: String,
+        model: String? = nil,
+        title: String? = nil,
+        autoTitle: String? = nil,
+        state: SessionState,
+        mode: SessionMode,
+        lastSeq: Int,
+        readSeq: Int,
+        messageCount: Int,
+        createdAt: Date,
+        usage: SessionUsage? = nil,
+        pinned: Bool,
+        currentToolName: String? = nil,
+        currentToolHeadline: String? = nil,
+        activity: SessionActivity = .none
+    ) {
+        self.id = id
+        self.deviceId = deviceId
+        self.deviceName = deviceName
+        self.agent = agent
+        self.model = model
+        self.title = title
+        self.autoTitle = autoTitle
+        self.state = state
+        self.mode = mode
+        self.lastSeq = lastSeq
+        self.readSeq = readSeq
+        self.messageCount = messageCount
+        self.createdAt = createdAt
+        self.usage = usage
+        self.pinned = pinned
+        self.currentToolName = currentToolName
+        self.currentToolHeadline = currentToolHeadline
+        self.activity = activity
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.deviceId = try c.decode(String.self, forKey: .deviceId)
+        self.deviceName = try c.decode(String.self, forKey: .deviceName)
+        self.agent = try c.decode(String.self, forKey: .agent)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.title = try c.decodeIfPresent(String.self, forKey: .title)
+        self.autoTitle = try c.decodeIfPresent(String.self, forKey: .autoTitle)
+        self.state = try c.decode(SessionState.self, forKey: .state)
+        self.mode = try c.decode(SessionMode.self, forKey: .mode)
+        self.lastSeq = try c.decode(Int.self, forKey: .lastSeq)
+        self.readSeq = try c.decode(Int.self, forKey: .readSeq)
+        self.messageCount = try c.decode(Int.self, forKey: .messageCount)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.usage = try c.decodeIfPresent(SessionUsage.self, forKey: .usage)
+        self.pinned = try c.decode(Bool.self, forKey: .pinned)
+        // Transient fields default to neutral values on load.
+        self.currentToolName = nil
+        self.currentToolHeadline = nil
+        self.activity = .none
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(deviceId, forKey: .deviceId)
+        try c.encode(deviceName, forKey: .deviceName)
+        try c.encode(agent, forKey: .agent)
+        try c.encodeIfPresent(model, forKey: .model)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(autoTitle, forKey: .autoTitle)
+        try c.encode(state, forKey: .state)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(lastSeq, forKey: .lastSeq)
+        try c.encode(readSeq, forKey: .readSeq)
+        try c.encode(messageCount, forKey: .messageCount)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(usage, forKey: .usage)
+        try c.encode(pinned, forKey: .pinned)
+    }
 }
 
 /// Coarse-grained "what is this session doing right now?" enum that
@@ -71,6 +166,37 @@ final class SessionStore {
     var navigateToSession: String?
     var streamingContent: [String: String] = [:]
 
+    /// Disk-backed snapshot of session metadata + previews. Hydrated
+    /// synchronously on init so cold-launch users see a populated session
+    /// list before the WS reconnects; overwritten by authoritative data
+    /// once `session_list` arrives.
+    let persistentCache = PersistentSessionCache()
+
+    init() {
+        guard let snapshot = persistentCache.load() else { return }
+        self.sessions = snapshot.sessions
+        self.sessionPreviews = snapshot.previews
+        // Rebuild derived state from the restored sessions.
+        for (id, s) in snapshot.sessions {
+            sessionModes[id] = s.mode
+            if let u = s.usage { sessionUsage[id] = u }
+            if s.pinned { pinnedSessions.insert(id) }
+        }
+    }
+
+    /// Schedules a debounced write of the current observable state to
+    /// disk. Called after any mutation that changes a card-visible field.
+    /// Safe to call frequently — the cache coalesces.
+    fileprivate func scheduleSave() {
+        persistentCache.save(.init(sessions: sessions, previews: sessionPreviews))
+    }
+
+    /// Force-flush the cache. Called from app background / logout so the
+    /// latest state survives termination.
+    func flushCache() {
+        persistentCache.flushNow()
+    }
+
     /// Sessions for which a `create_session` / `fork_session` /
     /// `import_session` has been sent but no `session_created` has
     /// arrived yet. Used to render an optimistic "Starting session…"
@@ -102,13 +228,33 @@ final class SessionStore {
     /// spinner, State-B top spinner).
     var loadingSessions: Set<String> = []
 
+    /// Sessions whose most recent `request_session_messages` timed out
+    /// without a `replay_batch` arriving. Views can show a "couldn't
+    /// load — tap to retry" affordance for entries in this set.
+    /// Cleared automatically on the next successful batch or retry.
+    var loadFailedSessions: Set<String> = []
+
     func setLoading(_ id: String, _ loading: Bool) {
-        if loading { loadingSessions.insert(id) }
-        else { loadingSessions.remove(id) }
+        if loading {
+            loadingSessions.insert(id)
+            // Clear any previous failure marker — we're retrying now.
+            loadFailedSessions.remove(id)
+        } else {
+            loadingSessions.remove(id)
+        }
+    }
+
+    func markLoadFailed(_ id: String) {
+        loadFailedSessions.insert(id)
+        loadingSessions.remove(id)
     }
 
     func isLoading(_ id: String) -> Bool {
         loadingSessions.contains(id)
+    }
+
+    func didLoadFail(_ id: String) -> Bool {
+        loadFailedSessions.contains(id)
     }
 
     // MARK: - Computed unread (seq-derived)
@@ -127,6 +273,57 @@ final class SessionStore {
         unreadCount(id) > 0
     }
 
+    // MARK: - Test-Compat Shims
+    //
+    // Earlier versions of the store kept an explicit counter-based
+    // unread map (`unreadCounts`) and helpers like `incrementUnread`
+    // / `clearUnread`. The seq-based model replaced those, but the
+    // existing `SessionStoreTests` suite still drives the legacy
+    // surface. We keep these shims so the test suite stays
+    // authoritative without rewriting every test, while production
+    // code continues to use the seq-based API directly.
+
+    /// Counter view derived from `lastSeq − readSeq`.
+    var unreadCounts: [String: Int] {
+        var out: [String: Int] = [:]
+        for (id, s) in sessions {
+            let c = max(0, s.lastSeq - s.readSeq)
+            if c > 0 { out[id] = c }
+        }
+        return out
+    }
+
+    /// Simulate "a new message arrived" by bumping `lastSeq` on the
+    /// session. Mirrors what an incoming router event would do.
+    func incrementUnread(_ id: String) {
+        guard var s = sessions[id] else { return }
+        s.lastSeq += 1
+        sessions[id] = s
+    }
+
+    /// Mark every message read up to `lastSeq`.
+    func clearUnread(_ id: String) {
+        guard var s = sessions[id] else { return }
+        s.readSeq = s.lastSeq
+        sessions[id] = s
+    }
+
+    /// Update the session's display title (preserves the legacy
+    /// setter name used by tests; production code uses
+    /// `upsertSession` with a new digest). The `autoTitle` flag is
+    /// honored by routing the title into `autoTitle` instead of
+    /// `title` when the caller is signalling a tentacle-generated
+    /// name.
+    func setSessionTitle(_ id: String, title: String, autoTitle: Bool = false) {
+        guard var s = sessions[id] else { return }
+        if autoTitle {
+            s.autoTitle = title
+        } else {
+            s.title = title
+        }
+        sessions[id] = s
+    }
+
     // MARK: - Computed
 
     /// Sessions sorted: pinned first, then by effective timestamp
@@ -137,17 +334,23 @@ final class SessionStore {
     /// relaunch, when their in-memory preview entry hasn't been
     /// seeded yet.
     var sortedSessions: [SessionInfo] {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        func effectiveTs(_ s: SessionInfo) -> String {
-            if let t = sessionPreviews[s.id]?.timestamp, !t.isEmpty { return t }
-            return iso.string(from: s.createdAt)
+        // Resolve each session's effective timestamp to a Date so we
+        // can compare across mixed "Z" vs "+00:00" timestamp shapes
+        // without string-compare bugs. Falls back to createdAt when
+        // the preview hasn't been seeded yet.
+        func effectiveDate(_ s: SessionInfo) -> Date {
+            if let t = sessionPreviews[s.id]?.timestamp,
+               !t.isEmpty,
+               let d = ISO8601.parse(t) {
+                return d
+            }
+            return s.createdAt
         }
         return sessions.values.sorted { a, b in
             if a.pinned != b.pinned { return a.pinned }
-            let aTs = effectiveTs(a)
-            let bTs = effectiveTs(b)
-            if aTs != bTs { return bTs < aTs }
+            let aDate = effectiveDate(a)
+            let bDate = effectiveDate(b)
+            if aDate != bDate { return aDate > bDate }
             return a.createdAt > b.createdAt
         }
     }
@@ -159,9 +362,7 @@ final class SessionStore {
     // MARK: - Session CRUD
 
     func upsertSession(_ digest: SessionDigest, deviceId: String, deviceName: String) {
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = dateFormatter.date(from: digest.createdAt) ?? Date()
+        let date = ISO8601.parse(digest.createdAt) ?? Date()
 
         let mode = digest.mode
         let pinned = digest.pinned ?? pinnedSessions.contains(digest.id)
@@ -224,6 +425,7 @@ final class SessionStore {
         }
         // Unread is computed on demand from lastSeq − readSeq; no
         // separate state to seed here.
+        scheduleSave()
     }
 
     func removeSession(_ id: String) {
@@ -234,6 +436,7 @@ final class SessionStore {
         sessionPreviews.removeValue(forKey: id)
         drafts.removeValue(forKey: id)
         streamingContent.removeValue(forKey: id)
+        scheduleSave()
     }
 
     // MARK: - Session Properties
@@ -241,15 +444,18 @@ final class SessionStore {
     func setMode(_ id: String, _ mode: SessionMode) {
         sessionModes[id] = mode
         sessions[id]?.mode = mode
+        scheduleSave()
     }
 
     func setModel(_ id: String, _ model: String) {
         sessions[id]?.model = model
+        scheduleSave()
     }
 
     func setTitle(_ id: String, title: String?, autoTitle: String?) {
         if let title { sessions[id]?.title = title.isEmpty ? nil : title }
         if let autoTitle { sessions[id]?.autoTitle = autoTitle.isEmpty ? nil : autoTitle }
+        scheduleSave()
     }
 
     func setState(_ id: String, _ state: SessionState) {
@@ -262,6 +468,7 @@ final class SessionStore {
             sessions[id]?.currentToolHeadline = nil
             sessions[id]?.activity = .none
         }
+        scheduleSave()
     }
 
     /// Record the tool whose `tool_start` event just arrived. The icon
@@ -307,6 +514,7 @@ final class SessionStore {
     func setUsage(_ id: String, _ usage: SessionUsage) {
         sessionUsage[id] = usage
         sessions[id]?.usage = usage
+        scheduleSave()
     }
 
     // MARK: - Pin
@@ -318,6 +526,7 @@ final class SessionStore {
         } else {
             pinnedSessions.remove(id)
         }
+        scheduleSave()
     }
 
     // MARK: - Read / unread (seq-derived)
@@ -336,6 +545,7 @@ final class SessionStore {
         if clamped > s.readSeq {
             s.readSeq = clamped
             sessions[id] = s
+            scheduleSave()
         }
     }
 
@@ -349,6 +559,7 @@ final class SessionStore {
         if seq > s.lastSeq {
             s.lastSeq = seq
             sessions[id] = s
+            scheduleSave()
         }
     }
 
@@ -356,6 +567,7 @@ final class SessionStore {
 
     func setPreview(_ id: String, text: String, type: String = "message", timestamp: String = "") {
         sessionPreviews[id] = SessionPreview(text: text, type: type, timestamp: timestamp)
+        scheduleSave()
     }
 
     func setDraft(_ id: String, _ text: String) {
@@ -368,24 +580,101 @@ final class SessionStore {
 
     // MARK: - Streaming Deltas
 
+    /// Per-session pending text buffered between flushes. Holds bytes
+    /// that have arrived from the relay but haven't yet been promoted
+    /// into the observed `streamingContent` dict (which is what views
+    /// read).
+    private var pendingDeltaBuffer: [String: String] = [:]
+    /// Per-session debounce task. Each `appendDelta` cancels the
+    /// previous task and schedules a fresh one.
+    private var pendingDeltaTasks: [String: Task<Void, Never>] = [:]
+    /// Window between buffer-write and observed-state-update. Tuned
+    /// so each session re-renders its chat at most ~4 times/sec
+    /// during streaming. Captures the full speed of the underlying
+    /// `agent_message_delta` firehose without making the UI re-parse
+    /// and re-layout per token.
+    private static let deltaCoalesceWindow: Duration = .milliseconds(250)
+
+    /// Append streaming text from an `agent_message_delta` event.
+    ///
+    /// Coalesces bursts: bytes go into `pendingDeltaBuffer` immediately
+    /// but `streamingContent` (the observed state every chat view
+    /// reads) only ticks after a 250 ms quiet window. With the
+    /// previous unbatched implementation, a fast burst of 30–50
+    /// deltas/sec produced 30–50 full chat re-renders per second on
+    /// the same growing string. Now the views see roughly four
+    /// updates per second instead, regardless of how fast the agent
+    /// emits tokens. Final-turn `flushDelta` empties the buffer
+    /// cleanly so no bytes are lost across the idle boundary.
     func appendDelta(_ id: String, _ content: String) {
-        streamingContent[id, default: ""] += content
+        pendingDeltaBuffer[id, default: ""] += content
+        pendingDeltaTasks[id]?.cancel()
+        pendingDeltaTasks[id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.deltaCoalesceWindow)
+            guard !Task.isCancelled, let self else { return }
+            self.promotePendingDelta(id)
+        }
+    }
+
+    /// Promote any buffered bytes for `id` into the observable
+    /// `streamingContent` so views re-render once with the new
+    /// suffix appended. Called by the debounce task and again
+    /// synchronously from `flushDelta` so a finalised turn always
+    /// shows its complete pre-idle text right up until the bubble
+    /// swaps to the canonical agent_message rendering.
+    ///
+    /// Also drives the session-card activity row: each promotion
+    /// updates the `.agentText(running)` snapshot with the FULL
+    /// accumulated content, not just the latest chunk. Doing it here
+    /// (instead of per-event in MessageRouter) means the card
+    /// preview is debounced for free — it ticks at ~4 Hz instead of
+    /// per-delta — AND it shows the entire running reply so far
+    /// instead of just the last chunk.
+    private func promotePendingDelta(_ id: String) {
+        guard let buffered = pendingDeltaBuffer.removeValue(forKey: id),
+              !buffered.isEmpty else { return }
+        let running = (streamingContent[id] ?? "") + buffered
+        streamingContent[id] = running
+        // Refresh the activity preview with the accumulated text.
+        // Trimmed/single-line conversion is done by the card view
+        // (`collapseWhitespace`) on read, so we keep the raw blob
+        // here. Guard the activity write with the same "session
+        // must be active" check `setAgentTextActivity` enforces.
+        if sessions[id]?.state == .active {
+            sessions[id]?.activity = .agentText(running)
+        }
     }
 
     /// Flush and return accumulated delta content, or nil if none.
     @discardableResult
     func flushDelta(_ id: String) -> String? {
-        streamingContent.removeValue(forKey: id)
+        // Cancel any in-flight debounce so the pending bytes don't
+        // land AFTER the flush and resurrect a stale streaming
+        // bubble. Then drain the buffer synchronously so callers
+        // see a fully-up-to-date final blob before removal.
+        pendingDeltaTasks.removeValue(forKey: id)?.cancel()
+        promotePendingDelta(id)
+        return streamingContent.removeValue(forKey: id)
+    }
+
+    /// Test-only synchronous promotion of pending deltas. Production
+    /// code drives this via the debounce task (~250ms) or `flushDelta`
+    /// at turn end. Exposed so tests can deterministically observe
+    /// the buffer landing in `streamingContent` without sleeping.
+    func promotePendingDeltaForTesting(_ id: String) {
+        promotePendingDelta(id)
     }
 
     // MARK: - Reset
 
     func clearTransientState() {
+        cancelAllDeltaTasks()
         streamingContent.removeAll()
         sessionUsage.removeAll()
     }
 
     func reset() {
+        cancelAllDeltaTasks()
         sessions.removeAll()
         activeSessionId = nil
         pinnedSessions.removeAll()
@@ -396,7 +685,18 @@ final class SessionStore {
         navigateToSession = nil
         streamingContent.removeAll()
         loadingSessions.removeAll()
+        loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
+        persistentCache.clear()
+    }
+
+    /// Cancel every in-flight delta debounce + drop buffered bytes.
+    /// Called from reset paths so we don't leak Tasks that wake up
+    /// after the session has been torn down.
+    private func cancelAllDeltaTasks() {
+        for (_, task) in pendingDeltaTasks { task.cancel() }
+        pendingDeltaTasks.removeAll()
+        pendingDeltaBuffer.removeAll()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)
@@ -505,6 +805,7 @@ final class SessionStore {
         if session.pinned {
             pinnedSessions.insert(session.id)
         }
+        scheduleSave()
     }
 
     /// Sync sessions from a parsed session list.

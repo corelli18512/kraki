@@ -72,6 +72,13 @@ final class AppState {
     /// the brand header.
     var hasCompletedInitialConnect: Bool = false
 
+    /// True when we have credentials stored in the keychain that
+    /// haven't been explicitly cleared. Set by `AuthManager` on
+    /// successful sign-in and cleared on sign-out. Lets the UI keep
+    /// the user "signed in" across cold launches before the WS
+    /// handshake completes.
+    var hasStoredCredentials: Bool = false
+
     /// True from the moment the user taps "Sign in with GitHub" until
     /// `ASWebAuthenticationSession`'s completion handler fires (success,
     /// error, or user cancel). Drives the LoginView's spinner so the
@@ -145,6 +152,12 @@ final class AppState {
         self.messageProvider = provider
         self.pushManager = push
         self.preferencesManager = prefs
+
+        // Mirror the persisted credential state from disk so cold launch
+        // with stored creds skips LoginView and lands directly on the
+        // session list, per RootView's gating contract. AuthManager has
+        // already loaded `storedDeviceId` from UserDefaults in its init.
+        self.hasStoredCredentials = (auth.storedDeviceId != nil)
     }
 
     func connect() {
@@ -212,6 +225,19 @@ final class AppState {
         guard hasCompletedInitialConnect else { return }
         guard connectionStatus != .connected else { return }
         wsClient?.resetBackoffAndReconnect()
+    }
+
+    /// Called when the app moves to background. Close the WS so the
+    /// relay marks this device offline immediately and starts routing
+    /// to APNs. Otherwise the relay would skip APNs for ~30s while it
+    /// waits for a pong from the dead socket.
+    ///
+    /// Also drains the persistent message-cache writer so messages
+    /// that arrived in the burst right before backgrounding aren't
+    /// lost if iOS suspends the process before the I/O queue empties.
+    func handleBackground() {
+        messageStore.flushCache()
+        wsClient?.disconnect()
     }
 
     /// Called by the WS client whenever it bumps its retry counter.

@@ -8,6 +8,21 @@ final class MessageStoreTests: XCTestCase {
     override func setUp() {
         super.setUp()
         store = MessageStore()
+        // Reset clears any messages left over from prior runs in the
+        // shared on-disk cache (ApplicationSupport/MessageCache/),
+        // which would otherwise hydrate into the new store on first
+        // access and bleed state across test cases.
+        store.reset()
+    }
+
+    override func tearDown() {
+        // Also clear on tearDown so no other test class accidentally
+        // sees this suite's messages on disk during a parallel /
+        // shuffled run.
+        store?.reset()
+        store?.flushCache()
+        store = nil
+        super.tearDown()
     }
 
     // MARK: - Helpers

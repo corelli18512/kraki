@@ -3,8 +3,17 @@ import XCTest
 
 // MARK: - Test Helpers
 
+/// JSONSerialization with a force-try in test fixtures is intentional —
+/// the inputs are static literals controlled by the test author, not
+/// arbitrary user data. Any failure here means the test author wrote a
+/// non-JSON-encodable dictionary, which should crash the test loudly
+/// rather than mask itself as `nil`.
 private func makeJSON(_ dict: [String: Any]) -> Data {
-    try! JSONSerialization.data(withJSONObject: dict)
+    do {
+        return try JSONSerialization.data(withJSONObject: dict)
+    } catch {
+        fatalError("makeJSON: test fixture is not JSON-encodable: \(error)")
+    }
 }
 
 private func makeEnvelopeJSON(

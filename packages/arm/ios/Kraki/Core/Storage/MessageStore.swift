@@ -79,7 +79,7 @@ final class MessageStore {
         let existing = messages[sessionId] ?? []
         let existingSeqs = Set(existing.map(\.seq))
         let merged = (existing + persisted.filter { !existingSeqs.contains($0.seq) })
-            .sorted { $0.seq < $1.seq }
+            .sorted { sortKey($0) < sortKey($1) }
         messages[sessionId] = merged
         return merged
     }
@@ -107,18 +107,31 @@ final class MessageStore {
         }
         hydrateFromDisk(sessionId)
         var list = messages[sessionId] ?? []
-        // Deduplicate: replace existing message with same seq, or append
-        if let idx = list.firstIndex(where: { $0.seq == message.seq }) {
+        // pending_input is identified by `clientId`, not `seq` (every
+        // pending shares seq=0). Multiple in-flight pendings coexist
+        // until each is resolved by its own ack — just append.
+        if message.type == "pending_input" {
+            list.append(message)
+        } else if let idx = list.firstIndex(where: { $0.seq == message.seq && $0.type == message.type }) {
+            // Deduplicate persistent messages by [type, seq]. Defends
+            // against relay re-broadcasts (e.g. reconnect mid-batch).
             list[idx] = message
         } else {
             list.append(message)
-            list.sort { $0.seq < $1.seq }
+            list.sort { sortKey($0) < sortKey($1) }
         }
         messages[sessionId] = list
 
         if shouldPersist(message) {
             persistentCache.appendMessage(sessionId, message)
         }
+    }
+
+    /// Sort key for chat messages. Real messages sort by seq;
+    /// `pending_input` (seq=0) sorts to the very end so optimistic
+    /// placeholders always appear after the latest server-acked turn.
+    private func sortKey(_ msg: ChatMessage) -> Int {
+        msg.type == "pending_input" ? Int.max : msg.seq
     }
 
     /// Prepend older messages (from replay), deduplicating by seq.
@@ -129,7 +142,9 @@ final class MessageStore {
         let unique = older.filter { !existingSeqs.contains($0.seq) }
         guard !unique.isEmpty else { return }
         existing.append(contentsOf: unique)
-        existing.sort { $0.seq < $1.seq }
+        // Use sortKey so pending_input (seq=0) is pinned at the tail
+        // rather than sorted before replayed history.
+        existing.sort { sortKey($0) < sortKey($1) }
         messages[sessionId] = existing
 
         let toPersist = unique.filter(shouldPersist)
@@ -192,21 +207,51 @@ final class MessageStore {
         pendingQuestions = pendingQuestions.filter { $0.value.sessionId != sessionId }
     }
 
-    /// Replace pending_input with a real user_message after server confirms.
-    func resolvePendingInput(_ sessionId: String, seq: Int, content: String) {
-        guard var list = messages[sessionId] else { return }
-        guard let idx = list.firstIndex(where: { $0.type == "pending_input" }) else { return }
+    /// Replace a pending_input with a real user_message after the
+    /// server confirms. Matching is by `clientId` when present, with
+    /// a content-match fallback for legacy clients/tentacles. Returns
+    /// `true` if a pending was resolved; the caller can then skip
+    /// appending the broadcast (which would otherwise duplicate it).
+    @discardableResult
+    func resolvePendingInput(_ sessionId: String,
+                             seq: Int,
+                             clientId: String?,
+                             content: String?) -> Bool {
+        guard var list = messages[sessionId] else { return false }
+        // Identify the right pending:
+        //   1. With clientId: exact match (new clients ↔ new tentacle).
+        //   2. Without clientId, with content: first pending whose
+        //      local text equals the server's content. Handles
+        //      "new client → old tentacle" without inappropriately
+        //      claiming user_messages broadcast by other devices.
+        //   3. Without either: no resolve. Caller will append.
+        let idx: Int?
+        if let clientId {
+            idx = list.firstIndex(where: { $0.type == "pending_input" && $0.clientId == clientId })
+        } else if let content {
+            idx = list.firstIndex(where: { $0.type == "pending_input" && $0.content == content })
+        } else {
+            idx = nil
+        }
+        guard let idx else { return false }
 
         let pending = list[idx]
+        var newPayload = pending.payload
+        if let content { newPayload["content"] = AnyCodable(content) }
+        newPayload.removeValue(forKey: "clientId")
         let resolved = ChatMessage(
             type: "user_message",
             seq: seq,
             sessionId: sessionId,
-            deviceId: "",
+            deviceId: pending.deviceId,
             timestamp: pending.timestamp,
-            payload: pending.payload
+            payload: newPayload
         )
         list[idx] = resolved
+        // Re-sort: the resolved message got its server seq and should
+        // slot into position relative to other persistent messages.
+        // Remaining pendings (still seq=0) stay at the tail via sortKey.
+        list.sort { sortKey($0) < sortKey($1) }
         messages[sessionId] = list
 
         // Persist the resolved user_message. Without this, iOS-sent
@@ -217,6 +262,7 @@ final class MessageStore {
         if shouldPersist(resolved) {
             persistentCache.appendMessage(sessionId, resolved)
         }
+        return true
     }
 
     /// Stamp a resolution on the matching permission message in the message list.
@@ -300,21 +346,29 @@ final class MessageStore {
         persistentCache.deleteAll()
     }
 
+    /// Synchronously flush any in-flight disk writes. Called from
+    /// `AppState.handleBackground()` so messages persisted during a
+    /// burst right before backgrounding aren't lost if iOS suspends
+    /// the process while writes are still draining on the I/O queue.
+    func flushCache() {
+        persistentCache.drainSync()
+    }
+
     // MARK: - Convenience Methods (called by MessageRouter)
 
     /// Append a message decoded from raw JSON data.
     func appendMessage(_ sessionId: String, json: Data) {
-        guard let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let msg = ProducerMessageDecoder.decode(json) else { return }
-        _ = dict // suppress unused warning
+        guard let msg = ProducerMessageDecoder.decode(json) else { return }
         appendMessage(sessionId, msg)
     }
 
     /// Resolve pending input by seq only (content comes from the existing pending message).
     func resolvePendingInput(_ sessionId: String, seq: Int) {
+        // Legacy single-arg overload kept for any out-of-tree callers.
+        // Prefer the clientId-aware version above.
         guard let list = messages[sessionId],
               let pending = list.first(where: { $0.type == "pending_input" }) else { return }
-        resolvePendingInput(sessionId, seq: seq, content: pending.content ?? "")
+        _ = resolvePendingInput(sessionId, seq: seq, clientId: pending.clientId, content: pending.content)
     }
 
     /// Check if a session has any pending_input messages.

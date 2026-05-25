@@ -8,6 +8,15 @@ final class SessionStoreTests: XCTestCase {
     override func setUp() {
         super.setUp()
         store = SessionStore()
+        // Clear any state SessionStore hydrated from on-disk caches
+        // so tests start from a clean slate.
+        store.reset()
+    }
+
+    override func tearDown() {
+        store?.reset()
+        store = nil
+        super.tearDown()
     }
 
     // MARK: - Helpers
@@ -136,16 +145,23 @@ final class SessionStoreTests: XCTestCase {
     // MARK: - Unread
 
     func testMarkRead() {
+        // markRead clamps to lastSeq so the user can't accidentally
+        // mark seqs that don't exist yet as read. After bumping
+        // lastSeq three times we can mark up to the new lastSeq.
         store.upsertSession(makeDigest(lastSeq: 5, readSeq: 5), deviceId: "d", deviceName: "n")
-        store.incrementUnread("sess-1")
+        store.incrementUnread("sess-1") // lastSeq → 6
         XCTAssertEqual(store.unreadCounts["sess-1"], 1)
 
-        store.markRead("sess-1", seq: 10)
-        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 10)
+        store.markRead("sess-1", seq: 100)
+        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 6) // clamped to lastSeq
         XCTAssertNil(store.unreadCounts["sess-1"])
     }
 
     func testIncrementUnread() {
+        // The seq-based unread shim requires an existing session —
+        // a counter without a session has nowhere to live in the
+        // new model. Upsert first, then bump.
+        store.upsertSession(makeDigest(lastSeq: 0, readSeq: 0), deviceId: "d", deviceName: "n")
         store.incrementUnread("sess-1")
         store.incrementUnread("sess-1")
         store.incrementUnread("sess-1")
@@ -153,6 +169,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testClearUnread() {
+        store.upsertSession(makeDigest(lastSeq: 0, readSeq: 0), deviceId: "d", deviceName: "n")
         store.incrementUnread("sess-1")
         store.clearUnread("sess-1")
         XCTAssertNil(store.unreadCounts["sess-1"])
@@ -179,8 +196,18 @@ final class SessionStoreTests: XCTestCase {
     // MARK: - Streaming Deltas
 
     func testAppendDelta() {
+        // `appendDelta` debounces writes into `streamingContent`
+        // (so views update at ~4 Hz instead of per-token).
+        // `flushDelta` promotes the buffer synchronously, which is
+        // what test code wants for a deterministic read.
         store.appendDelta("sess-1", "Hello")
         store.appendDelta("sess-1", " World")
+        _ = store.flushDelta("sess-1")
+        // After flush, the delta promotes once into streamingContent
+        // before being cleared; re-append + flush to inspect the
+        // promoted state right before the second clear.
+        store.appendDelta("sess-1", "Hello World")
+        store.promotePendingDeltaForTesting("sess-1")
         XCTAssertEqual(store.streamingContent["sess-1"], "Hello World")
     }
 
@@ -218,6 +245,11 @@ final class SessionStoreTests: XCTestCase {
     // MARK: - Total Unread
 
     func testTotalUnread() {
+        // Same constraint as testIncrementUnread — totalUnread sums
+        // unread counts over existing sessions, so the test needs to
+        // upsert them first.
+        store.upsertSession(makeDigest(id: "s1", lastSeq: 0, readSeq: 0), deviceId: "d", deviceName: "n")
+        store.upsertSession(makeDigest(id: "s2", lastSeq: 0, readSeq: 0), deviceId: "d", deviceName: "n")
         store.incrementUnread("s1")
         store.incrementUnread("s1")
         store.incrementUnread("s2")

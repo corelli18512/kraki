@@ -7,6 +7,118 @@
 
 import SwiftUI
 
+/// Module-level cache for parsed markdown `AttributedString` values.
+///
+/// **Why this exists.** Foundation's `AttributedString(markdown:)` parser
+/// is a couple of orders of magnitude slower than the rest of the
+/// SwiftUI text path on real iPhones. Without caching, every layout
+/// pass through `MessageBubbleView.body` re-parses the same finalised
+/// message content from scratch. On a long agent reply (a 20 KB log
+/// dump or a code paste) that's tens of milliseconds per render, and
+/// SwiftUI re-renders the bubble many times as the scroll view
+/// negotiates content height — symptom: tapping into a session with
+/// any long message immediately spikes CPU to 100 %.
+///
+/// Finalised message content never changes, so we parse once on
+/// first observation and serve a stored `NSAttributedString` (the
+/// reference-typed counterpart that `NSCache` can hold) on every
+/// re-render after that. `NSCache` auto-purges under memory pressure
+/// — no manual eviction needed.
+///
+/// Keyed by a stable string composed of the message id + content
+/// length + a Swift `String.hash`. The hash collapses unique content
+/// even when message ids collide (e.g., the synthetic streaming-turn
+/// placeholder reuses ids across turns).
+private let markdownCache: NSCache<NSString, NSAttributedString> = {
+    let cache = NSCache<NSString, NSAttributedString>()
+    cache.name = "kraki.MarkdownCache"
+    cache.countLimit = 512
+    return cache
+}()
+
+/// Returns parsed markdown for `text` keyed under `cacheKey`. First
+/// call parses; subsequent calls are O(1) dict lookups. See the doc on
+/// `markdownCache` for the rationale.
+private func cachedMarkdown(text: String, cacheKey: String) -> AttributedString {
+    let key = cacheKey as NSString
+    if let cached = markdownCache.object(forKey: key) {
+        return AttributedString(cached)
+    }
+    let parsed = parseMarkdownOnce(text)
+    markdownCache.setObject(NSAttributedString(parsed), forKey: key)
+    return parsed
+}
+
+/// Single-shot markdown parse over the whole text.
+///
+/// The previous implementation split by newline and invoked
+/// `AttributedString(markdown:)` once per line in order to support
+/// ATX headings (Foundation's inline-only mode doesn't recognise
+/// `# Heading` as a block construct). For long messages this meant
+/// hundreds of parser invocations per call. The parser has a
+/// non-trivial setup cost per invocation, so the line-by-line loop
+/// dwarfs the actual text content in CPU time.
+///
+/// New strategy: hand the whole text to the parser ONCE with
+/// `.inlineOnlyPreservingWhitespace` (which keeps newlines intact),
+/// then run a single linear post-pass over the original `text` to
+/// find lines that start with `^#{1,6} ` and upgrade their
+/// `AttributedString` ranges to the corresponding heading font.
+/// One parser invocation + O(text) post-pass instead of O(lines)
+/// parser invocations.
+private func parseMarkdownOnce(_ text: String) -> AttributedString {
+    var result: AttributedString = (try? AttributedString(
+        markdown: text,
+        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+    )) ?? AttributedString(text)
+
+    // Heading post-pass. Walk the original text line-by-line so we
+    // can map a line's UTF-16 offset range back into the parsed
+    // `AttributedString` and overwrite the font on that span. Cheap
+    // — purely byte arithmetic, no extra parser invocations.
+    var cursor = text.startIndex
+    while cursor < text.endIndex {
+        let lineEnd = text[cursor...].firstIndex(of: "\n") ?? text.endIndex
+        let line = text[cursor..<lineEnd]
+        if let font = headingFont(for: line) {
+            // Find the parsed range that corresponds to this slice
+            // of the original text. The inline-only parser preserves
+            // text length 1:1 with the source (except for inline
+            // markers like `**…**` which are removed). To stay
+            // robust we locate the heading by the literal substring
+            // it contains after stripping the leading `#`s — that
+            // substring survives parsing unchanged.
+            let stripped = line.drop(while: { $0 == "#" }).drop(while: { $0 == " " })
+            if !stripped.isEmpty,
+               let range = result.range(of: String(stripped)) {
+                result[range].font = font
+            }
+        }
+        if lineEnd == text.endIndex { break }
+        cursor = text.index(after: lineEnd)
+    }
+    return result
+}
+
+/// Maps an ATX heading line to the SwiftUI font to apply, or nil if
+/// the line isn't a heading.
+private func headingFont(for line: Substring) -> Font? {
+    var level = 0
+    for ch in line {
+        if ch == "#", level < 6 { level += 1 } else { break }
+    }
+    guard level > 0 else { return nil }
+    let afterHashes = line.index(line.startIndex, offsetBy: level)
+    guard afterHashes < line.endIndex, line[afterHashes] == " " else { return nil }
+    switch level {
+    case 1: return .title2.bold()
+    case 2: return .title3.bold()
+    case 3: return .headline
+    case 4: return .subheadline.bold()
+    default: return .footnote.bold()
+    }
+}
+
 struct MessageBubbleView: View {
     let message: ChatMessage
     var agent: String = ""
@@ -21,19 +133,35 @@ struct MessageBubbleView: View {
 
     // MARK: - Computed Properties
 
-    private var visibleHistory: [ChatMessage] {
-        thinkingHistory.filter { $0.type != "active" }
+    /// Single pass through `thinkingHistory` that classifies entries
+    /// into pre-message / post-message buckets. Repeated calls to
+    /// `preMessageHistory` / `postMessageActivity` (which happen
+    /// across many view-body computations on tool-heavy turns) all
+    /// reuse the same single filter pass instead of re-iterating
+    /// the full history three times per render.
+    private var historySplit: (pre: [ChatMessage], post: [ChatMessage]) {
+        var pre: [ChatMessage] = []
+        var post: [ChatMessage] = []
+        pre.reserveCapacity(thinkingHistory.count)
+        post.reserveCapacity(thinkingHistory.count)
+        for item in thinkingHistory {
+            if item.type == "active" { continue }
+            if item.seq <= message.seq {
+                pre.append(item)
+            } else {
+                post.append(item)
+            }
+        }
+        return (pre, post)
     }
 
     /// Items before the final message (top history section)
-    private var preMessageHistory: [ChatMessage] {
-        visibleHistory.filter { $0.seq <= message.seq }
-    }
+    private var preMessageHistory: [ChatMessage] { historySplit.pre }
 
     /// Items after the final message (bottom tool section)
     private var postMessageActivity: [ChatMessage] {
         guard streamingText == nil || streamingText?.isEmpty == true else { return [] }
-        return visibleHistory.filter { $0.seq > message.seq }
+        return historySplit.post
     }
 
     private var hasHistory: Bool { !preMessageHistory.isEmpty }
@@ -102,7 +230,7 @@ struct MessageBubbleView: View {
 
         case "send_input":
             userBubble(
-                content: message.payload["text"]?.stringValue,
+                content: message.payload["content"]?.stringValue ?? message.payload["text"]?.stringValue,
                 attachments: message.attachments,
                 timestamp: message.timestamp
             )
@@ -174,13 +302,16 @@ struct MessageBubbleView: View {
     private func userBubble(content: String?, attachments: [ImageAttachment]?, timestamp: String?) -> some View {
         let showText = content != nil && content != "[image]"
         return HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.10)
+            Spacer(minLength: WindowSize.width * 0.10)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let content {
-                    Text(markdownContent(content))
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .textSelection(.enabled)
+                    // User messages go through the same cached
+                    // markdown path as agent replies. The cache
+                    // (see `cachedMarkdown` at file top) makes
+                    // long user-pasted content cheap on re-renders
+                    // — first observation parses once, every render
+                    // after that is a dict lookup.
+                    messageBody(content, foreground: .white)
                 }
                 imageGrid(attachments: attachments)
             }
@@ -201,10 +332,15 @@ struct MessageBubbleView: View {
     // MARK: - Pending Input
 
     private var pendingInputBubble: some View {
-        let text = message.payload["text"]?.stringValue
+        // CommandSender writes the text to `payload.content` (matches
+        // the eventual `user_message` shape). Earlier code wrote to
+        // `payload.text` which mismatched and caused the pending
+        // bubble to render blank. Keep a fallback to `text` for any
+        // stale-in-memory placeholders.
+        let text = message.payload["content"]?.stringValue ?? message.payload["text"]?.stringValue
         let showText = text != nil && text != "[image]"
         return HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.10)
+            Spacer(minLength: WindowSize.width * 0.10)
             VStack(alignment: .trailing, spacing: 4) {
                 if showText, let text {
                     Text(text)
@@ -265,8 +401,8 @@ struct MessageBubbleView: View {
                             ForEach(Array(postMessageActivity.enumerated()), id: \.element.id) { _, item in
                                 historyItemView(item)
                             }
-                        } else {
-                            historyItemView(postMessageActivity.last!)
+                        } else if let last = postMessageActivity.last {
+                            historyItemView(last)
                         }
                     }
                 }
@@ -296,7 +432,7 @@ struct MessageBubbleView: View {
                 }
             }
             .tint(agentAccentColor)
-            Spacer(minLength: UIScreen.main.bounds.width * 0.05)
+            Spacer(minLength: WindowSize.width * 0.05)
         }
     }
 
@@ -307,10 +443,7 @@ struct MessageBubbleView: View {
         if let streaming = streamingText, !streaming.isEmpty {
             streamingTextView(streaming)
         } else if let content = message.content, !content.isEmpty {
-            Text(markdownContent(content))
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
+            messageBody(content, foreground: .primary)
         } else {
             TypingDotsView()
         }
@@ -323,10 +456,7 @@ struct MessageBubbleView: View {
         switch item.type {
         case "agent_message":
             if let content = item.content, !content.isEmpty {
-                Text(markdownContent(content))
-                    .font(.subheadline)
-                    .foregroundStyle(.primary.opacity(0.7))
-                    .textSelection(.enabled)
+                messageBody(content, foreground: .primary.opacity(0.7))
             }
         case "tool_start", "tool_complete":
             ToolLineView(message: item)
@@ -417,36 +547,29 @@ struct MessageBubbleView: View {
     }
 
     private func streamingTextView(_ text: String) -> some View {
-        TimelineView(.animation) { timeline in
-            let tokens = streamTokens(text)
-            let now = timeline.date
-            let elapsed = now.timeIntervalSince(batchTimestamp)
-            let totalSolid = min(tokens.count, solidCharCount + Int(elapsed * 30))
-
-            Text(tokens.enumerated().reduce(AttributedString()) { result, pair in
-                let (i, tok) = pair
-                var attr = AttributedString(tok.text)
-                if tok.headingLevel > 0 {
-                    attr.font = streamHeadingFont(level: tok.headingLevel)
-                }
-                if i >= totalSolid {
-                    let fadeIndex = i - totalSolid
-                    let opacity = max(0, min(1, 1.0 - Double(fadeIndex) / 3.0))
-                    attr.foregroundColor = .primary.opacity(opacity)
-                } else {
-                    attr.foregroundColor = .primary
-                }
-                return result + attr
-            })
+        // Plain Text — NO markdown, NO TimelineView, NO per-token
+        // attributed-string rebuild.
+        //
+        // The previous implementation wrapped the streaming view in a
+        // `TimelineView(.animation)` block that rebuilt an
+        // `AttributedString` of every token in the growing text on
+        // every animation frame (60–120 Hz) to drive a per-character
+        // fade-in. That's O(text) per tick × 60 ticks/sec × growing
+        // text length × however often new deltas arrive — by the end
+        // of a long agent reply it dominated the main thread.
+        //
+        // While streaming we now render the running text as a plain
+        // string. When the turn finalises, `messageContent` swaps to
+        // `messageBody(content, …)` which goes through the cached
+        // markdown path and gets proper formatting. The brief moment
+        // between "last delta" and "idle" where the bubble shows
+        // plain text is imperceptible and is well worth the dramatic
+        // CPU savings on long streams.
+        Text(text)
             .font(.subheadline)
+            .foregroundStyle(.primary)
             .textSelection(.enabled)
-            .onChange(of: text.count) { oldCount, newCount in
-                if newCount > oldCount {
-                    solidCharCount = max(0, tokens.count - 3)
-                    batchTimestamp = .now
-                }
-            }
-        }
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Agent Avatar
@@ -520,21 +643,26 @@ struct MessageBubbleView: View {
 
     // MARK: - Answer Bubble
 
+    @ViewBuilder
     private var answerBubble: some View {
-        HStack {
-            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("Answer")
-                    .font(.system(size: 10))
-                    .fontWeight(.medium)
-                    .foregroundStyle(.white.opacity(0.7))
-                Text(message.answer ?? "")
-                    .font(.subheadline)
-                    .foregroundStyle(.white)
+        // Skip rendering entirely if the answer payload is missing or
+        // empty — otherwise we'd show a hollow accent-colored bubble.
+        if let answer = message.answer, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            HStack {
+                Spacer(minLength: WindowSize.width * 0.15)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Answer")
+                        .font(.system(size: 10))
+                        .fontWeight(.medium)
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(answer)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.accentColor.opacity(0.85), in: bubbleShape(isUser: true))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.accentColor.opacity(0.85), in: bubbleShape(isUser: true))
         }
     }
 
@@ -573,7 +701,7 @@ struct MessageBubbleView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(palette.color.opacity(0.1), in: bubbleShape(isUser: false))
-            Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+            Spacer(minLength: WindowSize.width * 0.15)
         }
     }
 
@@ -608,13 +736,13 @@ struct MessageBubbleView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(.secondary.opacity(0.1), in: bubbleShape(isUser: false))
-                Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+                Spacer(minLength: WindowSize.width * 0.15)
             }
 
             // Answer (if provided)
             if let answer = message.answer {
                 HStack {
-                    Spacer(minLength: UIScreen.main.bounds.width * 0.15)
+                    Spacer(minLength: WindowSize.width * 0.15)
                     VStack(alignment: .trailing, spacing: 4) {
                         Text(answer)
                             .font(.subheadline)
@@ -680,54 +808,130 @@ struct MessageBubbleView: View {
         return displayFmt.string(from: date)
     }
 
-    private func markdownContent(_ text: String) -> AttributedString {
-        // SwiftUI's `AttributedString(markdown:)` with `.inlineOnly*`
-        // does not parse block-level constructs like headings, so a
-        // line like "# Title" would render with a literal '#'. Parse
-        // headings line-by-line, applying a font run; everything
-        // else still goes through inline markdown so bold/italic/
-        // links continue to render.
-        var result = AttributedString()
-        let lines = text.components(separatedBy: "\n")
-        for (idx, line) in lines.enumerated() {
-            result.append(renderMarkdownLine(line))
-            if idx < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
-    }
-
-    private func renderMarkdownLine(_ line: String) -> AttributedString {
-        var level = 0
-        for ch in line {
-            if ch == "#", level < 6 { level += 1 } else { break }
-        }
-        if level > 0, level < line.count {
-            let afterHashes = line.index(line.startIndex, offsetBy: level)
-            if line[afterHashes] == " " {
-                let content = line[line.index(after: afterHashes)...]
-                    .drop(while: { $0 == " " })
-                var attr = inlineMarkdown(String(content))
-                let font: Font
-                switch level {
-                case 1: font = .title2.bold()
-                case 2: font = .title3.bold()
-                case 3: font = .headline
-                case 4: font = .subheadline.bold()
-                default: font = .footnote.bold()
+    /// Renders message content with code-block awareness. Splits the text
+    /// into inline segments and fenced ``` code blocks; inline segments go
+    /// through the cached single-shot markdown parser (see
+    /// `cachedMarkdown` / `parseMarkdownOnce`), code blocks render as a
+    /// styled horizontally-scrollable monospace box.
+    @ViewBuilder
+    private func messageBody(_ text: String, foreground: Color) -> some View {
+        let segments = splitMessageBody(text)
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(segments.indices, id: \.self) { i in
+                switch segments[i] {
+                case .inline(let content):
+                    Text(cachedMarkdown(text: content, cacheKey: cacheKey(for: content, suffix: "i\(i)")))
+                        .font(.subheadline)
+                        .foregroundStyle(foreground)
+                        .textSelection(.enabled)
+                case .blockquote(let content):
+                    HStack(alignment: .top, spacing: 8) {
+                        Rectangle()
+                            .fill(foreground.opacity(0.4))
+                            .frame(width: 3)
+                        Text(cachedMarkdown(text: content, cacheKey: cacheKey(for: content, suffix: "q\(i)")))
+                            .font(.subheadline)
+                            .foregroundStyle(foreground.opacity(0.85))
+                            .textSelection(.enabled)
+                            .padding(.vertical, 2)
+                    }
+                    .padding(.leading, 4)
+                case .codeBlock(let language, let code):
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let language, !language.isEmpty {
+                            Text(language)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                                .padding(.bottom, 2)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text(code)
+                                .font(.system(size: 13, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, language == nil ? 8 : 4)
+                                .padding(.bottom, 8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                case .table(let rows, let alignments):
+                    tableView(rows: rows, alignments: alignments, foreground: foreground, segmentIndex: i)
                 }
-                attr.font = font
-                return attr
             }
         }
-        return inlineMarkdown(line)
     }
 
-    private func inlineMarkdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        ))) ?? AttributedString(text)
+    /// Build a stable cache key for a content segment. Combines the
+    /// message id (so two messages with identical text don't collide
+    /// across distinct identities), a position suffix (so multiple
+    /// segments of the same message stay distinct), the content
+    /// length, and the Swift hash of the content. Pure value-typed
+    /// inputs — safe to compute on every render; cheap.
+    private func cacheKey(for content: String, suffix: String) -> String {
+        "\(message.id):\(suffix):\(content.count):\(content.hashValue)"
+    }
+
+    /// Renders a GFM table. Wraps the table in a horizontal ScrollView
+    /// so wide tables don't blow out the bubble; the table itself uses
+    /// a Grid (iOS 16+) for clean column alignment without per-cell
+    /// width math. Each cell's text goes through the cached markdown
+    /// path so inline formatting (bold, italic, links) keeps working.
+    @ViewBuilder
+    private func tableView(rows: [[String]], alignments: [TableAlignment], foreground: Color, segmentIndex: Int) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r].indices, id: \.self) { c in
+                            let cell = rows[r][c]
+                            let alignment = c < alignments.count ? alignments[c] : .leading
+                            Text(cachedMarkdown(
+                                text: cell,
+                                cacheKey: cacheKey(for: cell, suffix: "t\(segmentIndex)r\(r)c\(c)")
+                            ))
+                            .font(.subheadline)
+                            .fontWeight(r == 0 ? .semibold : .regular)
+                            .foregroundStyle(foreground)
+                            .multilineTextAlignment(textAlignment(for: alignment))
+                            .frame(maxWidth: .infinity, alignment: frameAlignment(for: alignment))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                // Header gets a subtle tint to set it
+                                // apart from body rows.
+                                r == 0 ? foreground.opacity(0.08) : Color.clear
+                            )
+                            .overlay(
+                                Rectangle()
+                                    .stroke(foreground.opacity(0.15), lineWidth: 0.5)
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func textAlignment(for alignment: TableAlignment) -> TextAlignment {
+        switch alignment {
+        case .leading:  return .leading
+        case .center:   return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    private func frameAlignment(for alignment: TableAlignment) -> Alignment {
+        switch alignment {
+        case .leading:  return .leading
+        case .center:   return .center
+        case .trailing: return .trailing
+        }
     }
 
     private func agentLabel(_ agent: String) -> String {
@@ -1088,20 +1292,52 @@ private struct DiffBlockView: View {
     let old: String
     let new: String
 
+    @State private var expanded = false
+
+    private static let collapsedLinesPerSide = 60
+
     var body: some View {
         let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let newLines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let limit = expanded ? Int.max : Self.collapsedLinesPerSide
+        let oldVisible = Array(oldLines.prefix(limit))
+        let newVisible = Array(newLines.prefix(limit))
+        let oldHidden = max(0, oldLines.count - oldVisible.count)
+        let newHidden = max(0, newLines.count - newVisible.count)
+
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(oldLines.enumerated()), id: \.offset) { _, line in
+            ForEach(Array(oldVisible.enumerated()), id: \.offset) { _, line in
                 diffLine(prefix: "-", text: line, color: .red)
             }
-            ForEach(Array(newLines.enumerated()), id: \.offset) { _, line in
+            ForEach(Array(newVisible.enumerated()), id: \.offset) { _, line in
                 diffLine(prefix: "+", text: line, color: .green)
+            }
+            if oldHidden > 0 || newHidden > 0 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    Text(expandLabel(oldHidden: oldHidden, newHidden: newHidden))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.08))
+                }
+                .buttonStyle(.plain)
             }
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func expandLabel(oldHidden: Int, newHidden: Int) -> String {
+        if expanded { return "  Collapse" }
+        var pieces: [String] = []
+        if oldHidden > 0 { pieces.append("\(oldHidden) removed") }
+        if newHidden > 0 { pieces.append("\(newHidden) added") }
+        return "  \(pieces.joined(separator: ", ")) — tap to expand"
     }
 
     private func diffLine(prefix: String, text: String, color: Color) -> some View {
@@ -1389,6 +1625,198 @@ private struct TypingDotsView: View {
             }
         }
     }
+}
+
+// MARK: - Message body splitter
+
+private enum MessageBodySegment {
+    case inline(String)
+    case blockquote(String)
+    case codeBlock(language: String?, code: String)
+    /// GitHub-Flavored Markdown table. `rows[0]` is the header row;
+    /// alignments are per-column (length matches `rows[0].count`).
+    /// Stored already-parsed because the table spans multiple lines
+    /// and the splitter has the cleanest view of the syntax — no
+    /// reason to re-tokenise it downstream.
+    case table(rows: [[String]], alignments: [TableAlignment])
+}
+
+enum TableAlignment {
+    case leading, center, trailing
+}
+
+/// Splits a message body into inline text, blockquote, fenced
+/// code-block, and GFM table segments. Blockquote lines start with
+/// `> `. Code blocks are fenced with triple backticks. Tables follow
+/// the GFM shape: a header row (`| a | b |`), a separator row
+/// (`| --- | :-: |`) with optional `:` alignment markers, and one or
+/// more body rows. Anything that doesn't match falls through to
+/// inline markdown.
+private func splitMessageBody(_ text: String) -> [MessageBodySegment] {
+    var segments: [MessageBodySegment] = []
+    var inlineBuffer: [String] = []
+    var quoteBuffer: [String] = []
+    var codeBuffer: [String] = []
+    var codeLanguage: String?
+    var inCodeBlock = false
+
+    func flushInline() {
+        if !inlineBuffer.isEmpty {
+            segments.append(.inline(inlineBuffer.joined(separator: "\n")))
+            inlineBuffer.removeAll()
+        }
+    }
+    func flushQuote() {
+        if !quoteBuffer.isEmpty {
+            segments.append(.blockquote(quoteBuffer.joined(separator: "\n")))
+            quoteBuffer.removeAll()
+        }
+    }
+
+    let lines = text.components(separatedBy: "\n")
+    var i = 0
+    while i < lines.count {
+        let line = lines[i]
+
+        if inCodeBlock {
+            if line.hasPrefix("```") {
+                segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
+                codeBuffer.removeAll()
+                codeLanguage = nil
+                inCodeBlock = false
+            } else {
+                codeBuffer.append(line)
+            }
+            i += 1
+            continue
+        }
+
+        if line.hasPrefix("```") {
+            flushInline()
+            flushQuote()
+            let lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            codeLanguage = lang.isEmpty ? nil : lang
+            inCodeBlock = true
+            i += 1
+            continue
+        }
+
+        // Table probe: current line looks like a table row AND the
+        // next line is a valid separator. Both checks are cheap;
+        // most messages won't have any pipes at all and short-circuit
+        // immediately.
+        if looksLikeTableRow(line),
+           i + 1 < lines.count,
+           let alignments = parseTableSeparator(lines[i + 1]) {
+            let header = parseTableRow(line)
+            // Header column count must match the separator column count.
+            if header.count == alignments.count {
+                flushInline()
+                flushQuote()
+                var rows: [[String]] = [header]
+                var j = i + 2
+                while j < lines.count {
+                    let r = lines[j]
+                    if !looksLikeTableRow(r) { break }
+                    let row = parseTableRow(r)
+                    // Pad/truncate so every row has the same column
+                    // count — GFM-compatible.
+                    var padded = row
+                    if padded.count < alignments.count {
+                        padded += Array(repeating: "", count: alignments.count - padded.count)
+                    } else if padded.count > alignments.count {
+                        padded = Array(padded.prefix(alignments.count))
+                    }
+                    rows.append(padded)
+                    j += 1
+                }
+                segments.append(.table(rows: rows, alignments: alignments))
+                i = j
+                continue
+            }
+        }
+
+        // Blockquote: line starts with "> " or is exactly ">".
+        if line.hasPrefix("> ") || line == ">" {
+            flushInline()
+            let content = line == ">" ? "" : String(line.dropFirst(2))
+            quoteBuffer.append(content)
+            i += 1
+            continue
+        }
+
+        // Empty line between quote lines ends the quote group.
+        if line.isEmpty, !quoteBuffer.isEmpty {
+            flushQuote()
+            inlineBuffer.append(line)
+            i += 1
+            continue
+        }
+
+        flushQuote()
+        inlineBuffer.append(line)
+        i += 1
+    }
+
+    if inCodeBlock {
+        segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
+    }
+    flushQuote()
+    flushInline()
+
+    return segments
+}
+
+// MARK: - GFM table helpers
+
+/// Cheap "could this be a table row?" check. Triggers on any line
+/// that contains at least one pipe AND isn't an obvious non-table
+/// (fenced code, blockquote). Real validation happens via
+/// `parseTableSeparator` on the next line; this is just a fast gate
+/// so non-table messages skip the more expensive checks.
+private func looksLikeTableRow(_ line: String) -> Bool {
+    guard line.contains("|") else { return false }
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix("```") || trimmed.hasPrefix("> ") || trimmed == ">" {
+        return false
+    }
+    return true
+}
+
+/// Parses a separator row like `| :--- | :-: | ---: |` into per-
+/// column alignments. Returns nil if the line isn't a valid GFM
+/// separator (any cell that doesn't match `:?-+:?`).
+private func parseTableSeparator(_ line: String) -> [TableAlignment]? {
+    let cells = parseTableRow(line)
+    guard !cells.isEmpty else { return nil }
+    var alignments: [TableAlignment] = []
+    for cell in cells {
+        let trimmed = cell.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        let hasLeftColon = trimmed.hasPrefix(":")
+        let hasRightColon = trimmed.hasSuffix(":")
+        // Strip leading/trailing colons before verifying the dashes.
+        var dashes = trimmed
+        if hasLeftColon { dashes.removeFirst() }
+        if hasRightColon { dashes.removeLast() }
+        guard !dashes.isEmpty, dashes.allSatisfy({ $0 == "-" }) else { return nil }
+        switch (hasLeftColon, hasRightColon) {
+        case (true, true):  alignments.append(.center)
+        case (false, true): alignments.append(.trailing)
+        default:            alignments.append(.leading)
+        }
+    }
+    return alignments
+}
+
+/// Splits one table row into trimmed cells. Strips the optional
+/// leading/trailing pipe wrappers GFM allows.
+private func parseTableRow(_ line: String) -> [String] {
+    var s = Substring(line)
+    if s.first == "|" { s = s.dropFirst() }
+    if s.last == "|" { s = s.dropLast() }
+    return s.split(separator: "|", omittingEmptySubsequences: false)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
 }
 
 #endif

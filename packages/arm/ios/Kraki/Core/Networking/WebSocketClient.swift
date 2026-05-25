@@ -67,6 +67,22 @@ final class WebSocketClient: NSObject {
     private var reconnectAttempts = 0
     private var intentionalClose = false
 
+    // MARK: Outbound retry queue
+    //
+    // Commands sent while the socket is mid-(re)connect or
+    // mid-authenticate would previously vanish silently. We now
+    // buffer them in a small queue (capped + TTL'd) and flush on
+    // reconnect+auth-ready. Only message kinds explicitly marked
+    // `queueOnFailure: true` are queued — auth/handshake frames are
+    // not, since they're inherently tied to a specific socket session.
+    private struct QueuedFrame {
+        let payload: String
+        let queuedAt: Date
+    }
+    private var outboundQueue: [QueuedFrame] = []
+    private static let outboundQueueCap = 200
+    private static let outboundQueueTTL: TimeInterval = 60
+
     // MARK: - Init
 
     init(relayURL: String) {
@@ -117,12 +133,14 @@ final class WebSocketClient: NSObject {
         session?.invalidateAndCancel()
         session = nil
         reconnectAttempts = 0
+        // Clear the outbound queue too — any frames buffered here
+        // were addressed to the now-defunct session/identity and
+        // shouldn't survive an intentional disconnect (e.g. logout
+        // would otherwise replay old user commands at next login).
+        outboundQueue.removeAll()
         state = .disconnected
     }
 
-    /// Switch the relay URL (typically after a `wrong_region` redirect)
-    /// and reconnect. Cleanly tears down the current connection first
-    /// so the reconnect path doesn't auto-retry against the old URL.
     func setRelayURL(_ newURL: String) {
         guard newURL != relayURL else { return }
         relayURL = newURL
@@ -134,6 +152,11 @@ final class WebSocketClient: NSObject {
         session = nil
         reconnectAttempts = 0
         reconnectDelay = Self.reconnectBase
+        // Discard any queued frames bound for the old relay — see
+        // `AppState.redirectToRelay` for the matching encryption
+        // queue clear. Both queues hold ciphertext + envelopes tied
+        // to the OLD device identity, useless at the new relay.
+        outboundQueue.removeAll()
         // Reconnect to the new URL on the next runloop tick so callers
         // can finish updating any state before we touch the network.
         DispatchQueue.main.async { [weak self] in
@@ -141,39 +164,118 @@ final class WebSocketClient: NSObject {
         }
     }
 
-    /// Send an `Encodable` message — gated by `isAuthenticated`.
+    /// Send an `Encodable` message. Treated as a user command, so if
+    /// the socket is mid-(re)connect we queue the payload for retry
+    /// when the connection is back. Drops happen only on encode
+    /// failure or once the queue cap / TTL is exceeded.
     func send<T: Encodable>(_ message: T) {
-        guard state == .connected, isAuthenticated else { return }
         do {
             let data = try JSONEncoder().encode(message)
-            guard let string = String(data: data, encoding: .utf8) else { return }
-            writeString(string)
+            guard let string = String(data: data, encoding: .utf8) else {
+                KLog.d("⚠️ ws send dropped — non-utf8 payload")
+                return
+            }
+            if state == .connected, isAuthenticated {
+                // Encodable user commands are retryable.
+                writeString(string, retryOnSendError: true)
+            } else {
+                enqueueOutbound(string)
+                KLog.d("⏳ ws send queued — state=\(state) authed=\(isAuthenticated)")
+            }
         } catch {
-            // Encoding failure — message is silently dropped.
+            KLog.d("⚠️ ws send dropped — encode failed: \(error)")
         }
     }
 
-    /// Send a raw JSON string without the auth gate (used for the auth handshake).
-    func sendRaw(_ string: String) {
+    /// Send a raw JSON string. `queueOnFailure` opts the frame into
+    /// the retry queue when the socket isn't ready — used for
+    /// encrypted user commands routed via `AppState`. Auth handshake
+    /// frames pass `queueOnFailure: false` because they're tied to
+    /// the current socket session and can't survive a reconnect. The
+    /// same flag also gates retry on `URLSessionWebSocketTask.send`
+    /// completion errors — auth/handshake/ping frames don't get
+    /// requeued because replaying them on a new socket session is
+    /// either nonsensical (ping) or actively wrong (auth challenge
+    /// signed against a stale nonce).
+    func sendRaw(_ string: String, queueOnFailure: Bool = false) {
         guard state == .connected else {
-            KLog.d("⚠️ sendRaw blocked — not connected")
+            if queueOnFailure {
+                enqueueOutbound(string)
+                KLog.d("⏳ sendRaw queued — not connected")
+            } else {
+                KLog.d("⚠️ sendRaw blocked — not connected")
+            }
             return
         }
         KLog.d("📤 \(String(string.prefix(120)))")
-        writeString(string)
+        writeString(string, retryOnSendError: queueOnFailure)
     }
 
     func setAuthenticated(_ value: Bool) {
         isAuthenticated = value
+        if value {
+            flushOutboundQueue()
+        }
+    }
+
+    // MARK: - Outbound Queue helpers
+
+    private func enqueueOutbound(_ payload: String) {
+        // Drop expired entries before considering the cap so the
+        // queue doesn't get poisoned by ancient stale commands.
+        let now = Date()
+        outboundQueue.removeAll { now.timeIntervalSince($0.queuedAt) > Self.outboundQueueTTL }
+        if outboundQueue.count >= Self.outboundQueueCap {
+            // Cap reached — drop the oldest to keep the freshest commands.
+            outboundQueue.removeFirst()
+            KLog.d("⚠️ outbound queue full — dropped oldest")
+        }
+        outboundQueue.append(QueuedFrame(payload: payload, queuedAt: now))
+    }
+
+    private func flushOutboundQueue() {
+        guard !outboundQueue.isEmpty else { return }
+        let now = Date()
+        let queue = outboundQueue
+        outboundQueue.removeAll()
+        KLog.d("🔄 flushing \(queue.count) queued ws frames")
+        for frame in queue {
+            if now.timeIntervalSince(frame.queuedAt) > Self.outboundQueueTTL {
+                KLog.d("⚠️ ws frame TTL expired — dropping")
+                continue
+            }
+            // Frames in this queue are by definition retryable (only
+            // retryable callers — `send<T>` and
+            // `sendRaw(queueOnFailure: true)` — enqueue), so a wire
+            // failure during flush should fall back into the queue
+            // again rather than vanish.
+            writeString(frame.payload, retryOnSendError: true)
+        }
     }
 
     // MARK: - WebSocket I/O
 
-    private func writeString(_ string: String) {
+    /// Send a frame on the wire. `retryOnSendError` decides what
+    /// happens if the URLSession completion fires with an error
+    /// (transient network blip, socket closed mid-write,
+    /// backpressure):
+    ///   - `true`  → re-queue for the reconnect-and-flush path.
+    ///   - `false` → drop with a log line; for non-retryable frames
+    ///                like auth handshake, ping, and other
+    ///                session-bound control plane messages where
+    ///                replay would be wrong (challenge nonce signed
+    ///                against the previous socket) or pointless
+    ///                (next ping fires on its own timer).
+    private func writeString(_ string: String, retryOnSendError: Bool) {
         let message = URLSessionWebSocketTask.Message.string(string)
-        task?.send(message) { _ in
-            // Send-completion errors are handled by the delegate when the
-            // connection closes.
+        task?.send(message) { [weak self] error in
+            guard let error else { return }
+            KLog.d("⚠️ ws send completion failed: \(error)")
+            guard retryOnSendError else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.enqueueOutbound(string)
+            }
         }
     }
 
@@ -212,7 +314,10 @@ final class WebSocketClient: NSObject {
             guard let self,
                   self.state == .connected,
                   self.isAuthenticated else { return }
-            self.writeString("{\"type\":\"ping\"}")
+            // Pings are not retryable — the next ping fires on its
+            // own timer 25s later, and replaying a stale heartbeat
+            // adds no value.
+            self.writeString("{\"type\":\"ping\"}", retryOnSendError: false)
         }
     }
 
