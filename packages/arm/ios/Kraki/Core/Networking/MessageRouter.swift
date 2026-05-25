@@ -145,7 +145,15 @@ final class MessageRouter {
             return
         }
 
-        KLog.d("📥 \(type)")
+        // Only log envelope frames once they're decrypted (📨 Inner
+        // message ...). The outer "📥 broadcast" / "📥 unicast" doubles
+        // the log volume during agent streaming without adding signal.
+        switch type {
+        case "unicast", "broadcast":
+            break
+        default:
+            KLog.d("📥 \(type)")
+        }
 
         switch type {
         // ── Auth ──────────────────────────────────────────────────────────
@@ -225,7 +233,6 @@ final class MessageRouter {
         }
         do {
             let result = try encryptionHandler.decryptInbound(data)
-            KLog.d("🔓 Decrypted → routing inner message")
             Task { @MainActor in
                 self.handleDataMessage(result.message)
             }
