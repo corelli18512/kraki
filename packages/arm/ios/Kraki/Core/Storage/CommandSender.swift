@@ -47,6 +47,12 @@ final class CommandSender {
     func sendInput(sessionId: String, text: String, attachments: [ImageAttachment]? = nil) {
         guard let appState else { return }
 
+        // Generate a correlation id. Tentacle echoes this back inside
+        // the resulting `user_message.payload.clientId`, letting us
+        // resolve the right pending placeholder even with multiple
+        // in-flight sends, reconnects, or multi-device scenarios.
+        let clientId = UUID().uuidString
+
         // Optimistic: insert pending_input
         let pending = ChatMessage(
             type: "pending_input",
@@ -56,11 +62,12 @@ final class CommandSender {
             timestamp: ISO8601DateFormatter().string(from: Date()),
             payload: [
                 "content": AnyCodable(text),
+                "clientId": AnyCodable(clientId),
             ]
         )
         appState.messageStore.appendMessage(sessionId, pending)
 
-        var payload: [String: Any] = ["text": text]
+        var payload: [String: Any] = ["text": text, "clientId": clientId]
         if let attachments, !attachments.isEmpty {
             let encoded = attachments.map { att -> [String: String] in
                 ["type": att.type, "mimeType": att.mimeType, "data": att.data]

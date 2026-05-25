@@ -150,6 +150,11 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var model: String? { payload["model"]?.stringValue }
     var title: String? { payload["title"]?.stringValue }
     var autoTitle: String? { payload["autoTitle"]?.stringValue }
+    /// Correlation id round-tripped through tentacle for pending_input
+    /// resolution. Present on pending_input placeholders and on
+    /// user_message broadcasts that resulted from a `send_input`
+    /// carrying it. Absent on legacy/imported messages.
+    var clientId: String? { payload["clientId"]?.stringValue }
 
     var choices: [String]? {
         payload["choices"]?.arrayValue?.compactMap { $0.stringValue }

@@ -102,7 +102,7 @@ struct MessageBubbleView: View {
 
         case "send_input":
             userBubble(
-                content: message.payload["text"]?.stringValue,
+                content: message.payload["content"]?.stringValue ?? message.payload["text"]?.stringValue,
                 attachments: message.attachments,
                 timestamp: message.timestamp
             )
@@ -201,7 +201,12 @@ struct MessageBubbleView: View {
     // MARK: - Pending Input
 
     private var pendingInputBubble: some View {
-        let text = message.payload["text"]?.stringValue
+        // CommandSender writes the text to `payload.content` (matches
+        // the eventual `user_message` shape). Earlier code wrote to
+        // `payload.text` which mismatched and caused the pending
+        // bubble to render blank. Keep a fallback to `text` for any
+        // stale-in-memory placeholders.
+        let text = message.payload["content"]?.stringValue ?? message.payload["text"]?.stringValue
         let showText = text != nil && text != "[image]"
         return HStack {
             Spacer(minLength: UIScreen.main.bounds.width * 0.10)
