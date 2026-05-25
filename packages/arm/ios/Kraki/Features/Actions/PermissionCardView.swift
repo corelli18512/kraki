@@ -16,9 +16,16 @@ struct PermissionCardView: View {
         appState.sessionStore.sessionModes[permission.sessionId] ?? .discuss
     }
 
+    /// Tool names that mutate the workspace; in `.discuss` mode these
+    /// must be explicitly approved/denied by the user instead of
+    /// auto-approving like read-only tools. Declared static so the
+    /// set isn't reallocated on every body recomputation.
+    private static let writeTools: Set<String> = [
+        "write_file", "edit_file", "create_file", "write", "edit", "create",
+    ]
+
     private var isWriteInDiscuss: Bool {
-        let writeTools: Set<String> = ["write_file", "edit_file", "create_file", "write", "edit", "create"]
-        return sessionMode == .discuss && writeTools.contains(permission.toolName ?? "")
+        sessionMode == .discuss && Self.writeTools.contains(permission.toolName ?? "")
     }
 
     private var argsSummary: String? {
@@ -78,7 +85,14 @@ struct PermissionCardView: View {
 
                 if isWriteInDiscuss {
                     Button {
+                        // Mirror the web fix in commit cdf6139: flip
+                        // mode AND approve the pending write. The two
+                        // wire messages travel independently; sending
+                        // mode first means any subsequent writes in
+                        // the same turn ride execute without
+                        // re-prompting.
                         appState.commandSender?.setSessionMode(sessionId: permission.sessionId, mode: .execute)
+                        appState.commandSender?.approve(sessionId: permission.sessionId, permissionId: permission.id)
                     } label: {
                         Text("Switch to Execute")
                             .font(.subheadline.weight(.semibold))
@@ -146,7 +160,7 @@ struct PermissionStackView: View {
                 }
                 .padding(.horizontal)
             }
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.4)
+            .frame(maxHeight: WindowSize.height * 0.4)
         }
     }
 }

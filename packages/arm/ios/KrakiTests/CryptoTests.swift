@@ -10,7 +10,14 @@ final class CryptoTests: XCTestCase {
 
     override class func setUp() {
         super.setUp()
-        sharedKeyPair = try! CryptoManager().generateKeyPair()
+        do {
+            sharedKeyPair = try CryptoManager().generateKeyPair()
+        } catch {
+            // Surface the underlying failure instead of crashing on a
+            // bare force-try — tests pointing at a flaky simulator
+            // keychain should fail with an actionable message.
+            fatalError("CryptoTests.setUp: keypair generation failed: \(error)")
+        }
     }
 
     private var privateKey: SecKey { Self.sharedKeyPair.privateKey }

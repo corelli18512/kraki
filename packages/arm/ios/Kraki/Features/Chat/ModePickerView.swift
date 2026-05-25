@@ -101,35 +101,15 @@ struct ModePickerView: View {
 
     // MARK: - Colors
 
-    /// Glass tint color per mode (used on iOS 26 GlassEffect)
+    /// Mode colors — kept in sync with `Color.modeColor` in Theme.swift.
     private func modeColor(_ mode: SessionMode) -> Color {
-        switch mode {
-        case .safe:     return Color(hex: 0x34D399) // emerald
-        case .discuss:  return Color.kraki300
-        case .execute:  return Color(hex: 0xFBBF24) // amber
-        case .delegate: return Color.krakiPrimary    // navy
-        }
-    }
-
-    /// Solid pill color for pre-iOS 26 fallback
-    private func modePillColor(_ mode: SessionMode) -> Color {
-        modeColor(mode).opacity(0.8)
-    }
-
-    /// Dark text for pre-iOS 26 solid pill
-    private func modeTextColorDark(_ mode: SessionMode) -> Color {
-        switch mode {
-        case .safe:     return Color(hex: 0x064E3B)
-        case .discuss:  return Color.kraki900
-        case .execute:  return Color(hex: 0x78350F)
-        case .delegate: return Color.kraki900
-        }
+        Color.modeColor(mode)
     }
 }
 
 // MARK: - UIKit Segmented Control with dynamic tint
 
-private struct TintedSegmentedControl: UIViewRepresentable {
+struct TintedSegmentedControl: UIViewRepresentable {
     let items: [String]
     @Binding var selection: Int
     let tintColor: UIColor

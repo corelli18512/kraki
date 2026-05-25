@@ -3,6 +3,21 @@ import Foundation
 import Security
 import CryptoKit
 
+// MARK: - SecKey bridging
+
+/// Mirror of `bridgeToSecKey` in the main app target. Kept inline
+/// here because the Notification Service Extension is its own
+/// target and can't link against the main app's helpers.
+///
+/// See the comment in `KeychainManager.swift` for why the
+/// `CFGetTypeID` check + `as!` is the only correct pattern: Swift's
+/// CoreFoundation→Swift `as?` cast is a no-op (compiler warns) and
+/// can't be used as a runtime safety net.
+private func bridgeToSecKey(_ ref: CFTypeRef) -> SecKey? {
+    guard CFGetTypeID(ref) == SecKeyGetTypeID() else { return nil }
+    return (ref as! SecKey)
+}
+
 /// Notification Service Extension for decrypting Kraki push notification previews.
 ///
 /// APNs payload format from Kraki head:
@@ -69,10 +84,6 @@ class NotificationService: UNNotificationServiceExtension {
             throw NSError(domain: "KrakiNotification", code: 1, userInfo: [NSLocalizedDescriptionKey: "No encryption key"])
         }
 
-        guard let deviceId = loadDeviceId() else {
-            throw NSError(domain: "KrakiNotification", code: 2, userInfo: [NSLocalizedDescriptionKey: "No device ID"])
-        }
-
         // Unwrap AES key with RSA-OAEP
         guard let wrappedKeyData = Data(base64Encoded: wrappedKey) else {
             throw NSError(domain: "KrakiNotification", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid key base64"])
@@ -110,7 +121,7 @@ class NotificationService: UNNotificationServiceExtension {
     }
 
     private func loadEncryptionKey() -> SecKey? {
-        let tag = "cloud.corelli.kraki.encryption-key"
+        let tag = "chat.kraki.ios.encryption-key"
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,
@@ -120,12 +131,12 @@ class NotificationService: UNNotificationServiceExtension {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess else { return nil }
-        return (result as! SecKey)
-    }
-
-    private func loadDeviceId() -> String? {
-        UserDefaults(suiteName: "group.cloud.corelli.kraki")?.string(forKey: "deviceId")
+        guard status == errSecSuccess, let ref = result else { return nil }
+        // Bridge through the centralised helper — no inline `as!`
+        // here. Corrupt entries / simulator edge cases just drop
+        // the encrypted preview and iOS falls back to the default
+        // "New message" copy.
+        return bridgeToSecKey(ref)
     }
 
     // MARK: - Preview Parsing
@@ -142,35 +153,32 @@ class NotificationService: UNNotificationServiceExtension {
             return Preview(title: "Kraki", body: "New message", sessionId: nil)
         }
 
+        // Tentacle's pushPreview payload shape (see relay-client.ts):
+        //   { type: "permission" | "question" | "idle", summary, sessionId }
         let messageType = obj["type"] as? String
         let sessionId = obj["sessionId"] as? String
+        let summary = obj["summary"] as? String
 
         let body: String
         switch messageType {
         case "permission":
-            let desc = obj["description"] as? String ?? "Tool approval needed"
-            body = "🔐 \(desc)"
+            body = "🔐 " + (summary ?? "Tool approval needed")
         case "question":
-            let question = obj["question"] as? String ?? "Question from agent"
-            body = "❓ \(question)"
-        case "agent_message":
-            let content = obj["content"] as? String ?? ""
-            body = String(content.prefix(200))
+            body = "❓ " + (summary ?? "Question from agent")
+        case "idle":
+            // Idle pushes carry the last agent message as `summary`
+            body = summary ?? "Agent finished"
         case "error":
-            let message = obj["message"] as? String ?? "Error occurred"
-            body = "⚠️ \(message)"
+            body = "⚠️ " + (summary ?? "Error occurred")
         case "session_ended":
             body = "Session ended"
         default:
-            body = "Activity in session"
+            body = summary ?? "Needs your attention"
         }
 
-        let title: String
-        if let sessionTitle = obj["title"] as? String {
-            title = "Kraki — \(sessionTitle)"
-        } else {
-            title = "Kraki"
-        }
+        // The tentacle doesn't currently include a session title in the preview,
+        // so fall back to just the brand name.
+        let title = (obj["title"] as? String).map { "Kraki — \($0)" } ?? "Kraki"
 
         return Preview(title: title, body: body, sessionId: sessionId)
     }

@@ -29,6 +29,7 @@ final class PushManager: NSObject {
     // MARK: - Persisted preference
 
     private static let enabledKey = "kraki.pushNotificationsEnabled"
+    private static let pendingUnregisterKey = "kraki.pushPendingUnregister"
 
     /// `true` once the user has explicitly turned on push in Settings. Persists
     /// across launches; we honour it to decide whether to re-register after auth.
@@ -36,6 +37,19 @@ final class PushManager: NSObject {
         get { UserDefaults.standard.bool(forKey: Self.enabledKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.enabledKey) }
     }
+
+    /// Set when `disable()` is called but the relay couldn't be reached.
+    /// `onAuthenticated()` retries the unregister whenever this is true.
+    private var pendingUnregister: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.pendingUnregisterKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.pendingUnregisterKey) }
+    }
+
+    /// Monotonically increasing token used to fence delayed
+    /// "unregister landed" checks — a follow-up send invalidates any
+    /// prior in-flight ack waiter so we only ever clear the flag for
+    /// the most recent unregister attempt.
+    private var unregisterAckToken: Int = 0
 
     // MARK: - Observable state
 
@@ -86,11 +100,16 @@ final class PushManager: NSObject {
     /// User toggled the Settings switch OFF.
     /// Sends `unregister_push_token` to the relay and forgets the token locally.
     /// We don't unregister with the system — re-enabling stays cheap.
+    ///
+    /// Always sends the unregister (idempotent on the relay side) even if the
+    /// local `deviceToken` is nil — the relay tracks tokens by deviceId/WS
+    /// session, not by what we have locally. Persists a "pending unregister"
+    /// flag so that if the WebSocket is currently disconnected, we can
+    /// retry on next successful auth.
     func disable() {
         userEnabled = false
-        if deviceToken != nil {
-            sendUnregister()
-        }
+        pendingUnregister = true
+        sendUnregister()
         deviceToken = nil
         registered = false
     }
@@ -110,10 +129,16 @@ final class PushManager: NSObject {
         KLog.d("❌ APNs registration failed: \(error.localizedDescription)")
     }
 
-    /// Called by AppState after every successful `auth_ok`. If the user has
-    /// push enabled and we have a token, (re-)send the registration. The relay
-    /// upserts so this is safe to call repeatedly.
+    /// Called by AppState after every successful `auth_ok`. Handles both
+    /// pending unregistration (from a prior `disable()` while offline) and
+    /// re-registration when push is enabled.
     func onAuthenticated() {
+        // If the user disabled push but the unregister never reached the relay,
+        // retry now that we're connected.
+        if pendingUnregister {
+            sendUnregister()
+        }
+
         guard userEnabled else { return }
         // If the system already granted us a token, send it now. Otherwise
         // request one — AppDelegate will route the result back here.
@@ -155,7 +180,7 @@ final class PushManager: NSObject {
         guard let token = deviceToken else { return }
 
         let env = Self.detectAPNSEnvironment()
-        let bundleId = Bundle.main.bundleIdentifier ?? "cloud.corelli.kraki"
+        let bundleId = Bundle.main.bundleIdentifier ?? "chat.kraki.ios"
 
         let message: [String: Any] = [
             "type": "register_push_token",
@@ -171,15 +196,36 @@ final class PushManager: NSObject {
     }
 
     /// Send `unregister_push_token`. Best-effort; the relay also auto-cleans
-    /// stale tokens via APNs 410 responses.
+    /// stale tokens via APNs 410 responses. If the WebSocket is offline,
+    /// `pendingUnregister` stays set so `onAuthenticated()` retries later.
     private func sendUnregister() {
-        guard let appState, appState.connectionStatus == .connected else { return }
+        guard let appState, appState.connectionStatus == .connected else {
+            KLog.d("⏸ unregister deferred — WS not connected")
+            return
+        }
         let message: [String: Any] = [
             "type": "unregister_push_token",
             "payload": ["provider": "apns"],
         ]
         sendControl(message)
         KLog.d("📤 unregister_push_token")
+        // Only clear the pending flag once we're confident the message
+        // actually reached the relay. The control-plane has no
+        // explicit ACK, so we use a short delay-on-connected proxy:
+        // if the socket stays up for 5s after sending, assume the
+        // frame landed. If we disconnect in that window the flag
+        // stays set and `onAuthenticated()` retries on next session.
+        let token = unregisterAckToken &+ 1
+        unregisterAckToken = token
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self else { return }
+            // Bail if a newer send superseded this one or the user
+            // re-enabled push in the meantime.
+            guard self.unregisterAckToken == token else { return }
+            guard let app = self.appState, app.connectionStatus == .connected else { return }
+            self.pendingUnregister = false
+        }
     }
 
     /// Send an unencrypted control-plane message.
@@ -193,11 +239,27 @@ final class PushManager: NSObject {
 
     // MARK: - APNs environment detection
 
+    /// Cached environment string. Reading the embedded mobileprovision
+    /// is non-trivial (Data load + plist parse), and the answer is
+    /// fixed for the lifetime of the process — recomputing it on
+    /// every `register_push_token` is wasted work.
+    private static let cachedAPNSEnvironment: String = computeAPNSEnvironment()
+
+    private static func detectAPNSEnvironment() -> String {
+        cachedAPNSEnvironment
+    }
+
     /// Detects whether the build is signed for sandbox or production APNs.
     /// Reads `embedded.mobileprovision` and inspects the `aps-environment`
     /// entitlement. Falls back to "production" for App Store builds (which
     /// don't ship a mobileprovision file).
-    private static func detectAPNSEnvironment() -> String {
+    ///
+    /// Apple uses two different terminologies for the same concept:
+    ///   - Entitlement key value: "development" / "production"
+    ///   - APNs endpoint name:    "sandbox" / "production"
+    /// The relay's `ApnsProvider` routes by endpoint name, so we normalize
+    /// "development" → "sandbox" here.
+    private static func computeAPNSEnvironment() -> String {
         #if DEBUG
         return "sandbox"
         #else
@@ -213,7 +275,8 @@ final class PushManager: NSObject {
               let env = entitlements["aps-environment"] as? String else {
             return "production"
         }
-        return env  // "development" or "production"
+        // Normalize Apple's entitlement value to the relay's expected endpoint name.
+        return env == "development" ? "sandbox" : env
         #endif
     }
 

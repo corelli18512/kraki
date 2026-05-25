@@ -83,10 +83,10 @@ extension Color {
 extension Color {
     static func modeColor(_ mode: SessionMode) -> Color {
         switch mode {
-        case .safe:     return .green
-        case .discuss:  return .kraki300
-        case .execute:  return .orange
-        case .delegate: return .kraki500
+        case .safe:     return Color(red: 0x34/255, green: 0xD3/255, blue: 0x99/255) // emerald-400 #34D399
+        case .discuss:  return Color(red: 0x22/255, green: 0xD3/255, blue: 0xEE/255) // ocean-400 #22D3EE
+        case .execute:  return Color(red: 0xFB/255, green: 0xBF/255, blue: 0x24/255) // amber-400 #FBBF24
+        case .delegate: return Color(red: 0xF4/255, green: 0x83/255, blue: 0x6E/255) // brand orange #F4836E
         }
     }
 }

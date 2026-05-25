@@ -64,6 +64,22 @@ final class AuthManager {
     /// The device ID saved from a prior successful auth, loaded from UserDefaults.
     private(set) var storedDeviceId: String?
 
+    /// Device ID we received from a `wrong_region` redirect — held in
+    /// memory only until the redirected relay confirms it with
+    /// `auth_ok`. We deliberately do NOT persist this to UserDefaults
+    /// or the app-group store yet, because if the redirected relay is
+    /// unreachable or rejects auth we want the user's previous
+    /// identity (`storedDeviceId`) to remain intact for retry.
+    private var pendingRegionDeviceId: String?
+
+    /// Device id we should use when speaking to the relay right now.
+    /// Prefers the pending wrong-region id (during a redirect) over
+    /// the persisted one. Reset back to `storedDeviceId` after a
+    /// successful redirected `auth_ok` (we then promote pending → stored).
+    private var activeDeviceId: String? {
+        pendingRegionDeviceId ?? storedDeviceId
+    }
+
     /// A one-time pairing token (e.g. from a QR code scan or deep link).
     var pairingToken: String?
 
@@ -166,7 +182,7 @@ final class AuthManager {
             "name": "Kraki iOS",
             "role": "app",
             "kind": "ios",
-            "deviceId": storedDeviceId,
+            "deviceId": activeDeviceId,
             "publicKey": signingPublicKey,
             "encryptionKey": encryptionPublicKey,
         ]
@@ -182,7 +198,7 @@ final class AuthManager {
                 "device": cleanDevice,
             ]
             pairingToken = nil
-        } else if let deviceId = storedDeviceId {
+        } else if let deviceId = activeDeviceId {
             KLog.d("🔐 Auth method: challenge (deviceId: \(deviceId.prefix(12))...)")
             message = [
                 "type": "auth",
@@ -209,7 +225,7 @@ final class AuthManager {
 
             let response: [String: Any] = [
                 "type": "auth_response",
-                "deviceId": storedDeviceId ?? "",
+                "deviceId": activeDeviceId ?? "",
                 "signature": signature,
             ]
             sendRaw(response)
@@ -224,7 +240,16 @@ final class AuthManager {
     func handleAuthOk(message: [String: Any]) {
         guard let appState else { return }
 
-        let deviceId = message["deviceId"] as? String ?? ""
+        // The deviceId is required — without it we can't address any
+        // subsequent commands. A malformed/missing field here would
+        // otherwise poison our stored credentials and soft-lock the
+        // user out, so we treat it as an auth failure instead.
+        guard let deviceId = message["deviceId"] as? String, !deviceId.isEmpty else {
+            KLog.d("❌ auth_ok with missing/empty deviceId — failing auth")
+            clearStoredCredentials()
+            appState.onAuthFailed(error: "Server response missing device identifier.")
+            return
+        }
         KLog.d("✅ auth_ok — deviceId: \(deviceId.prefix(12))...")
 
         // Parse user info
@@ -253,8 +278,13 @@ final class AuthManager {
 
         // Persist device credentials (write to BOTH so NSE can read via app group)
         storedDeviceId = deviceId
+        // Clear any pending wrong-region transient — it has now been
+        // promoted to the persisted store, so subsequent reconnects
+        // use `storedDeviceId` directly.
+        pendingRegionDeviceId = nil
         Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
         UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
+        appState.hasStoredCredentials = true
 
         // Mark transport as authenticated
         appState.wsClient?.setAuthenticated(true)
@@ -292,12 +322,13 @@ final class AuthManager {
         // wrong_region: relay tells us our user is pinned to a different
         // region. The server includes the deviceId it just registered for
         // us so we can use challenge-response auth at the redirected relay.
+        // We hold the new id transiently — only persisting once the
+        // redirected relay confirms it with `auth_ok`. That way a failed
+        // redirect doesn't clobber the user's previous identity.
         if code == "wrong_region", let redirect = message["redirect"] as? String {
             KLog.d("🌏 wrong_region → \(redirect)")
-            if let newDeviceId = message["deviceId"] as? String {
-                storedDeviceId = newDeviceId
-                Self.sharedDefaults.set(newDeviceId, forKey: Self.deviceIdKey)
-                UserDefaults.standard.set(newDeviceId, forKey: Self.deviceIdKey)
+            if let newDeviceId = message["deviceId"] as? String, !newDeviceId.isEmpty {
+                pendingRegionDeviceId = newDeviceId
             }
             appState.redirectToRelay(redirect)
             return
@@ -330,9 +361,11 @@ final class AuthManager {
 
     func clearStoredCredentials() {
         storedDeviceId = nil
+        pendingRegionDeviceId = nil
         Self.sharedDefaults.removeObject(forKey: Self.deviceIdKey)
         UserDefaults.standard.removeObject(forKey: Self.deviceIdKey)
         try? keychain.deleteAllKeys()
+        appState?.hasStoredCredentials = false
     }
 
     /// Authenticate with a GitHub OAuth code.
@@ -494,8 +527,21 @@ final class AuthManager {
             self.authenticateWithGitHubCode(code, codeVerifier: verifier, redirectUri: redirectURL)
         }
 
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = scene.windows.first {
+        // Pick the foreground-active UIWindowScene rather than
+        // grabbing the first connected scene blindly — on iPad
+        // multi-window setups `connectedScenes.first` may resolve to
+        // a backgrounded scene whose `windows.first` is no longer
+        // visible, and ASWebAuthenticationSession would then fail
+        // with `presentationContextNotProvided`. We also prefer the
+        // scene's `keyWindow` over the deprecated `windows.first`.
+        let activeScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first
+        if let scene = activeScene,
+           let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
             let provider = OAuthPresentationContextProvider(anchor: window)
             self.oauthContextProvider = provider
             session.presentationContextProvider = provider

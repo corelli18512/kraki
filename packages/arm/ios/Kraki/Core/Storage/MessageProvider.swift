@@ -527,11 +527,14 @@ final class MessageProvider {
             beforeSeq: beforeSeq
         )
 
-        // Safety timeout — drop the in-flight marker if no batch arrives.
+        // Safety timeout — if no batch arrives within the window we
+        // mark the session as load-failed so the UI can show a
+        // retry affordance instead of leaving an empty/stale view.
         let work = DispatchWorkItem { [weak self, weak appState] in
             self?.inFlightRequests.remove(loadKey)
             self?.pendingHeadRequests.remove(sessionId)
-            appState?.sessionStore.setLoading(sessionId, false)
+            KLog.d("⏱ session messages timeout — \(loadKey)")
+            appState?.sessionStore.markLoadFailed(sessionId)
         }
         timeoutTasks[loadKey] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)

@@ -36,10 +36,10 @@
 		45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A429810ED3F81077317149B3 /* DeviceStoreTests.swift */; };
 		4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */; };
 		4BCD8832B17517464C140526 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 69B9A691EAC2476B0D3210AC /* Assets.xcassets */; };
-		4BEB0FA2DCF6DEBF5298311D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */; };
 		4C10C6ECF451DA2AA2A5AED0 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
 		50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
 		52884F019776B2D42A94782B /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
+		54097D3AAB1BE21254C36C96 /* PersistentDeviceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E99EFC41160DCB1CB59E368 /* PersistentDeviceCache.swift */; };
 		56FB3ED616BE7D72DFB31261 /* SessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */; };
 		5872624BD088114FFEB0C577 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */; };
 		5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */; };
@@ -50,7 +50,6 @@
 		7E5A1ECF6308F2C8497326D9 /* ToolStatusIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37B56341037B8B54A732E91A /* ToolStatusIcon.swift */; };
 		7F988F04B287C0F6E680229C /* ConnectionStatusChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */; };
 		84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */; };
-		866F819C7CE0F092B4A8CE57 /* OAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22F5E0E19B4EFDAE920582 /* OAuthView.swift */; };
 		87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */; };
 		96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
 		A28917FCF94F3FE2A0B5AD2A /* LazyImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A84BF94261411BEF2B51101 /* LazyImageView.swift */; };
@@ -66,6 +65,7 @@
 		CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */; };
 		D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */; };
 		D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
+		D568D17CBA87ED7B6E18B2EB /* PersistentSessionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052E1B8E50CA03CE7AAA65A7 /* PersistentSessionCache.swift */; };
 		D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		DB04B10C2DE3ADBB2CD75D2F /* PersistentMessageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BDDA2FA18795CCF1A0AC99 /* PersistentMessageCache.swift */; };
@@ -116,6 +116,7 @@
 		02010E839BEA2321FB4E19C7 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
 		04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStore.swift; sourceTree = "<group>"; };
 		0513473F4DCAC021C97802E4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		052E1B8E50CA03CE7AAA65A7 /* PersistentSessionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentSessionCache.swift; sourceTree = "<group>"; };
 		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
 		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
 		102ABECDD210B084B5B19319 /* MessageInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInputView.swift; sourceTree = "<group>"; };
@@ -131,8 +132,8 @@
 		2DA25F949A584169D7628316 /* TurnGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouper.swift; sourceTree = "<group>"; };
 		33641605B16E960C6A553E38 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
-		39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		3C568CFF12F4C661F328D4DA /* Kraki.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.entitlements; sourceTree = "<group>"; };
+		3C568CFF12F4C661F328D4DB /* Kraki.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Release.entitlements; sourceTree = "<group>"; };
 		3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypes.swift; sourceTree = "<group>"; };
 		41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionHandler.swift; sourceTree = "<group>"; };
 		427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInfoSheet.swift; sourceTree = "<group>"; };
@@ -149,6 +150,7 @@
 		69B9A691EAC2476B0D3210AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiApp.swift; sourceTree = "<group>"; };
 		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		6E99EFC41160DCB1CB59E368 /* PersistentDeviceCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentDeviceCache.swift; sourceTree = "<group>"; };
 		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		76E84B41258D35243F545BDB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -167,7 +169,6 @@
 		A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoManager.swift; sourceTree = "<group>"; };
 		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
 		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		AA22F5E0E19B4EFDAE920582 /* OAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthView.swift; sourceTree = "<group>"; };
 		AE712E4B973F287EF5B0DC17 /* QuestionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionCardView.swift; sourceTree = "<group>"; };
 		AF830792579504E8F32DFC4F /* SessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTable.swift; sourceTree = "<group>"; };
 		B25E8CC25E0F72D13A5394C5 /* PKCE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCE.swift; sourceTree = "<group>"; };
@@ -206,7 +207,9 @@
 				04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */,
 				D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */,
 				02010E839BEA2321FB4E19C7 /* MessageStore.swift */,
+				6E99EFC41160DCB1CB59E368 /* PersistentDeviceCache.swift */,
 				96BDDA2FA18795CCF1A0AC99 /* PersistentMessageCache.swift */,
+				052E1B8E50CA03CE7AAA65A7 /* PersistentSessionCache.swift */,
 				00A9A346933E404A3656AD63 /* SessionStore.swift */,
 				2DA25F949A584169D7628316 /* TurnGrouper.swift */,
 			);
@@ -247,7 +250,6 @@
 				FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */,
 				C1B2ACA651B6DE122BE92C76 /* LoginView.swift */,
 				E805046685AE086D68B890D4 /* MainTabView.swift */,
-				AA22F5E0E19B4EFDAE920582 /* OAuthView.swift */,
 				D5B791C3F6BA99245733A941 /* PairingView.swift */,
 			);
 			path = Auth;
@@ -318,6 +320,7 @@
 			isa = PBXGroup;
 			children = (
 				3C568CFF12F4C661F328D4DA /* Kraki.entitlements */,
+				3C568CFF12F4C661F328D4DB /* Kraki.Release.entitlements */,
 				E685974EC7D62085D8F8A91A /* App */,
 				678A6E1C826CEDF5BD7565DB /* Core */,
 				71615332CDDC89839E753D87 /* Features */,
@@ -334,7 +337,6 @@
 				9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */,
 				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
 				924794751B4507709362A1AE /* LucideIcon.swift */,
-				39F3BF8163B29CC28CE0E282 /* MarkdownText.swift */,
 				9656866F24E385A14F14E699 /* NavigationIDs.swift */,
 				6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */,
 				A625A24B0C13AF8010778069 /* Theme.swift */,
@@ -498,9 +500,11 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					8CF158A689FF2418C7E20679 = {
+						DevelopmentTeam = 3A83X5JZ3S;
 						ProvisioningStyle = Automatic;
 					};
 					EC0ED9322F6D2A73F356C1FC = {
+						DevelopmentTeam = 3A83X5JZ3S;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -581,7 +585,6 @@
 				B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */,
 				418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */,
 				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
-				4BEB0FA2DCF6DEBF5298311D /* MarkdownText.swift in Sources */,
 				1E626FDE917F77BEBF2D58B1 /* MessageBubbleView.swift in Sources */,
 				CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */,
 				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
@@ -591,11 +594,12 @@
 				DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */,
 				063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */,
 				EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */,
-				866F819C7CE0F092B4A8CE57 /* OAuthView.swift in Sources */,
 				F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */,
 				DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */,
 				381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */,
+				54097D3AAB1BE21254C36C96 /* PersistentDeviceCache.swift in Sources */,
 				DB04B10C2DE3ADBB2CD75D2F /* PersistentMessageCache.swift in Sources */,
+				D568D17CBA87ED7B6E18B2EB /* PersistentSessionCache.swift in Sources */,
 				F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */,
 				D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */,
 				F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */,
@@ -666,6 +670,7 @@
 				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				INFOPLIST_FILE = KrakiNotification/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -802,10 +807,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.Release.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -851,6 +857,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -877,6 +884,7 @@
 				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				INFOPLIST_FILE = KrakiNotification/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

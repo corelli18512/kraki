@@ -47,6 +47,11 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     private var tableView: UITableView!
     private var dataSource: UITableViewDiffableDataSource<Int, String>!
     private var didApplyInitialSnapshot = false
+    /// Fingerprint per session id (state that affects the cell
+    /// rendering: pinned, lastSeq, readSeq, title hash). Used to
+    /// decide which cells genuinely need a reconfigure so we don't
+    /// reconfigure all 100+ cells on every websocket event.
+    private var sessionFingerprints: [String: Int] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -67,8 +72,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 
     private func setupDataSource() {
         dataSource = UITableViewDiffableDataSource(tableView: tableView) { [weak self] tableView, indexPath, sessionId in
-            guard let self, let appState = self.appState,
-                  let session = appState.sessionStore.sessions[sessionId] else {
+            guard let self, let appState = self.appState else {
                 return UITableViewCell()
             }
             let cell = tableView.dequeueReusableCell(withIdentifier: "session", for: indexPath)
@@ -76,7 +80,13 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             let total = snapshot.numberOfItems(inSection: 0)
             let isLast = indexPath.row == total - 1
             cell.contentConfiguration = UIHostingConfiguration {
-                SessionRowContent(session: session, isLast: isLast)
+                // Pass only the sessionId so the SwiftUI subtree
+                // re-fetches the current SessionInfo from the
+                // observable store on every render. Capturing the
+                // SessionInfo struct here would freeze it at cell
+                // configuration time and miss in-place updates from
+                // the store (e.g. unread / readSeq mutations).
+                SessionRowContent(sessionId: sessionId, isLast: isLast)
                     .environment(appState)
             }
             .margins(.all, 0)
@@ -104,16 +114,51 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         let ids = filtered.map(\.id)
         snapshot.appendItems(ids)
 
-        // Reconfigure all items so cells re-render their SwiftUI content
-        // (UIHostingConfiguration captures session state at config-creation
-        // time; without reconfiguring, pin badge & other props won't update
-        // when the underlying SessionInfo changes but the order does not).
-        snapshot.reconfigureItems(ids)
+        // Reconfigure only cells whose underlying SessionInfo changed
+        // since the previous apply. With 100+ sessions, reconfiguring
+        // every cell on every WS event causes visible jank; this
+        // narrows it to just the rows that actually need new content.
+        var changedIds: [String] = []
+        changedIds.reserveCapacity(filtered.count / 4)
+        var nextFingerprints: [String: Int] = [:]
+        nextFingerprints.reserveCapacity(filtered.count)
+        for session in filtered {
+            let fp = Self.fingerprint(for: session, store: appState.sessionStore)
+            nextFingerprints[session.id] = fp
+            if sessionFingerprints[session.id] != fp {
+                changedIds.append(session.id)
+            }
+        }
+        sessionFingerprints = nextFingerprints
+        if !changedIds.isEmpty {
+            snapshot.reconfigureItems(changedIds)
+        }
 
         // First snapshot is non-animated; subsequent ones animate moves.
         let shouldAnimate = animated && didApplyInitialSnapshot
         dataSource.apply(snapshot, animatingDifferences: shouldAnimate)
         didApplyInitialSnapshot = true
+    }
+
+    /// Hash of every SessionInfo property that affects how the cell
+    /// renders. If two snapshots produce the same fingerprint, the
+    /// cell content can't have visibly changed and there's no need
+    /// to reconfigure.
+    private static func fingerprint(for session: SessionInfo, store: SessionStore) -> Int {
+        var hasher = Hasher()
+        hasher.combine(session.id)
+        hasher.combine(session.pinned)
+        hasher.combine(session.lastSeq)
+        hasher.combine(session.readSeq)
+        hasher.combine(session.displayTitle)
+        hasher.combine(session.state)
+        // Preview text + timestamp are the main "live" surface
+        // — include them so unread/reply previews re-render.
+        if let preview = store.sessionPreviews[session.id] {
+            hasher.combine(preview.text)
+            hasher.combine(preview.timestamp)
+        }
+        return hasher.finalize()
     }
 
     // MARK: - UITableViewDelegate
@@ -132,10 +177,13 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 
         // Order in array = right to left visually. Visual: Pin | Fork | Unread
 
-        // Unread (rightmost — closest to swipe edge)
-        let isUnread = (appState.sessionStore.unreadCounts[sessionId] ?? 0) > 0
+        // Unread (rightmost — closest to swipe edge). Seq-derived.
+        let isUnread = appState.sessionStore.isUnread(sessionId)
         let unreadAction = UIContextualAction(style: .normal, title: isUnread ? "Read" : "Unread") { _, _, completion in
             if isUnread {
+                // Optimistically clear locally — the server's
+                // `session_read` echo will reconcile via monotonic max.
+                appState.sessionStore.markRead(sessionId, seq: session.lastSeq)
                 appState.commandSender?.markRead(sessionId: sessionId, seq: session.lastSeq)
             } else {
                 appState.commandSender?.markUnread(sessionId: sessionId)
@@ -172,12 +220,12 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 
 struct SessionRowContent: View {
     @Environment(AppState.self) private var appState
-    let session: SessionInfo
+    let sessionId: String
     let isLast: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionCardView(session: session)
+            SessionCardView(sessionId: sessionId)
                 .padding(.vertical, 6)
                 .padding(.horizontal, 16)
 

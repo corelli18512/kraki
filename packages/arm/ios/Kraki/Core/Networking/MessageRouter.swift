@@ -350,14 +350,24 @@ final class MessageRouter {
         // ── Chat messages ────────────────────────────────────────────────
 
         case "user_message":
-            let hadPending = appState.messageStore.hasPendingInput(sessionId)
-            if let seq = dict["seq"] as? Int {
-                appState.messageStore.resolvePendingInput(sessionId, seq: seq)
-            }
-            if !hadPending {
+            // Tentacle echoes user_message broadcasts for every send_input.
+            // Resolve our optimistic pending placeholder by clientId
+            // (preferred) or content match (legacy fallback). If no
+            // pending matched, append — this handles history replays,
+            // multi-device broadcasts, etc.
+            let clientId = payload?["clientId"] as? String
+            let content = payload?["content"] as? String
+            let seqValue = dict["seq"] as? Int ?? 0
+            let resolved = appState.messageStore.resolvePendingInput(
+                sessionId,
+                seq: seqValue,
+                clientId: clientId,
+                content: content
+            )
+            if !resolved {
                 appState.messageStore.appendMessage(sessionId, json: json)
             }
-            if let content = payload?["content"] as? String {
+            if let content {
                 updatePreview(sessionId, text: content, type: "user", timestamp: timestamp)
             }
 

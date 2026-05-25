@@ -74,6 +74,34 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertEqual(user["age"]?.intValue, 30)
     }
 
+    /// Raw `[Any]` (not wrapped in `AnyCodable`) must encode through
+    /// the wrap-each-element fallback added to `AnyCodable.encode`.
+    /// Without that fallback, the old default-case `encodeNil` would
+    /// silently drop the array as `null`, losing user data.
+    func testRawArrayEncodesAsArray() throws {
+        let raw: [Any] = ["hello", 42, true]
+        let wrapped = AnyCodable(raw)
+        let decoded = try roundTrip(wrapped)
+        let arr = try XCTUnwrap(decoded.arrayValue)
+        XCTAssertEqual(arr.count, 3)
+        XCTAssertEqual(arr[0].stringValue, "hello")
+        XCTAssertEqual(arr[1].intValue, 42)
+        XCTAssertEqual(arr[2].boolValue, true)
+    }
+
+    /// Raw `[String: Any]` (not wrapped in `AnyCodable`) must encode
+    /// through the wrap-each-value fallback rather than vanish to
+    /// `null`. Mirrors `testRawArrayEncodesAsArray`.
+    func testRawDictionaryEncodesAsObject() throws {
+        let raw: [String: Any] = ["k1": "v1", "k2": 99, "k3": false]
+        let wrapped = AnyCodable(raw)
+        let decoded = try roundTrip(wrapped)
+        let dict = try XCTUnwrap(decoded.dictValue)
+        XCTAssertEqual(dict["k1"]?.stringValue, "v1")
+        XCTAssertEqual(dict["k2"]?.intValue, 99)
+        XCTAssertEqual(dict["k3"]?.boolValue, false)
+    }
+
     // MARK: - Equatable
 
     func testEquality() {

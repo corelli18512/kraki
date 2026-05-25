@@ -12,18 +12,25 @@ struct RootView: View {
             Color.surfacePrimary
                 .ignoresSafeArea()
 
-            // We show the LoginView only during the very first auth
-            // flow. Once we've reached `.connected` at least once, mid-
-            // session reconnects (.connecting / .authenticating / etc.)
-            // stay inside MainTabView — the brand header surfaces the
-            // status ambiently rather than blocking the whole screen.
-            if appState.hasCompletedInitialConnect {
+            // Show MainTabView when we have valid credentials —
+            // either loaded from disk at launch (returning user) or
+            // freshly written by AuthManager.handleAuthOk (post sign-
+            // in). `clearStoredCredentials()` flips this back to
+            // false on sign-out or credential rejection, re-routing
+            // to LoginView with no extra state to reconcile.
+            //
+            // `hasCompletedInitialConnect` is a separate concern (it
+            // gates the brand-header reconnect spinner inside
+            // MainTabView) and intentionally NOT part of this gate —
+            // mixing them would leave the user stuck on MainTabView
+            // after a credential rejection.
+            if appState.hasStoredCredentials {
                 MainTabView()
             } else {
                 LoginView()
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: appState.hasCompletedInitialConnect)
+        .animation(.easeInOut(duration: 0.3), value: appState.hasStoredCredentials)
     }
 }
 

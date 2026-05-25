@@ -3,8 +3,12 @@
 ///
 /// - Rounded rect (not circle) with per-session hue-based color
 /// - Copilot SVG icon (same for all agents, colored per session)
-/// - Badge: ShieldQuestion (permission) or MessageCircleQuestion (question) in Lucide
-/// - Unread dot: top-right coral dot with ring (separate from badge)
+/// - Corner badges (priority order at each anchor):
+///     • bottom-right → permission-pending shield (amber).
+///     • top-right    → pending-question glyph if any, else a
+///                      loading spinner while `status == .active`.
+///   Permission lives bottom-right, question lives top-right so the
+///   two can co-exist on the same avatar without colliding.
 
 import SwiftUI
 
@@ -39,6 +43,9 @@ enum AvatarSize {
         }
     }
 
+    /// Diameter of a corner-badge glyph. Same scale we used for the
+    /// previous tool-status icon — readable without crowding the
+    /// avatar's main glyph.
     var badgeIconSize: CGFloat {
         switch self {
         case .xs: return 8
@@ -56,20 +63,6 @@ enum AvatarSize {
     }
 }
 
-// MARK: - Avatar Badge
-
-enum AvatarBadge {
-    case permission
-    case question
-
-    var icon: LucideIconType {
-        switch self {
-        case .permission: return .shieldQuestion
-        case .question: return .messageCircleQuestion
-        }
-    }
-}
-
 // MARK: - AgentAvatar View
 
 struct AgentAvatar: View {
@@ -77,8 +70,13 @@ struct AgentAvatar: View {
     var sessionId: String? = nil
     var size: AvatarSize = .md
     var status: SessionState? = nil
-    var badge: AvatarBadge? = nil
-    var unreadCount: Int = 0
+    /// When true, render a shield-question glyph at the avatar's
+    /// bottom-right corner. Driven by `MessageStore.permissionsForSession`.
+    var pendingPermission: Bool = false
+    /// When true, render a question-circle glyph at the avatar's
+    /// top-right corner — overrides the active-state spinner so we
+    /// don't double-stack indicators in the same spot.
+    var pendingQuestion: Bool = false
 
     /// Deterministic hue from sessionId (or agent name as fallback)
     private var hue: Double {
@@ -108,25 +106,42 @@ struct AgentAvatar: View {
                 .frame(width: size.iconSize, height: size.iconSize)
         }
         .overlay(alignment: .bottomTrailing) {
-            // Badge: Lucide icon with background ring
-            if let badge {
-                LucideIcon(badge.icon, size: size.badgeIconSize, strokeWidth: 1, color: .krakiPrimary)
-                    .padding(1)
-                    .background(Color.surfacePrimary, in: Circle())
-                    .offset(x: 6, y: 4)
+            // Permission-pending shield. Solid red — stays readable
+            // on any avatar hue without needing a backing disc.
+            if pendingPermission {
+                LucideIcon(.shieldQuestion,
+                           size: size.badgeIconSize,
+                           strokeWidth: 2.5,
+                           color: Color(hex: 0xEF4444))
+                    .offset(x: 4, y: 4)
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Unread dot: coral with ring
-            if unreadCount > 0 {
-                Circle()
-                    .fill(Color.krakiPrimary)
-                    .frame(width: 10, height: 10)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.surfacePrimary, lineWidth: 2)
-                    )
-                    .offset(x: 2, y: -2)
+            // Question-pending glyph. Solid orange — stays readable
+            // on any avatar hue without needing a backing disc.
+            // Overrides the active-state spinner so we don't stack
+            // indicators in the same corner.
+            if pendingQuestion {
+                LucideIcon(.messageCircleQuestion,
+                           size: size.badgeIconSize,
+                           strokeWidth: 2.5,
+                           color: Color(hex: 0xF97316))
+                    .offset(x: 4, y: -1)
+                    .transition(.opacity)
+            } else if status == .active {
+                // Active-turn spinner. The default `krakiPrimary`
+                // adaptively shifts to `kraki300` in dark mode, which
+                // washes out the spinner strokes against the avatar's
+                // pale-pastel hue. Pin a more solid blue for the
+                // dark case so the spinner reads as a confident
+                // affordance in both themes.
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Color(light: UIColor(Color.kraki500),
+                                dark:  UIColor(Color.kraki400)))
+                    .offset(x: 4, y: -1)
+                    .transition(.opacity)
             }
         }
     }

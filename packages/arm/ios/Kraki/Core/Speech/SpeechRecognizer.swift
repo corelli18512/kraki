@@ -36,6 +36,17 @@ final class SpeechRecognizer {
 
     // MARK: - Public API
 
+    /// Proactively request speech-recognition + microphone permissions
+    /// without starting a recording session. Useful at the moment the
+    /// user toggles into voice mode, so the system permission prompts
+    /// appear before they press-and-hold to talk (avoids the first
+    /// press being eaten by the permission dialog or crashing because
+    /// of an unavailable audio session).
+    func requestPermissionsIfNeeded() {
+        SFSpeechRecognizer.requestAuthorization { _ in }
+        AVAudioApplication.requestRecordPermission { _ in }
+    }
+
     func toggleRecording() {
         if isRecording {
             stopRecording()
@@ -116,12 +127,10 @@ final class SpeechRecognizer {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
 
-        // Prefer on-device recognition for privacy
-        if #available(iOS 18.0, *) {
-            request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        } else {
-            request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        }
+        // Prefer on-device recognition for privacy. Both branches of
+        // the previous version did the same thing; the
+        // iOS-18-availability check was a no-op so we drop it.
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
 
         // Contextual strings to improve coding-related recognition
         request.contextualStrings = [

@@ -1,16 +1,36 @@
 #if os(iOS)
-/// ToolActivityView — Collapsible tool invocation detail, mirroring ToolActivity.tsx.
+/// ToolActivityView — Collapsible tool invocation detail, mirroring
+/// `web/src/components/chat/ToolActivity.tsx`.
 ///
-/// Shows a tool name + summary in collapsed state, expands to reveal
-/// arguments, diff view, and result content.
+/// As of v0.17+ (protocol PR #106), tool messages carry a
+/// tentacle-composed `headline` inline plus `argsRef` / `resultRef`
+/// lazy refs. The chip header shows the headline immediately; expanding
+/// the chip subscribes to the refs via `AttachmentStore` and renders
+/// the full args / result once bytes arrive.
+///
+/// Backwards-compat: permission prompts still ship the full args
+/// dictionary inline (the operator must see them to approve). If
+/// neither headline nor refs are present (cold cache from a pre-0.17
+/// session, or a permission prompt), the inline-args fallback is used.
 
 import SwiftUI
 
 struct ToolActivityView: View {
+    @Environment(AppState.self) private var appState
+
     let type: ToolActivityType
     let toolName: String
-    let args: [String: AnyCodable]?
-    let result: String?
+    /// Tentacle-composed headline (≤200 chars). Always present in v0.17+.
+    let headline: String?
+    /// Lazy ref to the full args JSON. Absent for trivially small args.
+    let argsRef: ContentRef?
+    /// Lazy ref to the full result. Always present on `tool_complete`
+    /// except when the tool produced no output.
+    let resultRef: ContentRef?
+    /// Inline args, kept for permission-prompt path where the agent
+    /// blocks waiting for approval and full args ship eagerly.
+    let inlineArgs: [String: AnyCodable]?
+    let sessionId: String
     var success: Bool? = nil
     var cancelled: Bool = false
     var forceExpanded: Bool = false
@@ -19,130 +39,78 @@ struct ToolActivityView: View {
 
     private var isExpanded: Bool { forceExpanded || expanded }
 
+    private var attachmentStore: AttachmentStore { appState.attachmentStore }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Header button
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    statusIcon
-                    toolIcon
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    if type == .start {
-                        Text("Running ")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text(toolName)
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.blue)
-
-                    if !summary.isEmpty {
-                        Text(summary)
-                            .font(.caption2)
-                            .fontDesign(.monospaced)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+            ToolChipHeader(
+                toolName: toolName,
+                headline: headlineForDisplay,
+                status: chipStatus,
+                isExpandable: hasExpandableContent,
+                isExpanded: isExpanded,
+                onTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 }
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            )
+            .padding(.vertical, 6)
 
             // Expanded content
             if isExpanded {
                 expandedContent
                     .transition(.opacity.combined(with: .move(edge: .top)))
+                    .onAppear { triggerLazyFetches() }
             }
         }
     }
 
-    // MARK: - Status Icon
-
-    @ViewBuilder
-    private var statusIcon: some View {
+    private var chipStatus: ToolChipStatus {
         if type == .start {
-            if cancelled {
-                LucideIcon(.circleSlash, size: 14, color: .orange)
-            } else {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-        } else {
-            if success == false {
-                LucideIcon(.x, size: 12, color: .red)
-            } else {
-                LucideIcon(.check, size: 12, color: .green)
-            }
+            return cancelled ? .cancelled : .running
         }
+        return success == false ? .failure : .success
     }
 
-    // MARK: - Tool Icon
-
-    @ViewBuilder
-    private var toolIcon: some View {
-        switch toolName {
-        case "shell", "bash":
-            LucideIcon(.terminal, size: 12, color: .secondary)
-        case "read_file", "view":
-            LucideIcon(.fileText, size: 12, color: .secondary)
-        case "write_file", "create_file", "create":
-            LucideIcon(.fileEdit, size: 12, color: .secondary)
-        case "edit_file", "edit":
-            LucideIcon(.pencil, size: 12, color: .secondary)
-        case "grep", "search":
-            LucideIcon(.search, size: 12, color: .secondary)
-        case "glob":
-            LucideIcon(.folderSearch, size: 12, color: .secondary)
-        case "mcp":
-            Image(systemName: "server.rack")
-        default:
-            Image(systemName: "wrench")
-        }
+    private var hasExpandableContent: Bool {
+        argsRef != nil
+            || resultRef != nil
+            || (inlineArgs?.isEmpty == false)
     }
 
-    // MARK: - Summary
+    // MARK: - Headline (collapsed-state preview text)
 
-    private var summary: String {
-        guard let args else { return "" }
-        switch toolName {
+    /// Prefer the tentacle's pre-composed headline. Fall back to a
+    /// minimal client-side preview built from inline args (for legacy
+    /// permission-prompt path).
+    private var headlineForDisplay: String? {
+        if let h = headline, !h.isEmpty { return h }
+        guard let args = inlineArgs else { return nil }
+        switch toolName.lowercased() {
         case "shell", "bash":
             if let cmd = args["command"]?.stringValue { return "$ \(cmd)" }
-        case "write_file", "edit_file", "edit", "create_file", "create", "read_file", "view":
+        case "read_file", "view", "read",
+             "write_file", "edit_file", "edit", "create_file", "create", "write":
             if let path = args["path"]?.stringValue { return path }
         case "fetch_url":
             if let url = args["url"]?.stringValue { return url }
-        case "mcp":
-            let server = args["server"]?.stringValue ?? ""
-            let tool = args["tool"]?.stringValue ?? ""
-            return "\(server)/\(tool)"
         case "grep", "search":
             if let pattern = args["pattern"]?.stringValue { return "/\(pattern)/" }
         case "glob":
             if let pattern = args["pattern"]?.stringValue { return pattern }
         default:
-            // First short string arg as preview
-            for (_, v) in (args) {
-                if let s = v.stringValue, !s.isEmpty, s.count < 120 { return s }
+            // Prefer well-known argument names first; fall back to
+            // iterating in a deterministic sort order so the chip
+            // headline doesn't change between runs depending on
+            // dictionary hash ordering.
+            let preferredKeys = ["query", "path", "file", "url", "name", "id", "key"]
+            for k in preferredKeys {
+                if let s = args[k]?.stringValue, !s.isEmpty, s.count < 120 { return s }
+            }
+            for k in args.keys.sorted() {
+                if let s = args[k]?.stringValue, !s.isEmpty, s.count < 120 { return s }
             }
         }
-        return ""
+        return nil
     }
 
     // MARK: - Expanded Content
@@ -150,121 +118,110 @@ struct ToolActivityView: View {
     @ViewBuilder
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Summary detail
-            if !summary.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(detailLabel)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    Text(summary)
-                        .font(.caption2)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            // Edit diff view
-            if let diff = editDiff {
-                SimpleDiffView(oldText: diff.old, newText: diff.new)
-            } else if let argsDetail {
-                // Additional args detail
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(argsDetail.label)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(argsDetail.content)
-                            .font(.caption2)
-                            .fontDesign(.monospaced)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxHeight: 160)
-                }
-            } else if let args, !args.isEmpty, summary.isEmpty {
-                // Fallback: raw args JSON
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Arguments")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    Text(formatArgs(args))
-                        .font(.caption2)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            // Result
-            if let result, !result.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Result")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                    ScrollView {
-                        Text(result)
-                            .font(.caption2)
-                            .fontDesign(.monospaced)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 240)
-                }
+            argsSection
+            resultSection
+            if argsRef == nil && resultRef == nil && (inlineArgs?.isEmpty ?? true) {
+                // Nothing to show: tool ran with no args and no result.
+                Text("(no args or result)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(12)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 
+    @ViewBuilder
+    private var argsSection: some View {
+        if let argsRef {
+            lazySection(title: "Arguments", ref: argsRef)
+        } else if let args = inlineArgs, !args.isEmpty {
+            // Legacy inline path (permission prompt).
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Arguments")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Text(formatArgs(args))
+                    .font(.caption2)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var resultSection: some View {
+        if let resultRef {
+            lazySection(title: "Result", ref: resultRef)
+        }
+    }
+
+    /// Render one lazy-fetched body region — subscribes to
+    /// `attachmentStore.states[ref.id]` via the @Observable mechanism.
+    @ViewBuilder
+    private func lazySection(title: String, ref: ContentRef) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            lazyBody(ref: ref)
+        }
+    }
+
+    @ViewBuilder
+    private func lazyBody(ref: ContentRef) -> some View {
+        switch attachmentStore.state(for: ref.id) {
+        case .ready(_, let data):
+            ScrollView {
+                Text(String(data: data, encoding: .utf8) ?? "(non-utf8 bytes)")
+                    .font(.caption2)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 240)
+        case .error(let reason):
+            Text("Couldn't load: \(reason)")
+                .font(.caption2)
+                .foregroundStyle(.red)
+        case .awaitingChunks(let received, let total):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                if let t = total {
+                    Text("Loading \(received)/\(t)…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("Loading…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        case .fetching, .none:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Loading…")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// Kick off lazy fetches for both refs when the chip expands.
+    private func triggerLazyFetches() {
+        if let argsRef {
+            attachmentStore.requestIfNeeded(id: argsRef.id, sessionId: sessionId)
+        }
+        if let resultRef {
+            attachmentStore.requestIfNeeded(id: resultRef.id, sessionId: sessionId)
+        }
+    }
+
     // MARK: - Helpers
-
-    private var detailLabel: String {
-        switch toolName {
-        case "shell", "bash": return "Command"
-        case "read_file", "view", "write_file", "edit_file", "edit", "create_file", "create": return "Path"
-        case "grep", "search", "glob": return "Pattern"
-        case "fetch_url": return "URL"
-        default: return "Summary"
-        }
-    }
-
-    private var argsDetail: (label: String, content: String)? {
-        guard let args else { return nil }
-        switch toolName {
-        case "edit", "edit_file":
-            let oldStr = args["old_str"]?.stringValue
-            let newStr = args["new_str"]?.stringValue
-            guard oldStr != nil || newStr != nil else { return nil }
-            var parts: [String] = []
-            if let o = oldStr { parts.append("- \(o)") }
-            if let n = newStr { parts.append("+ \(n)") }
-            return ("Changes", parts.joined(separator: "\n"))
-        case "write_file", "create_file", "create":
-            let content = args["file_text"]?.stringValue ?? args["content"]?.stringValue
-            guard let content else { return nil }
-            let preview = content.count > 500 ? String(content.prefix(497)) + "…" : content
-            return ("Content", preview)
-        case "grep", "search":
-            if let path = args["path"]?.stringValue { return ("Directory", path) }
-            return nil
-        default:
-            return nil
-        }
-    }
-
-    private var editDiff: (old: String, new: String)? {
-        guard let args else { return nil }
-        let oldStr = args["old_str"]?.stringValue ?? ""
-        let newStr = args["new_str"]?.stringValue ?? ""
-        guard !oldStr.isEmpty || !newStr.isEmpty else { return nil }
-        return (oldStr, newStr)
-    }
 
     private func formatArgs(_ args: [String: AnyCodable]) -> String {
         let pairs = args.sorted { $0.key < $1.key }
@@ -283,39 +240,76 @@ enum ToolActivityType {
 // MARK: - SimpleDiffView
 
 /// Minimal diff view showing old (red) and new (green) lines.
+///
+/// Caps each side at `maxLinesPerSide` lines to avoid the layout
+/// stall that comes from a `VStack(ForEach)` over hundreds of lines.
+/// When clipped, shows an "X more lines" affordance that lets the
+/// user expand the block at their own discretion.
 struct SimpleDiffView: View {
     let oldText: String
     let newText: String
 
+    @State private var expanded = false
+
+    private static let collapsedLinesPerSide = 60
+
     var body: some View {
+        let oldLines = oldText.isEmpty ? [] : oldText.components(separatedBy: "\n")
+        let newLines = newText.isEmpty ? [] : newText.components(separatedBy: "\n")
+        let limit = expanded ? Int.max : Self.collapsedLinesPerSide
+        let oldVisible = Array(oldLines.prefix(limit))
+        let newVisible = Array(newLines.prefix(limit))
+        let oldHidden = max(0, oldLines.count - oldVisible.count)
+        let newHidden = max(0, newLines.count - newVisible.count)
+
         VStack(alignment: .leading, spacing: 0) {
-            if !oldText.isEmpty {
-                ForEach(Array(oldText.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                    Text("- \(line)")
-                        .font(.caption2)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 1)
-                        .background(Color.red.opacity(0.08))
-                }
+            ForEach(Array(oldVisible.enumerated()), id: \.offset) { _, line in
+                Text("- \(line)")
+                    .font(.caption2)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 1)
+                    .background(Color.red.opacity(0.08))
             }
-            if !newText.isEmpty {
-                ForEach(Array(newText.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                    Text("+ \(line)")
-                        .font(.caption2)
-                        .fontDesign(.monospaced)
-                        .foregroundStyle(.green)
+            ForEach(Array(newVisible.enumerated()), id: \.offset) { _, line in
+                Text("+ \(line)")
+                    .font(.caption2)
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 1)
+                    .background(Color.green.opacity(0.08))
+            }
+            if oldHidden > 0 || newHidden > 0 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    Text(expandedLabel(oldHidden: oldHidden, newHidden: newHidden))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 1)
-                        .background(Color.green.opacity(0.08))
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.08))
                 }
+                .buttonStyle(.plain)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .textSelection(.enabled)
+    }
+
+    private func expandedLabel(oldHidden: Int, newHidden: Int) -> String {
+        if expanded {
+            return "  Collapse"
+        }
+        var pieces: [String] = []
+        if oldHidden > 0 { pieces.append("\(oldHidden) removed") }
+        if newHidden > 0 { pieces.append("\(newHidden) added") }
+        return "  \(pieces.joined(separator: ", ")) — tap to expand"
     }
 }
 

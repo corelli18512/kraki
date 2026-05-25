@@ -38,7 +38,7 @@ final class CommandSender {
         if let sessionId { msg["sessionId"] = sessionId }
         msg["deviceId"] = appState.deviceId ?? ""
         msg["seq"] = 0
-        msg["timestamp"] = ISO8601DateFormatter().string(from: Date())
+        msg["timestamp"] = ISO8601.now()
         appState.sendEncryptedMessage(msg)
     }
 
@@ -47,20 +47,40 @@ final class CommandSender {
     func sendInput(sessionId: String, text: String, attachments: [ImageAttachment]? = nil) {
         guard let appState else { return }
 
-        // Optimistic: insert pending_input
+        // Generate a correlation id. Tentacle echoes this back inside
+        // the resulting `user_message.payload.clientId`, letting us
+        // resolve the right pending placeholder even with multiple
+        // in-flight sends, reconnects, or multi-device scenarios.
+        let clientId = UUID().uuidString
+
+        // Optimistic: insert pending_input. Stash attachments on the
+        // pending payload so the pending bubble can render the image
+        // grid immediately (otherwise the image only appears after the
+        // server echoes user_message back). The `attachments` accessor
+        // on ChatMessage reads from `payload.attachments`, so we
+        // encode them in the same shape the server's user_message
+        // uses — array of [type, mimeType, data] dicts.
+        var pendingPayload: [String: AnyCodable] = [
+            "content": AnyCodable(text),
+            "clientId": AnyCodable(clientId),
+        ]
+        if let attachments, !attachments.isEmpty {
+            let encodedAttachments = attachments.map { att -> [String: String] in
+                ["type": att.type, "mimeType": att.mimeType, "data": att.data]
+            }
+            pendingPayload["attachments"] = AnyCodable(encodedAttachments)
+        }
         let pending = ChatMessage(
             type: "pending_input",
             seq: 0,
             sessionId: sessionId,
             deviceId: appState.deviceId,
-            timestamp: ISO8601DateFormatter().string(from: Date()),
-            payload: [
-                "content": AnyCodable(text),
-            ]
+            timestamp: ISO8601.now(),
+            payload: pendingPayload
         )
         appState.messageStore.appendMessage(sessionId, pending)
 
-        var payload: [String: Any] = ["text": text]
+        var payload: [String: Any] = ["text": text, "clientId": clientId]
         if let attachments, !attachments.isEmpty {
             let encoded = attachments.map { att -> [String: String] in
                 ["type": att.type, "mimeType": att.mimeType, "data": att.data]
@@ -79,9 +99,13 @@ final class CommandSender {
         appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "approved")
     }
 
-    func deny(sessionId: String, permissionId: String) {
+    func deny(sessionId: String, permissionId: String, reason: String? = nil) {
         guard let appState else { return }
-        send(["type": "deny", "payload": ["permissionId": permissionId]], sessionId: sessionId)
+        var payload: [String: Any] = ["permissionId": permissionId]
+        if let reason, !reason.isEmpty {
+            payload["reason"] = reason
+        }
+        send(["type": "deny", "payload": payload], sessionId: sessionId)
         appState.messageStore.removePermission(permissionId)
         appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "denied")
     }
@@ -200,7 +224,7 @@ final class CommandSender {
         cwd: String? = nil,
         title: String? = nil
     ) -> String {
-        let requestId = "req_\(Int(Date().timeIntervalSince1970 * 1000))_\(String(Int.random(in: 0...999999), radix: 36))"
+        let requestId = "req_" + UUID().uuidString.lowercased()
         let placeholderId = "pending-\(UUID().uuidString.lowercased())"
 
         if let prompt {
@@ -235,7 +259,7 @@ final class CommandSender {
     }
 
     func forkSession(sessionId: String) {
-        let requestId = "req_\(Int(Date().timeIntervalSince1970 * 1000))_\(String(Int.random(in: 0...999999), radix: 36))"
+        let requestId = "req_" + UUID().uuidString.lowercased()
         let placeholderId = "pending-\(UUID().uuidString.lowercased())"
         pendingCreateRequests[requestId] = ""
         pendingPlaceholderIds[requestId] = placeholderId
@@ -264,7 +288,7 @@ final class CommandSender {
         targetDeviceId: String,
         meta: [String: Any]? = nil
     ) -> String {
-        let requestId = "req_\(Int(Date().timeIntervalSince1970 * 1000))_\(String(Int.random(in: 0...999999), radix: 36))"
+        let requestId = "req_" + UUID().uuidString.lowercased()
         pendingCreateRequests[requestId] = ""
         // For import, the localSessionId IS the future session id.
         pendingPlaceholderIds[requestId] = localSessionId
@@ -318,6 +342,16 @@ final class CommandSender {
         send(["type": "delete_session", "payload": [:] as [String: Any]], sessionId: sessionId)
         appState.sessionStore.removeSession(sessionId)
         appState.messageStore.deleteSessionMessages(sessionId)
+    }
+
+    // MARK: - Device Lifecycle
+
+    /// Remove a device from the user's account. Routed through the
+    /// command layer (not raw `sendEncryptedMessage`) so it shares the
+    /// same connectivity/queue semantics as other commands and won't
+    /// silently disappear if the socket is mid-reconnect.
+    func removeDevice(deviceId: String) {
+        send(["type": "remove_device", "deviceId": deviceId])
     }
 
     // MARK: - Local sessions (import picker)

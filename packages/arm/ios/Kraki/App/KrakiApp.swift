@@ -37,13 +37,25 @@ struct KrakiApp: App {
                         #endif
                     }
                 }
-                .onChange(of: scenePhase) { _, phase in
-                    // On every return-to-foreground, kick a fresh
-                    // connect with reset backoff so the user doesn't
-                    // wait out a stale 30s timer that started while
-                    // backgrounded. No-op if we're already connected.
-                    if phase == .active {
+                .onChange(of: scenePhase) {
+                    switch scenePhase {
+                    case .active:
+                        // On every return-to-foreground, kick a fresh
+                        // connect with reset backoff so the user doesn't
+                        // wait out a stale 30s timer that started while
+                        // backgrounded. No-op if we're already connected.
                         appState.handleForegroundRehydrate()
+                    case .background:
+                        // Explicitly close the WS so the relay marks this
+                        // device offline immediately. Otherwise the relay
+                        // would skip APNs for ~30s while it waits for a
+                        // pong, opening a window where backgrounded users
+                        // miss notifications.
+                        appState.handleBackground()
+                    case .inactive:
+                        break
+                    @unknown default:
+                        break
                     }
                 }
         }

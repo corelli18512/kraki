@@ -11,10 +11,17 @@ import SwiftUI
 struct SessionDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
 
     let sessionId: String
 
     @State private var showInfoSheet = false
+    /// Tracks whether we've ever observed a live `SessionInfo` for
+    /// this id. Used to distinguish the brand-new pending state
+    /// (session never loaded yet) from a delete-after-load (session
+    /// was loaded, then went away). Only the latter pops back to
+    /// the session list.
+    @State private var didLoadSessionOnce = false
 
     private var sessionStore: SessionStore { appState.sessionStore }
 
@@ -32,6 +39,11 @@ struct SessionDetailView: View {
                 notFoundView
             }
         }
+        // Hide the tab bar across all branches — pending placeholder,
+        // not-found, and the live chat — so the optimistic landing
+        // from "Create Session" doesn't briefly show the tab bar
+        // before the real session arrives.
+        .hidesTabBar()
         .onAppear {
             sessionStore.activeSessionId = sessionId
             // Pull any persisted history off disk into the in-memory
@@ -71,6 +83,17 @@ struct SessionDetailView: View {
                 markReadIfFocused()
             }
         }
+        // Track whether the session has ever been live for this view.
+        // Combined with the `session == nil && !isPending` check, this
+        // detects deletion (loaded → gone) and pops back to the
+        // session list.
+        .onChange(of: session?.id) { _, newId in
+            if newId != nil {
+                didLoadSessionOnce = true
+            } else if didLoadSessionOnce, !sessionStore.isPending(sessionId) {
+                dismiss()
+            }
+        }
     }
 
     // MARK: - Session Content
@@ -78,7 +101,6 @@ struct SessionDetailView: View {
     private func sessionContent(_ session: SessionInfo) -> some View {
         ChatView(sessionId: sessionId)
             .navigationBarTitleDisplayMode(.inline)
-            .hidesTabBar()
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     toolbarTitle(session)

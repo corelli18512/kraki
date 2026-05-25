@@ -1,4 +1,3 @@
-#if os(iOS)
 import XCTest
 @testable import Kraki
 
@@ -126,4 +125,3 @@ final class HelpersTests: XCTestCase {
         XCTAssertEqual(result, "2h ago")
     }
 }
-#endif

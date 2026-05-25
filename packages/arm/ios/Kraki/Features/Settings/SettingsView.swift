@@ -183,6 +183,15 @@ struct SettingsView: View {
         // on the right. We constrain the picker's width so the title
         // stays visible regardless of the locale-localized segment
         // labels.
+        //
+        // Theme is one of three keys synced through head's
+        // `update_preferences` channel (alongside `internal` and
+        // `channel`, neither of which iOS surfaces today). The
+        // `onChange` handler below pipes user-driven changes upstream
+        // so the user's web client and other phones pick up the new
+        // scheme on their next render. The echo-loop guard on
+        // `PreferencesManager.isApplyingRemote` keeps us from
+        // re-sending what we just received via `preferences_updated`.
         LabeledContent {
             Picker("Theme", selection: $selectedScheme) {
                 Text("System").tag(AppColorScheme.system)
@@ -194,6 +203,10 @@ struct SettingsView: View {
             .frame(width: 200)
         } label: {
             Text("Theme")
+        }
+        .onChange(of: selectedScheme) { _, newValue in
+            guard appState.preferencesManager?.isApplyingRemote != true else { return }
+            appState.preferencesManager?.sendTheme(newValue)
         }
     }
 
