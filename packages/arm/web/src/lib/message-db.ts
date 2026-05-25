@@ -23,7 +23,7 @@ let dbPromise: Promise<IDBPDatabase> | null = null;
 function getDB(): Promise<IDBPDatabase> {
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
+      upgrade(db, oldVersion, _newVersion, tx) {
         if (oldVersion < 1) {
           const store = db.createObjectStore(STORE_NAME, { keyPath: ['sessionId', 'seq'] });
           store.createIndex('sessionId', 'sessionId', { unique: false });
@@ -40,31 +40,27 @@ function getDB(): Promise<IDBPDatabase> {
           }
         }
         // v4 purges orphaned `pending_input` rows. A previous version
-        // of this code persisted optimistic placeholders to IDB; they
-        // all share seq=0 and could not be resolved across a reload
-        // (no clientId). We now skip IDB writes for pending_input
-        // entirely, but existing users may carry stale rows. Sweep
-        // them out on first open.
-        if (oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
-          // upgrade runs inside a versionchange transaction; we have
-          // access to STORE_NAME via the transaction parameter normally,
-          // but idb's upgrade callback exposes the existing store via
-          // db.transaction. We use the versionchange tx that openDB
-          // provides via the second arg of the callback in newer idb
-          // versions; here we re-acquire it through db.transaction
-          // which is valid during upgrade.
-          const tx = db.transaction(STORE_NAME, 'readwrite');
+        // persisted optimistic placeholders to IDB; they all share
+        // seq=0 and could not be resolved across a reload (no
+        // clientId). We now skip IDB writes for pending_input
+        // entirely, but existing users may carry stale rows.
+        //
+        // Use the versionchange transaction `tx` provided by idb —
+        // creating a new transaction (or fire-and-forget async work)
+        // inside upgrade is invalid and would reject the openDB.
+        if (oldVersion >= 1 && oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
           const store = tx.objectStore(STORE_NAME);
-          // Iterate via openCursor and delete rows whose stored data
-          // is a pending_input. The compound key has seq=0 for these,
-          // and the only persistent type with seq=0 ever written was
-          // pending_input, so deleting by seq=0 is safe.
+          // Synchronous cursor walk inside the versionchange tx.
+          // Fire-and-forget the promise chain — `openDB` waits for
+          // `tx.done` internally before resolving, so the deletions
+          // complete before the DB is usable. Errors are surfaced via
+          // the transaction's abort.
           void (async () => {
             let cursor = await store.openCursor();
             while (cursor) {
               const stored = cursor.value as StoredMessage;
               if (stored.seq === 0 || stored.data?.type === 'pending_input') {
-                await cursor.delete();
+                cursor.delete();
               }
               cursor = await cursor.continue();
             }
