@@ -637,6 +637,10 @@ struct ChatView: View {
             // what produced the "tried to update multiple times per frame"
             // runtime warning.
             scrollMetrics = m
+            if Self.diagScrollCascade, pendingAnchorRestore != nil,
+               abs(m.offsetY - oldM.offsetY) > 1 {
+                KLog.d("📏geom WHILE-PENDING offsetY=\(oldM.offsetY)→\(m.offsetY) Δ=\(m.offsetY - oldM.offsetY) contentH=\(oldM.contentHeight)→\(m.contentHeight)")
+            }
             // Viewport shrank (keyboard came up, or the input box grew
             // an extra line, or any other safe-area inset change) and
             // the user was previously at or near the bottom → re-pin
@@ -695,6 +699,10 @@ struct ChatView: View {
             // `newMinY - screenY` to land the bubble at the same
             // screen position as before the prepend — preserving the
             // user's view across expansion.
+            if Self.diagScrollCascade, let pending = pendingAnchorRestore {
+                let f = newFrames[pending.id]
+                KLog.d("📐prefFire frames=\(newFrames.count) pendingId=user-\(pending.id.suffix(8)) framePresent=\(f != nil) frameMinY=\(f?.minY ?? -999) frameH=\(f?.height ?? -999) offsetY=\(scrollOffsetY)")
+            }
             if let pending = pendingAnchorRestore,
                let newFrame = newFrames[pending.id],
                newFrame.height > 0 {
@@ -811,6 +819,37 @@ struct ChatView: View {
     /// All slides are gated on `growMode == .idle` so an active R1
     /// (followBottom or lockedAtTop) doesn't have its anchored bubble
     /// dropped from the rendered set.
+    /// Compile-time diag switch for the scroll-cascade investigation.
+    /// Flip to `false` when done. Logs include: every gate evaluation,
+    /// every state mutation, every preference fire, every scroll
+    /// offset transition while a restore is pending.
+    private static let diagScrollCascade: Bool = true
+
+    private func phaseDescription(_ phase: ScrollPhase) -> String {
+        switch phase {
+        case .idle: return "idle"
+        case .tracking: return "tracking"
+        case .interacting: return "interacting"
+        case .decelerating: return "decelerating"
+        case .animating: return "animating"
+        @unknown default: return "?"
+        }
+    }
+
+    /// Is the user bubble with this id currently mounted in the
+    /// rendered window? Used only by diag logs — checks whether the
+    /// captured anchor will produce a fresh frame in the next
+    /// `onPreferenceChange` (it won't if it's been folded out).
+    private func isUserBubbleInRenderedWindow(_ id: String) -> Bool {
+        // The rendered window covers turns at index
+        // [renderWindowStartIdx, renderWindowStartIdx + renderedTurnCount).
+        // A user bubble's id is the turn's user_message id; we don't
+        // need to scan the cache — `userBubbleFrames` is populated
+        // only by rendered rows, so presence-in-frames-dict is
+        // equivalent to presence-in-window.
+        return userBubbleFrames[id] != nil
+    }
+
     private func maybeAutoLoadOlder() {
         // Don't auto-load until entry-scroll has positioned us.
         guard didInitialScroll else { return }
@@ -827,6 +866,9 @@ struct ChatView: View {
         // user's motion settles.
         let topThreshold = Self.topSpinnerHeight + Self.topSpinnerSlop
         if scrollOffsetY < topThreshold {
+            if Self.diagScrollCascade {
+                KLog.d("🔝gate offsetY=\(scrollOffsetY) phase=\(phaseDescription(scrollPhase)) growMode=\(growMode) hasAbove=\(hasFoldedTurnsAbove) pendingRestore=\(pendingAnchorRestore?.id.suffix(8) ?? "nil")")
+            }
             guard scrollPhase == .idle else { return }
             handleTopEdgeExpand()
             return
@@ -905,6 +947,12 @@ struct ChatView: View {
             let total = cachedAllTurnCount
             let beforeStart = renderWindowStartIdx
             let beforeCount = renderedTurnCount
+            if Self.diagScrollCascade {
+                let anchorInWindow = anchorCapture.map { cap in
+                    isUserBubbleInRenderedWindow(cap.id)
+                } ?? false
+                KLog.d("🔝expand PRE offsetY=\(scrollOffsetY) startIdx=\(beforeStart) size=\(beforeCount) anchor=\(anchorCapture?.id.suffix(8) ?? "nil") screenY=\(anchorCapture?.screenY ?? -999) anchorInWindow=\(anchorInWindow)")
+            }
             let newStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
             if renderedTurnCount < Self.maxRenderedTurns {
                 // Grow: extend top, keep bottom edge fixed.
@@ -913,6 +961,9 @@ struct ChatView: View {
             }
             // After potential growth, clamp so window stays in bounds.
             renderWindowStartIdx = min(newStart, max(0, total - renderedTurnCount))
+            if Self.diagScrollCascade {
+                KLog.d("🔝expand POST offsetY=\(scrollOffsetY) startIdx=\(renderWindowStartIdx) size=\(renderedTurnCount)")
+            }
 
             // Queue the restore for the next preference fire.
             if let cap = anchorCapture {
