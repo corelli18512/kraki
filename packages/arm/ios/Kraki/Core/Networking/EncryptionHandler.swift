@@ -198,7 +198,14 @@ final class EncryptionHandler {
             throw EncryptionError.invalidEnvelope
         }
 
-        KLog.d("🔐 Envelope keys: [\(keys.keys.map { String($0.prefix(12)) }.joined(separator: ", "))] — our deviceId: \(deviceId.prefix(12))...")
+        // Compact envelope-key log: just the count + whether we're in
+        // the recipient set. Full key dump is huge (28-device sessions
+        // emit ~500B per broadcast) and during agent-reply streaming
+        // these fire 20+/sec — string allocation + I/O dominates CPU.
+        // Re-enable the full dump via the `KRAKI_LOG_OS_LOG=1` env var
+        // path in KrakiLogger if needed.
+        let weAreIn = keys[deviceId] != nil ? "✓" : "✗"
+        KLog.d("🔐 Envelope keys=\(keys.count) us=\(weAreIn)")
 
         guard keys[deviceId] != nil else {
             KLog.d("📭 Not addressed to us")
