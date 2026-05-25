@@ -19,3 +19,9 @@ KRAKI_FILE_BY_FILE_REVIEW.md
 AGENTS.md
 .playwright-mcp/
 packages/arm/ios/.build/
+
+# iOS Xcode user state and intermediate build artifacts (review-fix)
+**/xcuserdata/
+*.xcuserstate
+packages/arm/ios/build/
+*.bak
