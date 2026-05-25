@@ -64,18 +64,9 @@ struct ChatView: View {
     /// scrolls through.
     private static let maxRenderedTurns: Int = 15
     /// Distance from the bottom of content (in points) at which the
-    /// bottom-edge expansion rule fires during active scrolling.
-    /// Tight so we only fire when the user is genuinely scrolling
-    /// past the rendered window's tail.
+    /// bottom-edge expansion rule fires. Mirrors `topSpinnerHeight +
+    /// topSpinnerSlop` semantics for the other end.
     private static let bottomEdgeSlop: CGFloat = 60
-    /// Wider distance from the bottom at which we ALSO fire when the
-    /// user has come to rest — `scrollPhase == .idle`. Real devices
-    /// have variable safe-area / input-bar insets (saw 83pt during
-    /// debugging on iPhone 16) and momentum often parks the user
-    /// 150–200pt above true content end after a swipe down. Without
-    /// this looser idle-state threshold, the user sees the bottom
-    /// spinner but no expand fires — the chat appears stuck.
-    private static let bottomEdgeIdleSlop: CGFloat = 240
     /// Minimum gap between two consecutive window expansions. Without
     /// throttling, `onScrollGeometryChange` fires fast enough to expand
     /// the entire memory store in one tick once the spinner becomes
@@ -823,39 +814,24 @@ struct ChatView: View {
 
         // Bottom-edge: slide window downward.
         //
-        // Intentionally NOT gated on settled scroll for the tight
-        // threshold. Bottom-edge slides don't have anchor preservation,
-        // so they don't create the same cascading-position problem as
-        // top-edge. The user reaching the bottom of rendered content
-        // with hasFoldedTurnsBelow=true is a clear "load more" intent
-        // — fire immediately, not after settle.
-        //
-        // Two-tier threshold:
-        //   1. Tight (`bottomEdgeSlop` = 60pt) — fires during any
-        //      scroll phase. Catches active scroll-to-bottom motion.
-        //   2. Wide (`bottomEdgeIdleSlop` = 240pt) — fires only when
-        //      scroll has settled. Catches the case where momentum or
-        //      safe-area insets parked the user 150–200pt above true
-        //      content end with the bottom spinner visible.
+        // Intentionally NOT gated on settled scroll. Bottom-edge
+        // slides don't have anchor preservation, so they don't
+        // create the same cascading-position problem as top-edge.
+        // The user reaching the bottom of rendered content with
+        // hasFoldedTurnsBelow=true is a clear "load more"
+        // intent — fire immediately, not after settle.
         let viewportBottomY = scrollOffsetY + viewportHeight
-        if hasFoldedTurnsBelow {
-            let tight = chatContentHeight - Self.bottomEdgeSlop
-            let wide = chatContentHeight - Self.bottomEdgeIdleSlop
-            if viewportBottomY > tight {
-                handleBottomEdgeExpand()
-                return
-            }
-            if scrollPhase == .idle && viewportBottomY > wide {
-                handleBottomEdgeExpand()
-                return
-            }
+        let bottomThreshold = chatContentHeight - Self.bottomEdgeSlop
+        if hasFoldedTurnsBelow && viewportBottomY > bottomThreshold {
+            handleBottomEdgeExpand()
+            return
         }
         // Diagnostic: log near-bottom-edge near-misses so we can
         // see when conditions aren't met during apparent-stuck cases.
         if hasFoldedTurnsBelow && scrollPhase == .idle {
             let gap = chatContentHeight - viewportBottomY
-            if gap < 400 {
-                KLog.d("🔻bottom-edge near-miss gap=\(gap) (viewportBottomY=\(viewportBottomY) contentH=\(chatContentHeight) tight=\(chatContentHeight - Self.bottomEdgeSlop) wide=\(chatContentHeight - Self.bottomEdgeIdleSlop))")
+            if gap < 200 {
+                KLog.d("🔻bottom-edge near-miss gap=\(gap) (viewportBottomY=\(viewportBottomY) contentH=\(chatContentHeight) threshold=\(bottomThreshold))")
             }
         }
     }
