@@ -172,6 +172,12 @@ struct ChatView: View {
     /// the user sees a vertical jump whenever the topmost-visible
     /// bubble wasn't already at viewport top at expand time.
     @State private var pendingAnchorRestore: (id: String, screenY: CGFloat)? = nil
+    /// Last-observed spinner visibility. Used only by the targeted
+    /// spinner diag log — when either edge's visibility flips, we
+    /// emit one line summarising the window state. Low-volume by
+    /// design (transitions happen at most a few times per scroll
+    /// session, not per frame).
+    @State private var lastSpinnerState: (top: Bool, bottom: Bool) = (false, false)
     /// Most recent observed scroll phase. Used to gate window
     /// expansion to settled scroll only — without this gate, a
     /// single user flick produces many `top-edge expand` triggers
@@ -441,6 +447,52 @@ struct ChatView: View {
             i -= 1
         }
         return 0
+    }
+
+    /// Snap an exclusive end-index forward to land **right after a
+    /// `.turn(...)`** — i.e. the last item inside the slice is an
+    /// agent reply, not a half-turn `.standalone(user_message)`.
+    /// Without this, sliding the window down (or jump-to-latest, or
+    /// any end-anchored mutation) can produce a slice whose tail is
+    /// a user message with the corresponding agent reply just below
+    /// the boundary — visible as "scroll to bottom and the last
+    /// thing I see is my own message, with a spinner under it
+    /// suggesting the reply is still loading" when in fact the reply
+    /// is already in memory, just not in the rendered tree.
+    ///
+    /// Returns `raw.count` if `idx` is at-or-past the end (the latest
+    /// content is included unconditionally, even if the latest item
+    /// is itself a user message with no reply yet — the streaming-
+    /// in-progress case).
+    private func snapEndIdxAfterTurn(_ idx: Int) -> Int {
+        let raw = cachedRawTurns
+        guard idx > 0 else { return 0 }
+        if idx >= raw.count { return raw.count }
+        var i = idx
+        while i < raw.count {
+            if case .turn = raw[i - 1] { return i }
+            i += 1
+        }
+        return raw.count
+    }
+
+    /// Compute a window [startIdx, endIdx) that:
+    ///   • starts on a `.standalone(user_message)` (snapStartIdxToUserMessage)
+    ///   • ends right after a `.turn(...)` (snapEndIdxAfterTurn)
+    ///   • is at most `maxRenderedTurns` items wide
+    ///   • includes the `endIdx` the caller asked for (so the latest
+    ///     content the caller wanted to show is in the slice)
+    ///
+    /// Returns the snapped (start, end) tuple. The caller assigns
+    /// `renderWindowStartIdx = start` and
+    /// `renderedTurnCount = end - start`.
+    private func snapWindow(desiredStart: Int, desiredEnd: Int) -> (start: Int, end: Int) {
+        let total = cachedRawTurns.count
+        let clampedEnd = max(0, min(total, desiredEnd))
+        let end = snapEndIdxAfterTurn(clampedEnd)
+        let clampedStart = max(0, min(desiredStart, end))
+        let start = snapStartIdxToUserMessage(clampedStart)
+        return (start, end)
     }
 
     /// Whether the session is idle (last message is idle type).
@@ -775,26 +827,10 @@ struct ChatView: View {
             }
         }
         .onChange(of: filteredMessages.count) { _, _ in
-            // Recompute the (expensive) raw turn grouping ONCE per
-            // batch instead of on every body re-render. All
-            // downstream rules (followBottom, autoLoad, edge slides,
-            // R3 target window-include) read from the cache.
             refreshGroupingCache()
-            // After each batch lands, if the top spinner is still
-            // visible and older history still exists, kick off the
-            // next page so we keep loading until either the spinner
-            // scrolls out of view or we hit firstSeq=1.
             maybeAutoLoadOlder()
-            // If new turns appeared at the BOTTOM AND the rendered
-            // window was previously anchored to the bottom (i.e., the
-            // user wasn't exploring history), slide the window down
-            // to keep the latest turns visible. Without this rule,
-            // new messages arriving while the user is on the chat
-            // screen end up folded below the rendered window and
-            // become invisible — symptom: R2 pill shows an OLD user
-            // message because the actual latest user message isn't
-            // even rendered.
             followBottomOnNewTurns()
+            logSpinnerStateIfChanged(reason: "msg-count-change")
         }
         .onChange(of: sessionIdle) { _, idle in
             // Turn complete — release the R1 lock so the next user
@@ -865,6 +901,43 @@ struct ChatView: View {
     /// every state mutation, every preference fire, every scroll
     /// offset transition while a restore is pending.
     private static let diagScrollCascade: Bool = false
+
+    /// Emit one log line when either spinner's visibility flips. Low
+    /// volume by design — fires at most a few times per scroll session.
+    /// Use to debug "spinner stuck visible" / "load not firing" without
+    /// the per-frame log flood that explodes CPU.
+    private func logSpinnerStateIfChanged(reason: String) {
+        let top = hasFoldedTurnsAbove
+        let bottom = hasFoldedTurnsBelow
+        guard top != lastSpinnerState.top || bottom != lastSpinnerState.bottom else { return }
+        let total = cachedAllTurnCount
+        let start = renderWindowStartIdx
+        let end = start + renderedTurnCount
+        // Describe what's at the window's last raw position (helps
+        // confirm "end lands after a turn" invariant).
+        let raw = cachedRawTurns
+        let tailType: String = {
+            guard end > 0, end <= raw.count else { return "?" }
+            switch raw[end - 1] {
+            case .standalone(let m): return "standalone(\(m.type))"
+            case .turn: return "turn"
+            }
+        }()
+        let headType: String = {
+            guard start < raw.count else { return "?" }
+            switch raw[start] {
+            case .standalone(let m): return "standalone(\(m.type))"
+            case .turn: return "turn"
+            }
+        }()
+        // Always emit via NSLog so this single line survives KLog being
+        // gated off — it's the diagnostic that matters when the user
+        // reports a stuck spinner.
+        let line = "🌀spinner top=\(top)→\(top != lastSpinnerState.top ? "FLIP" : "—") bottom=\(bottom)→\(bottom != lastSpinnerState.bottom ? "FLIP" : "—") win=[\(start)..\(end))/\(total) head=\(headType) tail=\(tailType) reason=\(reason)"
+        NSLog("🦑 %@", line)
+        print("🦑", line)
+        lastSpinnerState = (top, bottom)
+    }
 
     private func phaseDescription(_ phase: ScrollPhase) -> String {
         switch phase {
@@ -994,18 +1067,29 @@ struct ChatView: View {
                 } ?? false
                 KLog.d("🔝expand PRE offsetY=\(scrollOffsetY) startIdx=\(beforeStart) size=\(beforeCount) anchor=\(anchorCapture?.id.suffix(8) ?? "nil") screenY=\(anchorCapture?.screenY ?? -999) anchorInWindow=\(anchorInWindow)")
             }
-            let newStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
-            if renderedTurnCount < Self.maxRenderedTurns {
-                // Grow: extend top, keep bottom edge fixed.
-                renderedTurnCount = min(Self.maxRenderedTurns,
-                                         renderedTurnCount + Self.renderExpandStep)
+            // Top-edge expand: keep the current END fixed, grow START
+            // backward (or slide it back if at the rendered cap).
+            // `snapWindow` ensures both edges land on turn boundaries,
+            // so the slice's first row is a user bubble and the last
+            // row is an agent reply (or the latest user msg if no
+            // reply yet — streaming).
+            let currentEnd = renderWindowStartIdx + renderedTurnCount
+            let desiredStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
+            // If we have room to grow under the cap, extend endIdx by
+            // renderExpandStep too — but only on first growth pass,
+            // i.e. while renderedTurnCount < maxRenderedTurns.
+            let isGrowingPhase = renderedTurnCount < Self.maxRenderedTurns
+            let desiredEnd = isGrowingPhase
+                ? min(total, currentEnd)
+                : min(total, currentEnd) // sliding: end stays put
+            let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
+            // Cap to maxRenderedTurns by walking start forward if needed.
+            var finalStart = newStart
+            if newEnd - finalStart > Self.maxRenderedTurns {
+                finalStart = snapStartIdxToUserMessage(newEnd - Self.maxRenderedTurns)
             }
-            // After potential growth, clamp so window stays in bounds,
-            // then snap backward to the nearest user-message standalone
-            // so the rendered window always starts with a user bubble
-            // (anchor preservation depends on this).
-            let clamped = min(newStart, max(0, total - renderedTurnCount))
-            renderWindowStartIdx = snapStartIdxToUserMessage(clamped)
+            renderWindowStartIdx = finalStart
+            renderedTurnCount = max(1, newEnd - finalStart)
             if Self.diagScrollCascade {
                 KLog.d("🔝expand POST offsetY=\(scrollOffsetY) startIdx=\(renderWindowStartIdx) size=\(renderedTurnCount)")
             }
@@ -1017,6 +1101,7 @@ struct ChatView: View {
             } else {
                 KLog.d("🔝autoLoad top-edge expand startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchorPending=nil (no visible bubble)")
             }
+            logSpinnerStateIfChanged(reason: "top-edge-expand")
             return
         }
 
@@ -1047,14 +1132,23 @@ struct ChatView: View {
 
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
-        let newStart = min(total - renderedTurnCount,
-                            renderWindowStartIdx + Self.renderExpandStep)
-        // Snap to user-message boundary so the rendered window's first
-        // row is always a user bubble (matches top-edge symmetric
-        // behaviour; keeps the bottommost dropped turn a complete
-        // turn-pair instead of a half-pair).
-        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, newStart))
-        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
+        let beforeCount = renderedTurnCount
+        // Bottom-edge slide: move the END forward by renderExpandStep,
+        // then derive START from END - maxRenderedTurns. snapWindow
+        // ensures the new slice still ends right after a turn (so the
+        // last visible row is an agent reply, not a half-turn user
+        // message). Without this, the user scrolls down and lands on
+        // their own message with an agent reply just below the slice
+        // boundary — visible as "spinner still spinning at the bottom
+        // even though I'm at the latest content."
+        let currentEnd = renderWindowStartIdx + renderedTurnCount
+        let desiredEnd = min(total, currentEnd + Self.renderExpandStep)
+        let desiredStart = max(0, desiredEnd - Self.maxRenderedTurns)
+        let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
+        renderWindowStartIdx = newStart
+        renderedTurnCount = max(1, newEnd - newStart)
+        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total))")
+        logSpinnerStateIfChanged(reason: "bottom-edge-slide")
     }
 
     /// Jump-to-latest: snap the window to the bottom and scroll to
@@ -1064,9 +1158,18 @@ struct ChatView: View {
     private func jumpToLatest() {
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
-        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, total - renderedTurnCount))
+        // End at total (the latest item), derive start. snapWindow
+        // guarantees: start = a user_message standalone, end =
+        // right after a turn (or the absolute end if the latest item
+        // is a user msg with no reply yet).
+        let desiredEnd = total
+        let desiredStart = max(0, desiredEnd - Self.maxRenderedTurns)
+        let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
+        renderWindowStartIdx = newStart
+        renderedTurnCount = max(1, newEnd - newStart)
         chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
         KLog.d("⏬jumpToLatest startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(renderedTurnCount) (allTurns=\(total))")
+        logSpinnerStateIfChanged(reason: "jump-to-latest")
     }
 
     /// When new turns arrive (live agent reply, user reply, tool
@@ -1117,12 +1220,21 @@ struct ChatView: View {
         // (sliding would drop the very first turn the user wants to
         // see). Once we hit the cap, fall through to sliding.
         if renderWindowStartIdx == 0 && renderedTurnCount < Self.maxRenderedTurns {
-            renderedTurnCount = min(Self.maxRenderedTurns, newTotal)
+            // Below cap — just grow to include the latest. End at total.
+            let (newStart, newEnd) = snapWindow(desiredStart: 0, desiredEnd: newTotal)
+            renderWindowStartIdx = newStart
+            renderedTurnCount = max(1, newEnd - newStart)
         } else {
-            renderWindowStartIdx = snapStartIdxToUserMessage(max(0, newTotal - renderedTurnCount))
+            // At cap — slide window forward to keep end at latest.
+            let desiredEnd = newTotal
+            let desiredStart = max(0, desiredEnd - Self.maxRenderedTurns)
+            let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
+            renderWindowStartIdx = newStart
+            renderedTurnCount = max(1, newEnd - newStart)
         }
         if renderWindowStartIdx != beforeStart || renderedTurnCount != beforeCount {
             KLog.d("📌followBottom slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (total \(lastSeenTotalTurns)→\(newTotal))")
+            logSpinnerStateIfChanged(reason: "follow-bottom")
         }
     }
 
@@ -1413,8 +1525,13 @@ struct ChatView: View {
         let beforeStart = renderWindowStartIdx
         let beforeCount = renderedTurnCount
         let bufferAbove = min(idx, 2)
-        renderWindowStartIdx = snapStartIdxToUserMessage(idx - bufferAbove)
-        renderedTurnCount = min(Self.maxRenderedTurns, cachedAllTurnCount - renderWindowStartIdx)
+        // Position so target is near the top with bufferAbove context.
+        // End extends downward to fill the cap.
+        let desiredStart = max(0, idx - bufferAbove)
+        let desiredEnd = min(cachedAllTurnCount, desiredStart + Self.maxRenderedTurns)
+        let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
+        renderWindowStartIdx = newStart
+        renderedTurnCount = max(1, newEnd - newStart)
         KLog.d("🪟ensureRenderedWindowIncludes: msg=\(msg.id.prefix(8)) at idx=\(idx)/\(cachedAllTurnCount); window startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) bufferAbove=\(bufferAbove)")
     }
 
@@ -1519,8 +1636,13 @@ struct ChatView: View {
         // spinner to expand the window, which grows up to
         // `maxRenderedTurns` then slides further as needed.
         let totalTurns = cachedAllTurnCount
-        renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurns))
-        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, totalTurns - renderedTurnCount))
+        // Entry: anchor end at total, derive start with initial count.
+        // snapWindow ensures start = user-message, end = right after turn.
+        let initialEnd = totalTurns
+        let initialStart = max(0, initialEnd - Self.initialRenderTurnCount)
+        let (entryStart, entryEnd) = snapWindow(desiredStart: initialStart, desiredEnd: initialEnd)
+        renderWindowStartIdx = entryStart
+        renderedTurnCount = max(1, entryEnd - entryStart)
         lastWindowExpansion = nil
         pendingAnchorRestore = nil
         // Capture whether we started empty BEFORE any await. We use
@@ -1578,8 +1700,11 @@ struct ChatView: View {
         // this is the first time we have a valid total to position
         // the window against.
         let totalTurnsAfterPoll = cachedAllTurnCount
-        renderedTurnCount = min(Self.initialRenderTurnCount, max(1, totalTurnsAfterPoll))
-        renderWindowStartIdx = snapStartIdxToUserMessage(max(0, totalTurnsAfterPoll - renderedTurnCount))
+        let pollEnd = totalTurnsAfterPoll
+        let pollStart = max(0, pollEnd - Self.initialRenderTurnCount)
+        let (pollNewStart, pollNewEnd) = snapWindow(desiredStart: pollStart, desiredEnd: pollEnd)
+        renderWindowStartIdx = pollNewStart
+        renderedTurnCount = max(1, pollNewEnd - pollNewStart)
         // Initialize the follow-bottom baseline. Without this, the
         // first `followBottomOnNewTurns()` call would see
         // `lastSeenTotalTurns = 0` and treat the window as "at
@@ -1588,6 +1713,7 @@ struct ChatView: View {
         lastSeenTotalTurns = totalTurnsAfterPoll
 
         KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(totalTurnsAfterPoll) window=[\(renderWindowStartIdx),\(renderWindowStartIdx+renderedTurnCount)) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
+        logSpinnerStateIfChanged(reason: "entry-scroll")
 
         // Re-baseline ONLY for fresh loads — the messages that just
         // landed are historical backfill and must not trip R1. For
@@ -1719,7 +1845,12 @@ struct ChatView: View {
         // the latest turn alongside R1's followBottom scroll.
         let total = cachedAllTurnCount
         if total > 0 {
-            renderWindowStartIdx = snapStartIdxToUserMessage(max(0, total - renderedTurnCount))
+            // End at total (latest), derive start.
+            let newDesiredEnd = total
+            let newDesiredStart = max(0, newDesiredEnd - Self.maxRenderedTurns)
+            let (newWStart, newWEnd) = snapWindow(desiredStart: newDesiredStart, desiredEnd: newDesiredEnd)
+            renderWindowStartIdx = newWStart
+            renderedTurnCount = max(1, newWEnd - newWStart)
         }
         // Reset the visibility gate. LOCK in checkLockTransition is only
         // permitted after we've seen the new bubble inside the viewport
