@@ -142,7 +142,7 @@ final class MessageStoreTests: XCTestCase {
         store.appendMessage("sess-1", makeMsg(type: "pending_input", seq: 0,
             payload: ["content": AnyCodable("draft message")]))
 
-        store.resolvePendingInput("sess-1", seq: 5, content: "draft message")
+        store.resolvePendingInput("sess-1", seq: 5, clientId: nil, content: "draft message")
 
         let messages = store.getMessages("sess-1")
         XCTAssertEqual(messages.count, 1)

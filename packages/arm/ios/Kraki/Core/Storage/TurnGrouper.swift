@@ -10,6 +10,11 @@ import Foundation
 
 struct Turn: Identifiable {
     let id: String
+    /// The user message that opened this turn (if any). User-side
+    /// messages (`user_message`, `send_input`, `pending_input`) live
+    /// at the TOP of their turn rather than as separate standalone
+    /// items so each turn is a self-contained idle-bounded unit.
+    var userMessage: ChatMessage?
     var thinkingMessages: [ChatMessage]
     var finalMessage: ChatMessage?
     /// True if the turn is still receiving messages (no idle yet).
@@ -30,15 +35,25 @@ enum TurnItem: Identifiable {
 
 // MARK: - Constants
 
-/// Message types that always display as standalone (never collapsed into thinking).
+/// Message types that display as their own standalone bubble — true
+/// session-level events that don't belong to any agent activity turn.
+/// User messages are NOT standalone: they live at the top of their
+/// owning turn (idle-bounded).
 private let standaloneTypes: Set<String> = [
-    "user_message",
-    "send_input",
-    "pending_input",
     "session_created",
     "session_ended",
     "kill_session",
     "session_deleted",
+]
+
+/// User-side message types that open a new turn. The first one in a
+/// turn becomes `Turn.userMessage`. Tentacle guarantees no two
+/// consecutive user-side messages without an intervening agent
+/// activity + idle, so we only ever store one per turn.
+private let userMessageTypes: Set<String> = [
+    "user_message",
+    "send_input",
+    "pending_input",
 ]
 
 /// Message types that belong in the thinking box.
@@ -66,22 +81,34 @@ private let turnCompleteTypes: Set<String> = [
 
 // MARK: - Grouping Function
 
-/// Groups a flat message list into turn-based structure for UI rendering.
+/// Groups a flat message list into idle-bounded turn structures for
+/// UI rendering.
 ///
-/// Rules (mirror web exactly):
-/// - Standalone messages are emitted directly.
-/// - Between user messages, all agent-side messages are grouped into a Turn.
-/// - Within a Turn, all messages except the last agent_message go into thinkingMessages.
-/// - The last agent_message becomes finalMessage.
-/// - tool_start + tool_complete merged by toolCallId (complete replaces start, args merged).
-/// - Questions are always standalone, splitting the turn.
-/// - idle signals turn complete.
-/// - Active streaming content appended as synthetic agent_message in current turn.
+/// Rules:
+/// - A **turn** is everything between two `idle` markers (inclusive
+///   of the trailing `idle`). Each turn typically has one user
+///   message + agent activity + final agent reply.
+/// - `user_message`/`send_input`/`pending_input` go to
+///   `Turn.userMessage` (first one wins; tentacle never emits two
+///   user-side messages without an intervening idle).
+/// - Within a Turn, all messages except the last `agent_message` go
+///   into `thinkingMessages`; the last `agent_message` becomes
+///   `finalMessage`.
+/// - `session_created`/`session_ended`/`kill_session`/`session_deleted`
+///   render as their own standalone bubbles.
+/// - `tool_start`+`tool_complete` merged by `toolCallId`.
+/// - `question` merged into the preceding `ask_user` tool_start.
+/// - `idle` arriving while a permission is still unresolved is
+///   DEFERRED (skipped) — the activity following approval is
+///   conceptually part of the same turn.
+/// - Active streaming content is appended as a synthetic
+///   `agent_message` in the current turn.
 func groupMessagesIntoTurns(
     _ messages: [ChatMessage],
     streamingContent: String? = nil
 ) -> [TurnItem] {
     var result: [TurnItem] = []
+    var currentUserMessage: ChatMessage? = nil
     var currentThinking: [ChatMessage] = []
     /// Permission IDs that have been asked but not yet resolved, tracked in
     /// stream order. We can't rely on `ChatMessage.resolution` because
@@ -96,14 +123,18 @@ func groupMessagesIntoTurns(
 
     func flushTurn(turnComplete: Bool) {
         defer { unresolvedPermIds.removeAll() }
-        guard !currentThinking.isEmpty else { return }
+        guard currentUserMessage != nil || !currentThinking.isEmpty else { return }
         turnCounter += 1
-        let turnId = "turn:\(turnCounter):\(currentThinking.first?.id ?? "unknown")"
+        let anchor = currentUserMessage?.id
+            ?? currentThinking.first?.id
+            ?? "unknown"
+        let turnId = "turn:\(turnCounter):\(anchor)"
 
         if !turnComplete {
             // Turn still in progress — everything stays in thinking
             result.append(.turn(Turn(
                 id: turnId,
+                userMessage: currentUserMessage,
                 thinkingMessages: currentThinking,
                 finalMessage: nil,
                 isActive: true
@@ -119,9 +150,9 @@ func groupMessagesIntoTurns(
             }
 
             if lastAgentIdx == -1 {
-                // No agent_message — just thinking steps
                 result.append(.turn(Turn(
                     id: turnId,
+                    userMessage: currentUserMessage,
                     thinkingMessages: currentThinking,
                     finalMessage: nil,
                     isActive: false
@@ -133,6 +164,7 @@ func groupMessagesIntoTurns(
                 let finalMsg = currentThinking[lastAgentIdx]
                 result.append(.turn(Turn(
                     id: turnId,
+                    userMessage: currentUserMessage,
                     thinkingMessages: thinking,
                     finalMessage: finalMsg,
                     isActive: false
@@ -140,6 +172,7 @@ func groupMessagesIntoTurns(
             }
         }
 
+        currentUserMessage = nil
         currentThinking = []
     }
 
@@ -160,6 +193,16 @@ func groupMessagesIntoTurns(
         if standaloneTypes.contains(msg.type) {
             flushTurn(turnComplete: true)
             result.append(.standalone(msg))
+        } else if userMessageTypes.contains(msg.type) {
+            // User-side message opens a new turn. Tentacle doesn't
+            // allow two consecutive user messages without an
+            // intervening idle, but defensively close any
+            // in-progress turn first so a stray double-tap still
+            // renders cleanly.
+            if currentUserMessage != nil || !currentThinking.isEmpty {
+                flushTurn(turnComplete: true)
+            }
+            currentUserMessage = msg
         } else if turnCompleteTypes.contains(msg.type) {
             // Defer the flush if the current turn has a permission that
             // hasn't been resolved yet — agents typically emit `idle`

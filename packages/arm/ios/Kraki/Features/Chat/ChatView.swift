@@ -58,11 +58,11 @@ struct ChatView: View {
     /// stay in memory but are not in the SwiftUI tree (cheaper layout
     /// passes, R1/R2 frame measurement only over the visible window).
     /// The user can scroll up past the rendered window to auto-expand.
-    private static let initialRenderTurnCount: Int = 5
+    private static let initialRenderTurnCount: Int = 3
     /// Number of additional turns to bring into the rendered window
     /// each time the user hits the spinner threshold and folded
     /// in-memory turns remain.
-    private static let renderExpandStep: Int = 5
+    private static let renderExpandStep: Int = 3
     /// Hard cap on the rendered window size. Once the window has
     /// grown to this size, further top-edge expansion drops an equal
     /// number of turns from the bottom (sliding window). Conversely
@@ -70,7 +70,7 @@ struct ChatView: View {
     /// window with folded turns below, the window slides down. Keeps
     /// layout passes bounded regardless of how much history the user
     /// scrolls through.
-    private static let maxRenderedTurns: Int = 15
+    private static let maxRenderedTurns: Int = 8
     /// Distance from the bottom of content (in points) at which the
     /// bottom-edge expansion rule fires. Mirrors `topSpinnerHeight +
     /// topSpinnerSlop` semantics for the other end.
@@ -376,7 +376,7 @@ struct ChatView: View {
         if let last = raw.last, case .turn(let turn) = last, turn.finalMessage == nil {
             return raw
         }
-        return raw + [.turn(Turn(id: "streaming", thinkingMessages: [], finalMessage: nil, isActive: true))]
+        return raw + [.turn(Turn(id: "streaming", userMessage: nil, thinkingMessages: [], finalMessage: nil, isActive: true))]
     }
 
     /// Grouped turn items, windowed via the sliding-window state.
@@ -403,95 +403,25 @@ struct ChatView: View {
         }
         if end > raw.count {
             // Slice extends into the synthetic streaming turn.
-            result.append(.turn(Turn(id: "streaming", thinkingMessages: [], finalMessage: nil, isActive: true)))
+            result.append(.turn(Turn(id: "streaming", userMessage: nil, thinkingMessages: [], finalMessage: nil, isActive: true)))
         }
         return result
     }
 
-    /// Snap a candidate `renderWindowStartIdx` value backward to the
-    /// nearest `.standalone(user_message)` (or `send_input` /
-    /// `pending_input`) at or before `idx`. Guarantees the rendered
-    /// window always begins on a turn-pair boundary — i.e., the first
-    /// rendered row is a user-side bubble, never a mid-turn agent
-    /// reply. Without this, slicing by raw item index lands on a
-    /// `.turn(...)` half the time (because the grouped list
-    /// alternates user-standalone / agent-turn), which:
+    /// Clamp a desired window `[desiredStart, desiredEnd)` to valid
+    /// bounds within `cachedRawTurns`. In the idle-bounded turn model
+    /// every grouped item (either a complete `.turn` or a true
+    /// `.standalone` session event) is a self-contained render unit,
+    /// so the only adjustment needed is clamping — there's no
+    /// half-turn boundary to snap away from.
     ///
-    ///   • makes `topmostVisibleUserBubbleId()` return nil for some
-    ///     scroll positions (no user bubble at the top of the
-    ///     rendered set), so anchor preservation captures no anchor
-    ///     and the top-edge expand cascades.
-    ///   • shows "spinner above an agent reply" instead of the user
-    ///     message that started that turn — which is visually wrong
-    ///     and prevents the user from knowing which question the
-    ///     agent is answering.
-    ///
-    /// Snapping is always **backward** (never skips content): if the
-    /// caller wanted to slide the window to `idx` but `idx` lands
-    /// mid-turn, we shift to `idx-1` (or further) until we hit a
-    /// user-side standalone. Returns 0 if no user-side standalone
-    /// exists at or before `idx`.
-    private func snapStartIdxToUserMessage(_ idx: Int) -> Int {
-        guard idx > 0 else { return 0 }
-        let raw = cachedRawTurns
-        let cap = min(idx, raw.count - 1)
-        guard cap >= 0 else { return 0 }
-        var i = cap
-        while i > 0 {
-            if case .standalone(let msg) = raw[i],
-               msg.type == "user_message" ||
-                msg.type == "send_input" ||
-                msg.type == "pending_input" {
-                return i
-            }
-            i -= 1
-        }
-        return 0
-    }
-
-    /// Snap an exclusive end-index forward to land **right after a
-    /// `.turn(...)`** — i.e. the last item inside the slice is an
-    /// agent reply, not a half-turn `.standalone(user_message)`.
-    /// Without this, sliding the window down (or jump-to-latest, or
-    /// any end-anchored mutation) can produce a slice whose tail is
-    /// a user message with the corresponding agent reply just below
-    /// the boundary — visible as "scroll to bottom and the last
-    /// thing I see is my own message, with a spinner under it
-    /// suggesting the reply is still loading" when in fact the reply
-    /// is already in memory, just not in the rendered tree.
-    ///
-    /// Returns `raw.count` if `idx` is at-or-past the end (the latest
-    /// content is included unconditionally, even if the latest item
-    /// is itself a user message with no reply yet — the streaming-
-    /// in-progress case).
-    private func snapEndIdxAfterTurn(_ idx: Int) -> Int {
-        let raw = cachedRawTurns
-        guard idx > 0 else { return 0 }
-        if idx >= raw.count { return raw.count }
-        var i = idx
-        while i < raw.count {
-            if case .turn = raw[i - 1] { return i }
-            i += 1
-        }
-        return raw.count
-    }
-
-    /// Compute a window [startIdx, endIdx) that:
-    ///   • starts on a `.standalone(user_message)` (snapStartIdxToUserMessage)
-    ///   • ends right after a `.turn(...)` (snapEndIdxAfterTurn)
-    ///   • is at most `maxRenderedTurns` items wide
-    ///   • includes the `endIdx` the caller asked for (so the latest
-    ///     content the caller wanted to show is in the slice)
-    ///
-    /// Returns the snapped (start, end) tuple. The caller assigns
+    /// Returns the clamped (start, end) tuple. The caller assigns
     /// `renderWindowStartIdx = start` and
     /// `renderedTurnCount = end - start`.
     private func snapWindow(desiredStart: Int, desiredEnd: Int) -> (start: Int, end: Int) {
         let total = cachedRawTurns.count
-        let clampedEnd = max(0, min(total, desiredEnd))
-        let end = snapEndIdxAfterTurn(clampedEnd)
-        let clampedStart = max(0, min(desiredStart, end))
-        let start = snapStartIdxToUserMessage(clampedStart)
+        let end = max(0, min(total, desiredEnd))
+        let start = max(0, min(desiredStart, end))
         return (start, end)
     }
 
@@ -632,52 +562,63 @@ struct ChatView: View {
                         let hasStreaming = isLastTurn && streaming != nil
                         let turnId = turn.id
 
-                        if let final = turn.finalMessage, !hasStreaming {
-                            // Turn complete: final bubble with thinking history inside
-                            MessageBubbleView(
-                                message: final,
-                                agent: session?.agent ?? "",
-                                turnImages: collectTurnImages(turn.thinkingMessages),
-                                thinkingHistory: turn.thinkingMessages,
-                                historyExpanded: Binding(
-                                    get: { expandedTurns.contains(turnId) },
-                                    set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
-                                )
-                            )
-                            .id(messageScrollId(final))
-                        } else if !turn.thinkingMessages.isEmpty || hasStreaming {
-                            // Turn in progress
-                            let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
-                            let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
-                            let hasStreamingContent = hasStreaming && streaming?.isEmpty == false
-                            let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
+                        // Each idle-bounded turn renders as: optional
+                        // leading user bubble (the message that opened
+                        // the turn) followed by the agent activity
+                        // bubble. Both render here so the turn is a
+                        // self-contained unit in the scroll list.
+                        Group {
+                            if let userMsg = turn.userMessage {
+                                standaloneRow(userMsg)
+                            }
 
-                            if hasMessage || hasStreamingContent || hasTools {
+                            if let final = turn.finalMessage, !hasStreaming {
+                                // Turn complete: final bubble with thinking history inside
                                 MessageBubbleView(
-                                    message: latestMsg ?? ChatMessage(
-                                        type: "agent_message",
-                                        seq: 0,
-                                        sessionId: sessionId,
-                                        deviceId: nil,
-                                        timestamp: nil,
-                                        payload: [:]
-                                    ),
+                                    message: final,
                                     agent: session?.agent ?? "",
+                                    turnImages: collectTurnImages(turn.thinkingMessages),
                                     thinkingHistory: turn.thinkingMessages,
                                     historyExpanded: Binding(
                                         get: { expandedTurns.contains(turnId) },
                                         set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
-                                    ),
-                                    streamingText: hasStreaming ? streaming : nil
+                                    )
                                 )
-                                // Tag the in-progress turn with a scroll id
-                                // when it has a usable agent_message — R3
-                                // priority 3 ("last agent_message at top")
-                                // targets exactly this id. Without the tag,
-                                // an unread session whose latest turn is
-                                // still mid-stream loses its scroll target
-                                // and falls back to defaultScrollAnchor.
-                                .id(latestMsg.map { messageScrollId($0) } ?? "turn-\(turnId)")
+                                .id(messageScrollId(final))
+                            } else if !turn.thinkingMessages.isEmpty || hasStreaming {
+                                // Turn in progress
+                                let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
+                                let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
+                                let hasStreamingContent = hasStreaming && streaming?.isEmpty == false
+                                let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
+
+                                if hasMessage || hasStreamingContent || hasTools {
+                                    MessageBubbleView(
+                                        message: latestMsg ?? ChatMessage(
+                                            type: "agent_message",
+                                            seq: 0,
+                                            sessionId: sessionId,
+                                            deviceId: nil,
+                                            timestamp: nil,
+                                            payload: [:]
+                                        ),
+                                        agent: session?.agent ?? "",
+                                        thinkingHistory: turn.thinkingMessages,
+                                        historyExpanded: Binding(
+                                            get: { expandedTurns.contains(turnId) },
+                                            set: { if $0 { expandedTurns.insert(turnId) } else { expandedTurns.remove(turnId) } }
+                                        ),
+                                        streamingText: hasStreaming ? streaming : nil
+                                    )
+                                    // Tag the in-progress turn with a scroll id
+                                    // when it has a usable agent_message — R3
+                                    // priority 3 ("last agent_message at top")
+                                    // targets exactly this id. Without the tag,
+                                    // an unread session whose latest turn is
+                                    // still mid-stream loses its scroll target
+                                    // and falls back to defaultScrollAnchor.
+                                    .id(latestMsg.map { messageScrollId($0) } ?? "turn-\(turnId)")
+                                }
                             }
                         }
                     }
@@ -735,22 +676,18 @@ struct ChatView: View {
                 KLog.d("📏geom WHILE-PENDING offsetY=\(oldM.offsetY)→\(m.offsetY) Δ=\(m.offsetY - oldM.offsetY) contentH=\(oldM.contentHeight)→\(m.contentHeight)")
             }
             // Viewport shrank (keyboard came up, or the input box grew
-            // an extra line, or any other safe-area inset change) and
-            // the user was previously at or near the bottom → re-pin
-            // to chat-bottom so the latest message stays visible
-            // above the new compose / keyboard region instead of
-            // getting buried beneath it. Threshold mirrors the
-            // bottom-edge auto-load slop so brief inset jitter
-            // doesn't yank scroll around.
+            // an extra line, or any other safe-area inset change) →
+            // pin to chat-bottom so the latest message stays visible
+            // above the new compose / keyboard region. Always pin,
+            // even when the user was scrolled up: the keyboard
+            // appearing means they're focusing the input to send a
+            // new message, and they expect that new message + the
+            // latest reply visible right above their typing.
             let viewportShrunk = m.viewportHeight + 1 < oldM.viewportHeight
-            let oldEffectiveBottom = oldM.contentHeight - oldM.insetBottom
-            let wasAtBottom = oldM.contentHeight > 0
-                && (oldM.offsetY + oldM.viewportHeight)
-                    >= oldEffectiveBottom - Self.bottomEdgeSlop
             Task { @MainActor in
                 checkLockTransition(proxy: proxy)
                 maybeAutoLoadOlder()
-                if viewportShrunk && wasAtBottom && growMode == .idle {
+                if viewportShrunk && growMode == .idle {
                     scrollToBottomInstant(proxy: proxy)
                 }
             }
@@ -971,31 +908,23 @@ struct ChatView: View {
         // stay in the rendered window.
         guard growMode == .idle else { return }
 
-        // Top-edge: expand window upward. Gated on settled scroll
-        // because momentum cascades into multiple top-edge fires
-        // landing the user at unpredictable scroll positions
-        // depending on which anchor bubble is current at each tick.
-        // The `.onScrollPhaseChange .idle` callback also calls
-        // `maybeAutoLoadOlder()` so this fires reliably after the
-        // user's motion settles.
+        // Top-edge: expand window upward. Fires whenever the spinner
+        // is in (or near) the viewport — no scroll-phase gate. To
+        // prevent inertia from carrying the user past the rendered
+        // top while we're still loading, `handleTopEdgeExpand` halts
+        // momentum by programmatically pinning scroll to the
+        // captured anchor before mutating the window.
         let topThreshold = Self.topSpinnerHeight + Self.topSpinnerSlop
         if scrollOffsetY < topThreshold {
             if Self.diagScrollCascade {
                 KLog.d("🔝gate offsetY=\(scrollOffsetY) phase=\(phaseDescription(scrollPhase)) growMode=\(growMode) hasAbove=\(hasFoldedTurnsAbove) pendingRestore=\(pendingAnchorRestore?.id.suffix(8) ?? "nil")")
             }
-            guard scrollPhase == .idle else { return }
             handleTopEdgeExpand()
             return
         }
 
-        // Bottom-edge: slide window downward.
-        //
-        // Intentionally NOT gated on settled scroll. Bottom-edge
-        // slides don't have anchor preservation, so they don't
-        // create the same cascading-position problem as top-edge.
-        // The user reaching the bottom of rendered content with
-        // hasFoldedTurnsBelow=true is a clear "load more"
-        // intent — fire immediately, not after settle.
+        // Bottom-edge: slide window downward. Same semantic as top —
+        // fires on spinner visible regardless of scroll phase.
         //
         // Use `effectiveContentBottom` (= contentHeight − insetBottom)
         // not `contentHeight` directly: SwiftUI's `geo.contentSize.height`
@@ -1058,6 +987,18 @@ struct ChatView: View {
                 return (id, screenY)
             }()
 
+            // Halt any in-flight scroll momentum: a programmatic
+            // scrollTo to the CURRENT y kills inertia, preventing
+            // the user from blowing past the spinner while load is
+            // in progress. Wrap in a non-animated transaction so
+            // SwiftUI doesn't try to animate the no-op.
+            if let cap = anchorCapture {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) {
+                    chatScrollPosition.scrollTo(id: cap.id, anchor: UnitPoint(x: 0, y: cap.screenY / max(1, viewportHeight)))
+                }
+            }
+
             let total = cachedAllTurnCount
             let beforeStart = renderWindowStartIdx
             let beforeCount = renderedTurnCount
@@ -1086,7 +1027,7 @@ struct ChatView: View {
             // Cap to maxRenderedTurns by walking start forward if needed.
             var finalStart = newStart
             if newEnd - finalStart > Self.maxRenderedTurns {
-                finalStart = snapStartIdxToUserMessage(newEnd - Self.maxRenderedTurns)
+                finalStart = max(0, newEnd - Self.maxRenderedTurns)
             }
             renderWindowStartIdx = finalStart
             renderedTurnCount = max(1, newEnd - finalStart)
@@ -1118,10 +1059,11 @@ struct ChatView: View {
 
     /// Bottom-edge expansion: slide window down by `renderExpandStep`
     /// per debounced trigger, exposing the next folded-below turns.
-    /// Symmetric with top-edge: scroll-down feels like incremental
-    /// exploration, not a teleport. For the "I want to see latest
-    /// now" intent the user can tap the floating jump-to-latest
-    /// button instead.
+    /// Symmetric with top-edge: capture the BOTTOMMOST visible user
+    /// bubble + screen Y before mutation, queue a restore for after
+    /// the next preference fire. The bottom anchor survives the slide
+    /// because items dropped from the rendered tree come from the
+    /// TOP of the window, never the bottom.
     private func handleBottomEdgeExpand() {
         let now = Date()
         if let last = lastWindowExpansion,
@@ -1130,24 +1072,43 @@ struct ChatView: View {
         }
         lastWindowExpansion = now
 
+        // Anchor preservation (mirror of top-edge): capture the
+        // bottommost-visible user bubble before sliding.
+        let anchorCapture: (id: String, screenY: CGFloat)? = {
+            guard let id = bottommostVisibleUserBubbleId(),
+                  let frame = userBubbleFrames[id] else { return nil }
+            let screenY = frame.minY - scrollOffsetY
+            return (id, screenY)
+        }()
+
+        // Halt scroll momentum so the user doesn't blow past the
+        // spinner mid-load. See `handleTopEdgeExpand` for the same
+        // pattern at the other edge.
+        if let cap = anchorCapture {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                chatScrollPosition.scrollTo(id: cap.id, anchor: UnitPoint(x: 0, y: cap.screenY / max(1, viewportHeight)))
+            }
+        }
+
         let total = cachedAllTurnCount
         let beforeStart = renderWindowStartIdx
         let beforeCount = renderedTurnCount
         // Bottom-edge slide: move the END forward by renderExpandStep,
-        // then derive START from END - maxRenderedTurns. snapWindow
-        // ensures the new slice still ends right after a turn (so the
-        // last visible row is an agent reply, not a half-turn user
-        // message). Without this, the user scrolls down and lands on
-        // their own message with an agent reply just below the slice
-        // boundary — visible as "spinner still spinning at the bottom
-        // even though I'm at the latest content."
+        // then derive START from END - maxRenderedTurns.
         let currentEnd = renderWindowStartIdx + renderedTurnCount
         let desiredEnd = min(total, currentEnd + Self.renderExpandStep)
         let desiredStart = max(0, desiredEnd - Self.maxRenderedTurns)
         let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
         renderWindowStartIdx = newStart
         renderedTurnCount = max(1, newEnd - newStart)
-        KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total))")
+
+        if let cap = anchorCapture {
+            pendingAnchorRestore = cap
+            KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchorPending=user-\(cap.id.suffix(8)) screenY=\(cap.screenY)")
+        } else {
+            KLog.d("🔻autoLoad bottom-edge slide startIdx=\(beforeStart)→\(renderWindowStartIdx) size=\(beforeCount)→\(renderedTurnCount) (allTurns=\(total)) anchorPending=nil")
+        }
         logSpinnerStateIfChanged(reason: "bottom-edge-slide")
     }
 
@@ -1511,7 +1472,8 @@ struct ChatView: View {
             case .standalone(let m):
                 if m.id == msg.id { idx = i }
             case .turn(let t):
-                if t.finalMessage?.id == msg.id ||
+                if t.userMessage?.id == msg.id ||
+                   t.finalMessage?.id == msg.id ||
                    t.thinkingMessages.contains(where: { $0.id == msg.id }) {
                     idx = i
                 }
@@ -1560,51 +1522,30 @@ struct ChatView: View {
     // function before any awaits.
 
     /// Resolve the entry-scroll target for an unread session. Returns
-    /// `nil` to mean "scroll to bottom" (rules 4 or no usable target).
-    /// Returns the target ChatMessage so callers can both derive the
-    /// scroll id and ensure the rendered window includes it.
+    /// `nil` to mean "scroll to bottom" (read sessions, or no usable
+    /// unread anchor). Returns a target ChatMessage so callers can
+    /// both derive the scroll id and ensure the rendered window
+    /// includes it.
+    ///
+    /// Unread sessions anchor on the FIRST USER MESSAGE the user
+    /// hasn't read yet — pinned to the viewport top. This way the
+    /// user's own message sits at the top of the screen and the
+    /// agent's reply appears naturally below, matching the
+    /// read-from-the-question-down flow they expect.
     private func entryScrollTarget() -> (msg: ChatMessage, anchor: UnitPoint)? {
-        // 1. Last unanswered question — but ONLY if it's still
-        //    "pending": no user message has been sent after it. A
-        //    question with no answer + no resolution + a later user
-        //    message has been superseded (user typed a follow-up
-        //    instead of answering). Without this guard, the rule
-        //    pulls users back into ancient history every time they
-        //    re-open a session that ever contained an unanswered
-        //    question.
-        let lastUserSeq = lastUserMessage?.seq ?? -1
-        for msg in filteredMessages.reversed() {
-            if msg.type == "question" {
-                let answer = msg.answer ?? ""
-                let resolution = msg.resolution
-                if answer.isEmpty && resolution == nil && msg.seq > lastUserSeq {
-                    KLog.d("entryScrollTarget=\(msg.id.prefix(8)) type=question seq=\(msg.seq) anchor=top (priority 1: pending unanswered question)")
-                    return (msg, .top)
-                }
-            }
-        }
-
-        // 2. If idle, last user_message / send_input — read your own
-        //    message → agent's reply naturally.
-        if sessionIdle, let target = lastUserMessage {
-            KLog.d("entryScrollTarget=\(target.id.prefix(8)) type=\(target.type) seq=\(target.seq) anchor=top (priority 2: idle+lastUser)")
-            return (target, .top)
-        }
-
-        // 3. Last turn with a finalMessage — read the latest agent reply
-        //    from the start.
-        for msg in filteredMessages.reversed() {
-            if msg.type == "agent_message" {
-                // Only treat as a turn-final if it's the last
-                // agent_message and followed only by idle/standalone
-                // boundary types. Defensive — most "agent_message"
-                // entries in an idle session ARE finals.
-                KLog.d("entryScrollTarget=\(msg.id.prefix(8)) type=agent_message seq=\(msg.seq) anchor=top (priority 3: lastAgentMessage)")
+        let readSeq = sessionStore.sessions[sessionId]?.readSeq ?? 0
+        // First user-side message with seq > readSeq, in chronological order.
+        for msg in filteredMessages {
+            guard msg.seq > readSeq else { continue }
+            if msg.type == "user_message"
+                || msg.type == "send_input"
+                || msg.type == "pending_input" {
+                KLog.d("entryScrollTarget=\(msg.id.prefix(8)) type=\(msg.type) seq=\(msg.seq) anchor=top (first unread user message)")
                 return (msg, .top)
             }
         }
 
-        // 4. Fallback: bottom.
+        // Fallback: bottom (no unread user message to anchor on).
         KLog.d("entryScrollTarget=nil → fallback to chat-bottom")
         return nil
     }
@@ -1971,6 +1912,24 @@ struct ChatView: View {
                 && frame.minY >= viewportTop
                 && frame.minY < viewportBottom
         }.sorted { $0.value.minY < $1.value.minY }
+        return candidates.first?.key
+    }
+
+    /// Picks the bottommost user bubble currently in viewport.
+    /// Mirror of `topmostVisibleUserBubbleId()` for the bottom edge.
+    /// Used by `handleBottomEdgeExpand` so that when the window
+    /// slides down (top drops, bottom adds), the captured anchor is
+    /// near the END of the window and is guaranteed to survive the
+    /// slide — bubbles dropped from the rendered tree come from the
+    /// TOP of the window.
+    private func bottommostVisibleUserBubbleId() -> String? {
+        let viewportTop = scrollOffsetY
+        let viewportBottom = scrollOffsetY + viewportHeight
+        let candidates = userBubbleFrames.filter { (_, frame) in
+            frame.height > 0
+                && frame.minY >= viewportTop
+                && frame.minY < viewportBottom
+        }.sorted { $0.value.minY > $1.value.minY }
         return candidates.first?.key
     }
 
