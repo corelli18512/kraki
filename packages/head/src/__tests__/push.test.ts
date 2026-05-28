@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { Storage } from '../storage.js';
 import { PushManager } from '../push/index.js';
 import type { PushProvider, PushPayload, PushResult } from '../push/index.js';
@@ -280,5 +280,46 @@ describe('Storage.touchDeviceLastSeen', () => {
     const after = storage.getDevice('dev-1')!;
 
     expect(new Date(after.lastSeen).getTime()).toBeGreaterThan(new Date(before.lastSeen).getTime());
+  });
+});
+
+// ── APNs retry on stale connection ──────────────────────
+
+describe('isConnectionError', () => {
+  // Inline import to test the exported helper
+  let isConnectionError: (error: string | undefined) => boolean;
+
+  beforeAll(async () => {
+    const mod = await import('../push/apns.js');
+    isConnectionError = mod.isConnectionError;
+  });
+
+  it('matches ECONNRESET', () => {
+    expect(isConnectionError('read ECONNRESET')).toBe(true);
+  });
+
+  it('matches ETIMEDOUT', () => {
+    expect(isConnectionError('connect ETIMEDOUT 17.188.166.17:443')).toBe(true);
+  });
+
+  it('matches GOAWAY', () => {
+    expect(isConnectionError('GOAWAY')).toBe(true);
+  });
+
+  it('matches socket hang up', () => {
+    expect(isConnectionError('socket hang up')).toBe(true);
+  });
+
+  it('matches EPIPE', () => {
+    expect(isConnectionError('write EPIPE')).toBe(true);
+  });
+
+  it('does not match HTTP errors', () => {
+    expect(isConnectionError('HTTP 403')).toBe(false);
+    expect(isConnectionError('BadDeviceToken')).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isConnectionError(undefined)).toBe(false);
   });
 });

@@ -13,6 +13,12 @@ const APNS_HOST_SANDBOX = 'api.sandbox.push.apple.com';
 const JWT_ALGORITHM = 'ES256';
 const JWT_TTL_MS = 50 * 60 * 1000; // Refresh JWT every 50 minutes (APNs requires < 1 hour)
 
+/** Errors that indicate a dead/stale TCP connection — worth retrying with a fresh session. */
+export function isConnectionError(error: string | undefined): boolean {
+  if (!error) return false;
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|GOAWAY|socket hang up/i.test(error);
+}
+
 export interface ApnsConfig {
   /** Path to the .p8 private key file */
   keyPath: string;
@@ -83,6 +89,24 @@ export class ApnsProvider implements PushProvider {
 
   private async sendRaw(host: string, token: string, bundleId: string, body: string): Promise<PushResult> {
     const logger = getLogger();
+    const sessionBefore = this.sessions.get(host);
+    const result = await this.attemptSend(host, token, bundleId, body);
+
+    // Retry once on connection-level errors (stale session after idle).
+    // Only destroy if the session hasn't already been replaced by a concurrent retry.
+    if (!result.success && isConnectionError(result.error)) {
+      logger.info('APNs connection error, retrying with fresh session', { error: result.error, tokenSuffix: token.slice(-8) });
+      if (this.sessions.get(host) === sessionBefore) {
+        this.destroySession(host);
+      }
+      return this.attemptSend(host, token, bundleId, body);
+    }
+
+    return result;
+  }
+
+  private attemptSend(host: string, token: string, bundleId: string, body: string): Promise<PushResult> {
+    const logger = getLogger();
     const jwt = this.getJwt();
     const session = this.getSession(host);
 
@@ -134,6 +158,14 @@ export class ApnsProvider implements PushProvider {
     });
   }
 
+  private destroySession(host: string): void {
+    const session = this.sessions.get(host);
+    if (session) {
+      try { session.destroy(); } catch { /* best effort */ }
+      this.sessions.delete(host);
+    }
+  }
+
   private getSession(host: string): http2.ClientHttp2Session {
     let session = this.sessions.get(host);
     if (session && !session.destroyed && !session.closed) return session;
@@ -169,9 +201,8 @@ export class ApnsProvider implements PushProvider {
   }
 
   close(): void {
-    for (const session of this.sessions.values()) {
-      try { session.close(); } catch { /* best effort */ }
+    for (const host of this.sessions.keys()) {
+      this.destroySession(host);
     }
-    this.sessions.clear();
   }
 }
