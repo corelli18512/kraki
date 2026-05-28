@@ -172,16 +172,6 @@ struct ChatView: View {
     /// the user sees a vertical jump whenever the topmost-visible
     /// bubble wasn't already at viewport top at expand time.
     @State private var pendingAnchorRestore: (id: String, screenY: CGFloat)? = nil
-    /// Last-observed spinner visibility. Used only by the targeted
-    /// spinner diag log — when either edge's visibility flips, we
-    /// emit one line summarising the window state. Low-volume by
-    /// design (transitions happen at most a few times per scroll
-    /// session, not per frame).
-    @State private var lastSpinnerState: (top: Bool, bottom: Bool) = (false, false)
-    /// Last-emitted window tuple for `logWindowStateIfChanged`. Same
-    /// transition-only pattern as `lastSpinnerState`. -1 sentinel
-    /// means "not yet emitted" so the first call always fires.
-    @State private var lastLoggedWindow: (start: Int, end: Int, total: Int) = (-1, -1, -1)
     /// Most recent observed scroll phase. Used to gate window
     /// expansion to settled scroll only — without this gate, a
     /// single user flick produces many `top-edge expand` triggers
@@ -756,10 +746,6 @@ struct ChatView: View {
                newFrame.height > 0 {
                 let targetY = newFrame.minY - pending.screenY
                 chatScrollPosition.scrollTo(y: max(0, targetY))
-                logAnchorRestore(id: pending.id,
-                                 oldScreenY: pending.screenY,
-                                 newMinY: newFrame.minY,
-                                 targetY: max(0, targetY))
                 pendingAnchorRestore = nil
             }
             checkLockTransition(proxy: proxy)
@@ -788,8 +774,6 @@ struct ChatView: View {
             refreshGroupingCache()
             maybeAutoLoadOlder()
             followBottomOnNewTurns()
-            logWindowStateIfChanged(reason: "msg-count-change")
-            logSpinnerStateIfChanged(reason: "msg-count-change")
         }
         .onChange(of: sessionIdle) { _, idle in
             // Turn complete — release the R1 lock so the next user
@@ -860,87 +844,6 @@ struct ChatView: View {
     /// every state mutation, every preference fire, every scroll
     /// offset transition while a restore is pending.
     private static let diagScrollCascade: Bool = false
-
-    /// Emit one log line when either spinner's visibility flips. Low
-    /// volume by design — fires at most a few times per scroll session.
-    /// Use to debug "spinner stuck visible" / "load not firing" without
-    /// the per-frame log flood that explodes CPU.
-    private func logSpinnerStateIfChanged(reason: String) {
-        let top = hasFoldedTurnsAbove
-        let bottom = hasFoldedTurnsBelow
-        guard top != lastSpinnerState.top || bottom != lastSpinnerState.bottom else { return }
-        let total = cachedAllTurnCount
-        let start = renderWindowStartIdx
-        let end = start + renderedTurnCount
-        // Describe what's at the window's last raw position (helps
-        // confirm "end lands after a turn" invariant).
-        let raw = cachedRawTurns
-        let tailType: String = {
-            guard end > 0, end <= raw.count else { return "?" }
-            switch raw[end - 1] {
-            case .standalone(let m): return "standalone(\(m.type))"
-            case .turn: return "turn"
-            }
-        }()
-        let headType: String = {
-            guard start < raw.count else { return "?" }
-            switch raw[start] {
-            case .standalone(let m): return "standalone(\(m.type))"
-            case .turn: return "turn"
-            }
-        }()
-        // Always emit via NSLog so this single line survives KLog being
-        // gated off — it's the diagnostic that matters when the user
-        // reports a stuck spinner.
-        let line = "🌀spinner top=\(top)→\(top != lastSpinnerState.top ? "FLIP" : "—") bottom=\(bottom)→\(bottom != lastSpinnerState.bottom ? "FLIP" : "—") win=[\(start)..\(end))/\(total) head=\(headType) tail=\(tailType) reason=\(reason)"
-        NSLog("🦑 %@", line)
-        print("🦑", line)
-        lastSpinnerState = (top, bottom)
-    }
-
-    /// Emit one line when the rendered window tuple `[start..end)/total`
-    /// changes. Transition-only so the CPU stays calm even when
-    /// scrolling continuously — `renderWindowStartIdx` /
-    /// `renderedTurnCount` only mutate inside the debounced edge
-    /// handlers, `jumpToLatest`, `followBottomOnNewTurns`, and
-    /// `performEntryScroll`, so this fires a handful of times per
-    /// session at most.
-    private func logWindowStateIfChanged(reason: String) {
-        let start = renderWindowStartIdx
-        let end = start + renderedTurnCount
-        let total = cachedAllTurnCount
-        guard start != lastLoggedWindow.start
-              || end != lastLoggedWindow.end
-              || total != lastLoggedWindow.total else { return }
-        let foldedAbove = start
-        let foldedBelow = max(0, total - end)
-        let line = "🪟win=[\(start)..\(end))/\(total) Δstart=\(start - max(0, lastLoggedWindow.start)) Δend=\(end - max(0, lastLoggedWindow.end)) foldedAbove=\(foldedAbove) foldedBelow=\(foldedBelow) reason=\(reason)"
-        NSLog("🦑 %@", line)
-        print("🦑", line)
-        lastLoggedWindow = (start, end, total)
-    }
-
-    /// Emit one line per edge-fire attempt (top or bottom). Fires at
-    /// most every `windowExpandDebounce` (400ms) per edge so this is
-    /// inherently low-volume. Captures the scroll position + anchor
-    /// info that determined the fire, so we can see whether the rule
-    /// is triggering at the right times.
-    private func logEdgeFire(edge: String, fired: Bool, reason: String,
-                             anchorId: String?, anchorScreenY: CGFloat?) {
-        let line = "🔁\(edge) fired=\(fired) reason=\(reason) offsetY=\(Int(scrollOffsetY)) contentH=\(Int(chatContentHeight)) viewportH=\(Int(viewportHeight)) anchor=\(anchorId?.suffix(8).description ?? "nil") screenY=\(anchorScreenY.map { Int($0) }.map(String.init) ?? "nil") foldedAbove=\(hasFoldedTurnsAbove) foldedBelow=\(hasFoldedTurnsBelow)"
-        NSLog("🦑 %@", line)
-        print("🦑", line)
-    }
-
-    /// Emit one line when a pending anchor restore is consumed in
-    /// `onPreferenceChange(UserBubbleFramesKey)`. One fire per
-    /// debounced edge expansion, so volume = edge volume.
-    private func logAnchorRestore(id: String, oldScreenY: CGFloat,
-                                  newMinY: CGFloat, targetY: CGFloat) {
-        let line = "🪝anchorRestore id=user-\(id.suffix(8)) oldScreenY=\(Int(oldScreenY)) newMinY=\(Int(newMinY)) → scrollY=\(Int(targetY))"
-        NSLog("🦑 %@", line)
-        print("🦑", line)
-    }
 
     private func phaseDescription(_ phase: ScrollPhase) -> String {
         switch phase {
@@ -1037,8 +940,6 @@ struct ChatView: View {
         let now = Date()
         if let last = lastWindowExpansion,
            now.timeIntervalSince(last) < Self.windowExpandDebounce {
-            logEdgeFire(edge: "🔝top", fired: false, reason: "debounced",
-                        anchorId: nil, anchorScreenY: nil)
             return
         }
         lastWindowExpansion = now
@@ -1102,18 +1003,6 @@ struct ChatView: View {
                 pendingAnchorRestore = cap
             }
         }
-
-        let reason: String
-        if slid && loadDispatched      { reason = "slide+fetch" }
-        else if slid                   { reason = "slide" }
-        else if loadDispatched         { reason = "fetch beforeSeq=\(firstSeq)" }
-        else if firstSeq <= 1          { reason = "at-session-start" }
-        else                           { reason = "no-op" }
-        logEdgeFire(edge: "🔝top", fired: slid || loadDispatched, reason: reason,
-                    anchorId: anchorCapture?.id,
-                    anchorScreenY: anchorCapture?.screenY)
-        logWindowStateIfChanged(reason: "top-edge-expand")
-        logSpinnerStateIfChanged(reason: "top-edge-expand")
     }
 
     /// Bottom-edge expansion: slide window down by `renderExpandStep`
@@ -1127,8 +1016,6 @@ struct ChatView: View {
         let now = Date()
         if let last = lastWindowExpansion,
            now.timeIntervalSince(last) < Self.windowExpandDebounce {
-            logEdgeFire(edge: "🔻bottom", fired: false, reason: "debounced",
-                        anchorId: nil, anchorScreenY: nil)
             return
         }
         lastWindowExpansion = now
@@ -1165,11 +1052,6 @@ struct ChatView: View {
         if let cap = anchorCapture {
             pendingAnchorRestore = cap
         }
-        logEdgeFire(edge: "🔻bottom", fired: true, reason: "spinner-visible",
-                    anchorId: anchorCapture?.id,
-                    anchorScreenY: anchorCapture?.screenY)
-        logWindowStateIfChanged(reason: "bottom-edge-slide")
-        logSpinnerStateIfChanged(reason: "bottom-edge-slide")
     }
 
     /// Jump-to-latest: snap the window to the bottom and scroll to
@@ -1184,8 +1066,6 @@ struct ChatView: View {
         renderWindowStartIdx = newStart
         renderedTurnCount = max(1, newEnd - newStart)
         chatScrollPosition.scrollTo(id: "chat-bottom", anchor: .bottom)
-        logWindowStateIfChanged(reason: "jump-to-latest")
-        logSpinnerStateIfChanged(reason: "jump-to-latest")
     }
 
     /// When new turns arrive (live agent reply, user reply, tool
@@ -1241,9 +1121,7 @@ struct ChatView: View {
               prevId != newFirstId else { return }
         guard let newIdx = newRaw.firstIndex(where: { $0.id == prevId }) else { return }
         guard newIdx > 0 else { return }
-        let beforeStart = renderWindowStartIdx
-        renderWindowStartIdx = min(beforeStart + newIdx, max(0, newRaw.count - 1))
-        logWindowStateIfChanged(reason: "prepend-follow Δ=\(newIdx)")
+        renderWindowStartIdx = min(renderWindowStartIdx + newIdx, max(0, newRaw.count - 1))
     }
 
     private func followBottomOnNewTurns() {
@@ -1268,8 +1146,6 @@ struct ChatView: View {
             // User is exploring history. Leave the window where it is.
             return
         }
-        let beforeStart = renderWindowStartIdx
-        let beforeCount = renderedTurnCount
         // If the top edge is already at the start of the session and
         // we have room to grow, prefer growing the window over sliding
         // (sliding would drop the very first turn the user wants to
@@ -1286,10 +1162,6 @@ struct ChatView: View {
             let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
             renderWindowStartIdx = newStart
             renderedTurnCount = max(1, newEnd - newStart)
-        }
-        if renderWindowStartIdx != beforeStart || renderedTurnCount != beforeCount {
-            logWindowStateIfChanged(reason: "follow-bottom")
-            logSpinnerStateIfChanged(reason: "follow-bottom")
         }
     }
 
@@ -1754,8 +1626,6 @@ struct ChatView: View {
         lastSeenTotalTurns = totalTurnsAfterPoll
 
         KLog.d("📍entryScroll poll done → filteredMsgs=\(filteredMessages.count) allTurns=\(totalTurnsAfterPoll) window=[\(renderWindowStartIdx),\(renderWindowStartIdx+renderedTurnCount)) viewportH=\(viewportHeight) contentH=\(chatContentHeight)")
-        logWindowStateIfChanged(reason: "entry-scroll")
-        logSpinnerStateIfChanged(reason: "entry-scroll")
 
         // Re-baseline ONLY for fresh loads — the messages that just
         // landed are historical backfill and must not trip R1. For
