@@ -1062,21 +1062,34 @@ struct ChatView: View {
                 } ?? false
                 KLog.d("🔝expand PRE offsetY=\(scrollOffsetY) startIdx=\(beforeStart) size=\(beforeCount) anchor=\(anchorCapture?.id.suffix(8) ?? "nil") screenY=\(anchorCapture?.screenY ?? -999) anchorInWindow=\(anchorInWindow)")
             }
-            // Top-edge expand: keep the current END fixed, grow START
-            // backward (or slide it back if at the rendered cap).
-            // `snapWindow` ensures both edges land on turn boundaries,
-            // so the slice's first row is a user bubble and the last
-            // row is an agent reply (or the latest user msg if no
-            // reply yet — streaming).
+            // Top-edge expand has two phases:
+            //   • Growing (size < maxRenderedTurns): keep END fixed,
+            //     extend START backward by `renderExpandStep`. Window
+            //     grows up to the cap.
+            //   • Sliding (size == cap): the user wants OLDER content
+            //     than the current window's start, so we must drop
+            //     `renderExpandStep` turns from the END (bottom) to
+            //     make room for the new turns at the START (top).
+            //     Without this, the window is frozen at the cap and
+            //     no further top-edge expansion can occur — the
+            //     classic "spinner keeps firing, nothing changes"
+            //     symptom.
+            //
+            //   `snapWindow` clamps the result to valid bounds; the
+            //   per-turn integer math itself already lands on natural
+            //   boundaries since every grouped item is atomic.
             let currentEnd = renderWindowStartIdx + renderedTurnCount
             let desiredStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
-            // If we have room to grow under the cap, extend endIdx by
-            // renderExpandStep too — but only on first growth pass,
-            // i.e. while renderedTurnCount < maxRenderedTurns.
             let isGrowingPhase = renderedTurnCount < Self.maxRenderedTurns
-            let desiredEnd = isGrowingPhase
-                ? min(total, currentEnd)
-                : min(total, currentEnd) // sliding: end stays put
+            let desiredEnd: Int
+            if isGrowingPhase {
+                desiredEnd = min(total, currentEnd)
+            } else {
+                // Slide: drop `renderExpandStep` from the END so the
+                // window can shift up. Cap at desiredStart+1 so the
+                // slice is never empty.
+                desiredEnd = max(desiredStart + 1, currentEnd - Self.renderExpandStep)
+            }
             let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
             // Cap to maxRenderedTurns by walking start forward if needed.
             var finalStart = newStart
