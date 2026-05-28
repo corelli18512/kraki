@@ -119,16 +119,21 @@ func groupMessagesIntoTurns(
     /// the turn. Stream-order tracking avoids that.
     var unresolvedPermIds: Set<String> = []
     var skipNextToolComplete = false
-    var turnCounter = 0
 
     func flushTurn(turnComplete: Bool) {
         defer { unresolvedPermIds.removeAll() }
         guard currentUserMessage != nil || !currentThinking.isEmpty else { return }
-        turnCounter += 1
+        // Anchor on a stable message id (user msg if present, else
+        // first accumulated thinking entry). Message ids are unique
+        // across the session, so the resulting turn id is unique
+        // without any position-dependent counter — critical for the
+        // chat view's prepend-follow, which needs to relocate a
+        // turn after tentacle backfill inserts older turns at the
+        // top.
         let anchor = currentUserMessage?.id
             ?? currentThinking.first?.id
             ?? "unknown"
-        let turnId = "turn:\(turnCounter):\(anchor)"
+        let turnId = "turn:\(anchor)"
 
         if !turnComplete {
             // Turn still in progress — everything stays in thinking
