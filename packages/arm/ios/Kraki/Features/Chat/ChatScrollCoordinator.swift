@@ -151,6 +151,36 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
         guard let cv = collectionView else { return }
         publishIsAtBottom(for: cv)
     }
+
+    // MARK: - Idle anchor lock (Stage 6)
+
+    /// Store an active idle anchor on the latest user bubble.
+    /// `screenY` is the bubble's current top-edge Y in viewport
+    /// coordinates (i.e. content-Y minus contentOffset.y). The
+    /// controller will use the pair on subsequent `apply` calls to
+    /// shift contentOffset so the bubble stays at the same screenY,
+    /// preventing tool-entry expansions or late image decodes from
+    /// drifting the visible user message.
+    ///
+    /// Called by the controller after it samples the cell — the
+    /// coordinator publishes the values for SwiftUI observability
+    /// but doesn't sample them itself (it has no view of cells).
+    func setIdleAnchor(itemId: String, screenY: CGFloat) {
+        anchoredUserMsgId = itemId
+        anchoredScreenY = screenY
+    }
+
+    /// Clear the idle anchor. Called when:
+    ///   • Session leaves idle (new turn starts) — anchor is for
+    ///     idle quiet-period; once growth begins, anchor preservation
+    ///     and follow-bottom take over.
+    ///   • User starts dragging — explicit scroll intent overrides
+    ///     any auto-positioning.
+    ///   • Session switch — controller is torn down.
+    func clearIdleAnchor() {
+        anchoredUserMsgId = nil
+        anchoredScreenY = nil
+    }
 }
 
 // MARK: - UICollectionViewDelegate
@@ -162,6 +192,14 @@ extension ChatScrollCoordinator: UICollectionViewDelegate {
         guard let cv = scrollView as? UICollectionView else { return }
         publishIsAtBottom(for: cv)
         checkNearTop(for: cv)
+    }
+
+    /// User has started a drag — release the idle anchor so the
+    /// controller stops auto-correcting. Without this the apply
+    /// after the user lifts their finger would yank the scroll
+    /// back to the captured Y, fighting the user's gesture.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        clearIdleAnchor()
     }
 }
 

@@ -116,6 +116,16 @@ final class ChatListViewController: UIViewController {
     /// its delegate alive across reattach cycles.
     private let scrollCoordinator: ChatScrollCoordinator
 
+    /// Item id whose cell should be held at a fixed screen Y for the
+    /// duration of the idle period. Set by the SwiftUI shell via
+    /// `updateIdleAnchorTarget(_:)` when sessionIdle transitions
+    /// true; cleared when it transitions false or the user starts
+    /// dragging. Decoupled from `scrollCoordinator.anchoredUserMsgId`
+    /// here so we don't depend on Combine subscriptions for the
+    /// controller's local read path — the coordinator owns the
+    /// published surface for SwiftUI observers.
+    private var idleAnchorTargetId: String?
+
     // MARK: - Init
 
     init(sessionId: String, viewModel: ChatViewModel, scrollCoordinator: ChatScrollCoordinator) {
@@ -151,6 +161,13 @@ final class ChatListViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         attemptEntryScroll()
+        // Re-attempt idle-anchor capture in case the previous call
+        // ran before layout was ready. Idempotent when the anchor
+        // is already held for the current target.
+        if let targetId = idleAnchorTargetId,
+           scrollCoordinator.anchoredUserMsgId != targetId {
+            sampleAndStoreIdleAnchor(itemId: targetId)
+        }
     }
 
     // MARK: - Setup
@@ -268,6 +285,12 @@ final class ChatListViewController: UIViewController {
         // a backfill arrival would visibly jerk the viewport upward
         // by the height of the newly-inserted older history.
         let anchor = captureTopVisibleAnchor()
+        // Stage 6: snapshot whether the user is currently at the
+        // bottom. If yes, we re-pin the bottom after the diff so
+        // streaming additions / new turns stay in view. Sampled
+        // BEFORE the apply because content-size changes during the
+        // diff would otherwise corrupt the "was at bottom" reading.
+        let wasAtBottom = scrollCoordinator.isAtBottom
 
         itemsById = newMap
 
@@ -275,24 +298,35 @@ final class ChatListViewController: UIViewController {
         snapshot.appendSections([.messages])
         snapshot.appendItems(turns.map { Item(id: $0.id) }, toSection: .messages)
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-            // After the diff settles the content size may have grown
-            // (e.g. very first apply, or a new turn arriving while
-            // the user is reading old history). Resync the
-            // coordinator's `isAtBottom` so overlays don't lag
-            // behind reality — `scrollViewDidScroll` only fires when
-            // the offset actually changes.
             guard let self else { return }
-            // Try entry scroll first. For an unread session the
-            // target item may not have arrived in the first batch;
-            // each subsequent apply that brings it in is another
-            // chance for `attemptEntryScroll` to land it. For a
-            // read session, the bottom-anchored scroll fires on
-            // the first apply that arrives after layout is ready.
+
+            // Priority order for offset adjustment:
+            //   1. Entry scroll (one-shot, takes over the offset).
+            //   2. Follow-bottom — if we were at the bottom before
+            //      the apply, snap back. Handles streaming + new
+            //      turn arrival while the user is at the live edge.
+            //      Wins over idle anchor: a user actively at the
+            //      tail wants to follow new content, not stay
+            //      pinned to an older bubble.
+            //   3. Idle anchor lock — preserve the latest user
+            //      bubble's screen Y. Stage 6. Only relevant when
+            //      the user has scrolled away from the bottom but
+            //      the session is idle.
+            //   4. Top-visible anchor preservation — for in-history
+            //      scroll where neither of the above applies (e.g.
+            //      older-content backfill arriving during streaming).
+            //
+            // After the offset is settled, `recomputeIsAtBottom`
+            // re-publishes the proximity flag so overlays catch up.
             let entryFired = self.attemptEntryScroll()
-            // Restore the user-controlled anchor ONLY if entry
-            // scroll didn't take over the offset for this apply.
-            if !entryFired, let anchor {
-                self.restoreScrollAnchor(anchor)
+            if !entryFired {
+                if wasAtBottom {
+                    self.scrollCoordinator.scrollToBottom(animated: false)
+                } else if self.enforceIdleAnchor() {
+                    // Idle anchor handled — skip top-visible.
+                } else if let anchor {
+                    self.restoreScrollAnchor(anchor)
+                }
             }
             self.scrollCoordinator.recomputeIsAtBottom()
         }
@@ -389,6 +423,94 @@ final class ChatListViewController: UIViewController {
             return ScrollAnchor(itemId: item.id, screenY: screenY)
         }
         return nil
+    }
+
+    // MARK: - Idle anchor lock (Stage 6)
+
+    /// Acquire (or refresh) the idle anchor on a specific turn item.
+    /// Samples the cell's current top-edge screen Y and stores it on
+    /// the coordinator's published surface. No-op if the cell can't
+    /// be located (e.g. user has scrolled it out of the visible
+    /// region — in that case there's nothing to anchor against, and
+    /// enforcing a stale Y would yank the scroll mid-view).
+    ///
+    /// Idempotent for repeated calls with the same `itemId`: the
+    /// guard against re-sampling once we already hold the anchor
+    /// for this id keeps `apply`-time enforcement using the
+    /// original capture, not a freshly-sampled one whose Y may have
+    /// drifted by self-sizing settling.
+    func updateIdleAnchorTarget(_ itemId: String?) {
+        // Release case.
+        guard let itemId else {
+            idleAnchorTargetId = nil
+            scrollCoordinator.clearIdleAnchor()
+            return
+        }
+        // Same id already anchored — keep the original capture.
+        if idleAnchorTargetId == itemId,
+           scrollCoordinator.anchoredUserMsgId == itemId {
+            return
+        }
+        idleAnchorTargetId = itemId
+        // Force a layout pass so self-sizing cells near the target
+        // get attributes computed. Without this the first call right
+        // after `apply` returns nil for `layoutAttributesForItem`
+        // because the data source has the items but the layout
+        // engine hasn't measured them yet.
+        collectionView?.layoutIfNeeded()
+        sampleAndStoreIdleAnchor(itemId: itemId)
+    }
+
+    /// Sample the cell's current screen Y and store it on the
+    /// coordinator. No-op when the cell isn't laid out — caller
+    /// retains `idleAnchorTargetId` so a later layout pass (e.g.
+    /// the next apply completion's enforce) can re-attempt via the
+    /// same sampling helper.
+    private func sampleAndStoreIdleAnchor(itemId: String) {
+        guard let cv = collectionView, let dataSource else { return }
+        let snapshot = dataSource.snapshot()
+        let identifiers = snapshot.itemIdentifiers
+        guard let index = identifiers.firstIndex(where: { $0.id == itemId }) else { return }
+        let path = IndexPath(item: index, section: 0)
+        guard let attrs = cv.layoutAttributesForItem(at: path) else { return }
+        let screenY = attrs.frame.minY - cv.contentOffset.y
+        scrollCoordinator.setIdleAnchor(itemId: itemId, screenY: screenY)
+    }
+
+    /// Enforce the active idle anchor on the current layout. Looks
+    /// up the anchored cell's new content-Y and shifts contentOffset
+    /// so the cell's top sits at the captured screen Y. Returns
+    /// `true` when an offset adjustment was applied — callers use
+    /// this to skip other anchor mechanisms for the same apply.
+    ///
+    /// No-op when:
+    ///   • No anchor is held on the coordinator.
+    ///   • The anchored item is no longer in the snapshot
+    ///     (rare — only possible if the SwiftUI shell stops sending
+    ///     us a target id while content is mutating; defensive).
+    ///   • The cell isn't yet laid out (no attributes available).
+    ///   • The required offset would clamp to its current value
+    ///     (saves a redundant `setContentOffset` call).
+    @discardableResult
+    private func enforceIdleAnchor() -> Bool {
+        guard let itemId = scrollCoordinator.anchoredUserMsgId,
+              let screenY = scrollCoordinator.anchoredScreenY,
+              let cv = collectionView,
+              let dataSource else { return false }
+        let snapshot = dataSource.snapshot()
+        let identifiers = snapshot.itemIdentifiers
+        guard let index = identifiers.firstIndex(where: { $0.id == itemId }) else { return false }
+        let path = IndexPath(item: index, section: 0)
+        cv.layoutIfNeeded()
+        guard let attrs = cv.layoutAttributesForItem(at: path) else { return false }
+        let targetOffsetY = attrs.frame.minY - screenY
+        let inset = cv.adjustedContentInset
+        let minOffsetY = -inset.top
+        let maxOffsetY = max(minOffsetY, cv.contentSize.height - cv.bounds.height + inset.bottom)
+        let clamped = min(maxOffsetY, max(minOffsetY, targetOffsetY))
+        guard abs(cv.contentOffset.y - clamped) > 0.5 else { return true }
+        cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: clamped), animated: false)
+        return true
     }
 
     /// Restore the captured anchor by computing the cell's new
@@ -563,6 +685,12 @@ struct ChatListView: UIViewControllerRepresentable {
     /// sessions (scroll to bottom). The controller consumes this on
     /// its first non-empty apply; subsequent changes are ignored.
     let entryScrollTargetId: String?
+    /// Active idle-anchor target. Non-nil when the session is idle
+    /// and there's a `lastUserMessage` we want to hold at a fixed
+    /// screen Y across subsequent applies (tool entries, image
+    /// decodes, expand/collapse). Nil otherwise — controller clears
+    /// any held anchor on the next update.
+    let idleAnchorTargetId: String?
     /// Turns to render. Sourced from `viewModel.cachedRawTurns`;
     /// UICollectionView handles all virtualisation, so no windowing
     /// is applied here.
@@ -585,6 +713,10 @@ struct ChatListView: UIViewControllerRepresentable {
             }
         }
         vc.apply(turns: turns)
+        // Idle anchor must be set AFTER apply so the snapshot lookup
+        // can succeed for the captured cell on a session that opens
+        // already-idle.
+        vc.updateIdleAnchorTarget(idleAnchorTargetId)
         return vc
     }
 
@@ -622,6 +754,10 @@ struct ChatListView: UIViewControllerRepresentable {
         if contentChanged {
             vc.reconfigureVisible()
         }
+        // Forward idle-anchor target last — `apply` may have just
+        // rebuilt the snapshot, and `updateIdleAnchorTarget`
+        // depends on `dataSource.snapshot()` to find the cell.
+        vc.updateIdleAnchorTarget(idleAnchorTargetId)
     }
 }
 #endif
