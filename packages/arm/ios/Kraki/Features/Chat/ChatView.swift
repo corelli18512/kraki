@@ -522,6 +522,25 @@ struct ChatView: View {
                     viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
                     refreshGroupingCache()
                 }
+                // Stage 3: install the UIKit branch's load-older
+                // handler on the coordinator. Captures sessionId by
+                // value (not the @State) so a later session switch
+                // doesn't accidentally fetch for the new session
+                // when the previous coordinator hasn't been torn
+                // down yet — @StateObject is per-view-instance, so
+                // a sessionId change re-runs this task and reinstalls
+                // the handler.
+                let pinnedSessionId = sessionId
+                uikitScrollCoordinator.onNearTopReached = { [weak appState = appState] in
+                    guard let appState else { return }
+                    let messages = appState.messageStore.messages[pinnedSessionId] ?? []
+                    let firstSeq = messages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
+                    guard firstSeq > 1 else { return }
+                    _ = appState.messageProvider?.ensureOlderLoaded(
+                        sessionId: pinnedSessionId,
+                        beforeSeq: firstSeq
+                    )
+                }
             }
         }
     }
