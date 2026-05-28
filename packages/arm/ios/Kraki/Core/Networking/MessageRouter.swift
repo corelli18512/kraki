@@ -795,6 +795,11 @@ final class MessageRouter {
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
         }
+        // Greeting fully landed — clear the amber "connecting" dot.
+        // This must come AFTER `setDeviceOnline(true)` above (which
+        // re-inserts into pendingGreetingIds) so the net effect of a
+        // greeting frame is "device is online + no longer pending".
+        appState.deviceStore.markGreeted(deviceId)
     }
 
     /// Land a `local_sessions_list` response into the device store so

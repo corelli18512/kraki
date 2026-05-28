@@ -44,6 +44,13 @@ struct MainTabView: View {
             // Clear so it can fire again next time.
             appState.deviceStore.navigateToDeviceId = nil
         }
+        .onChange(of: appState.sessionStore.popToSessionListSignal) { _, _ in
+            // A session was deleted while the user was viewing it.
+            // Pop the chat detail so they land on the session list
+            // instead of a "Session not found" placeholder.
+            selectedTab = 0
+            sessionPath = NavigationPath()
+        }
     }
 
     // MARK: - Sub-views (shared)
