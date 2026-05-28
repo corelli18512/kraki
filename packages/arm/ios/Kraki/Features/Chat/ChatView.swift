@@ -175,6 +175,26 @@ struct ChatView: View {
         return nil
     }
 
+    /// TurnItem id for the idle anchor target — the turn containing
+    /// the most recent user message. Non-nil only while the session
+    /// is idle; the controller releases the anchor whenever this
+    /// goes back to nil. Stage 6 semantics: hold the visible user
+    /// bubble at a fixed screen Y while tool entries or expand/
+    /// collapse mutate other parts of the list during the quiet
+    /// period between turns.
+    private var idleAnchorTargetId: String? {
+        guard let vm = viewModel,
+              vm.sessionIdle,
+              let lastUserMsg = vm.lastUserMessage else { return nil }
+        for turn in vm.cachedRawTurns {
+            if case .turn(let t) = turn,
+               t.userMessage?.id == lastUserMsg.id {
+                return turn.id
+            }
+        }
+        return nil
+    }
+
     // MARK: - UIKit Messages
 
     /// UIKit-backed message list. Renders `viewModel.cachedRawTurns`
@@ -193,6 +213,7 @@ struct ChatView: View {
                 agentName: session?.agent ?? "",
                 streamingText: streaming,
                 entryScrollTargetId: entryScrollTargetId,
+                idleAnchorTargetId: idleAnchorTargetId,
                 turns: viewModel.cachedRawTurns
             )
         } else {
