@@ -367,6 +367,13 @@ struct ChatView: View {
     /// `handleBottomEdgeExpand`, `followBottomOnNewTurns`). Kept in
     /// sync with `allGroupedTurns` in `refreshGroupingCache`.
     @State private var cachedAllTurnCount: Int = 0
+    /// First turn id observed in the previous `cachedRawTurns`. When
+    /// the cache rebuilds and the new first turn id differs, older
+    /// turns were prepended (tentacle backfill). The prepend-follow
+    /// uses this to shift `renderWindowStartIdx` forward so the
+    /// rendered slice keeps pointing at the same physical turns —
+    /// otherwise the user's view teleports to ancient history.
+    @State private var lastKnownFirstTurnId: String? = nil
 
     /// Full grouped turn list (all in-memory messages + a synthetic
     /// streaming turn appended if needed). Reads the cached value
@@ -478,10 +485,17 @@ struct ChatView: View {
                             jumpToLatestButton
                         }
                         .safeAreaInset(edge: .bottom, spacing: 0) {
-                            // Hide the entire compose area while the relay
-                            // channel is broken — the user can't send anything
-                            // anyway and the chat surface is read-only.
-                            if isDeviceOnline && appState.isFullyOnline {
+                            // Show the compose area whenever the tentacle
+                            // device is on file as online. We intentionally
+                            // do NOT gate on `appState.isFullyOnline` —
+                            // relay blips are short, the WS layer queues
+                            // outbound frames (200-frame cap, 60s TTL),
+                            // and the input itself surfaces a hint when
+                            // sending would not be live. Yanking the
+                            // input mid-typing on every reconnect would
+                            // be far more disruptive than queueing for
+                            // a few hundred ms.
+                            if isDeviceOnline {
                                 bottomInputArea
                             }
                         }
@@ -1001,83 +1015,52 @@ struct ChatView: View {
         }
     }
 
-    /// Top-edge expansion: grow window upward, or slide up if at cap.
-    /// Preserves the user's visible position by capturing the
-    /// topmost-visible user bubble id BEFORE the state mutation and
-    /// explicitly scrolling back to it AFTER. Without this, SwiftUI's
-    /// `.scrollPosition(anchor: .top)` would re-anchor to whichever
-    /// row ends up at viewport top after the prepend (typically the
-    /// newly-rendered top-spinner or first new turn), making the
-    /// chat jump to the top of the loaded content instead of staying
-    /// where the user was reading.
+    /// Top-edge expansion: bring older content into view. Single
+    /// debounced entry point — does not branch on memory-vs-network;
+    /// the provider's `ensureOlderLoaded` hides that decision.
+    ///
+    /// Each fire:
+    ///   1. Captures the topmost-visible user bubble + screen Y and
+    ///      pins scroll to it (halts inertia, queues an
+    ///      `pendingAnchorRestore`).
+    ///   2. Slides the local rendered window upward if folded turns
+    ///      exist above it. Window grows up to `maxRenderedTurns`
+    ///      then slides (drops `renderExpandStep` from END).
+    ///   3. Asks the provider to ensure messages older than
+    ///      `firstSeq` are loaded. Provider no-ops if memory already
+    ///      has them, else fetches from tentacle. Backfill arrives
+    ///      asynchronously and triggers `msg-count-change`, which
+    ///      `applyPrependFollow` translates into a window-index
+    ///      shift so the rendered slice keeps showing the same
+    ///      physical turns.
     private func handleTopEdgeExpand() {
-        // Priority 1: bring folded-above turns into the window.
+        let now = Date()
+        if let last = lastWindowExpansion,
+           now.timeIntervalSince(last) < Self.windowExpandDebounce {
+            logEdgeFire(edge: "🔝top", fired: false, reason: "debounced",
+                        anchorId: nil, anchorScreenY: nil)
+            return
+        }
+        lastWindowExpansion = now
+
+        // 1. Anchor capture + momentum halt.
+        let anchorCapture: (id: String, screenY: CGFloat)? = {
+            guard let id = topmostVisibleUserBubbleId(),
+                  let frame = userBubbleFrames[id] else { return nil }
+            let screenY = frame.minY - scrollOffsetY
+            return (id, screenY)
+        }()
+        if let cap = anchorCapture {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                chatScrollPosition.scrollTo(id: cap.id, anchor: UnitPoint(x: 0, y: cap.screenY / max(1, viewportHeight)))
+            }
+        }
+
+        // 2. Local window slide (if folded turns exist above).
+        var slid = false
         if hasFoldedTurnsAbove {
-            let now = Date()
-            if let last = lastWindowExpansion,
-               now.timeIntervalSince(last) < Self.windowExpandDebounce {
-                logEdgeFire(edge: "🔝top", fired: false, reason: "debounced",
-                            anchorId: nil, anchorScreenY: nil)
-                return
-            }
-            lastWindowExpansion = now
-
-            // Anchor preservation: capture the topmost-visible user
-            // bubble + its current screen Y (relative to viewport top)
-            // BEFORE state change. Restoration happens in
-            // `onPreferenceChange(UserBubbleFramesKey)` after the new
-            // layout pass produces the bubble's new content-space
-            // minY — at which point we can compute the exact y to
-            // scroll to so the bubble lands at the same screen
-            // position as before. Without the two-phase approach,
-            // SwiftUI's `scrollTo(anchor: .top)` would force the
-            // bubble to viewport top regardless of its prior screen
-            // position — visible as a jump whenever the bubble was
-            // mid-viewport rather than at the top edge.
-            let anchorCapture: (id: String, screenY: CGFloat)? = {
-                guard let id = topmostVisibleUserBubbleId(),
-                      let frame = userBubbleFrames[id] else { return nil }
-                let screenY = frame.minY - scrollOffsetY
-                return (id, screenY)
-            }()
-
-            // Halt any in-flight scroll momentum: a programmatic
-            // scrollTo to the CURRENT y kills inertia, preventing
-            // the user from blowing past the spinner while load is
-            // in progress. Wrap in a non-animated transaction so
-            // SwiftUI doesn't try to animate the no-op.
-            if let cap = anchorCapture {
-                var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) {
-                    chatScrollPosition.scrollTo(id: cap.id, anchor: UnitPoint(x: 0, y: cap.screenY / max(1, viewportHeight)))
-                }
-            }
-
             let total = cachedAllTurnCount
-            let beforeStart = renderWindowStartIdx
-            let beforeCount = renderedTurnCount
-            if Self.diagScrollCascade {
-                let anchorInWindow = anchorCapture.map { cap in
-                    isUserBubbleInRenderedWindow(cap.id)
-                } ?? false
-                KLog.d("🔝expand PRE offsetY=\(scrollOffsetY) startIdx=\(beforeStart) size=\(beforeCount) anchor=\(anchorCapture?.id.suffix(8) ?? "nil") screenY=\(anchorCapture?.screenY ?? -999) anchorInWindow=\(anchorInWindow)")
-            }
-            // Top-edge expand has two phases:
-            //   • Growing (size < maxRenderedTurns): keep END fixed,
-            //     extend START backward by `renderExpandStep`. Window
-            //     grows up to the cap.
-            //   • Sliding (size == cap): the user wants OLDER content
-            //     than the current window's start, so we must drop
-            //     `renderExpandStep` turns from the END (bottom) to
-            //     make room for the new turns at the START (top).
-            //     Without this, the window is frozen at the cap and
-            //     no further top-edge expansion can occur — the
-            //     classic "spinner keeps firing, nothing changes"
-            //     symptom.
-            //
-            //   `snapWindow` clamps the result to valid bounds; the
-            //   per-turn integer math itself already lands on natural
-            //   boundaries since every grouped item is atomic.
             let currentEnd = renderWindowStartIdx + renderedTurnCount
             let desiredStart = max(0, renderWindowStartIdx - Self.renderExpandStep)
             let isGrowingPhase = renderedTurnCount < Self.maxRenderedTurns
@@ -1085,46 +1068,52 @@ struct ChatView: View {
             if isGrowingPhase {
                 desiredEnd = min(total, currentEnd)
             } else {
-                // Slide: drop `renderExpandStep` from the END so the
-                // window can shift up. Cap at desiredStart+1 so the
-                // slice is never empty.
+                // At cap → drop `renderExpandStep` from END so the
+                // window can shift up. Without this the window is
+                // frozen at the cap; symptom: "spinner keeps firing,
+                // nothing changes."
                 desiredEnd = max(desiredStart + 1, currentEnd - Self.renderExpandStep)
             }
             let (newStart, newEnd) = snapWindow(desiredStart: desiredStart, desiredEnd: desiredEnd)
-            // Cap to maxRenderedTurns by walking start forward if needed.
             var finalStart = newStart
             if newEnd - finalStart > Self.maxRenderedTurns {
                 finalStart = max(0, newEnd - Self.maxRenderedTurns)
             }
             renderWindowStartIdx = finalStart
             renderedTurnCount = max(1, newEnd - finalStart)
-            if Self.diagScrollCascade {
-                KLog.d("🔝expand POST offsetY=\(scrollOffsetY) startIdx=\(renderWindowStartIdx) size=\(renderedTurnCount)")
-            }
-
-            // Queue the restore for the next preference fire.
+            slid = true
             if let cap = anchorCapture {
                 pendingAnchorRestore = cap
             }
-            logEdgeFire(edge: "🔝top", fired: true, reason: "spinner-visible",
-                        anchorId: anchorCapture?.id,
-                        anchorScreenY: anchorCapture?.screenY)
-            logWindowStateIfChanged(reason: "top-edge-expand")
-            logSpinnerStateIfChanged(reason: "top-edge-expand")
-            return
         }
 
-        // Priority 2: network fetch for older history not yet in memory.
-        guard !isLoading else { return }
+        // 3. Ensure older messages are loaded (provider decides
+        //    no-op vs tentacle fetch). Backfill arrival is handled
+        //    by `applyPrependFollow` on msg-count-change.
         let firstSeq = filteredMessages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
-        guard firstSeq > 1 else {
-            logEdgeFire(edge: "🔝top", fired: false, reason: "no-folded-above-and-firstSeq=1",
-                        anchorId: nil, anchorScreenY: nil)
-            return
+        var loadDispatched = false
+        if firstSeq > 1 {
+            loadDispatched = appState.messageProvider?.ensureOlderLoaded(
+                sessionId: sessionId, beforeSeq: firstSeq) ?? false
+            // If we're at the in-memory top (slid==false) and a
+            // network fetch went out, still queue an anchor restore
+            // so the prepend-follow can land on the same bubble.
+            if !slid, let cap = anchorCapture, loadDispatched {
+                pendingAnchorRestore = cap
+            }
         }
-        logEdgeFire(edge: "🔝top", fired: true, reason: "network-fetch beforeSeq=\(firstSeq)",
-                    anchorId: nil, anchorScreenY: nil)
-        appState.messageProvider?.requestBefore(sessionId: sessionId, beforeSeq: firstSeq)
+
+        let reason: String
+        if slid && loadDispatched      { reason = "slide+fetch" }
+        else if slid                   { reason = "slide" }
+        else if loadDispatched         { reason = "fetch beforeSeq=\(firstSeq)" }
+        else if firstSeq <= 1          { reason = "at-session-start" }
+        else                           { reason = "no-op" }
+        logEdgeFire(edge: "🔝top", fired: slid || loadDispatched, reason: reason,
+                    anchorId: anchorCapture?.id,
+                    anchorScreenY: anchorCapture?.screenY)
+        logWindowStateIfChanged(reason: "top-edge-expand")
+        logSpinnerStateIfChanged(reason: "top-edge-expand")
     }
 
     /// Bottom-edge expansion: slide window down by `renderExpandStep`
@@ -1217,6 +1206,7 @@ struct ChatView: View {
     /// `cachedRawTurns` is then free.
     private func refreshGroupingCache() {
         let newRaw = groupMessagesIntoTurns(filteredMessages)
+        let previousFirstTurnId = lastKnownFirstTurnId
         cachedRawTurns = newRaw
         // Count includes the synthetic streaming turn if present.
         let streamingTailNeeded: Bool = {
@@ -1227,6 +1217,33 @@ struct ChatView: View {
             return true
         }()
         cachedAllTurnCount = newRaw.count + (streamingTailNeeded ? 1 : 0)
+        applyPrependFollow(newRaw: newRaw, previousFirstTurnId: previousFirstTurnId)
+        lastKnownFirstTurnId = newRaw.first?.id
+    }
+
+    /// When a refresh changes the FIRST turn id (older turns
+    /// prepended by tentacle backfill), shift `renderWindowStartIdx`
+    /// forward by the prepend delta so the rendered slice keeps
+    /// pointing at the same physical turns the user was reading.
+    /// Without this, the window indices stay literal (e.g. [0..7))
+    /// but the underlying items at those indices silently swap to
+    /// the newly-arrived ancient history — visible as a teleport.
+    ///
+    /// No-op when:
+    ///   • Previous first id is nil (initial entry, nothing to follow).
+    ///   • New first id == previous (no prepend, only tail growth or
+    ///     in-place updates).
+    ///   • Previous first id isn't found in the new list (unexpected;
+    ///     bail rather than shift to a wrong position).
+    private func applyPrependFollow(newRaw: [TurnItem], previousFirstTurnId: String?) {
+        guard let prevId = previousFirstTurnId,
+              let newFirstId = newRaw.first?.id,
+              prevId != newFirstId else { return }
+        guard let newIdx = newRaw.firstIndex(where: { $0.id == prevId }) else { return }
+        guard newIdx > 0 else { return }
+        let beforeStart = renderWindowStartIdx
+        renderWindowStartIdx = min(beforeStart + newIdx, max(0, newRaw.count - 1))
+        logWindowStateIfChanged(reason: "prepend-follow Δ=\(newIdx)")
     }
 
     private func followBottomOnNewTurns() {
@@ -1652,6 +1669,12 @@ struct ChatView: View {
         renderedTurnCount = max(1, entryEnd - entryStart)
         lastWindowExpansion = nil
         pendingAnchorRestore = nil
+        // Reset prepend-follow baseline. The initial refreshGroupingCache
+        // above set lastKnownFirstTurnId to the new session's first
+        // turn; clearing here ensures the very next refresh — which
+        // may be the entry-poll picking up persisted messages — won't
+        // see a stale value carried over from the previous session.
+        lastKnownFirstTurnId = cachedRawTurns.first?.id
         // Capture whether we started empty BEFORE any await. We use
         // this at the tail to distinguish "fresh load — all messages
         // are backfill, baseline silently" from "session was already

@@ -220,6 +220,33 @@ final class MessageProvider {
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq)
     }
 
+    /// Unified "I need older messages" entry point used by the chat
+    /// view's top-spinner auto-load. Hides the memory-vs-network
+    /// decision from the caller: if any message older than
+    /// `beforeSeq` is already in the store the call is a no-op;
+    /// otherwise it falls through to `requestBefore` (which carries
+    /// its own (sessionId, beforeSeq) dedupe and `seq-1` overlap
+    /// short-circuit). Returns whether a tentacle request was
+    /// actually dispatched — callers can use that to decide if a
+    /// "fetching" indicator should be shown, but most can ignore it.
+    @discardableResult
+    func ensureOlderLoaded(sessionId: String, beforeSeq: Int) -> Bool {
+        guard let appState else { return false }
+        guard beforeSeq > 1 else { return false }
+        // Already in memory: any message older than `beforeSeq`
+        // means the chat view just needs to widen its rendered
+        // window — no network round-trip required.
+        let storeMessages = appState.messageStore.getMessages(sessionId)
+        if storeMessages.contains(where: { $0.seq > 0 && $0.seq < beforeSeq }) {
+            return false
+        }
+        // Not in memory → fetch. `requestBefore` handles tentacle
+        // device readiness, dedupe, and timeout.
+        let wasInFlight = inFlightRequests.contains("\(sessionId):\(beforeSeq)")
+        requestBefore(sessionId: sessionId, beforeSeq: beforeSeq)
+        return !wasInFlight
+    }
+
     // MARK: - Handle Batch
 
     /// Process a turn-aligned batch from tentacle. Inserts into store
