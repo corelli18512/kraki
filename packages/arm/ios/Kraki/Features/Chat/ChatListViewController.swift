@@ -237,6 +237,17 @@ final class ChatListViewController: UIViewController {
         for item in turns {
             newMap[item.id] = item
         }
+
+        // Stage 3: anchor preservation. Before mutating the data
+        // source, record the topmost-visible cell's id and the
+        // screen-space Y at which it currently sits. After the diff
+        // applies — which may have inserted older items above it,
+        // shifting its content-space Y — we re-anchor the scroll so
+        // the same row stays visually pinned in place. Without this,
+        // a backfill arrival would visibly jerk the viewport upward
+        // by the height of the newly-inserted older history.
+        let anchor = captureTopVisibleAnchor()
+
         itemsById = newMap
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
@@ -249,7 +260,14 @@ final class ChatListViewController: UIViewController {
             // coordinator's `isAtBottom` so overlays don't lag
             // behind reality — `scrollViewDidScroll` only fires when
             // the offset actually changes.
-            self?.scrollCoordinator.recomputeIsAtBottom()
+            guard let self else { return }
+            // Restore scroll anchor before the bottom-tracking
+            // recomputes so isAtBottom reflects the corrected
+            // offset.
+            if let anchor {
+                self.restoreScrollAnchor(anchor)
+            }
+            self.scrollCoordinator.recomputeIsAtBottom()
         }
     }
 
@@ -261,6 +279,75 @@ final class ChatListViewController: UIViewController {
         var snapshot = dataSource.snapshot()
         snapshot.reconfigureItems(snapshot.itemIdentifiers)
         dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    // MARK: - Scroll anchor preservation
+
+    /// A captured scroll anchor: the id of the topmost-visible cell
+    /// at the moment of capture, plus the screen-space Y at which
+    /// that cell's top sat (i.e. content Y minus contentOffset.y).
+    /// On restore we recompute the cell's new content Y after the
+    /// snapshot apply and shift contentOffset.y by the delta, so the
+    /// cell visually stays put.
+    private struct ScrollAnchor {
+        let itemId: String
+        let screenY: CGFloat
+    }
+
+    /// Snapshot the topmost-visible cell. Returns nil if nothing is
+    /// visible (e.g. first apply, list empty). Skips the very first
+    /// "partially scrolled off the top" cell only if it's barely on
+    /// screen — anchoring to a cell that's about to disappear from
+    /// the viewport creates a worse experience than anchoring to the
+    /// next one fully on screen.
+    private func captureTopVisibleAnchor() -> ScrollAnchor? {
+        guard let cv = collectionView, dataSource != nil else { return nil }
+        let visiblePaths = cv.indexPathsForVisibleItems.sorted()
+        guard !visiblePaths.isEmpty else { return nil }
+        let snapshot = dataSource.snapshot()
+        for path in visiblePaths {
+            guard let attrs = cv.layoutAttributesForItem(at: path) else { continue }
+            // Resolve the cell's id from the snapshot (path → id),
+            // not from `itemsById` — the snapshot is the source of
+            // truth for "what's in the list right now".
+            let identifiers = snapshot.itemIdentifiers
+            guard path.item < identifiers.count else { continue }
+            let item = identifiers[path.item]
+            let screenY = attrs.frame.minY - cv.contentOffset.y
+            return ScrollAnchor(itemId: item.id, screenY: screenY)
+        }
+        return nil
+    }
+
+    /// Restore the captured anchor by computing the cell's new
+    /// content-space Y and shifting contentOffset so the cell sits
+    /// at the same screen Y as before. No-op if the cell is no
+    /// longer in the snapshot (e.g. user-initiated full reload) or
+    /// the layout hasn't placed the item yet.
+    private func restoreScrollAnchor(_ anchor: ScrollAnchor) {
+        guard let cv = collectionView, let dataSource else { return }
+        let snapshot = dataSource.snapshot()
+        let identifiers = snapshot.itemIdentifiers
+        guard let newIndex = identifiers.firstIndex(where: { $0.id == anchor.itemId }) else {
+            return
+        }
+        let path = IndexPath(item: newIndex, section: 0)
+        // Force the layout to size this item before asking for its
+        // attributes — self-sizing cells may not have been measured
+        // yet for items above the current viewport.
+        cv.layoutIfNeeded()
+        guard let attrs = cv.layoutAttributesForItem(at: path) else { return }
+        let targetOffsetY = attrs.frame.minY - anchor.screenY
+        // Clamp to scrollable range so we don't end up with an
+        // out-of-bounds offset that would bounce-back on the next
+        // runloop tick.
+        let inset = cv.adjustedContentInset
+        let minOffsetY = -inset.top
+        let maxOffsetY = max(minOffsetY, cv.contentSize.height - cv.bounds.height + inset.bottom)
+        let clamped = min(maxOffsetY, max(minOffsetY, targetOffsetY))
+        if abs(cv.contentOffset.y - clamped) > 0.5 {
+            cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: clamped), animated: false)
+        }
     }
 
     // MARK: - Cell helpers
