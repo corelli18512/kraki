@@ -20,6 +20,23 @@ final class SpeechRecognizer {
     private(set) var isRecording = false
     private(set) var error: String?
 
+    /// Captured error code from the most recent recognition task. Set
+    /// by the task callback in `beginRecognition`. The toggle gate in
+    /// `MessageInputView` consults this AND probes `isAvailable` to
+    /// detect "Dictation disabled at iOS level" — `isAvailable` is
+    /// optimistic (returns true even when the global Dictation toggle
+    /// is off), so the post-recording error is the reliable signal.
+    /// Stays true across recordings within a session; reset by
+    /// `clearRecognizerError()` on app foreground so a user who toggled
+    /// Dictation on while away gets a fresh chance.
+    var dictationDisabled: Bool = false
+
+    /// Reset the dictation-disabled latch. Called on app foreground.
+    func clearRecognizerError() {
+        dictationDisabled = false
+        error = nil
+    }
+
     var isAvailable: Bool {
         SFSpeechRecognizer(locale: Locale.current)?.isAvailable ?? false
     }
@@ -49,25 +66,31 @@ final class SpeechRecognizer {
 
     func toggleRecording() {
         if isRecording {
-            stopRecording()
+            // Toggle from the input bar maps to the graceful finish
+            // path so partial speech right at the moment of tap still
+            // lands in `transcript`.
+            finishRecording()
         } else {
             startRecording()
         }
     }
 
     func startRecording() {
+        NSLog("[VOICE] startRecording called isRecording=\(isRecording)")
         guard !isRecording else { return }
         error = nil
 
-        // Request permissions sequentially
         SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
             DispatchQueue.main.async {
+                NSLog("[VOICE] auth status = \(authStatus.rawValue)")
                 switch authStatus {
                 case .authorized:
                     self?.requestMicAndStart()
                 case .denied, .restricted:
+                    NSLog("[VOICE] auth denied")
                     self?.error = "Speech recognition permission denied. Enable it in Settings → Privacy."
                 case .notDetermined:
+                    NSLog("[VOICE] auth notDetermined")
                     self?.error = "Speech recognition permission not determined."
                 @unknown default:
                     self?.error = "Speech recognition unavailable."
@@ -76,12 +99,87 @@ final class SpeechRecognizer {
         }
     }
 
-    func stopRecording() {
+    /// Graceful stop. Tells the recognizer "no more audio" and lets
+    /// the task deliver its final result, which fills out
+    /// `transcript` with the last partial that would otherwise be
+    /// lost. `await`s the final result up to a short timeout — past
+    /// that we hard-cancel so we don't leak the audio session
+    /// indefinitely if the recognizer never replies.
+    ///
+    /// This is the correct path for normal push-to-talk release. The
+    /// previous implementation called `recognitionTask.cancel()`
+    /// immediately after `endAudio()`, which aborted the final-result
+    /// callback inside Apple's framework — exactly the trailing
+    /// speech the user just spoke. That's why on-release sends were
+    /// silently dropping their captured text.
+    @MainActor
+    func finishRecording() async {
+        NSLog("[VOICE] finishRecording entry isRecording=\(isRecording) transcript=\"\(transcript)\"")
         guard isRecording else { return }
         silenceTimer?.invalidate()
         silenceTimer = nil
+
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        NSLog("[VOICE] finishRecording endAudio called, awaiting isFinal callback…")
+
+        let deadline = Date().addingTimeInterval(Self.finishTimeout)
+        var pollCount = 0
+        while isRecording, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(40))
+            pollCount += 1
+        }
+        NSLog("[VOICE] finishRecording polled \(pollCount)x; isRecording=\(isRecording) transcript=\"\(transcript)\"")
+
+        if isRecording {
+            NSLog("[VOICE] finishRecording TIMEOUT — forcing teardown")
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            recognitionRequest = nil
+            isRecording = false
+        }
+        deactivateAudioSession()
+    }
+
+    /// Fire-and-forget overload for non-async call sites that don't
+    /// need to read the transcript synchronously. Uses a detached
+    /// task so the callback ordering matches the original
+    /// `stopRecording`.
+    func finishRecording() {
+        Task { @MainActor in await self.finishRecording() }
+    }
+
+    /// Hard cancel. Discards anything in flight including any
+    /// transcript that arrived. Use this for the cancel-arm path
+    /// (user dragged up past threshold) where we don't want to keep
+    /// their last words at all.
+    func cancelRecording() {
+        guard isRecording else { return }
+        teardown()
+        transcript = ""
+    }
+
+    /// Backwards-compat alias. Matches the previous behaviour
+    /// (immediate cancel + cleanup) for any caller that hasn't been
+    /// migrated to `finishRecording` / `cancelRecording`. Internally
+    /// it's a hard cancel — preserve the historical effect.
+    func stopRecording() {
+        cancelRecording()
+    }
+
+    /// Private teardown — releases the audio session, engine,
+    /// request, and task. Does NOT touch `transcript`. Called from
+    /// both the graceful and the hard paths AND from the recognizer's
+    /// own `isFinal` callback (which has just written the final
+    /// transcript and must not have it wiped).
+    private func teardown() {
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()
@@ -89,6 +187,8 @@ final class SpeechRecognizer {
         isRecording = false
         deactivateAudioSession()
     }
+
+    private static let finishTimeout: TimeInterval = 1.5
 
     // MARK: - Setup
 
@@ -127,10 +227,28 @@ final class SpeechRecognizer {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
 
-        // Prefer on-device recognition for privacy. Both branches of
-        // the previous version did the same thing; the
-        // iOS-18-availability check was a no-op so we drop it.
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        // Let Apple choose between on-device and cloud recognition.
+        //
+        // The previous default of `requiresOnDeviceRecognition = true`
+        // is the documented cause of the "Siri and Dictation are
+        // disabled" error (kAFAssistantErrorDomain code 1101) on
+        // devices where the on-device speech model isn't fully
+        // configured — even when Dictation IS enabled. Apple's dev
+        // forum thread on this confirms: on-device-only mode imposes
+        // strict setup requirements (language pack downloaded, Siri
+        // configured for that language, etc.) that are invisible to
+        // `isAvailable` and silently fail at recognition time.
+        //
+        // Leaving this unset (i.e., false) lets the framework fall
+        // back to Apple's cloud recognition when on-device isn't
+        // ready. This works on every device with Dictation enabled
+        // and a network connection — the standard expectation users
+        // already have from the dictation keyboard.
+        //
+        // Revisit if we want strict on-device for offline / privacy
+        // use cases. That would need an explicit user-facing opt-in
+        // (Settings toggle) AND a pre-flight check that the language
+        // model is downloaded before the first attempt.
 
         // Contextual strings to improve coding-related recognition
         request.contextualStrings = [
@@ -166,24 +284,41 @@ final class SpeechRecognizer {
             guard let self else { return }
             DispatchQueue.main.async {
                 if let result {
-                    self.transcript = result.bestTranscription.formattedString
+                    let txt = result.bestTranscription.formattedString
+                    let isFinal = result.isFinal
+                    NSLog("[VOICE] task callback result.text=\"\(txt)\" isFinal=\(isFinal)")
+                    self.transcript = txt
                     self.resetSilenceTimer()
 
-                    if result.isFinal {
-                        self.stopRecording()
+                    if isFinal {
+                        NSLog("[VOICE] task callback isFinal=true → teardown")
+                        self.teardown()
                     }
                 }
 
                 if let error {
-                    // Ignore cancellation errors (we trigger these on stopRecording)
                     let nsError = error as NSError
                     if nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 216 {
-                        // "Request was canceled" — expected
+                        NSLog("[VOICE] task callback error=216 (canceled) — ignored")
                         return
+                    }
+                    NSLog("[VOICE] task callback error=\(error.localizedDescription) domain=\(nsError.domain) code=\(nsError.code) isRecording=\(self.isRecording)")
+                    // Latch the "Dictation disabled" condition so the
+                    // mic-toggle gate can show the user a clear prompt
+                    // next time they tap. The error string check is
+                    // belt-and-braces — Apple has used several codes
+                    // (1101, 1700) historically for the same root cause
+                    // (Settings → General → Keyboard → Enable Dictation
+                    // is off), but the message text "Siri and Dictation
+                    // are disabled" has been stable.
+                    let msg = error.localizedDescription.lowercased()
+                    if msg.contains("dictation") || nsError.code == 1101 || nsError.code == 1700 {
+                        NSLog("[VOICE] detected Dictation-disabled error — latching dictationDisabled=true")
+                        self.dictationDisabled = true
                     }
                     if self.isRecording {
                         self.error = error.localizedDescription
-                        self.stopRecording()
+                        self.cancelRecording()
                     }
                 }
             }
@@ -199,9 +334,11 @@ final class SpeechRecognizer {
             repeats: false
         ) { [weak self] _ in
             guard let self, self.isRecording else { return }
-            // Only auto-stop if we have some transcript content
+            // Only auto-stop if we have some transcript content.
+            // Graceful finish so the final partial flushes before we
+            // close the recognizer — preserves the user's words.
             if !self.transcript.isEmpty {
-                self.stopRecording()
+                self.finishRecording()
             } else {
                 // No speech yet — give more time
                 self.resetSilenceTimer()

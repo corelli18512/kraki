@@ -48,13 +48,16 @@ private struct SessionCardBody: View {
         device?.online ?? false
     }
 
-    /// True when the device's WS connection is live but we haven't
-    /// received its greeting message yet (no model list). Mirrors the
-    /// web app's amber "connecting" state.
+    /// True when the device is online but we haven't received a fresh
+    /// `device_greeting` in the current connection session. Mirrors
+    /// the web app's amber "connecting" state. Tracked by
+    /// `DeviceStore.pendingGreetingIds` rather than checking
+    /// `deviceModels.isEmpty` so the model picker can keep showing
+    /// cached models across a reconnect without polluting the dot
+    /// color.
     private var isDeviceConnecting: Bool {
         guard isDeviceOnline else { return false }
-        let models = deviceStore.deviceModels[session.deviceId]
-        return (models?.isEmpty ?? true)
+        return deviceStore.pendingGreetingIds.contains(session.deviceId)
     }
 
     private var machineName: String? {
@@ -227,12 +230,20 @@ private struct SessionCardBody: View {
 
     /// Color of the device tag's status dot. Driven purely by the
     /// device's own connectivity (no session.state mixing):
-    ///   - relay broken → amber (cached online flag is stale)
     ///   - device offline → gray
     ///   - device online but no greeting yet → amber (connecting)
     ///   - device online + greeting received → green
+    ///
+    /// Crucially this does NOT key off `appState.isFullyOnline` —
+    /// during a mid-session reconnect we keep showing the last-known
+    /// per-device state instead of flashing every dot amber. The
+    /// cached `deviceModels` survives the reconnect, so a previously-
+    /// green device stays green through the gap; `auth_ok` then
+    /// refreshes the online flags and any genuinely-changed devices
+    /// flip naturally. Brand-new devices first seen post-reconnect
+    /// (no cached models) legitimately go amber until their
+    /// `device_greeting` arrives.
     private var deviceStatusColor: Color {
-        if !appState.isFullyOnline { return Color(hex: 0xFBBF24) }
         if !isDeviceOnline { return .gray }
         if isDeviceConnecting { return Color(hex: 0xFBBF24) }
         return .green
