@@ -1251,10 +1251,21 @@ struct ChatView: View {
         defer { lastSeenTotalTurns = newTotal }
         guard didInitialScroll, newTotal > lastSeenTotalTurns else { return }
 
-        let windowBottomBefore = renderWindowStartIdx + renderedTurnCount
-        guard windowBottomBefore >= lastSeenTotalTurns else {
-            // Window was NOT at the bottom — user is exploring
-            // history. Leave the window where it is.
+        // "At bottom" must be measured by VIEWPORT position, not by
+        // window indices. After a growing-phase top-edge slide, the
+        // window's END remains pinned at `total`, so an index-based
+        // check ("windowBottomBefore >= lastSeenTotalTurns") yields a
+        // false positive: the user has scrolled up and is reading
+        // history, but the index check would still claim they're at
+        // the bottom and slide the window forward — yanking them out
+        // of what they were reading. Symptom in the log trace: right
+        // after a top-edge expand at session entry, follow-bottom
+        // would fire with Δstart=+1 Δend=+3.
+        let viewportBottomY = scrollOffsetY + viewportHeight
+        let nearBottom = effectiveContentBottom > 0
+            && viewportBottomY >= effectiveContentBottom - Self.bottomEdgeSlop
+        guard nearBottom else {
+            // User is exploring history. Leave the window where it is.
             return
         }
         let beforeStart = renderWindowStartIdx
