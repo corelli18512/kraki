@@ -31,6 +31,7 @@ struct MessageInputView: View {
     var pendingQuestion: PendingQuestion? = nil
 
     @Environment(AppState.self) private var appState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var imageMimeType: String = "image/jpeg"
@@ -50,6 +51,10 @@ struct MessageInputView: View {
     @AppStorage("kraki.input.voiceMode") private var voiceMode = false
     @State private var isPressing = false
     @State private var cancelArmed = false
+    /// Shows the "Enable Dictation" alert when the user toggles into
+    /// voice mode but `SFSpeechRecognizer.isAvailable` is false
+    /// (system Dictation toggle off, no language pack, etc.).
+    @State private var showDictationDisabledAlert = false
 
     // Hold-to-talk vs mode-swipe arbitration (voice mode only).
     // The hold-to-talk gesture pivots into one of these branches
@@ -156,6 +161,32 @@ struct MessageInputView: View {
     private var hasImage: Bool { imageData != nil }
     private var canSend: Bool { isIdle && (hasText || hasImage) }
 
+    /// True when we can actually deliver a message right now —
+    /// tentacle is online AND the relay channel is up. Drives the
+    /// send button's enabled state and the offline-hint pill.
+    /// Typing/voice/image picker remain fully functional regardless
+    /// so the user can compose a message in advance.
+    private var isDeviceReachable: Bool {
+        guard let deviceId = session?.deviceId,
+              let device = appState.deviceStore.devices[deviceId] else { return false }
+        return device.online && appState.isFullyOnline
+    }
+
+    /// Short banner text to surface above the input row when sending
+    /// wouldn't deliver right now. `nil` ⇒ no pill rendered.
+    private var unreachableHint: String? {
+        guard let deviceId = session?.deviceId else { return nil }
+        let device = appState.deviceStore.devices[deviceId]
+        if device?.online != true {
+            let name = device?.name ?? session?.deviceName ?? "Device"
+            return "\(name) is offline — message will deliver when it reconnects."
+        }
+        if !appState.isFullyOnline {
+            return "Reconnecting…"
+        }
+        return nil
+    }
+
     /// Voice toggle is hidden in permission flows (responses are structured,
     /// not freeform speech).
     private var canShowVoiceToggle: Bool { pendingPermission == nil }
@@ -176,12 +207,32 @@ struct MessageInputView: View {
                     .offset(x: -23, y: -32)
                     .allowsHitTesting(false)
             }
+            .overlay(alignment: .top) {
+                // Offline / reconnecting hint pill. Sits a few points
+                // above the input row, full-width centered, low-key
+                // tertiary text so it informs without alarming. Hidden
+                // when the device is reachable.
+                unreachableHintPill
+                    .offset(y: -28)
+                    .allowsHitTesting(false)
+            }
             .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isPressing)
             .onChange(of: sessionActive) { _, active in
                 if active { awaitingActive = false }
             }
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
+            }
+            // If the user toggled iOS Dictation while away from the
+            // app, clear the latched "disabled" state so the next
+            // mic-toggle tap gets a fresh probe instead of bouncing
+            // straight to the alert. `scenePhase` fires `.active` on
+            // any return-to-foreground, including coming back from
+            // Settings.
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active && speech.dictationDisabled {
+                    speech.clearRecognizerError()
+                }
             }
             .alert(
                 "Couldn't attach image",
@@ -194,6 +245,24 @@ struct MessageInputView: View {
                 Button("OK", role: .cancel) { imageAttachError = nil }
             } message: { error in
                 Text(error)
+            }
+            // Voice input requires Dictation to be enabled at the iOS
+            // level. We can't deep-link straight to that pane (Apple
+            // removed third-party `prefs:` URLs), but we surface the
+            // exact path and a one-tap shortcut to the app's Settings
+            // entry so the user can navigate from there.
+            .alert(
+                "Voice input needs Dictation",
+                isPresented: $showDictationDisabledAlert
+            ) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Not Now", role: .cancel) {}
+            } message: {
+                Text("Push-to-talk uses iOS Dictation. Open Settings → General → Keyboard and turn on Enable Dictation.")
             }
     }
 
@@ -367,6 +436,25 @@ struct MessageInputView: View {
 
     private var voiceToggleButton: some View {
         Button {
+            // Gate before flipping into voice mode. Two checks:
+            //
+            //   1. Latched failure from a previous press-to-talk
+            //      attempt that hit "Siri and Dictation are disabled."
+            //      That error is set on the recognition callback and
+            //      cleared on app foreground (so flipping the iOS
+            //      Dictation toggle ON and returning gets a fresh
+            //      shot).
+            //
+            //   2. `isAvailable == false` — covers missing language
+            //      packs and similar non-Dictation cases. Note this
+            //      flag is unreliable for the Dictation toggle itself
+            //      (returns true even when Dictation is off), which is
+            //      why we also need the latch above.
+            if !voiceMode && (speech.dictationDisabled || !speech.isAvailable) {
+                NSLog("[VOICE] toggle into voice mode blocked — dictationDisabled=\(speech.dictationDisabled) isAvailable=\(speech.isAvailable)")
+                showDictationDisabledAlert = true
+                return
+            }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 voiceMode.toggle()
                 if voiceMode { isFocused = false }
@@ -379,6 +467,33 @@ struct MessageInputView: View {
             // a crash on cold mic-session start.
             if voiceMode {
                 speech.requestPermissionsIfNeeded()
+                // Fire-and-forget probe: start a tiny recognition
+                // session and immediately finish it. If the user has
+                // Dictation disabled the framework will fire the
+                // error callback within ~100ms, latch
+                // `dictationDisabled`, and the next tap will bounce
+                // them to the alert. The user sees a brief mic
+                // permission grant (if first time) and then nothing
+                // — voice mode appears to work. The probe is
+                // throwaway: any transcript from it is discarded
+                // since we `cancelRecording()` right after.
+                Task { @MainActor in
+                    speech.startRecording()
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if speech.isRecording {
+                        speech.cancelRecording()
+                    }
+                    // If the probe latched the Dictation-disabled
+                    // error, bounce the user back out of voice mode
+                    // AND show the alert. Same UX as if they'd
+                    // tapped mic the second time.
+                    if speech.dictationDisabled {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            voiceMode = false
+                        }
+                        showDictationDisabledAlert = true
+                    }
+                }
             }
         } label: {
             LucideIcon(voiceMode ? .keyboard : .mic, size: 22, strokeWidth: 2.25, color: .secondary)
@@ -406,11 +521,22 @@ struct MessageInputView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity((isIdle && !canSend) ? 0.4 : 1)
+        // Three-stage opacity:
+        //   - Idle + nothing to send → 40% (greyed regardless of network)
+        //   - Idle + has content + device unreachable → 50% (greyed but tappable;
+        //     tap will enqueue and show the offline hint)
+        //   - Anything else (fully ready, or stop button) → 100%
+        .opacity(sendButtonOpacity)
         // Nudge inward from the trailing edge — mirrors the toggle's
         // leading inset so the two icons sit symmetric and don't
         // crowd the capsule's rounded ends.
         .padding(.trailing, 6)
+    }
+
+    private var sendButtonOpacity: Double {
+        if isIdle && !canSend { return 0.4 }
+        if isIdle && !isDeviceReachable { return 0.5 }
+        return 1
     }
 
     @ViewBuilder
@@ -508,6 +634,7 @@ struct MessageInputView: View {
                         guard !Task.isCancelled else { return }
                         // 200ms elapsed without a horizontal pivot →
                         // commit to RECORD.
+                        NSLog("[VOICE] dwell expired → pivot=record, startRecording")
                         holdPivot = .record
                         isPressing = true
                         cancelArmed = false
@@ -533,41 +660,34 @@ struct MessageInputView: View {
 
                 switch pivot {
                 case .record:
-                    speech.stopRecording()
                     let cancelled = cancelArmed
-                    // Brief delay so the recognizer can flush its
-                    // final partial.
+                    NSLog("[VOICE] release pivot=record cancelArmed=\(cancelled) transcriptAtRelease=\"\(speech.transcript)\"")
                     Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(180))
-                        if !cancelled {
-                            let captured = speech.transcript
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !captured.isEmpty {
-                                // Push-to-talk = WhatsApp model:
-                                // release IS the send action. Merge
-                                // the captured transcript into any
-                                // pre-existing draft so a half-typed
-                                // message isn't lost, write it
-                                // through `setDraft` so the bound
-                                // `text` reflects the merged value,
-                                // then fire `handleSend` directly.
-                                // Falls back to draft-only if for
-                                // some reason we can't send (no
-                                // active session, etc.).
-                                let prior = text
-                                let merged = prior.isEmpty ? captured : (prior + " " + captured)
-                                sessionStore.setDraft(sessionId, merged)
-                                // Flip back to keyboard mode FIRST
-                                // so the user sees the text land in
-                                // the input box for a tick before
-                                // the send animation kicks off.
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                    voiceMode = false
-                                }
-                                if canSend {
-                                    handleSend()
-                                }
+                        if cancelled {
+                            NSLog("[VOICE] cancelled → cancelRecording, no send")
+                            speech.cancelRecording()
+                            isPressing = false
+                            cancelArmed = false
+                            return
+                        }
+                        NSLog("[VOICE] awaiting finishRecording…")
+                        await speech.finishRecording()
+                        let captured = speech.transcript
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        NSLog("[VOICE] finishRecording done. transcript=\"\(speech.transcript)\" captured=\"\(captured)\" isRecording=\(speech.isRecording)")
+                        if !captured.isEmpty {
+                            let prior = text
+                            let merged = prior.isEmpty ? captured : (prior + " " + captured)
+                            NSLog("[VOICE] merged=\"\(merged)\" calling setDraft + handleSend (canSend=\(canSend) hasText=\(hasText) isIdle=\(isIdle) awaitingActive=\(awaitingActive) sessionActive=\(sessionActive))")
+                            sessionStore.setDraft(sessionId, merged)
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                voiceMode = false
                             }
+                            NSLog("[VOICE] post-setDraft text=\"\(text)\" canSend=\(canSend)")
+                            handleSend()
+                            NSLog("[VOICE] handleSend returned")
+                        } else {
+                            NSLog("[VOICE] empty transcript, skip send")
                         }
                         isPressing = false
                         cancelArmed = false
@@ -933,12 +1053,37 @@ struct MessageInputView: View {
         }
     }
 
+    @ViewBuilder
+    private var unreachableHintPill: some View {
+        if let hint = unreachableHint {
+            Text(hint)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .padding(.horizontal, 16)
+                .transition(.opacity.combined(with: .offset(y: 4)))
+                .animation(.easeInOut(duration: 0.2), value: hint)
+        }
+    }
+
     // MARK: - Actions
 
     private func handleSend() {
-        guard canSend else { return }
+        NSLog("[VOICE] handleSend entry canSend=\(canSend) text=\"\(text)\" hasText=\(hasText) hasImage=\(hasImage) isIdle=\(isIdle) sessionActive=\(sessionActive) awaitingActive=\(awaitingActive)")
+        guard canSend else {
+            NSLog("[VOICE] handleSend BAILED — canSend false")
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendText = trimmed.isEmpty ? "[image]" : trimmed
+        NSLog("[VOICE] handleSend sending: \"\(sendText)\"")
 
         var attachments: [ImageAttachment]?
         if let imageData {
@@ -951,6 +1096,7 @@ struct MessageInputView: View {
         clearImage()
         awaitingActive = true
         isFocused = false
+        NSLog("[VOICE] handleSend done (commandSender=\(appState.commandSender != nil))")
     }
 
     private func clearImage() {

@@ -19,6 +19,13 @@ final class DeviceStore {
     /// used by the import picker to show a spinner.
     var localSessionsLoading: Set<String> = []
 
+    /// Device IDs that the relay told us are online (via `auth_ok` or
+    /// `device_joined`) but whose `device_greeting` we haven't yet
+    /// received in the current connection session. Drives the amber
+    /// "connecting" dot. Cleared on `setGreeting`. Not persisted —
+    /// greeting freshness is a per-connection property.
+    var pendingGreetingIds: Set<String> = []
+
     /// Cross-tab navigation request. Setting this asks the root tab
     /// view to (a) switch to the Devices tab and (b) push the named
     /// device's detail panel. Mirrors `SessionStore.navigateToSession`.
@@ -83,11 +90,19 @@ final class DeviceStore {
 
     func setDevices(_ list: [DeviceSummary]) {
         devices = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+        // Refresh greeting freshness — every online device in the fresh
+        // list is "connecting" until its `device_greeting` lands in this
+        // session. Offline devices don't need to be tracked because
+        // `isDeviceOnline=false` short-circuits the connecting check.
+        pendingGreetingIds = Set(list.filter { $0.online }.map(\.id))
         scheduleSave()
     }
 
     func addDevice(_ device: DeviceSummary) {
         devices[device.id] = device
+        if device.online {
+            pendingGreetingIds.insert(device.id)
+        }
         scheduleSave()
     }
 
@@ -96,11 +111,20 @@ final class DeviceStore {
         deviceModels.removeValue(forKey: id)
         deviceModelDetails.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
+        pendingGreetingIds.remove(id)
         scheduleSave()
     }
 
     func setOnline(_ id: String, _ online: Bool) {
         devices[id]?.online = online
+        if online {
+            // Coming online → mark pending. The greeting we expect to
+            // follow this `device_joined` will clear it.
+            pendingGreetingIds.insert(id)
+        } else {
+            // Going offline → not connecting, just gray.
+            pendingGreetingIds.remove(id)
+        }
         scheduleSave()
     }
 
@@ -129,6 +153,8 @@ final class DeviceStore {
         if let version {
             deviceVersions[deviceId] = version
         }
+        // Greeting received — device is no longer "connecting".
+        pendingGreetingIds.remove(deviceId)
         scheduleSave()
     }
 
@@ -139,6 +165,7 @@ final class DeviceStore {
         deviceModels.removeAll()
         deviceModelDetails.removeAll()
         deviceVersions.removeAll()
+        pendingGreetingIds.removeAll()
         persistentCache.clear()
     }
 
@@ -157,6 +184,16 @@ final class DeviceStore {
     /// Set device online status (named alias for setOnline).
     func setDeviceOnline(_ id: String, online: Bool) {
         setOnline(id, online)
+    }
+
+    /// Mark a device as having delivered its greeting in the current
+    /// connection session — clears the amber "connecting" dot.
+    /// Called by `MessageRouter.handleDeviceGreeting` after the
+    /// individual setters land the new models/version/etc., so the
+    /// `setDeviceOnline(true)` inside the same handler (which would
+    /// otherwise re-insert the id) is correctly cancelled out.
+    func markGreeted(_ id: String) {
+        pendingGreetingIds.remove(id)
     }
 
     /// Set device models list.

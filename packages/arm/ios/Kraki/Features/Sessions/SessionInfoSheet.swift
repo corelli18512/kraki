@@ -40,7 +40,7 @@ struct SessionInfoSheet: View {
                     sessionSection
                     usageSection
                     deviceSection
-                    deleteSection
+                    actionsSection
                 }
                 .padding(.horizontal)
                 .padding(.bottom)
@@ -55,7 +55,13 @@ struct SessionInfoSheet: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) {
                     appState.commandSender?.deleteSession(sessionId: session.id)
+                    // Dismiss the sheet AND signal MainTabView to
+                    // pop the session navigation stack — otherwise
+                    // the user lands on a "Session not found"
+                    // placeholder where the deleted session used to
+                    // be, instead of the session list.
                     dismiss()
+                    appState.sessionStore.popToSessionListSignal &+= 1
                 }
             } message: {
                 Text("This will permanently delete this session and all its messages.")
@@ -292,22 +298,46 @@ struct SessionInfoSheet: View {
         }
     }
 
-    // MARK: - Delete
+    // MARK: - Actions (Fork / Delete row)
 
-    private var deleteSection: some View {
-        // Subtle bump in size from before — `footnote` font + regular
-        // control size, not large. Stays visually subordinate to the
-        // info rows above while reading as a real action.
-        HStack {
-            Spacer()
+    /// Side-by-side action row. Fork (krakiPrimary) on the left,
+    /// Delete (destructive red) on the right. Equal half-widths
+    /// inside the same horizontal stack so they read as a paired
+    /// affordance rather than two separate sections.
+    private var actionsSection: some View {
+        HStack(spacing: 12) {
+            forkButton
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .tint(.krakiPrimary)
+
             deleteButton
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
                 .tint(.red)
-                .containerRelativeFrame(.horizontal) { width, _ in width * 0.6 }
-            Spacer()
         }
-        .padding(.vertical, 16)
+    }
+
+    private var forkButton: some View {
+        Button {
+            // `forkSession` is fully optimistic — `CommandSender` adds
+            // a pending placeholder to the session store and assigns
+            // it to `navigateToSession`, which `MainTabView` watches.
+            // That pop-then-push lands the user on the new session's
+            // "Starting session…" placeholder while the tentacle
+            // works. We dismiss this sheet right after so the user
+            // sees the placeholder chat, not the info sheet, when
+            // the navigation completes.
+            appState.commandSender?.forkSession(sessionId: session.id)
+            dismiss()
+        } label: {
+            HStack(spacing: 5) {
+                LucideIcon(.gitFork, size: 16, color: .krakiPrimary)
+                Text("Fork")
+                    .font(.subheadline)
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private var deleteButton: some View {
@@ -316,9 +346,9 @@ struct SessionInfoSheet: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "trash")
-                    .font(.footnote)
-                Text("Delete Session")
-                    .font(.footnote)
+                    .font(.subheadline)
+                Text("Delete")
+                    .font(.subheadline)
             }
             .frame(maxWidth: .infinity)
         }

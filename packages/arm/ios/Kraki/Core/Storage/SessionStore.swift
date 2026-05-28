@@ -164,6 +164,12 @@ final class SessionStore {
     var sessionPreviews: [String: SessionPreview] = [:]
     var drafts: [String: String] = [:]
     var navigateToSession: String?
+    /// Bumped when a session is deleted while it's being viewed.
+    /// `MainTabView` observes this and pops the session navigation
+    /// stack so the user lands on the session list instead of the
+    /// "Session not found" placeholder. Counter (not boolean) so two
+    /// rapid deletes don't share the same value and get coalesced.
+    var popToSessionListSignal: Int = 0
     var streamingContent: [String: String] = [:]
 
     /// Disk-backed snapshot of session metadata + previews. Hydrated
