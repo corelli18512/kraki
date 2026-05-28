@@ -464,6 +464,14 @@ struct ChatView: View {
     /// the SwiftUI path entirely.
     @AppStorage("kraki.chat.useUIKit") private var useUIKitChatList: Bool = false
 
+    /// Scroll coordinator for the UIKit message list. Allocated
+    /// unconditionally — it's cheap, an @StateObject can't be
+    /// conditionally created, and the SwiftUI branch simply ignores
+    /// it. Stage 2 uses it only to drive the UIKit jump-to-latest
+    /// button (via its `isAtBottom` publisher); Stages 5-6 will
+    /// extend it with R1 and anchor-lock state.
+    @StateObject private var uikitScrollCoordinator = ChatScrollCoordinator()
+
     var body: some View {
         ScrollViewReader { proxy in
             Group {
@@ -472,7 +480,7 @@ struct ChatView: View {
                 } else if useUIKitChatList {
                     uikitMessages
                         .overlay(alignment: .bottomTrailing) {
-                            jumpToLatestButton
+                            uikitJumpToLatestButton
                         }
                         .safeAreaInset(edge: .bottom, spacing: 0) {
                             if isDeviceOnline {
@@ -571,6 +579,7 @@ struct ChatView: View {
             ChatListView(
                 sessionId: sessionId,
                 viewModel: viewModel,
+                coordinator: uikitScrollCoordinator,
                 expandedTurns: $expandedTurns,
                 agentName: session?.agent ?? "",
                 streamingText: streaming,
@@ -578,6 +587,30 @@ struct ChatView: View {
             )
         } else {
             Color.clear
+        }
+    }
+
+    /// Jump-to-latest button for the UIKit branch. Visible whenever
+    /// the user has scrolled away from the bottom (per the
+    /// coordinator's `isAtBottom`). The SwiftUI branch uses
+    /// `jumpToLatestButton` which gates on `hasFoldedTurnsBelow` —
+    /// a windowing concept that doesn't exist in the UIKit list.
+    @ViewBuilder
+    private var uikitJumpToLatestButton: some View {
+        if !uikitScrollCoordinator.isAtBottom {
+            Button {
+                uikitScrollCoordinator.scrollToBottom(animated: true)
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.krakiPrimary))
+                    .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+            }
+            .padding(.trailing, 16)
+            .padding(.bottom, 12)
+            .transition(.scale.combined(with: .opacity))
         }
     }
 

@@ -97,11 +97,20 @@ final class ChatListViewController: UIViewController {
     /// has loaded the view, so we stash and replay.
     private var pendingTurns: [TurnItem]?
 
+    /// Scroll coordinator that owns this controller's UICollectionView
+    /// delegate callbacks and republishes derived state (isAtBottom,
+    /// growMode, etc.) for SwiftUI overlays. Held strongly because
+    /// the @StateObject lifetime in the SwiftUI shell binds to the
+    /// view, not the controller, and we want the controller to keep
+    /// its delegate alive across reattach cycles.
+    private let scrollCoordinator: ChatScrollCoordinator
+
     // MARK: - Init
 
-    init(sessionId: String, viewModel: ChatViewModel) {
+    init(sessionId: String, viewModel: ChatViewModel, scrollCoordinator: ChatScrollCoordinator) {
         self.sessionId = sessionId
         self.viewModel = viewModel
+        self.scrollCoordinator = scrollCoordinator
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -144,6 +153,13 @@ final class ChatListViewController: UIViewController {
         collectionView.showsVerticalScrollIndicator = false
         // Match the SwiftUI ScrollView's keyboard dismiss behaviour.
         collectionView.keyboardDismissMode = .interactive
+        // Stage 2: wire scroll-derived state through the coordinator.
+        // The coordinator owns the delegate callbacks; it also needs
+        // a weak ref back to the collection view so SwiftUI overlays
+        // can trigger `scrollToBottom` without a round-trip through
+        // the representable.
+        collectionView.delegate = scrollCoordinator
+        scrollCoordinator.collectionView = collectionView
 
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -226,7 +242,15 @@ final class ChatListViewController: UIViewController {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         snapshot.appendSections([.messages])
         snapshot.appendItems(turns.map { Item(id: $0.id) }, toSection: .messages)
-        dataSource.apply(snapshot, animatingDifferences: false)
+        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+            // After the diff settles the content size may have grown
+            // (e.g. very first apply, or a new turn arriving while
+            // the user is reading old history). Resync the
+            // coordinator's `isAtBottom` so overlays don't lag
+            // behind reality — `scrollViewDidScroll` only fires when
+            // the offset actually changes.
+            self?.scrollCoordinator.recomputeIsAtBottom()
+        }
     }
 
     /// Force-reconfigure all visible cells in place (no snapshot
@@ -366,6 +390,11 @@ private struct MessageRow: View {
 struct ChatListView: UIViewControllerRepresentable {
     let sessionId: String
     let viewModel: ChatViewModel
+    /// Coordinator owned by the SwiftUI shell. Held as plain `let`
+    /// (not @ObservedObject) — this representable doesn't render
+    /// based on coordinator changes; subscribers in the SwiftUI
+    /// shell (the jump-to-latest overlay, etc.) observe it directly.
+    let coordinator: ChatScrollCoordinator
     @Binding var expandedTurns: Set<String>
     let agentName: String
     let streamingText: String?
@@ -376,7 +405,11 @@ struct ChatListView: UIViewControllerRepresentable {
     let turns: [TurnItem]
 
     func makeUIViewController(context: Context) -> ChatListViewController {
-        let vc = ChatListViewController(sessionId: sessionId, viewModel: viewModel)
+        let vc = ChatListViewController(
+            sessionId: sessionId,
+            viewModel: viewModel,
+            scrollCoordinator: coordinator
+        )
         vc.agentName = agentName
         vc.expandedTurnIds = expandedTurns
         vc.streamingText = streamingText
