@@ -109,7 +109,7 @@ jobs:
 
           for i in $(seq 1 30); do
             status=$(gh api "repos/${{ github.repository }}/commits/${RELEASE_SHA}/check-runs" \
-              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' 2>/dev/null | head -1 || true)
 
             if [ "${status}" = "success" ]; then
               echo "CI passed ✅"
