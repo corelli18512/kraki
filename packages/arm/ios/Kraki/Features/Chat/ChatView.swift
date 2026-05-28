@@ -45,6 +45,14 @@ struct ChatView: View {
     @Environment(AppState.self) private var appState
     @State private var expandedTurns: Set<String> = []
 
+    /// View model that owns the derived state (grouped turns,
+    /// streaming snapshot, pending action slices, etc.). Lazily
+    /// initialised on first appearance because `appState` isn't
+    /// available at view-construct time. Lives across body re-evals
+    /// thanks to `@State`; recreated on `task(id: sessionId)` when
+    /// the session changes.
+    @State private var viewModel: ChatViewModel?
+
     /// Height of the top "load older" spinner row (matches the
     /// HStack frame below). Combined with `topSpinnerSlop` below to
     /// decide whether the spinner is currently visible enough to
@@ -265,24 +273,22 @@ struct ChatView: View {
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
 
     private var isDeviceOnline: Bool {
-        guard let session else { return false }
-        return appState.deviceStore.devices[session.deviceId]?.online ?? false
+        viewModel?.isDeviceOnline ?? false
     }
 
-    /// Pending permissions for this session (filtered from global map).
+    /// Pending permissions for this session (forwards to view model).
     private var permissions: [PendingPermission] {
-        messageStore.permissionsForSession(sessionId)
+        viewModel?.permissions ?? []
     }
 
-    /// Pending questions for this session.
+    /// Pending questions for this session (forwards to view model).
     private var questions: [PendingQuestion] {
-        messageStore.questionsForSession(sessionId)
+        viewModel?.questions ?? []
     }
 
-    /// Messages for this session. Pending permissions stay inline so the user
-    /// sees the request in chat history, mirroring how pending questions behave.
+    /// Messages for this session (forwards to view model).
     private var filteredMessages: [ChatMessage] {
-        messageStore.messages[sessionId] ?? []
+        viewModel?.filteredMessages ?? []
     }
 
     /// Whether older content can be brought into view — either by
@@ -337,33 +343,23 @@ struct ChatView: View {
         hasFoldedTurnsAbove || hasFoldedTurnsBelow
     }
 
-    /// Session streaming content.
+    /// Session streaming content (forwards to view model).
     private var streaming: String? {
-        sessionStore.streamingContent[sessionId]
+        viewModel?.streaming
     }
 
-    /// **Cached** result of `groupMessagesIntoTurns(filteredMessages)`.
-    /// Recomputed only when `filteredMessages.count` changes (via the
-    /// `.onChange` handler) — never on every body invocation.
-    /// `groupMessagesIntoTurns` is O(n) over all in-memory messages
-    /// (2000+ in long sessions) and accessing it as a plain computed
-    /// property caused the main thread to stall long enough for
-    /// WebSocket heartbeats to time out — symptom: opening the
-    /// session disconnected the relay.
-    @State private var cachedRawTurns: [TurnItem] = []
-    /// Mirror of `cachedRawTurns.count + (streaming-extra-turn ? 1 : 0)`
-    /// for cheap O(1) reads from helpers that only need the total turn
-    /// count (`hasFoldedTurnsBelow`, `handleTopEdgeExpand`,
-    /// `handleBottomEdgeExpand`, `followBottomOnNewTurns`). Kept in
-    /// sync with `allGroupedTurns` in `refreshGroupingCache`.
-    @State private var cachedAllTurnCount: Int = 0
-    /// First turn id observed in the previous `cachedRawTurns`. When
-    /// the cache rebuilds and the new first turn id differs, older
-    /// turns were prepended (tentacle backfill). The prepend-follow
-    /// uses this to shift `renderWindowStartIdx` forward so the
-    /// rendered slice keeps pointing at the same physical turns —
-    /// otherwise the user's view teleports to ancient history.
-    @State private var lastKnownFirstTurnId: String? = nil
+    /// Raw cached turns (forwards to view model). Stage 0 keeps the
+    /// callers in place; Stage 4 deletes the windowing code that
+    /// reads this.
+    private var cachedRawTurns: [TurnItem] {
+        viewModel?.cachedRawTurns ?? []
+    }
+
+    /// Total turn count including the synthetic streaming turn
+    /// (forwards to view model).
+    private var cachedAllTurnCount: Int {
+        viewModel?.cachedAllTurnCount ?? 0
+    }
 
     /// Full grouped turn list (all in-memory messages + a synthetic
     /// streaming turn appended if needed). Reads the cached value
@@ -426,16 +422,15 @@ struct ChatView: View {
         return (start, end)
     }
 
-    /// Whether the session is idle (last message is idle type).
+    /// Whether the session is idle (forwards to view model).
     private var sessionIdle: Bool {
-        guard let last = filteredMessages.last else { return true }
-        return last.type == "idle"
+        viewModel?.sessionIdle ?? true
     }
 
-    /// Last user-side message (user_message or send_input), used as the
+    /// Last user-side message (forwards to view model). Used as the
     /// scroll target for R3-unread and R1/R2 anchoring.
     private var lastUserMessage: ChatMessage? {
-        filteredMessages.last(where: { $0.type == "user_message" || $0.type == "send_input" })
+        viewModel?.lastUserMessage
     }
 
     /// Is this session currently fetching messages from tentacle?
@@ -445,20 +440,15 @@ struct ChatView: View {
     }
 
     /// True when we have any cached messages OR we know we've reached
-    /// the very beginning of the conversation. Used by the State-A
-    /// center-spinner gate: while false AND we're loading, the chat
-    /// list + compose footer are hidden and we show a single centered
-    /// spinner. The tentacle's turn-aware endpoint guarantees the
-    /// first batch always contains the latest turn, so this flag
-    /// flips true as soon as the first batch arrives.
+    /// the very beginning of the conversation. Forwards to view model.
     private var latestTurnLoaded: Bool {
-        !filteredMessages.isEmpty
+        viewModel?.latestTurnLoaded ?? false
     }
 
     /// State-A: empty + loading. Show centered spinner, hide the
-    /// scroll list and the compose footer.
+    /// scroll list and the compose footer. Forwards to view model.
     private var showCenterLoading: Bool {
-        !latestTurnLoaded && isLoading
+        viewModel?.showCenterLoading ?? false
     }
 
     var body: some View {
@@ -790,6 +780,12 @@ struct ChatView: View {
             }
         }
         .task(id: sessionId) {
+            // Create / recreate the view model for this session. The
+            // grouping cache primes on first read of `viewModel?.
+            // refreshGroupingCache()` below; entry scroll then runs
+            // against a populated `cachedRawTurns`.
+            viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
+            refreshGroupingCache()
             // Reset anchor state across session switches.
             releaseIdleAnchor()
             await performEntryScroll(proxy: proxy)
@@ -1084,21 +1080,14 @@ struct ChatView: View {
     /// Rebuild the grouping cache. Called once per
     /// `filteredMessages.count` change (and once at entry). Reading
     /// `cachedRawTurns` is then free.
+    ///
+    /// Delegates the expensive grouping to the view model so it
+    /// happens once per data change, not per SwiftUI body invocation.
+    /// The window-index shift on prepend stays here because it owns
+    /// the render-window state.
     private func refreshGroupingCache() {
-        let newRaw = groupMessagesIntoTurns(filteredMessages)
-        let previousFirstTurnId = lastKnownFirstTurnId
-        cachedRawTurns = newRaw
-        // Count includes the synthetic streaming turn if present.
-        let streamingTailNeeded: Bool = {
-            guard streaming != nil else { return false }
-            if let last = newRaw.last, case .turn(let turn) = last, turn.finalMessage == nil {
-                return false
-            }
-            return true
-        }()
-        cachedAllTurnCount = newRaw.count + (streamingTailNeeded ? 1 : 0)
-        applyPrependFollow(newRaw: newRaw, previousFirstTurnId: previousFirstTurnId)
-        lastKnownFirstTurnId = newRaw.first?.id
+        guard let result = viewModel?.refreshGroupingCache() else { return }
+        applyPrependFollow(newRaw: result.newRaw, previousFirstTurnId: result.previousFirstTurnId)
     }
 
     /// When a refresh changes the FIRST turn id (older turns
@@ -1552,12 +1541,10 @@ struct ChatView: View {
         renderedTurnCount = max(1, entryEnd - entryStart)
         lastWindowExpansion = nil
         pendingAnchorRestore = nil
-        // Reset prepend-follow baseline. The initial refreshGroupingCache
-        // above set lastKnownFirstTurnId to the new session's first
-        // turn; clearing here ensures the very next refresh — which
-        // may be the entry-poll picking up persisted messages — won't
-        // see a stale value carried over from the previous session.
-        lastKnownFirstTurnId = cachedRawTurns.first?.id
+        // `lastKnownFirstTurnId` is owned by the view model and was
+        // set by the entry-task's `refreshGroupingCache()` call. No
+        // explicit reset needed here — the next refresh's diff will
+        // see the right baseline.
         // Capture whether we started empty BEFORE any await. We use
         // this at the tail to distinguish "fresh load — all messages
         // are backfill, baseline silently" from "session was already
