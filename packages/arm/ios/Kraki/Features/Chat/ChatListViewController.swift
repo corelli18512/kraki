@@ -87,6 +87,17 @@ final class ChatListViewController: UIViewController {
     /// bubbles the event up.
     var onExpandedTurnsChange: ((Set<String>) -> Void)?
 
+    /// Target item id for the one-shot entry scroll. When set BEFORE
+    /// the first non-empty `apply(turns:)`, the controller scrolls
+    /// to that item at the top on the apply completion. When nil,
+    /// the entry scroll lands at the bottom (read-session case).
+    /// Subsequent changes after the first scroll are ignored —
+    /// entry scroll fires once per controller lifetime.
+    var entryScrollTargetId: String?
+
+    /// One-shot guard so the entry scroll runs exactly once.
+    private var didPerformEntryScroll: Bool = false
+
     // MARK: - UI
 
     private(set) var collectionView: UICollectionView!
@@ -130,6 +141,16 @@ final class ChatListViewController: UIViewController {
             pendingTurns = nil
             apply(turns: pending)
         }
+    }
+
+    /// Re-attempt the one-shot entry scroll on every layout pass.
+    /// At launch the first `apply(turns:)` runs from the
+    /// pre-viewDidLoad replay before the view has a window — bounds
+    /// are 0×0 and `scrollToItem` is a no-op. We need the first
+    /// post-layout opportunity to fire the scroll instead.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        attemptEntryScroll()
     }
 
     // MARK: - Setup
@@ -261,14 +282,65 @@ final class ChatListViewController: UIViewController {
             // behind reality — `scrollViewDidScroll` only fires when
             // the offset actually changes.
             guard let self else { return }
-            // Restore scroll anchor before the bottom-tracking
-            // recomputes so isAtBottom reflects the corrected
-            // offset.
-            if let anchor {
+            // Try entry scroll first. For an unread session the
+            // target item may not have arrived in the first batch;
+            // each subsequent apply that brings it in is another
+            // chance for `attemptEntryScroll` to land it. For a
+            // read session, the bottom-anchored scroll fires on
+            // the first apply that arrives after layout is ready.
+            let entryFired = self.attemptEntryScroll()
+            // Restore the user-controlled anchor ONLY if entry
+            // scroll didn't take over the offset for this apply.
+            if !entryFired, let anchor {
                 self.restoreScrollAnchor(anchor)
             }
             self.scrollCoordinator.recomputeIsAtBottom()
         }
+    }
+
+    /// One-shot entry scroll. Idempotent until it fires successfully,
+    /// then guarded against repeat. Returns whether the scroll fired.
+    ///
+    /// Preconditions checked here:
+    ///   • Not already done.
+    ///   • View has been laid out (`bounds.height > 0`).
+    ///   • Data source has at least one item.
+    ///   • For unread (target id set): target must be in the current
+    ///     snapshot — otherwise we wait for the apply that brings it in.
+    ///
+    /// On success:
+    ///   • Unread: scroll the target turn to TOP, animated false.
+    ///   • Read: scroll the last turn to BOTTOM, animated false.
+    @discardableResult
+    private func attemptEntryScroll() -> Bool {
+        guard !didPerformEntryScroll,
+              let cv = collectionView,
+              cv.bounds.height > 0,
+              let dataSource else { return false }
+        let snapshot = dataSource.snapshot()
+        let identifiers = snapshot.itemIdentifiers
+        guard !identifiers.isEmpty else { return false }
+
+        if let targetId = entryScrollTargetId {
+            // Unread: only fire when the target is present. If it's
+            // not yet in the snapshot we leave the guard down so the
+            // next apply gets another chance.
+            guard let targetIndex = identifiers.firstIndex(where: { $0.id == targetId }) else {
+                return false
+            }
+            let path = IndexPath(item: targetIndex, section: 0)
+            cv.scrollToItem(at: path, at: .top, animated: false)
+        } else {
+            // Read: scroll to the last cell. UICollectionView
+            // resolves the bottom position even when above-fold
+            // cells haven't been sized yet — `scrollToItem(.bottom)`
+            // is monotonically correct against `contentSize`.
+            let lastPath = IndexPath(item: identifiers.count - 1, section: 0)
+            cv.scrollToItem(at: lastPath, at: .bottom, animated: false)
+        }
+
+        didPerformEntryScroll = true
+        return true
     }
 
     /// Force-reconfigure all visible cells in place (no snapshot
@@ -485,10 +557,15 @@ struct ChatListView: UIViewControllerRepresentable {
     @Binding var expandedTurns: Set<String>
     let agentName: String
     let streamingText: String?
-    /// Turns to render. The SwiftUI shell computes this from the
-    /// view model's `cachedRawTurns` (Stage 1 still routes through
-    /// the old window-aware `grouped` accessor; Stages 3-4 drop the
-    /// windowing and pass all turns directly).
+    /// One-shot entry-scroll target. Set by the SwiftUI shell on
+    /// session entry — non-nil for unread sessions (the TurnItem id
+    /// containing the first unread user message), nil for read
+    /// sessions (scroll to bottom). The controller consumes this on
+    /// its first non-empty apply; subsequent changes are ignored.
+    let entryScrollTargetId: String?
+    /// Turns to render. Sourced from `viewModel.cachedRawTurns`;
+    /// UICollectionView handles all virtualisation, so no windowing
+    /// is applied here.
     let turns: [TurnItem]
 
     func makeUIViewController(context: Context) -> ChatListViewController {
@@ -500,6 +577,7 @@ struct ChatListView: UIViewControllerRepresentable {
         vc.agentName = agentName
         vc.expandedTurnIds = expandedTurns
         vc.streamingText = streamingText
+        vc.entryScrollTargetId = entryScrollTargetId
         vc.onExpandedTurnsChange = { newSet in
             // Hop back to the SwiftUI binding via the main actor.
             Task { @MainActor in
@@ -530,6 +608,12 @@ struct ChatListView: UIViewControllerRepresentable {
             vc.streamingText = streamingText
             contentChanged = true
         }
+
+        // Keep the target id forwarded — the controller's one-shot
+        // guard means a late-arriving update can't re-trigger the
+        // scroll, but a first apply that races with the binding
+        // settling could otherwise see a stale nil.
+        vc.entryScrollTargetId = entryScrollTargetId
 
         // Snapshot diff — applies in O(diff) when ids match. Even
         // for streaming text changes, the same Item id is reused so

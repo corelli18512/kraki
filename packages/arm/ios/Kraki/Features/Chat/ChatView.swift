@@ -37,6 +37,20 @@ struct ChatView: View {
     /// idle anchor) and republishes for SwiftUI overlays.
     @StateObject private var uikitScrollCoordinator = ChatScrollCoordinator()
 
+    /// Read-seq boundary captured on session entry. Non-nil only if
+    /// the session was UNREAD at entry — in that case it equals the
+    /// session's `readSeq` at the moment we opened the chat, so the
+    /// entry-scroll logic can find the first user message past it.
+    /// Nil for read sessions; the entry scroll then defaults to
+    /// landing at the bottom.
+    ///
+    /// Captured in `.task(id: sessionId)` from the
+    /// `entryUnreadSnapshots` mechanism in SessionStore, which is
+    /// populated synchronously by SessionDetailView's onAppear
+    /// BEFORE markRead clears `readSeq` to `lastSeq`. Reading
+    /// `readSeq` directly here would race against markRead.
+    @State private var entryUnreadSeqBoundary: Int? = nil
+
     // MARK: - View-model passthroughs
 
     private var session: SessionInfo? { viewModel?.session }
@@ -83,6 +97,17 @@ struct ChatView: View {
             if viewModel == nil || viewModel?.sessionId != sessionId {
                 viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
             }
+            // Capture-and-clear the unread snapshot SessionDetailView
+            // stashed for us before its markRead Task fired. If no
+            // snapshot was left we fall back to the live readSeq
+            // comparison — same answer for sessions opened outside
+            // SessionDetailView's flow (e.g. deep link).
+            let session = appState.sessionStore.sessions[sessionId]
+            let snapshot = appState.sessionStore.entryUnreadSnapshots[sessionId]
+            appState.sessionStore.entryUnreadSnapshots.removeValue(forKey: sessionId)
+            let wasUnread = snapshot ?? ((session?.lastSeq ?? 0) > (session?.readSeq ?? 0))
+            entryUnreadSeqBoundary = wasUnread ? (session?.readSeq ?? 0) : nil
+
             refreshGroupingCache()
             // Install the load-older handler on the coordinator.
             // sessionId is captured by value (pinnedSessionId) so a
@@ -128,6 +153,28 @@ struct ChatView: View {
         _ = viewModel?.refreshGroupingCache()
     }
 
+    /// TurnItem id for the entry-scroll target — the first turn
+    /// whose user message arrived AFTER the captured `readSeq`
+    /// boundary. Nil for read sessions (entry scroll falls back to
+    /// the bottom) or when the unread tail wasn't grouped into a
+    /// turn yet (the controller likewise falls back to the bottom).
+    ///
+    /// Recomputed on each body evaluation — the controller's
+    /// one-shot guard means a transient nil/non-nil flip before the
+    /// first apply lands has no behavioural cost.
+    private var entryScrollTargetId: String? {
+        guard let boundary = entryUnreadSeqBoundary,
+              let viewModel else { return nil }
+        for turn in viewModel.cachedRawTurns {
+            if case .turn(let t) = turn,
+               let userMsg = t.userMessage,
+               userMsg.seq > boundary {
+                return turn.id
+            }
+        }
+        return nil
+    }
+
     // MARK: - UIKit Messages
 
     /// UIKit-backed message list. Renders `viewModel.cachedRawTurns`
@@ -145,6 +192,7 @@ struct ChatView: View {
                 expandedTurns: $expandedTurns,
                 agentName: session?.agent ?? "",
                 streamingText: streaming,
+                entryScrollTargetId: entryScrollTargetId,
                 turns: viewModel.cachedRawTurns
             )
         } else {
