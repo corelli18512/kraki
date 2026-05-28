@@ -451,11 +451,34 @@ struct ChatView: View {
         viewModel?.showCenterLoading ?? false
     }
 
+    /// Feature flag for the UIKit-backed message list.
+    ///
+    /// Toggled via Settings → "Use UIKit chat list (beta)" or set
+    /// directly in code during dev. When true, `scrollableMessages`
+    /// is replaced by `ChatListView` (a UICollectionView wrapped via
+    /// `UIViewControllerRepresentable`). The overlays (sticky pill,
+    /// jump button) and the compose footer stay SwiftUI either way.
+    ///
+    /// Stage 1 default is `false` so the existing path is unchanged.
+    /// Flip to `true` in dev to exercise the new path; Stage 7 deletes
+    /// the SwiftUI path entirely.
+    @AppStorage("kraki.chat.useUIKit") private var useUIKitChatList: Bool = false
+
     var body: some View {
         ScrollViewReader { proxy in
             Group {
                 if showCenterLoading {
                     centerLoadingView
+                } else if useUIKitChatList {
+                    uikitMessages
+                        .overlay(alignment: .bottomTrailing) {
+                            jumpToLatestButton
+                        }
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            if isDeviceOnline {
+                                bottomInputArea
+                            }
+                        }
                 } else {
                     scrollableMessages(proxy: proxy)
                         .overlay(alignment: .top) {
@@ -482,6 +505,16 @@ struct ChatView: View {
                 }
             }
             .background(Color.surfacePrimary)
+            .task(id: sessionId) {
+                // View-model setup runs in both branches (UIKit and
+                // SwiftUI). performEntryScroll still depends on the
+                // ScrollViewProxy and lives on the SwiftUI branch's
+                // own `.task` further down.
+                if viewModel == nil || viewModel?.sessionId != sessionId {
+                    viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
+                    refreshGroupingCache()
+                }
+            }
         }
     }
 
@@ -524,7 +557,31 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Scrollable Messages
+    // MARK: - UIKit Messages (Stage 1)
+
+    /// UIKit-backed message list. Renders the full grouped turn list
+    /// in a UICollectionView; virtualisation is handled by UIKit.
+    /// Stage 1 still uses the same `cachedRawTurns` source so the
+    /// SwiftUI sticky pill / windowing code can run alongside for
+    /// comparison; Stage 4 drops the windowing entirely and passes
+    /// every turn directly.
+    @ViewBuilder
+    private var uikitMessages: some View {
+        if let viewModel {
+            ChatListView(
+                sessionId: sessionId,
+                viewModel: viewModel,
+                expandedTurns: $expandedTurns,
+                agentName: session?.agent ?? "",
+                streamingText: streaming,
+                turns: viewModel.cachedRawTurns
+            )
+        } else {
+            Color.clear
+        }
+    }
+
+    // MARK: - Scrollable Messages (SwiftUI, original path)
 
     private func scrollableMessages(proxy: ScrollViewProxy) -> some View {
         ScrollView {
@@ -780,11 +837,16 @@ struct ChatView: View {
             }
         }
         .task(id: sessionId) {
-            // Create / recreate the view model for this session. The
-            // grouping cache primes on first read of `viewModel?.
-            // refreshGroupingCache()` below; entry scroll then runs
-            // against a populated `cachedRawTurns`.
-            viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
+            // The viewModel is created by the outer body's
+            // `.task(id: sessionId)`. This inner task only runs in
+            // the SwiftUI branch (it's attached to scrollableMessages)
+            // and is responsible for the proxy-dependent entry scroll.
+            // Guarantee the cache is primed before entry scroll, in
+            // case the outer task hasn't completed yet — refresh is
+            // idempotent.
+            if viewModel == nil {
+                viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
+            }
             refreshGroupingCache()
             // Reset anchor state across session switches.
             releaseIdleAnchor()
