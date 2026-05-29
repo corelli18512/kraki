@@ -547,16 +547,16 @@ final class ChatListViewController: UIViewController {
     // MARK: - Cell helpers
 
     /// Streaming text to attach to a given turn item. Only the LAST
-    /// in-progress turn carries streaming content; everything else
+    /// in-progress block carries streaming content; everything else
     /// gets nil.
     private func streamingForItem(_ item: TurnItem) -> String? {
         guard let streamingText, !streamingText.isEmpty else { return nil }
-        // Identify the in-progress turn by its synthetic id ("streaming")
-        // OR by being a turn with no finalMessage (the only one of
+        // Identify the in-progress block by its synthetic id ("streaming")
+        // OR by being a block with no finalMessage (the only one of
         // these in a well-formed grouping is the latest).
-        guard case .turn(let turn) = item else { return nil }
-        if turn.id == "streaming" { return streamingText }
-        if turn.finalMessage == nil { return streamingText }
+        guard case .block(let block) = item else { return nil }
+        if block.id == "streaming" { return streamingText }
+        if block.finalMessage == nil { return streamingText }
         return nil
     }
 
@@ -584,10 +584,16 @@ final class ChatListViewController: UIViewController {
 
 // MARK: - MessageRow
 
-/// SwiftUI view that renders a single turn item — either a standalone
-/// message or a full turn (user bubble + agent reply bubble). This is
-/// the same rendering logic that `ChatView.ForEach(grouped)` ran for
-/// each row; lifted out so the UIKit cell can host it.
+/// SwiftUI view that renders a single `TurnItem` — either a
+/// standalone session-lifecycle bubble or a full `ActivityBlock`
+/// (opener(s) + thinking history + agent reply). The cell hosts
+/// this view via `UIHostingConfiguration`.
+///
+/// `ActivityBlock.openers` is iterated rather than unwrapped so
+/// future queue support — where multiple user messages can land
+/// inside one block — renders correctly without further changes.
+/// Today the array has 0 entries (non-`.user` initiators) or 1
+/// entry (`.user` initiator).
 private struct MessageRow: View {
     let item: TurnItem
     let agent: String
@@ -603,30 +609,24 @@ private struct MessageRow: View {
                 historyExpanded: .constant(false)
             )
 
-        case .turn(let turn):
+        case .block(let block):
             VStack(spacing: 12) {
-                if let userMsg = turn.userMessage {
-                    MessageBubbleView(
-                        message: userMsg,
-                        agent: agent,
-                        historyExpanded: .constant(false)
-                    )
-                }
+                blockHeader(for: block)
 
-                if let final = turn.finalMessage, streamingText == nil {
-                    // Completed turn.
+                if let final = block.finalMessage, streamingText == nil {
+                    // Completed block.
                     MessageBubbleView(
                         message: final,
                         agent: agent,
-                        turnImages: collectTurnImages(turn.thinkingMessages),
-                        thinkingHistory: turn.thinkingMessages,
+                        turnImages: collectTurnImages(block.thinkingMessages),
+                        thinkingHistory: block.thinkingMessages,
                         historyExpanded: $expanded
                     )
-                } else if !turn.thinkingMessages.isEmpty || streamingText != nil {
-                    let latestMsg = turn.thinkingMessages.last(where: { $0.type == "agent_message" })
+                } else if !block.thinkingMessages.isEmpty || streamingText != nil {
+                    let latestMsg = block.thinkingMessages.last(where: { $0.type == "agent_message" })
                     let hasMessage = latestMsg?.content != nil && latestMsg?.content?.isEmpty == false
                     let hasStreamingContent = (streamingText ?? "").isEmpty == false
-                    let hasTools = turn.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
+                    let hasTools = block.thinkingMessages.contains(where: { $0.type == "tool_start" || $0.type == "tool_complete" })
 
                     if hasMessage || hasStreamingContent || hasTools {
                         MessageBubbleView(
@@ -639,13 +639,40 @@ private struct MessageRow: View {
                                 payload: [:]
                             ),
                             agent: agent,
-                            thinkingHistory: turn.thinkingMessages,
+                            thinkingHistory: block.thinkingMessages,
                             historyExpanded: $expanded,
                             streamingText: streamingText
                         )
                     }
                 }
             }
+        }
+    }
+
+    /// Renders the block's header — the visual cue at the top of an
+    /// activity block that tells the user "why is this block here?".
+    /// Today only `.user` produces visible chrome (the user message
+    /// bubble(s)); `.agentResumed`, `.systemTriggered`, and
+    /// `.implicit` are stubbed pending the rendering work that lands
+    /// alongside the new grouper rules that produce them.
+    @ViewBuilder
+    private func blockHeader(for block: ActivityBlock) -> some View {
+        switch block.initiator {
+        case .user:
+            ForEach(block.openers, id: \.id) { msg in
+                MessageBubbleView(
+                    message: msg,
+                    agent: agent,
+                    historyExpanded: .constant(false)
+                )
+            }
+        case .agentResumed, .systemTriggered, .implicit:
+            // No header today. When subagent revoke / system-triggered
+            // rules start producing these initiators, add a small
+            // header pill here (e.g. "↪ Subagent returned",
+            // "🔔 OpenClaw reminder") so the user can tell at a
+            // glance why the block exists without a user bubble.
+            EmptyView()
         }
     }
 

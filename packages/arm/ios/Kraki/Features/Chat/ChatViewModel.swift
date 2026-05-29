@@ -166,11 +166,11 @@ final class ChatViewModel {
         cachedRawTurns = newRaw
         // Count includes the synthetic streaming turn only when
         // streaming is actively producing content AND the last cached
-        // turn isn't already an in-progress turn (which already
+        // block isn't already an in-progress block (which already
         // contains the streaming text).
         let streamingTailNeeded: Bool = {
             guard streaming != nil else { return false }
-            if let last = newRaw.last, case .turn(let turn) = last, turn.finalMessage == nil {
+            if let last = newRaw.last, case .block(let block) = last, block.finalMessage == nil {
                 return false
             }
             return true
