@@ -120,11 +120,11 @@ private struct SessionCardBody: View {
     }
 
     private var hasPendingPermission: Bool {
-        !appState.messageStore.permissionsForSession(session.id).isEmpty
+        preview?.type == "permission"
     }
 
     private var hasPendingQuestion: Bool {
-        !appState.messageStore.questionsForSession(session.id).isEmpty
+        preview?.type == "question"
     }
 
     // MARK: - Center Content

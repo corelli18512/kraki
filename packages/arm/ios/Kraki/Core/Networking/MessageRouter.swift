@@ -342,7 +342,7 @@ final class MessageRouter {
         case "session_ended":
             appState.sessionStore.updateState(sessionId, state: "ended")
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
 
         case "session_deleted":
             appState.sessionStore.removeSession(sessionId)
@@ -365,7 +365,7 @@ final class MessageRouter {
                 content: content
             )
             if !resolved {
-                appState.messageStore.appendMessage(sessionId, json: json)
+                appState.messageStore.append(sessionId, json: json)
             }
             if let content {
                 updatePreview(sessionId, text: content, type: "user", timestamp: timestamp)
@@ -373,7 +373,7 @@ final class MessageRouter {
 
         case "agent_message":
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
@@ -387,7 +387,7 @@ final class MessageRouter {
         // ── Permissions ──────────────────────────────────────────────────
 
         case "permission":
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let permId = payload?["id"] as? String {
                 let toolName = payload?["toolName"] as? String ?? ""
                 let description = payload?["description"] as? String ?? ""
@@ -403,7 +403,12 @@ final class MessageRouter {
                     args: codedArgs,
                     timestamp: Date()
                 )
-                appState.messageStore.addPermission(perm)
+                _ = perm  // pending state is derived from messages now;
+                          // PendingPermission no longer needs to be added
+                          // to a dictionary — the underlying `permission`
+                          // message we already appended above is the
+                          // source of truth. ChatView derives the list
+                          // from messages, sidebar uses preview.type.
                 // Prefer the human-readable description; fall back to
                 // the tool name so the preview always says SOMETHING.
                 let previewBody = description.isEmpty ? toolName : description
@@ -414,16 +419,14 @@ final class MessageRouter {
         case "permission_resolved":
             if let permId = payload?["permissionId"] as? String,
                let resolution = payload?["resolution"] as? String {
-                appState.messageStore.removePermission(permId)
                 appState.messageStore.resolvePermissionMessage(
                     sessionId, permissionId: permId, resolution: resolution
                 )
             }
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
 
         case "approve", "deny", "always_allow":
             if let permId = payload?["permissionId"] as? String {
-                appState.messageStore.removePermission(permId)
                 let resolution: String = switch type {
                 case "approve": "approved"
                 case "deny": "denied"
@@ -437,16 +440,14 @@ final class MessageRouter {
         // ── Questions ────────────────────────────────────────────────────
 
         case "question":
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let qId = payload?["id"] as? String,
                let question = payload?["question"] as? String {
-                appState.messageStore.addQuestion(PendingQuestion(
-                    id: qId,
-                    sessionId: sessionId,
-                    question: question,
-                    choices: payload?["choices"] as? [String],
-                    timestamp: Date()
-                ))
+                // Same as permission: we no longer hold a derived
+                // PendingQuestion in a dict — the message itself is
+                // canonical. Sidebar reads preview.type to know there's
+                // a pending question; ChatView scans its window.
+                _ = qId
                 updatePreview(sessionId, text: question, type: "question",
                               timestamp: timestamp, notify: true)
             }
@@ -454,7 +455,6 @@ final class MessageRouter {
         case "question_resolved":
             if let qId = payload?["questionId"] as? String {
                 let answer = payload?["answer"] as? String
-                appState.messageStore.removeQuestion(qId)
                 appState.messageStore.resolveQuestionMessage(
                     sessionId, questionId: qId, answer: answer
                 )
@@ -463,17 +463,16 @@ final class MessageRouter {
                                   timestamp: timestamp)
                 }
             }
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
 
         case "answer":
             if let qId = payload?["questionId"] as? String {
                 let answer = payload?["answer"] as? String
-                appState.messageStore.removeQuestion(qId)
                 appState.messageStore.resolveQuestionMessage(
                     sessionId, questionId: qId, answer: answer
                 )
             }
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let answer = payload?["answer"] as? String, !answer.isEmpty {
                 updatePreview(sessionId, text: answer, type: "answer",
                               timestamp: timestamp)
@@ -482,7 +481,7 @@ final class MessageRouter {
         // ── Tool events ──────────────────────────────────────────────────
 
         case "tool_start":
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let name = payload?["toolName"] as? String {
                 let headline = payload?["headline"] as? String
                 appState.sessionStore.setCurrentTool(sessionId, toolName: name, headline: headline)
@@ -493,7 +492,7 @@ final class MessageRouter {
             registerContentRefs(in: payload, sessionId: sessionId)
 
         case "tool_complete":
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             let name = payload?["toolName"] as? String
             let success = payload?["success"] as? Bool
             appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name, success: success)
@@ -520,7 +519,7 @@ final class MessageRouter {
         case "idle":
             appState.sessionStore.updateState(sessionId, state: "idle")
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             if let usage = payload?["usage"] as? [String: Any] {
                 appState.sessionStore.setSessionUsage(sessionId, usage: usage)
             }
@@ -532,7 +531,7 @@ final class MessageRouter {
 
         case "active":
             appState.sessionStore.updateState(sessionId, state: "active")
-            // NOTE: We deliberately do NOT call `messageStore.appendMessage`
+            // NOTE: We deliberately do NOT call `messageStore.append`
             // here. `active` is a TRANSIENT envelope (see the comment at
             // L297) whose `seq` field comes from the relay's GLOBAL event
             // counter, not the per-session conversation counter. Storing
@@ -546,7 +545,7 @@ final class MessageRouter {
 
         case "error":
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
             // If this error correlates to a pending create/fork/import
             // by requestId, fail the placeholder so the optimistic
@@ -674,10 +673,9 @@ final class MessageRouter {
                 appState.sessionStore.markRead(digest.id, seq: digest.readSeq)
             }
             if digest.lastSeq > digest.readSeq {
-                let hasUnreadWorthy = appState.messageStore.persistentCache
-                    .hasUnreadWorthy(digest.id, afterSeq: digest.readSeq)
-                let hasCachedGap = appState.messageStore.persistentCache
-                    .getLastSeq(digest.id) >= digest.lastSeq
+                let store = appState.messageStore
+                let hasUnreadWorthy = store.hasUnreadWorthy(digest.id, afterSeq: digest.readSeq)
+                let hasCachedGap = store.dbLastSeq(digest.id) >= digest.lastSeq
                 if hasCachedGap && !hasUnreadWorthy {
                     // We have the gap fully cached and nothing in it is
                     // a real unread → suppress the badge.
@@ -745,7 +743,7 @@ final class MessageRouter {
 
         // Store the raw message
         if let json = try? JSONSerialization.data(withJSONObject: dict) {
-            appState.messageStore.appendMessage(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
         }
 
         // Seed an initial preview so the new card has a timestamp and

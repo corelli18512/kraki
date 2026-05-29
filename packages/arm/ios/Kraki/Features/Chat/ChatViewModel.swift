@@ -74,7 +74,7 @@ final class ChatViewModel {
     /// so the user sees the request in chat history, mirroring how
     /// pending questions behave.
     var filteredMessages: [ChatMessage] {
-        appState?.messageStore.messages[sessionId] ?? []
+        appState?.messageStore.currentWindow(sessionId) ?? []
     }
 
     /// Streaming content for this session. Non-nil during agent reply
@@ -99,14 +99,84 @@ final class ChatViewModel {
 
     // MARK: - Pending action slices
 
-    /// Pending permissions for this session, in arrival order.
+    /// Pending permissions for this session, derived live from the
+    /// loaded window. A permission is pending iff it has no
+    /// `resolution` stamp in its payload AND no later
+    /// approve/deny/always_allow/permission_resolved appears in the
+    /// same session. The old `MessageStore.permissionsForSession`
+    /// dict-lookup was deleted along with its denormalised
+    /// `pendingPermissions` state — sidebar uses `preview.type` for
+    /// session-list aggregation, ChatView uses this scan.
     var permissions: [PendingPermission] {
-        appState?.messageStore.permissionsForSession(sessionId) ?? []
+        guard let appState else { return [] }
+        let msgs = filteredMessages
+        var resolvedIds = Set<String>()
+        for m in msgs {
+            switch m.type {
+            case "approve", "deny", "always_allow", "permission_resolved":
+                if let pid = m.payload["permissionId"]?.stringValue {
+                    resolvedIds.insert(pid)
+                }
+            default:
+                break
+            }
+        }
+        var out: [PendingPermission] = []
+        for m in msgs where m.type == "permission" {
+            guard let pid = m.permissionId else { continue }
+            if m.payload["resolution"] != nil { continue }
+            if resolvedIds.contains(pid) { continue }
+            out.append(PendingPermission(
+                id: pid,
+                sessionId: sessionId,
+                description: m.toolDescription ?? "",
+                toolName: m.toolName,
+                args: m.args,
+                timestamp: Self.parseTimestamp(m.timestamp)
+            ))
+        }
+        _ = appState
+        return out
     }
 
-    /// Pending questions for this session, in arrival order.
+    /// Pending questions for this session, same scan model as
+    /// `permissions`.
     var questions: [PendingQuestion] {
-        appState?.messageStore.questionsForSession(sessionId) ?? []
+        let msgs = filteredMessages
+        var resolvedIds = Set<String>()
+        for m in msgs {
+            switch m.type {
+            case "answer", "question_resolved":
+                if let qid = m.payload["questionId"]?.stringValue {
+                    resolvedIds.insert(qid)
+                }
+            default:
+                break
+            }
+        }
+        var out: [PendingQuestion] = []
+        for m in msgs where m.type == "question" {
+            guard let qid = m.questionId else { continue }
+            if m.payload["answer"] != nil { continue }
+            if resolvedIds.contains(qid) { continue }
+            out.append(PendingQuestion(
+                id: qid,
+                sessionId: sessionId,
+                question: m.question ?? "",
+                choices: m.choices,
+                timestamp: Self.parseTimestamp(m.timestamp)
+            ))
+        }
+        return out
+    }
+
+    private static func parseTimestamp(_ iso: String?) -> Date {
+        guard let iso else { return Date() }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso) ?? Date()
     }
 
     // MARK: - Session + device

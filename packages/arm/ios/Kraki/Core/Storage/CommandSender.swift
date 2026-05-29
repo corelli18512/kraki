@@ -78,7 +78,7 @@ final class CommandSender {
             timestamp: ISO8601.now(),
             payload: pendingPayload
         )
-        appState.messageStore.appendMessage(sessionId, pending)
+        appState.messageStore.append(sessionId, pending)
 
         var payload: [String: Any] = ["text": text, "clientId": clientId]
         if let attachments, !attachments.isEmpty {
@@ -95,7 +95,6 @@ final class CommandSender {
     func approve(sessionId: String, permissionId: String) {
         guard let appState else { return }
         send(["type": "approve", "payload": ["permissionId": permissionId]], sessionId: sessionId)
-        appState.messageStore.removePermission(permissionId)
         appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "approved")
     }
 
@@ -106,7 +105,6 @@ final class CommandSender {
             payload["reason"] = reason
         }
         send(["type": "deny", "payload": payload], sessionId: sessionId)
-        appState.messageStore.removePermission(permissionId)
         appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "denied")
     }
 
@@ -115,7 +113,6 @@ final class CommandSender {
         var payload: [String: Any] = ["permissionId": permissionId]
         if let toolKind { payload["toolKind"] = toolKind }
         send(["type": "always_allow", "payload": payload], sessionId: sessionId)
-        appState.messageStore.removePermission(permissionId)
         appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "always_allowed")
     }
 
@@ -127,7 +124,6 @@ final class CommandSender {
             "type": "answer",
             "payload": ["questionId": questionId, "answer": answer],
         ], sessionId: sessionId)
-        appState.messageStore.removeQuestion(questionId)
         appState.messageStore.resolveQuestionMessage(sessionId, questionId: questionId, answerText: answer)
     }
 
@@ -152,14 +148,18 @@ final class CommandSender {
         send(["type": "set_session_mode", "payload": ["mode": mode.rawValue]], sessionId: sessionId)
         appState.sessionStore.setMode(sessionId, mode)
 
-        // Auto-resolve pending permissions based on mode
-        let pending = appState.messageStore.permissionsForSession(sessionId)
+        // Auto-resolve pending permissions based on the new mode.
+        // Pending permissions are derived from the message DB: a
+        // `permission` row with no `resolution` stamp and no
+        // matching approve/deny/always_allow/permission_resolved in
+        // the same session. Window-state-agnostic since this can
+        // fire for a session the user hasn't opened.
+        let pending = pendingPermissions(in: sessionId)
 
         switch mode {
         case .execute, .delegate:
             for perm in pending {
                 send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                appState.messageStore.removePermission(perm.id)
                 appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "approved")
             }
         case .discuss:
@@ -171,17 +171,55 @@ final class CommandSender {
 
                 if !isWrite || isPlanMd {
                     send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                    appState.messageStore.removePermission(perm.id)
                     appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "approved")
                 } else {
                     send(["type": "deny", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                    appState.messageStore.removePermission(perm.id)
                     appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "denied")
                 }
             }
         case .safe:
             break // No auto-resolution in safe mode
         }
+    }
+
+    /// Derive currently-unresolved permission requests for a session
+    /// from the persisted message stream. Used by mode-change
+    /// auto-resolution; the old code held a dedicated dict, but the
+    /// truth lives in the message log so we just read it. Bounded
+    /// scan (recent 100 messages) — old permissions that never got
+    /// resolved still surface from there.
+    private func pendingPermissions(in sessionId: String) -> [PendingPermission] {
+        guard let appState else { return [] }
+        let msgs = appState.messageStore.recentFromDB(sessionId, limit: 100)
+        var resolvedIds = Set<String>()
+        for m in msgs {
+            switch m.type {
+            case "approve", "deny", "always_allow", "permission_resolved":
+                if let pid = m.payload["permissionId"]?.stringValue {
+                    resolvedIds.insert(pid)
+                }
+            default:
+                break
+            }
+        }
+        var out: [PendingPermission] = []
+        for m in msgs where m.type == "permission" {
+            guard let pid = m.permissionId else { continue }
+            // Either the message itself has a resolution stamp (set
+            // by resolvePermissionMessage) or a matching resolver
+            // arrived later in the stream.
+            if m.payload["resolution"] != nil { continue }
+            if resolvedIds.contains(pid) { continue }
+            out.append(PendingPermission(
+                id: pid,
+                sessionId: sessionId,
+                description: m.toolDescription ?? "",
+                toolName: m.toolName,
+                args: m.args,
+                timestamp: Date()  // close-enough; only used for ordering on UI
+            ))
+        }
+        return out
     }
 
     /// Consume one pending mode echo. Returns true if this was our own echo.
