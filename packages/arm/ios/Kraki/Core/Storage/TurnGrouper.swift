@@ -35,10 +35,19 @@ import Foundation
 /// What caused an `ActivityBlock` to start. Renderers branch on this
 /// to pick a header style (blue user bubble vs subagent pill vs
 /// system-reminder badge vs no header at all).
+///
+/// `.user` carries the originating `ChatMessage` directly — the
+/// opener and the initiator are one and the same. Earlier drafts
+/// kept a separate `openers: [ChatMessage]` on the block to support
+/// "multiple user messages queued into one block", but real agent
+/// SDKs (Anthropic, OpenAI, what Claude Code / Copilot CLI build on)
+/// don't accept multi-message input mid-turn — queued messages each
+/// become their own block on dispatch. Single opener per `.user`
+/// block matches the world we actually live in.
 enum Initiator: Equatable {
-    /// User-initiated. The block's `openers` carries the user-side
-    /// message(s) that opened it.
-    case user
+    /// User-initiated. The associated message is the user-side
+    /// bubble that opened the block.
+    case user(ChatMessage)
 
     /// Agent woke back up — e.g. a spawned subagent returned and the
     /// parent agent resumed. `reason` is a free-form tag used by the
@@ -60,20 +69,26 @@ enum Initiator: Equatable {
     case implicit
 }
 
+extension Initiator {
+    /// Convenience accessor for the user-side opener message when
+    /// this is a `.user` initiator. Returns nil for every other
+    /// case. Lets callers that only care about user-msg
+    /// identification (entry-scroll target, idle-anchor lookup)
+    /// stay one line.
+    var userMessage: ChatMessage? {
+        if case .user(let msg) = self { return msg }
+        return nil
+    }
+}
+
 /// One visual block in the chat. Replaces the older `Turn` struct.
 struct ActivityBlock: Identifiable {
     let id: String
 
-    /// What caused this block to start. Branching point for the
-    /// renderer's header look.
+    /// What caused this block to start. For `.user` initiators the
+    /// opener message is embedded; for other initiators the block
+    /// has no user bubble at the top.
     let initiator: Initiator
-
-    /// The user-side message(s) that opened this block, in arrival
-    /// order. Today: always 0 entries (non-user initiators) or 1
-    /// entry (`.user` initiator). Future queue support will allow
-    /// multiple entries when several user messages land while the
-    /// agent is still working on the block.
-    var openers: [ChatMessage]
 
     /// Everything the agent did inside the block — tool starts /
     /// completions, intermediate `agent_message` chunks, permission
@@ -166,13 +181,9 @@ private let turnCompleteTypes: Set<String> = [
 ///   trailing `idle` closes it). Each block typically has one
 ///   user-side opener + agent activity + a final agent reply.
 /// - `user_message` / `send_input` / `pending_input` open a new block
-///   with `initiator = .user` and append themselves to `openers`.
-///   Tentacle never emits two user-side messages without an
-///   intervening idle, so today each `.user` block has exactly one
-///   opener; the array shape accommodates the future "queue" case
-///   where multiple user messages land before the agent closes the
-///   block (see `appendOpenerToActiveBlock` for that path, currently
-///   unused).
+///   with `initiator = .user(msg)`. Tentacle never emits two
+///   user-side messages without an intervening idle, so today each
+///   `.user` block is opened by exactly one message.
 /// - Within a block, all messages except the last `agent_message` go
 ///   into `thinkingMessages`; the last `agent_message` becomes
 ///   `finalMessage` on block close.
@@ -193,7 +204,6 @@ func groupMessagesIntoTurns(
 ) -> [TurnItem] {
     var result: [TurnItem] = []
     var currentInitiator: Initiator? = nil
-    var currentOpeners: [ChatMessage] = []
     var currentThinking: [ChatMessage] = []
     /// Permission IDs that have been asked but not yet resolved, tracked in
     /// stream order. We can't rely on `ChatMessage.resolution` because
@@ -210,21 +220,20 @@ func groupMessagesIntoTurns(
     /// opening a new one?" gate.
     func hasOpenBlock() -> Bool {
         return currentInitiator != nil
-            || !currentOpeners.isEmpty
             || !currentThinking.isEmpty
     }
 
     func flushBlock(blockComplete: Bool) {
         defer { unresolvedPermIds.removeAll() }
         guard hasOpenBlock() else { return }
-        // Anchor on a stable message id — first opener (if any),
-        // else first accumulated thinking entry. Message ids are
-        // unique across the session, so the resulting block id is
-        // unique without any position-dependent counter — critical
-        // for the chat view's diffable-data-source identity
+        // Anchor on a stable message id — the .user initiator's
+        // message (if any), else first accumulated thinking entry.
+        // Message ids are unique across the session, so the resulting
+        // block id is unique without any position-dependent counter —
+        // critical for the chat view's diffable-data-source identity
         // tracking, which needs to relocate a block after tentacle
         // backfill inserts older blocks at the top.
-        let anchor = currentOpeners.first?.id
+        let anchor = currentInitiator?.userMessage?.id
             ?? currentThinking.first?.id
             ?? "unknown"
         let blockId = "turn:\(anchor)"
@@ -236,7 +245,6 @@ func groupMessagesIntoTurns(
             result.append(.block(ActivityBlock(
                 id: blockId,
                 initiator: initiator,
-                openers: currentOpeners,
                 thinkingMessages: currentThinking,
                 finalMessage: nil,
                 isActive: true
@@ -257,7 +265,6 @@ func groupMessagesIntoTurns(
                 result.append(.block(ActivityBlock(
                     id: blockId,
                     initiator: initiator,
-                    openers: currentOpeners,
                     thinkingMessages: currentThinking,
                     finalMessage: nil,
                     isActive: false
@@ -270,7 +277,6 @@ func groupMessagesIntoTurns(
                 result.append(.block(ActivityBlock(
                     id: blockId,
                     initiator: initiator,
-                    openers: currentOpeners,
                     thinkingMessages: thinking,
                     finalMessage: finalMsg,
                     isActive: false
@@ -279,7 +285,6 @@ func groupMessagesIntoTurns(
         }
 
         currentInitiator = nil
-        currentOpeners = []
         currentThinking = []
     }
 
@@ -306,15 +311,17 @@ func groupMessagesIntoTurns(
             // intervening idle, but defensively close any in-progress
             // block first so a stray double-send still renders cleanly.
             //
-            // Future queue work: when multiple user messages can land
-            // while the agent is still active, replace this flush with
-            // an append into the current block's `openers` — the
-            // surrounding shape already supports it.
+            // If queue support ever lands at the SDK level (multiple
+            // user messages dispatched to one agent invocation), this
+            // is the spot to grow — either keep the flush-and-open
+            // pattern (one block per dispatched message) or attach the
+            // new opener as a sibling on the active block. The struct
+            // is single-opener today; multi-opener would require
+            // bringing back the array shape.
             if hasOpenBlock() {
                 flushBlock(blockComplete: true)
             }
-            currentInitiator = .user
-            currentOpeners = [msg]
+            currentInitiator = .user(msg)
         } else if turnCompleteTypes.contains(msg.type) {
             // Defer the flush if the current block has a permission
             // that hasn't been resolved yet — agents typically emit
@@ -332,7 +339,7 @@ func groupMessagesIntoTurns(
             // standalone `session_created` with no preceding user
             // input) and would otherwise be silently dropped by
             // `flushBlock`'s guard.
-            if currentInitiator == nil && currentOpeners.isEmpty && currentThinking.isEmpty {
+            if currentInitiator == nil && currentThinking.isEmpty {
                 currentInitiator = .implicit
             }
             // Questions: merge into the preceding ask_user tool_start
@@ -424,7 +431,7 @@ func groupMessagesIntoTurns(
     if let streaming = streamingContent, !streaming.isEmpty {
         // Streaming without an open block ⇒ open implicit so the
         // synthetic message has a home.
-        if currentInitiator == nil && currentOpeners.isEmpty && currentThinking.isEmpty {
+        if currentInitiator == nil && currentThinking.isEmpty {
             currentInitiator = .implicit
         }
         let syntheticMessage = ChatMessage(
