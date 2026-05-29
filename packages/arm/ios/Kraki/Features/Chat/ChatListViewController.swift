@@ -652,20 +652,18 @@ private struct MessageRow: View {
     /// Renders the block's header — the visual cue at the top of an
     /// activity block that tells the user "why is this block here?".
     /// Today only `.user` produces visible chrome (the user message
-    /// bubble(s)); `.agentResumed`, `.systemTriggered`, and
-    /// `.implicit` are stubbed pending the rendering work that lands
-    /// alongside the new grouper rules that produce them.
+    /// bubble); `.agentResumed`, `.systemTriggered`, and `.implicit`
+    /// are stubbed pending the rendering work that lands alongside
+    /// the new grouper rules that produce them.
     @ViewBuilder
     private func blockHeader(for block: ActivityBlock) -> some View {
         switch block.initiator {
-        case .user:
-            ForEach(block.openers, id: \.id) { msg in
-                MessageBubbleView(
-                    message: msg,
-                    agent: agent,
-                    historyExpanded: .constant(false)
-                )
-            }
+        case .user(let msg):
+            MessageBubbleView(
+                message: msg,
+                agent: agent,
+                historyExpanded: .constant(false)
+            )
         case .agentResumed, .systemTriggered, .implicit:
             // No header today. When subagent revoke / system-triggered
             // rules start producing these initiators, add a small

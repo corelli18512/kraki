@@ -159,10 +159,6 @@ struct ChatView: View {
     /// the bottom) or when the unread tail wasn't grouped into a
     /// block yet (the controller likewise falls back to the bottom).
     ///
-    /// Iterates `openers` rather than reading a single user-message
-    /// slot so the lookup remains correct when queue support lands
-    /// (multiple user messages per block).
-    ///
     /// Recomputed on each body evaluation — the controller's
     /// one-shot guard means a transient nil/non-nil flip before the
     /// first apply lands has no behavioural cost.
@@ -171,7 +167,8 @@ struct ChatView: View {
               let viewModel else { return nil }
         for item in viewModel.cachedRawTurns {
             if case .block(let block) = item,
-               block.openers.contains(where: { $0.seq > boundary }) {
+               let userMsg = block.initiator.userMessage,
+               userMsg.seq > boundary {
                 return item.id
             }
         }
@@ -191,7 +188,7 @@ struct ChatView: View {
               let lastUserMsg = vm.lastUserMessage else { return nil }
         for item in vm.cachedRawTurns {
             if case .block(let block) = item,
-               block.openers.contains(where: { $0.id == lastUserMsg.id }) {
+               block.initiator.userMessage?.id == lastUserMsg.id {
                 return item.id
             }
         }
