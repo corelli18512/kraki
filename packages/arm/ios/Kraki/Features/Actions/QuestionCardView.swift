@@ -119,9 +119,48 @@ struct QuestionStackView: View {
     @Environment(AppState.self) private var appState
     let sessionId: String
 
+    /// Currently-unresolved questions for this session, derived
+    /// live from the loaded window. Matches the scan logic in
+    /// `ChatViewModel.questions` — kept independent so this view
+    /// can render even if no ChatViewModel is around (e.g. push
+    /// notification → action sheet).
     private var questions: [PendingQuestion] {
-        appState.messageStore.questionsForSession(sessionId)
-            .sorted { $0.timestamp < $1.timestamp }
+        let msgs = appState.messageStore.currentWindow(sessionId)
+        var resolvedIds = Set<String>()
+        for m in msgs {
+            switch m.type {
+            case "answer", "question_resolved":
+                if let qid = m.payload["questionId"]?.stringValue {
+                    resolvedIds.insert(qid)
+                }
+            default:
+                break
+            }
+        }
+        var out: [PendingQuestion] = []
+        for m in msgs where m.type == "question" {
+            guard let qid = m.questionId else { continue }
+            if m.payload["answer"] != nil { continue }
+            if resolvedIds.contains(qid) { continue }
+            let ts = Self.parseTimestamp(m.timestamp)
+            out.append(PendingQuestion(
+                id: qid,
+                sessionId: sessionId,
+                question: m.question ?? "",
+                choices: m.choices,
+                timestamp: ts
+            ))
+        }
+        return out.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private static func parseTimestamp(_ iso: String?) -> Date {
+        guard let iso else { return Date() }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso) ?? Date()
     }
 
     var body: some View {

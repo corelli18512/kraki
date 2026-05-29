@@ -7,7 +7,8 @@ final class AppState {
     // MARK: - Stores
     let sessionStore = SessionStore()
     let deviceStore = DeviceStore()
-    let messageStore = MessageStore()
+    let messageDatabase: MessageDatabase
+    let messageStore: MessageStore
     /// Disk-backed cache + chunk reassembly for ContentRef attachments
     /// (tool args/result, agent images). Created with a request-pull
     /// closure that uses our encrypted-send pipeline.
@@ -21,6 +22,32 @@ final class AppState {
     private(set) var messageProvider: MessageProvider?
     private(set) var pushManager: PushManager?
     private(set) var preferencesManager: PreferencesManager?
+
+    init() {
+        // The message DB is the persistence backbone for chat
+        // history. Failing to open it is fatal — without it the chat
+        // surface can't function and silent degradation would mask
+        // the failure. Loud crash on launch is the right signal.
+        do {
+            self.messageDatabase = try MessageDatabase()
+        } catch {
+            fatalError("Failed to open message database: \(error)")
+        }
+        self.messageStore = MessageStore(db: messageDatabase)
+        // attachmentStore is set up after the DB-backed stores so the
+        // request-pull closure can capture self by weak reference
+        // and the rest of setup (router, ws) can read it.
+        self.attachmentStore = AttachmentStore { [weak self] id, sessionId in
+            guard let self else { return }
+            self.sendEncryptedMessage([
+                "type": "request_attachment",
+                "deviceId": self.deviceId ?? "",
+                "sessionId": sessionId,
+                "payload": ["id": id, "sessionId": sessionId],
+            ])
+        }
+        setupNetworking()
+    }
 
     // MARK: - Connection
     var connectionStatus: ConnectionStatus = .awaitingLogin
@@ -101,22 +128,6 @@ final class AppState {
     /// True only when the WS is fully connected and authenticated.
     var isFullyOnline: Bool {
         connectionStatus == .connected
-    }
-
-    init() {
-        // attachmentStore is set up first so the request-pull closure
-        // can capture self by weak reference and the rest of setup
-        // (router, ws) can read it.
-        self.attachmentStore = AttachmentStore { [weak self] id, sessionId in
-            guard let self else { return }
-            self.sendEncryptedMessage([
-                "type": "request_attachment",
-                "deviceId": self.deviceId ?? "",
-                "sessionId": sessionId,
-                "payload": ["id": id, "sessionId": sessionId],
-            ])
-        }
-        setupNetworking()
     }
 
     func setupNetworking() {
@@ -232,11 +243,19 @@ final class AppState {
     /// to APNs. Otherwise the relay would skip APNs for ~30s while it
     /// waits for a pong from the dead socket.
     ///
-    /// Also drains the persistent message-cache writer so messages
-    /// that arrived in the burst right before backgrounding aren't
-    /// lost if iOS suspends the process before the I/O queue empties.
+    /// Called when the app moves to background. We pre-empt the
+    /// system-level idle-timeout disconnect by tearing down the WS
+    /// before iOS suspends us. That way the relay marks this device
+    /// offline immediately and starts routing to APNs. Otherwise the
+    /// relay would skip APNs for ~30s while it waits for a pong from
+    /// the dead socket.
+    ///
+    /// GRDB DatabasePool checkpoints WAL on its own — no explicit
+    /// flush needed for messages. We still flush the SessionStore /
+    /// DeviceStore JSON snapshots so debounced writes don't get lost.
     func handleBackground() {
-        messageStore.flushCache()
+        sessionStore.flushCache()
+        deviceStore.flushCache()
         wsClient?.disconnect()
     }
 

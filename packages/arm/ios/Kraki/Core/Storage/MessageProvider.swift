@@ -50,7 +50,7 @@ final class MessageProvider {
     /// doesn't short-circuit and silently swallow the gap.
     func setTentacleInfo(sessionId: String, lastSeq: Int, deviceId: String) {
         if let appState, lastSeq > 0 {
-            let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+            let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
             if storeLastSeq > lastSeq {
                 KLog.d("🧹 setTentacleInfo(\(sessionId.prefix(12))): store=\(storeLastSeq) > tentacle=\(lastSeq) — purging stale tail")
                 appState.messageStore.dropMessagesAboveSeq(sessionId, seq: lastSeq)
@@ -88,10 +88,7 @@ final class MessageProvider {
         }
         guard let appState else { return }
 
-        // Pull in any persisted history first so getLastSeq reflects
-        // the cache, not just whatever happens to be in memory.
-        appState.messageStore.hydrateFromDisk(sessionId)
-        let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
         KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq)")
 
         if storeLastSeq > 0 {
@@ -113,8 +110,7 @@ final class MessageProvider {
         guard !isLoading(sessionId) else { return }
         guard let appState else { return }
 
-        appState.messageStore.hydrateFromDisk(sessionId)
-        let storeLastSeq = appState.messageStore.getLastSeq(sessionId)
+        let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
         if storeLastSeq >= totalLastSeq { return }
 
         requestFromTentacle(sessionId: sessionId, beforeSeq: nil)
@@ -136,18 +132,18 @@ final class MessageProvider {
     func runWarmup(digests: [SessionDigest]) {
         guard let appState else { return }
         let now = Date()
-        let cache = appState.messageStore.persistentCache
 
         var eagerIds: Set<String> = []
         var recencyById: [String: Date] = [:]
 
         for digest in digests {
             guard digest.lastSeq > 0 else { continue }
-            // Recency anchor: digest's preview timestamp, else disk
-            // cache's most-recent persisted message timestamp.
+            // Recency anchor: digest's preview timestamp. The old
+            // implementation also peeked at the on-disk cache's
+            // most-recent timestamp as a fallback, but with sessions
+            // we always have a sessionPreview (tentacle ships one in
+            // session_list) the fallback never fired in practice.
             if let ts = digest.preview?.timestamp, let d = Self.parseISO(ts) {
-                recencyById[digest.id] = d
-            } else if let d = cache.getLastTimestamp(digest.id) {
                 recencyById[digest.id] = d
             }
             let isActive = digest.state == .active
@@ -208,40 +204,38 @@ final class MessageProvider {
         let loadKey = "\(sessionId):\(beforeSeq)"
         if inFlightRequests.contains(loadKey) { return }
 
-        // Only short-circuit if the slot immediately below `beforeSeq`
-        // is already in the store. Earlier code skipped on any store
-        // overlap, which let a middle-only cache (e.g. a stale slice
-        // hydrated from disk) silently leave a gap when latest-turn
-        // fetch landed above it. We need to actually walk back from
-        // `beforeSeq`.
-        let storeMessages = appState.messageStore.getMessages(sessionId)
-        if storeMessages.contains(where: { $0.seq == beforeSeq - 1 }) { return }
+        // Short-circuit when DB already has the slot immediately
+        // below beforeSeq — that means there's no gap to bridge from
+        // here. DB is the truth (memory window may not cover that
+        // range). The old code asked an in-memory `contains` which
+        // missed cases where the row was on disk but outside the
+        // current loaded window.
+        if appState.messageStore.hasInDB(sessionId, seq: beforeSeq - 1) { return }
 
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq)
     }
 
     /// Unified "I need older messages" entry point used by the chat
-    /// view's top-spinner auto-load. Hides the memory-vs-network
-    /// decision from the caller: if any message older than
-    /// `beforeSeq` is already in the store the call is a no-op;
-    /// otherwise it falls through to `requestBefore` (which carries
-    /// its own (sessionId, beforeSeq) dedupe and `seq-1` overlap
-    /// short-circuit). Returns whether a tentacle request was
-    /// actually dispatched — callers can use that to decide if a
-    /// "fetching" indicator should be shown, but most can ignore it.
+    /// view's top-spinner auto-load. If anything older than
+    /// `beforeSeq` is already on disk (whether in the window or
+    /// not), no wire request — the window-load path can grow the
+    /// window from DB. Otherwise falls through to `requestBefore`.
     @discardableResult
     func ensureOlderLoaded(sessionId: String, beforeSeq: Int) -> Bool {
         guard let appState else { return false }
         guard beforeSeq > 1 else { return false }
-        // Already in memory: any message older than `beforeSeq`
-        // means the chat view just needs to widen its rendered
-        // window — no network round-trip required.
-        let storeMessages = appState.messageStore.getMessages(sessionId)
-        if storeMessages.contains(where: { $0.seq > 0 && $0.seq < beforeSeq }) {
+        // Already in DB: ChatView's window-load path can satisfy
+        // the request without a network round-trip.
+        let dbLast = appState.messageStore.dbLastSeq(sessionId)
+        // Cheap heuristic: if our DB's lowest seq for this session
+        // is < beforeSeq we have *something* older. dbLastSeq gives
+        // us only the max, so use `hasInDB(beforeSeq - 1)` as the
+        // direct check.
+        if appState.messageStore.hasInDB(sessionId, seq: beforeSeq - 1) {
             return false
         }
-        // Not in memory → fetch. `requestBefore` handles tentacle
-        // device readiness, dedupe, and timeout.
+        _ = dbLast
+        // Not in DB → fetch.
         let wasInFlight = inFlightRequests.contains("\(sessionId):\(beforeSeq)")
         requestBefore(sessionId: sessionId, beforeSeq: beforeSeq)
         return !wasInFlight
@@ -265,24 +259,30 @@ final class MessageProvider {
 
         KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq), head=\(containsHead)")
 
-        // Snapshot store seqs *before* the prepend so we can spot a
-        // hole between the incoming batch and what we already had.
-        // Anything we have whose seq is strictly below the batch's
-        // lowest seq is "prior content"; if the largest such seq is
-        // not directly contiguous with batch.minSeq we have a gap.
+        // Detect a hole between this batch and what we already have
+        // on disk. If batch starts at seq B and DB contains B-1 we're
+        // contiguous; otherwise the gap [DB max below B + 1 .. B - 1]
+        // needs a bridge fetch.
+        //
+        // Note: `priorMaxBelowBatch == 0` (no rows below) is not a
+        // gap — it just means this batch is the oldest we have so
+        // far. Only flag a gap when there's *some* row below the
+        // batch but it's not B-1.
         let batchMinSeq = messages.map(\.seq).min() ?? 0
-        let priorMaxBelowBatch: Int = {
-            guard batchMinSeq > 0 else { return 0 }
-            let store = appState.messageStore.getMessages(sessionId)
-            var best = 0
-            for m in store where m.seq < batchMinSeq && m.seq > best { best = m.seq }
-            return best
+        let hasContiguousBelow: Bool = {
+            guard batchMinSeq > 1 else { return true }
+            return appState.messageStore.hasInDB(sessionId, seq: batchMinSeq - 1)
         }()
+        let priorMaxIsZero = appState.messageStore.dbLastSeq(sessionId) == 0
+            || appState.messageStore.dbLastSeq(sessionId) >= batchMinSeq
+        // priorMaxIsZero is true when DB is empty for this session,
+        // or when DB already has rows at/above batchMinSeq (so
+        // there's nothing strictly below the batch to bridge from).
+        // Either way no gap-bridge is needed.
 
         if !messages.isEmpty {
-            appState.messageStore.prependMessages(sessionId, messages)
-            KLog.d("📦 Store now has \(appState.messageStore.getMessages(sessionId).count) msgs for \(sessionId.prefix(12))")
-            processReplayedActions(sessionId: sessionId, messages: messages)
+            appState.messageStore.ingestBatch(sessionId, messages)
+            KLog.d("📦 Store now has window \(appState.messageStore.currentWindow(sessionId).count) msgs for \(sessionId.prefix(12))")
             rebuildPreview(sessionId: sessionId)
         }
 
@@ -301,14 +301,28 @@ final class MessageProvider {
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
-        // hole between [priorMaxBelowBatch+1 .. batchMinSeq-1] —
-        // happens when disk holds a stale middle slice and the
-        // latest-turn fetch anchors above it. Schedule a one-shot
-        // bridge fetch ending at batchMinSeq; subsequent batches will
-        // re-enter this guard and keep walking the hole closed.
-        let needsGapBridge = batchMinSeq > 0
-            && priorMaxBelowBatch > 0
-            && batchMinSeq > priorMaxBelowBatch + 1
+        // hole between [existing-max-below..batchMinSeq-1] — happens
+        // when disk holds a stale middle slice and the latest-turn
+        // fetch anchors above it. Schedule a one-shot bridge fetch
+        // ending at batchMinSeq; subsequent batches will re-enter
+        // this guard and keep walking the hole closed.
+        //
+        // Check by asking the DB: does the slot immediately below
+        // batchMinSeq exist? If no but we have *something* below
+        // batchMinSeq (i.e. the DB isn't empty AND isn't entirely
+        // at/above the batch), there's a gap to bridge.
+        let needsGapBridge: Bool = {
+            guard batchMinSeq > 1 else { return false }
+            if hasContiguousBelow { return false }
+            // Some content below the batch exists iff dbLastSeq < batchMinSeq
+            // is false AND we're not in an empty DB. Use a hasInDB
+            // probe at batchMinSeq - 2 to confirm "something below
+            // but not contiguous".
+            return appState.messageStore.hasInDB(sessionId, seq: max(1, batchMinSeq - 2))
+        }()
+        _ = priorMaxIsZero  // computed but only the gap-bridge boolean
+                            // above actually drives action — kept for
+                            // future telemetry hooks.
 
         // Clear in-flight tracking for the *specific* request this
         // batch answers — not every in-flight key for the session.
@@ -349,34 +363,33 @@ final class MessageProvider {
         }
 
         if needsGapBridge {
-            KLog.d("🪡 detected gap [\(priorMaxBelowBatch + 1)..\(batchMinSeq - 1)] in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
+            KLog.d("🪡 detected gap below \(batchMinSeq) in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
             requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
         }
     }
 
     // MARK: - Preview
 
-    /// Rebuild session preview from messages in the store.
-    /// Scans backwards for the last meaningful message.
+    /// Recompute session preview from the persisted message stream.
+    /// Reads the tail of the DB (independent of the in-memory window
+    /// state) so the sidebar shows the real last meaningful message
+    /// even when the user is scrolled into history. Scans backwards
+    /// for the first message that matches one of the preview-worthy
+    /// types.
     ///
-    /// Forked sessions need their fork timestamp preserved so they sort
-    /// next to other freshly-touched sessions instead of next to their
-    /// parent's old last-message. We detect this by comparing the
-    /// existing preview's timestamp to the one we're about to write —
-    /// if the existing one is newer (e.g. set by the `session_created`
-    /// seed in MessageRouter), we keep its timestamp and only swap the
-    /// text+type.
+    /// Forked / freshly-imported sessions need their fork timestamp
+    /// preserved so they sort next to other freshly-touched sessions
+    /// instead of next to their parent's old last-message — detect by
+    /// comparing the existing preview's timestamp to the new one and
+    /// keep the newer.
     func rebuildPreview(sessionId: String) {
         guard let appState else { return }
-        let msgs = appState.messageStore.getMessages(sessionId)
+        let msgs = appState.messageStore.recentFromDB(sessionId, limit: 30)
         guard !msgs.isEmpty else { return }
 
         let existing = appState.sessionStore.sessionPreviews[sessionId]
 
         func write(text: String, type: String, timestamp: String) {
-            // Forked / freshly imported sessions: preserve the newer
-            // existing timestamp so their card doesn't sort by the
-            // parent session's last-message clock.
             let chosenTs: String = {
                 guard let e = existing,
                       let existingDate = Self.parseISO(e.timestamp),
@@ -424,115 +437,6 @@ final class MessageProvider {
             default:
                 continue
             }
-        }
-    }
-
-    // MARK: - Replay Action Processing
-
-    /// Scan replayed messages for pending permissions/questions that weren't processed live.
-    func processReplayedActions(sessionId: String, messages: [ChatMessage]) {
-        guard let appState else { return }
-
-        // Collect resolved IDs
-        var resolvedPermIds = Set<String>()
-        var resolvedQuestionIds = Set<String>()
-        var permResolutions: [String: String] = [:]
-        var questionAnswers: [String: String] = [:]
-
-        for msg in messages {
-            switch msg.type {
-            case "approve":
-                if let pid = msg.payload["permissionId"]?.stringValue {
-                    resolvedPermIds.insert(pid)
-                    permResolutions[pid] = "approved"
-                }
-            case "deny":
-                if let pid = msg.payload["permissionId"]?.stringValue {
-                    resolvedPermIds.insert(pid)
-                    permResolutions[pid] = "denied"
-                }
-            case "always_allow":
-                if let pid = msg.payload["permissionId"]?.stringValue {
-                    resolvedPermIds.insert(pid)
-                    permResolutions[pid] = "always_allowed"
-                }
-            case "permission_resolved":
-                if let pid = msg.payload["permissionId"]?.stringValue {
-                    resolvedPermIds.insert(pid)
-                    permResolutions[pid] = msg.payload["resolution"]?.stringValue ?? "approved"
-                }
-            case "answer":
-                if let qid = msg.payload["questionId"]?.stringValue {
-                    resolvedQuestionIds.insert(qid)
-                    questionAnswers[qid] = msg.payload["answer"]?.stringValue ?? ""
-                }
-            case "question_resolved":
-                if let qid = msg.payload["questionId"]?.stringValue {
-                    resolvedQuestionIds.insert(qid)
-                    questionAnswers[qid] = msg.payload["answer"]?.stringValue ?? ""
-                }
-            default:
-                break
-            }
-        }
-
-        // Add unresolved permissions
-        for msg in messages where msg.type == "permission" {
-            guard let pid = msg.permissionId, !resolvedPermIds.contains(pid) else { continue }
-            guard appState.messageStore.pendingPermissions[pid] == nil else { continue }
-
-            let ts: Date
-            if let tsStr = msg.timestamp {
-                let fmt = ISO8601DateFormatter()
-                fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                ts = fmt.date(from: tsStr) ?? Date()
-            } else {
-                ts = Date()
-            }
-
-            let perm = PendingPermission(
-                id: pid,
-                sessionId: sessionId,
-                description: msg.toolDescription ?? "",
-                toolName: msg.toolName,
-                args: msg.args,
-                timestamp: ts
-            )
-            appState.messageStore.addPermission(perm)
-        }
-
-        // Add unresolved questions
-        for msg in messages where msg.type == "question" {
-            guard let qid = msg.questionId, !resolvedQuestionIds.contains(qid) else { continue }
-            guard appState.messageStore.pendingQuestions[qid] == nil else { continue }
-
-            let ts: Date
-            if let tsStr = msg.timestamp {
-                let fmt = ISO8601DateFormatter()
-                fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                ts = fmt.date(from: tsStr) ?? Date()
-            } else {
-                ts = Date()
-            }
-
-            let q = PendingQuestion(
-                id: qid,
-                sessionId: sessionId,
-                question: msg.question ?? "",
-                choices: msg.choices,
-                timestamp: ts
-            )
-            appState.messageStore.addQuestion(q)
-        }
-
-        // Stamp resolutions on messages so UI renders them correctly
-        for (permId, resolution) in permResolutions {
-            appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permId, resolution: resolution)
-            appState.messageStore.removePermission(permId)
-        }
-        for (qId, answer) in questionAnswers {
-            appState.messageStore.resolveQuestionMessage(sessionId, questionId: qId, answerText: answer)
-            appState.messageStore.removeQuestion(qId)
         }
     }
 
