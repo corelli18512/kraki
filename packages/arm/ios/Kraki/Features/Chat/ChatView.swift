@@ -116,9 +116,12 @@ struct ChatView: View {
             let pinnedSessionId = sessionId
             uikitScrollCoordinator.onNearTopReached = { [weak appState = appState] in
                 guard let appState else { return }
-                let messages = appState.messageStore.messages[pinnedSessionId] ?? []
-                let firstSeq = messages.compactMap { $0.seq > 0 ? $0.seq : nil }.min() ?? Int.max
-                guard firstSeq > 1 else { return }
+                // windowTopSeq returns the seq of the topmost loaded
+                // message — that's the boundary we want to fetch
+                // older than. nil ⇒ window not yet loaded; nothing
+                // to do.
+                guard let firstSeq = appState.messageProvider?.windowTopSeq(pinnedSessionId),
+                      firstSeq > 1 else { return }
                 _ = appState.messageProvider?.ensureOlderLoaded(
                     sessionId: pinnedSessionId,
                     beforeSeq: firstSeq

@@ -221,7 +221,7 @@ private struct SessionCardBody: View {
         if session.state == .active && !hasPendingPermission && !hasPendingQuestion {
             ActivityRow(
                 activity: session.activity,
-                lastUserMessage: appState.messageStore.lastUserMessageContent(session.id)
+                lastUserMessage: appState.messageProvider?.lastUserMessageContent(session.id)
             )
         } else {
             previewText

@@ -49,7 +49,7 @@ struct SessionDetailView: View {
             // Bootstrap the in-memory window from the DB so ChatView
             // has something to render before the (possibly delayed)
             // tentacle replay lands. Cold-launch idempotent.
-            appState.messageStore.loadInitialWindow(sessionId)
+            appState.messageProvider?.openSession(sessionId)
             // Ensure tentacle's view of the latest turn(s) is loaded —
             // no-op if warm-up already covered this session or if the
             // disk cache already reaches head.

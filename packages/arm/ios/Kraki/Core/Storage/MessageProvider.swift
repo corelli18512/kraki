@@ -65,6 +65,51 @@ final class MessageProvider {
         inFlightRequests.contains { $0.hasPrefix("\(sessionId):") }
     }
 
+    // MARK: - Feature-layer façade
+    //
+    // ChatView, the session list, and the action cards talk to
+    // *this* layer for everything message-related. They never reach
+    // into MessageStore directly — that keeps the storage internals
+    // (window mechanics, DB schema) free to evolve without touching
+    // the UI.
+
+    /// Bootstrap the in-memory window for a session and return the
+    /// loaded slice. Idempotent — repeated calls during a session's
+    /// lifetime are no-ops once the window is already populated.
+    @discardableResult
+    func openSession(_ sessionId: String) -> [ChatMessage] {
+        guard let appState else { return [] }
+        return appState.messageStore.loadInitialWindow(sessionId)
+    }
+
+    /// Snapshot of the messages currently in memory for the session.
+    /// Same shape as `MessageStore.currentWindow` but exposed here so
+    /// callers don't take a dependency on MessageStore directly.
+    func currentWindow(_ sessionId: String) -> [ChatMessage] {
+        appState?.messageStore.currentWindow(sessionId) ?? []
+    }
+
+    /// Latest persisted agent_message text for a session, regardless
+    /// of window state. Used by the session list's "current activity"
+    /// row.
+    func lastAgentMessageContent(_ sessionId: String) -> String? {
+        appState?.messageStore.lastAgentMessageContent(sessionId)
+    }
+
+    /// Latest persisted user-side message text for a session.
+    func lastUserMessageContent(_ sessionId: String) -> String? {
+        appState?.messageStore.lastUserMessageContent(sessionId)
+    }
+
+    /// firstSeq of the loaded window — used by the chat view's
+    /// "fetch older" trigger to know what `beforeSeq` to ask for.
+    /// Returns nil if no window is loaded.
+    func windowTopSeq(_ sessionId: String) -> Int? {
+        guard let state = appState?.messageStore.windowState(sessionId),
+              state.topSeq > 0 else { return nil }
+        return state.topSeq
+    }
+
     // MARK: - Request Latest
 
     /// Load the latest turn (and any prior whole turns that fit in
