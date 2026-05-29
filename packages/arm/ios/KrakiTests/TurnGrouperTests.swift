@@ -52,9 +52,9 @@ final class TurnGrouperTests: XCTestCase {
         XCTAssertEqual(result.count, 1)
         // User-side messages live inside their owning turn (idle-bounded).
         // With no idle yet, the turn is still active and has no final agent reply.
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertTrue(turn.isActive)
-            XCTAssertEqual(turn.userMessage?.type, "user_message")
+            XCTAssertEqual(turn.initiator.userMessage?.type, "user_message")
             XCTAssertNil(turn.finalMessage)
             XCTAssertTrue(turn.thinkingMessages.isEmpty)
         } else {
@@ -67,7 +67,7 @@ final class TurnGrouperTests: XCTestCase {
         let result = groupMessagesIntoTurns(msgs)
         // No idle, so turn is still active
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertTrue(turn.isActive)
             XCTAssertEqual(turn.thinkingMessages.count, 1)
             XCTAssertNil(turn.finalMessage)
@@ -85,9 +85,9 @@ final class TurnGrouperTests: XCTestCase {
         let result = groupMessagesIntoTurns(msgs)
         // Idle-bounded: 1 turn containing user_message + agent_message.
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertFalse(turn.isActive)
-            XCTAssertEqual(turn.userMessage?.type, "user_message")
+            XCTAssertEqual(turn.initiator.userMessage?.type, "user_message")
             XCTAssertNotNil(turn.finalMessage)
             XCTAssertEqual(turn.finalMessage?.content, "reply")
             XCTAssertTrue(turn.thinkingMessages.isEmpty)
@@ -102,7 +102,7 @@ final class TurnGrouperTests: XCTestCase {
         ]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             // Last agent_message becomes final, rest in thinking
             XCTAssertEqual(turn.finalMessage?.content, "final answer")
             XCTAssertEqual(turn.thinkingMessages.count, 1)
@@ -120,7 +120,7 @@ final class TurnGrouperTests: XCTestCase {
         ]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             // tool_start replaced by tool_complete (merged)
             XCTAssertEqual(turn.thinkingMessages.count, 1)
             XCTAssertEqual(turn.thinkingMessages[0].type, "tool_complete")
@@ -136,7 +136,7 @@ final class TurnGrouperTests: XCTestCase {
             makeMsg(type: "idle", seq: 3),
         ]
         let result = groupMessagesIntoTurns(msgs)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             let merged = turn.thinkingMessages[0]
             let args = merged.args
             XCTAssertEqual(args?["command"]?.stringValue, "ls")
@@ -151,7 +151,7 @@ final class TurnGrouperTests: XCTestCase {
             makeMsg(type: "idle", seq: 3),
         ]
         let result = groupMessagesIntoTurns(msgs)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             // Without toolCallId, both remain in thinking (no merge)
             XCTAssertEqual(turn.thinkingMessages.count, 2)
         } else { XCTFail("Expected turn") }
@@ -175,7 +175,7 @@ final class TurnGrouperTests: XCTestCase {
         ]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertNotNil(turn.finalMessage)
             XCTAssertFalse(turn.thinkingMessages.contains(where: { $0.type == "question" }))
         } else { XCTFail("Expected turn") }
@@ -195,8 +195,8 @@ final class TurnGrouperTests: XCTestCase {
         // rendering as its own bubble. The merged entry stays in
         // the turn's thinking history with question metadata baked
         // into its payload.
-        let turns = result.compactMap { item -> Turn? in
-            if case .turn(let t) = item { return t }
+        let turns = result.compactMap { item -> ActivityBlock? in
+            if case .block(let t) = item { return t }
             return nil
         }
         XCTAssertEqual(turns.count, 1)
@@ -221,7 +221,7 @@ final class TurnGrouperTests: XCTestCase {
         let result = groupMessagesIntoTurns(msgs)
         // tool_complete after question should be skipped
         let allThinking = result.compactMap { item -> [ChatMessage]? in
-            if case .turn(let t) = item { return t.thinkingMessages }
+            if case .block(let t) = item { return t.thinkingMessages }
             return nil
         }.flatMap { $0 }
         XCTAssertFalse(allThinking.contains(where: { $0.seq == 3 && $0.type == "tool_complete" }))
@@ -236,7 +236,7 @@ final class TurnGrouperTests: XCTestCase {
         ]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertFalse(turn.isActive)
             XCTAssertNotNil(turn.finalMessage)
         } else { XCTFail("Expected turn") }
@@ -249,20 +249,20 @@ final class TurnGrouperTests: XCTestCase {
             makeMsg(type: "idle", seq: 3),
         ]
         let result = groupMessagesIntoTurns(msgs)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             // active should be in thinking
             XCTAssertTrue(turn.thinkingMessages.contains(where: { $0.type == "active" }))
             XCTAssertNotNil(turn.finalMessage)
         } else { XCTFail("Expected turn") }
     }
 
-    func testErrorInTurn() {
+    func testErrorInActivityBlock() {
         let msgs = [
             makeMsg(type: "error", seq: 1, payload: ["message": AnyCodable("failed")]),
             makeMsg(type: "idle", seq: 2),
         ]
         let result = groupMessagesIntoTurns(msgs)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertEqual(turn.thinkingMessages.count, 1)
             XCTAssertEqual(turn.thinkingMessages[0].type, "error")
         } else { XCTFail("Expected turn") }
@@ -270,13 +270,13 @@ final class TurnGrouperTests: XCTestCase {
 
     // MARK: - Streaming
 
-    func testStreamingContentAppendsToTurn() {
+    func testStreamingContentAppendsToActivityBlock() {
         let msgs = [
             makeMsg(type: "agent_message", seq: 1, payload: ["content": AnyCodable("thinking")]),
         ]
         let result = groupMessagesIntoTurns(msgs, streamingContent: "streaming text")
         XCTAssertEqual(result.count, 1)
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertTrue(turn.isActive)
             // Should have the original + synthetic streaming message
             XCTAssertEqual(turn.thinkingMessages.count, 2)
@@ -287,7 +287,7 @@ final class TurnGrouperTests: XCTestCase {
     func testStreamingContentEmptyIgnored() {
         let msgs = [makeMsg(type: "agent_message", seq: 1)]
         let result = groupMessagesIntoTurns(msgs, streamingContent: "")
-        if case .turn(let turn) = result[0] {
+        if case .block(let turn) = result[0] {
             XCTAssertEqual(turn.thinkingMessages.count, 1)
         } else { XCTFail("Expected turn") }
     }
@@ -307,12 +307,12 @@ final class TurnGrouperTests: XCTestCase {
         // Each idle bounds a turn; user_message lives inside its turn.
         XCTAssertEqual(result.count, 2)
 
-        if case .turn(let turn) = result[0] {
-            XCTAssertEqual(turn.userMessage?.type, "user_message")
+        if case .block(let turn) = result[0] {
+            XCTAssertEqual(turn.initiator.userMessage?.type, "user_message")
             XCTAssertEqual(turn.finalMessage?.content, "reply1")
         } else { XCTFail() }
-        if case .turn(let turn) = result[1] {
-            XCTAssertEqual(turn.userMessage?.type, "user_message")
+        if case .block(let turn) = result[1] {
+            XCTAssertEqual(turn.initiator.userMessage?.type, "user_message")
             XCTAssertEqual(turn.finalMessage?.content, "reply2")
         } else { XCTFail() }
     }
@@ -337,13 +337,13 @@ final class TurnGrouperTests: XCTestCase {
         } else { XCTFail("Expected standalone") }
     }
 
-    func testPendingInputInsideTurn() {
+    func testPendingInputInsideActivityBlock() {
         let msgs = [makeMsg(type: "pending_input", seq: 0)]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
         // pending_input is a user-side message: lives inside its turn.
-        if case .turn(let turn) = result[0] {
-            XCTAssertEqual(turn.userMessage?.type, "pending_input")
+        if case .block(let turn) = result[0] {
+            XCTAssertEqual(turn.initiator.userMessage?.type, "pending_input")
             XCTAssertTrue(turn.isActive)
         } else { XCTFail("Expected turn") }
     }
@@ -359,7 +359,7 @@ final class TurnGrouperTests: XCTestCase {
         ]
         let result = groupMessagesIntoTurns(msgs)
         let turnIds = result.compactMap { item -> String? in
-            if case .turn(let turn) = item { return turn.id }
+            if case .block(let turn) = item { return turn.id }
             return nil
         }
         // Each turn should have a unique ID
