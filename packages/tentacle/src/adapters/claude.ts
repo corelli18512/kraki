@@ -252,6 +252,10 @@ export class ClaudeAdapter extends AgentAdapter {
   private cachedModels: ModelDetail[] = [];
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown> }>>();
+  /** Map Kraki session ID → SDK session UUID (for getSessionInfo polling) */
+  private sdkSessionIds = new Map<string, string>();
+  /** Last known title per session (to detect changes) */
+  private lastKnownTitles = new Map<string, string>();
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
@@ -816,12 +820,19 @@ export class ClaudeAdapter extends AgentAdapter {
         const sysMsg = msg as SDKSystemMessage & { subtype?: string };
         if (sysMsg.subtype === 'init') {
           const sdkSessionId = sysMsg.session_id;
-          if (sdkSessionId && sdkSessionId !== sessionId) {
-            const entry = this.sessions.get(sessionId);
-            if (entry) entry.sessionId = sdkSessionId;
+          if (sdkSessionId) {
+            this.sdkSessionIds.set(sessionId, sdkSessionId);
+            if (sdkSessionId !== sessionId) {
+              const entry = this.sessions.get(sessionId);
+              if (entry) entry.sessionId = sdkSessionId;
+            }
           }
           this.cacheModelsFromInit(sysMsg);
           logger.debug({ sessionId, sdkSessionId }, 'SDK session initialized');
+        } else if (sysMsg.subtype === 'files_persisted') {
+          // The SDK finished writing session files to disk — safe to
+          // resume watching the session directory for external changes.
+          this.onFlushComplete?.(sessionId);
         }
         break;
       }
@@ -912,6 +923,10 @@ export class ClaudeAdapter extends AgentAdapter {
         }
 
         this.onIdle?.(sessionId);
+
+        // Poll for SDK-native title changes (the SDK auto-generates titles
+        // but doesn't emit title events in the stream)
+        this.pollTitleChange(sessionId).catch(() => {});
         break;
       }
 
@@ -928,13 +943,44 @@ export class ClaudeAdapter extends AgentAdapter {
               const tracked = this.pendingToolCalls.get(sessionId)?.get(toolCallId);
 
               let result = '';
+              const imageAttachments: import('@kraki/protocol').Attachment[] = [];
               if (typeof b.content === 'string') {
                 result = b.content;
               } else if (Array.isArray(b.content)) {
-                result = (b.content as Array<Record<string, unknown>>)
+                const blocks = b.content as Array<Record<string, unknown>>;
+                result = blocks
                   .filter(c => c.type === 'text' && typeof c.text === 'string')
                   .map(c => c.text as string)
                   .join('\n');
+
+                // Extract image blocks from MCP tool results (e.g. kraki-show_image)
+                if (this.attachmentStore) {
+                  const isKrakiShowImage = tracked?.toolName?.includes('show_image') ?? false;
+                  for (const c of blocks) {
+                    if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
+                      try {
+                        const bytes = Buffer.from(c.data, 'base64');
+                        const ref = this.attachmentStore.put(sessionId, bytes, c.mimeType, {});
+                        imageAttachments.push(ref);
+                      } catch (err) {
+                        logger.warn({ err, sessionId }, 'failed to store image attachment');
+                      }
+                    }
+                    // Also handle Anthropic API image format: { type: 'image', source: { type: 'base64', media_type, data } }
+                    if (c.type === 'image' && typeof c.source === 'object' && c.source !== null) {
+                      const src = c.source as Record<string, unknown>;
+                      if (src.type === 'base64' && typeof src.data === 'string' && typeof src.media_type === 'string') {
+                        try {
+                          const bytes = Buffer.from(src.data, 'base64');
+                          const ref = this.attachmentStore.put(sessionId, bytes, src.media_type, {});
+                          imageAttachments.push(ref);
+                        } catch (err) {
+                          logger.warn({ err, sessionId }, 'failed to store image attachment');
+                        }
+                      }
+                    }
+                  }
+                }
               }
 
               this.onToolComplete?.(sessionId, {
@@ -942,7 +988,18 @@ export class ClaudeAdapter extends AgentAdapter {
                 result,
                 toolCallId,
                 success: !b.is_error,
+                ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
               });
+
+              // Broadcast image bytes to connected devices
+              if (imageAttachments.length > 0) {
+                const refs = imageAttachments.filter(
+                  (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
+                );
+                if (refs.length > 0) {
+                  this.onAttachmentBytes?.(sessionId, { refs });
+                }
+              }
 
               this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
             }
@@ -954,6 +1011,30 @@ export class ClaudeAdapter extends AgentAdapter {
       default:
         // Ignore other message types (status, auth_status, etc.)
         break;
+    }
+  }
+
+  /**
+   * Poll the SDK for title changes after a turn completes.
+   * The Claude SDK auto-generates titles but doesn't emit stream events for them.
+   * We check getSessionInfo() and fire onTitleChanged if the title differs.
+   */
+  private async pollTitleChange(sessionId: string): Promise<void> {
+    const sdkId = this.sdkSessionIds.get(sessionId);
+    if (!sdkId) return;
+
+    try {
+      const { getSessionInfo } = await import('@anthropic-ai/claude-agent-sdk');
+      const info = await getSessionInfo(sdkId);
+      const title = (info as unknown as { customTitle?: string; summary?: string }).customTitle
+        ?? (info as unknown as { summary?: string }).summary;
+      if (title && title !== this.lastKnownTitles.get(sessionId)) {
+        this.lastKnownTitles.set(sessionId, title);
+        this.onTitleChanged?.(sessionId, title);
+        logger.debug({ sessionId, title: title.slice(0, 60) }, 'SDK title change detected');
+      }
+    } catch {
+      // getSessionInfo may fail if session is too new or not persisted — that's fine
     }
   }
 
@@ -1112,6 +1193,8 @@ export class ClaudeAdapter extends AgentAdapter {
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
     this.pendingToolCalls.delete(sessionId);
+    this.sdkSessionIds.delete(sessionId);
+    this.lastKnownTitles.delete(sessionId);
   }
 
   private broadcastPendingResolutions(sessionId: string): void {
