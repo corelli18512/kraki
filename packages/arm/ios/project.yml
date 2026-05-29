@@ -7,6 +7,10 @@ options:
   generateEmptyDirectories: false
   createIntermediateGroups: true
 
+packages:
+  GRDB:
+    path: ./Vendor/GRDB.swift
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -60,6 +64,7 @@ targets:
     dependencies:
       - target: KrakiNotification
         embed: true
+      - package: GRDB
 
   KrakiNotification:
     type: app-extension
