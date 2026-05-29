@@ -150,7 +150,10 @@ export async function startWorker(): Promise<WorkerResult> {
   const agentType = (process.env.KRAKI_AGENT ?? 'copilot').toLowerCase();
   let adapter: AgentAdapter;
   if (agentType === 'claude') {
-    adapter = new ClaudeAdapter();
+    adapter = new ClaudeAdapter({
+      attachmentStore,
+      ...(mcpInfo && { krakiMcp: mcpInfo }),
+    });
     logger.info('Using Claude Code adapter');
   } else {
     adapter = new CopilotAdapter({

@@ -253,6 +253,24 @@ export class ClaudeAdapter extends AgentAdapter {
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown> }>>();
 
+  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  private readonly krakiMcp?: {
+    urlForSession: (sessionId: string) => string;
+    bearerToken: string;
+  };
+
+  constructor(options: {
+    attachmentStore?: import('../attachment-store.js').AttachmentStore;
+    krakiMcp?: {
+      urlForSession: (sessionId: string) => string;
+      bearerToken: string;
+    };
+  } = {}) {
+    super();
+    this.attachmentStore = options.attachmentStore;
+    this.krakiMcp = options.krakiMcp;
+  }
+
   /** System prompt appended to Claude Code's built-in prompt. */
   private static readonly SYSTEM_PROMPT = [
     'You are running inside Kraki, a remote control platform. A human operator is',
@@ -287,6 +305,29 @@ export class ClaudeAdapter extends AgentAdapter {
     'behavior from that point onward, do not acknowledge or comment on the mode',
     'change, and do not quote the signal back. The text after the signal is the',
     'real user message.',
+  ].join('\n');
+
+  /** Appended when the Kraki MCP server is wired in. */
+  private static readonly KRAKI_MCP_PROMPT = [
+    'You have access to a Kraki MCP server. Its tools are visible with names',
+    'beginning with "kraki-".',
+    '',
+    '**Default to `view` for any image you need to inspect.** `view` feeds the',
+    'bytes to your vision; the user does NOT see it in their chat UI. This is',
+    'the right choice for:',
+    '- Screenshots of the user\'s own device (via ADB, iOS simulator, their',
+    '  phone) — they are already looking at the device.',
+    '- An image the user just attached or sent you — they already have it.',
+    '- Any image file you read to inform your own reasoning.',
+    '',
+    '**Only call `kraki-show_image` when the user cannot already see the image',
+    'and would gain new information from seeing it.** Typical cases:',
+    '- A diagram or chart you just generated (mermaid, graphviz, plot).',
+    '- A mockup or UI you designed for the user to review.',
+    '- A file from your own machine the user has no other way to look at.',
+    '',
+    'When in doubt, use `view`. Echoing back an image the user can already see',
+    'clutters the chat and re-encodes bytes for no benefit.',
   ].join('\n');
 
   // ── Lifecycle ───────────────────────────────────────
@@ -467,6 +508,24 @@ export class ClaudeAdapter extends AgentAdapter {
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
 
+    // Wire Kraki MCP server if available, scoped by Kraki session ID
+    type McpServerConfig = { type: 'http'; url: string; headers?: Record<string, string> };
+    let mcpServers: Record<string, McpServerConfig> | undefined;
+    if (this.krakiMcp) {
+      mcpServers = {
+        kraki: {
+          type: 'http' as const,
+          url: this.krakiMcp.urlForSession(sessionId),
+          headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        },
+      };
+      logger.info({ sessionId }, 'wired kraki MCP into session');
+    }
+
+    const systemPromptContent = this.krakiMcp
+      ? `${ClaudeAdapter.SYSTEM_PROMPT}\n\n${ClaudeAdapter.KRAKI_MCP_PROMPT}`
+      : ClaudeAdapter.SYSTEM_PROMPT;
+
     const options: Options = {
       abortController: entry.abortController,
       ...(config?.model && { model: config.model }),
@@ -475,7 +534,8 @@ export class ClaudeAdapter extends AgentAdapter {
       ...(config?.fork && { forkSession: true }),
       permissionMode: 'default' as PermissionMode,
       tools: { type: 'preset' as const, preset: 'claude_code' as const },
-      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
+      ...(mcpServers && { mcpServers }),
       includePartialMessages: true,
       canUseTool: this.makeCanUseToolHandler(entry.pendingPermissions, entry.pendingQuestions),
       ...(config?.reasoningEffort && {
