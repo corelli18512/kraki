@@ -74,7 +74,7 @@ final class ChatViewModel {
     /// so the user sees the request in chat history, mirroring how
     /// pending questions behave.
     var filteredMessages: [ChatMessage] {
-        appState?.messageStore.currentWindow(sessionId) ?? []
+        appState?.messageProvider?.currentWindow(sessionId) ?? []
     }
 
     /// Streaming content for this session. Non-nil during agent reply

@@ -151,7 +151,7 @@ struct PermissionStackView: View {
     /// kept independent so this view can render without a
     /// ChatViewModel around (e.g. push-notification entry point).
     private var permissions: [PendingPermission] {
-        let msgs = appState.messageStore.currentWindow(sessionId)
+        let msgs = appState.messageProvider?.currentWindow(sessionId) ?? []
         var resolvedIds = Set<String>()
         for m in msgs {
             switch m.type {

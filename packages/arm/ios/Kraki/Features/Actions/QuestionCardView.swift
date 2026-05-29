@@ -125,7 +125,7 @@ struct QuestionStackView: View {
     /// can render even if no ChatViewModel is around (e.g. push
     /// notification → action sheet).
     private var questions: [PendingQuestion] {
-        let msgs = appState.messageStore.currentWindow(sessionId)
+        let msgs = appState.messageProvider?.currentWindow(sessionId) ?? []
         var resolvedIds = Set<String>()
         for m in msgs {
             switch m.type {
