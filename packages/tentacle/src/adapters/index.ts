@@ -1,5 +1,6 @@
 export { AgentAdapter } from './base.js';
 export { CopilotAdapter } from './copilot.js';
+export { ClaudeAdapter } from './claude.js';
 
 // Re-export types consumers need
 export type {
