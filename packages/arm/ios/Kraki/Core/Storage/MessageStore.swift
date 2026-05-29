@@ -190,84 +190,101 @@ final class MessageStore {
     /// persistent-type row; then patches the in-memory window if the
     /// batch overlaps or extends it. Batches that fall entirely
     /// outside the current window just go to DB.
+    /// Ingest a batch from a tentacle replay. Persists every row,
+    /// then patches the in-memory window if the batch extends it at
+    /// either end. O(log N + K) where N is the batch size and K is
+    /// the contiguous prefix/suffix that actually extends the window.
+    ///
+    /// **Invariants assumed of the input batch** (held by tentacle —
+    /// see relay-client.ts `findTurnAlignedStart` and
+    /// session-manager.ts `appendMessage`):
+    /// 1. Strictly ascending `seq`. Tentacle appends with a
+    ///    monotonic per-session counter and replay reads back in
+    ///    that order. Asserted in DEBUG.
+    /// 2. Every row is a persistent-type message with a real
+    ///    `seq > 0`. Tentacle's replay path already filters
+    ///    `PERSISTENT_TYPES` server-side, so the arm doesn't
+    ///    re-filter. Asserted in DEBUG.
+    /// 3. Content for an existing seq never changes. Tentacle's
+    ///    messages.jsonl is append-only — no row is ever rewritten
+    ///    after broadcast. Rows in the batch whose seq is already
+    ///    inside our window are therefore byte-identical to what
+    ///    we hold; they require no in-memory update.
+    ///
+    /// **Algorithm.** Binary-search the batch for the window's
+    /// `topSeq` and `bottomSeq` boundaries (O(log N)). The two
+    /// resulting slices (`< topSeq` and `> bottomSeq`) are the only
+    /// rows that can extend the in-memory window; the middle slice
+    /// is dropped silently because of invariant 3. We never touch
+    /// rows that don't change anything.
+    ///
+    /// Persistence: DB upsert of the whole batch (`INSERT OR
+    /// REPLACE` on the PK) handles dedup and crash-safety at the
+    /// storage layer.
     func ingestBatch(_ sessionId: String, _ batch: [ChatMessage]) {
         guard !batch.isEmpty else { return }
-        let persistent = batch.filter(Self.isPersistent)
-        try? db.insert(sessionId, persistent)
+
+        #if DEBUG
+        for i in 0..<batch.count {
+            assert(batch[i].seq > 0, "ingestBatch invariant: every row must have seq > 0 (tentacle filters non-persistent types server-side). Got seq=\(batch[i].seq) type=\(batch[i].type).")
+            assert(Self.persistentTypes.contains(batch[i].type), "ingestBatch invariant: every row must be a persistent type. Got type=\(batch[i].type) seq=\(batch[i].seq).")
+            if i > 0 {
+                assert(batch[i - 1].seq < batch[i].seq, "ingestBatch invariant: batch must be sorted by seq ascending. Got \(batch[i - 1].seq) before \(batch[i].seq).")
+            }
+        }
+        #endif
+
+        try? db.insert(sessionId, batch)
 
         guard let state = windows[sessionId] else { return }
 
-        // Empty bootstrap state (window was set up against an empty
-        // DB at session-open time). Now that DB has content, build a
-        // real window from the tail.
+        // Empty bootstrap state (window placeholder set on
+        // session-open against an empty DB). Rebuild from DB now
+        // that content has arrived.
         if state.bottomSeq == 0 {
             rebootstrapWindow(sessionId)
             return
         }
 
-        // Split the batch by relation to the current window.
-        var extendsTop: [ChatMessage] = []     // < topSeq, immediately adjacent
-        var insideWindow: [ChatMessage] = []   // inside [topSeq, bottomSeq]
-        var extendsBottom: [ChatMessage] = []  // > bottomSeq, immediately adjacent
-
-        for msg in batch where Self.isPersistent(msg) {
-            if msg.seq < state.topSeq {
-                extendsTop.append(msg)
-            } else if msg.seq > state.bottomSeq {
-                extendsBottom.append(msg)
-            } else {
-                insideWindow.append(msg)
-            }
-        }
+        // Binary-split batch into three slices:
+        //   [0 ..< topIdx)         seq < state.topSeq      (may extend top)
+        //   [topIdx ..< botIdx)    inside window           (ignored — invariant 3)
+        //   [botIdx ..< end]       seq > state.bottomSeq   (may extend bottom)
+        let topIdx = batch.partitioningIndex { $0.seq >= state.topSeq }
+        let botIdx = batch.partitioningIndex { $0.seq > state.bottomSeq }
+        let extendsTopSlice = batch[0..<topIdx]
+        let extendsBotSlice = batch[botIdx...]
 
         var window = messages[sessionId] ?? []
         var updated = state
 
-        // Prepend tail-end of extendsTop that's contiguous with topSeq.
-        if !extendsTop.isEmpty {
-            let sorted = extendsTop.sorted { $0.seq < $1.seq }
-            // Find the longest suffix that ends at topSeq - 1.
-            if sorted.last?.seq == state.topSeq - 1 {
-                // Walk back to find the contiguous head of the suffix.
-                var contiguousStart = sorted.count - 1
-                while contiguousStart > 0,
-                      sorted[contiguousStart - 1].seq == sorted[contiguousStart].seq - 1 {
-                    contiguousStart -= 1
-                }
-                let prepend = Array(sorted[contiguousStart...])
-                window = prepend + window
-                updated.topSeq = prepend.first!.seq
-                if updated.topSeq <= 1 { updated.reachedTail = true }
+        // Prepend the longest contiguous suffix of extendsTopSlice
+        // that ends at state.topSeq - 1.
+        if !extendsTopSlice.isEmpty, extendsTopSlice.last?.seq == state.topSeq - 1 {
+            var startIdx = extendsTopSlice.endIndex - 1
+            while startIdx > extendsTopSlice.startIndex,
+                  extendsTopSlice[startIdx - 1].seq == extendsTopSlice[startIdx].seq - 1 {
+                startIdx -= 1
             }
-            // Anything left in extendsTop is non-contiguous below
-            // the window — already in DB, ignore.
+            let prepend = Array(extendsTopSlice[startIdx...])
+            window = prepend + window
+            updated.topSeq = prepend.first!.seq
+            if updated.topSeq <= 1 { updated.reachedTail = true }
         }
 
-        // Dedup-replace insideWindow rows.
-        if !insideWindow.isEmpty {
-            var byKey: [String: ChatMessage] = [:]
-            for m in insideWindow { byKey["\(m.seq)|\(m.type)"] = m }
-            for i in window.indices where window[i].type != "pending_input" {
-                let key = "\(window[i].seq)|\(window[i].type)"
-                if let replacement = byKey[key] { window[i] = replacement }
+        // Append the longest contiguous prefix of extendsBotSlice
+        // that starts at state.bottomSeq + 1.
+        if !extendsBotSlice.isEmpty, extendsBotSlice.first?.seq == state.bottomSeq + 1 {
+            var endIdx = extendsBotSlice.startIndex
+            while endIdx < extendsBotSlice.endIndex - 1,
+                  extendsBotSlice[endIdx + 1].seq == extendsBotSlice[endIdx].seq + 1 {
+                endIdx += 1
             }
-        }
-
-        // Append head-end of extendsBottom that's contiguous with bottomSeq.
-        if !extendsBottom.isEmpty {
-            let sorted = extendsBottom.sorted { $0.seq < $1.seq }
-            if sorted.first?.seq == state.bottomSeq + 1 {
-                var contiguousEnd = 0
-                while contiguousEnd < sorted.count - 1,
-                      sorted[contiguousEnd + 1].seq == sorted[contiguousEnd].seq + 1 {
-                    contiguousEnd += 1
-                }
-                let append = Array(sorted[...contiguousEnd])
-                // Pendings go after.
-                let insertAt = window.lastIndex(where: { $0.type != "pending_input" }).map { $0 + 1 } ?? window.count
-                window.insert(contentsOf: append, at: insertAt)
-                updated.bottomSeq = append.last!.seq
-            }
+            let append = Array(extendsBotSlice[extendsBotSlice.startIndex...endIdx])
+            // Pendings always sort to the tail.
+            let insertAt = window.lastIndex(where: { $0.type != "pending_input" }).map { $0 + 1 } ?? window.count
+            window.insert(contentsOf: append, at: insertAt)
+            updated.bottomSeq = append.last!.seq
         }
 
         messages[sessionId] = window
@@ -634,5 +651,35 @@ final class MessageStore {
                 messages[sessionId] = window
             }
         }
+    }
+}
+
+// MARK: - Binary partitioning
+
+private extension RandomAccessCollection {
+    /// Returns the first index where `predicate` is true, found via
+    /// binary search. Requires that the collection is *partitioned*
+    /// with respect to ` i.e. all elements for whichpredicate` 
+    /// `predicate` is false come before all elements for which it
+    /// is true. A sorted array satisfies this for predicates of the
+    /// form `{ $0.x >= threshold }`.
+    ///
+    /// Returns `endIndex` when `predicate` is false for every
+    /// element. O(log n).
+    ///
+    /// Mirrors the API in swift-algorithms; reproduced here so
+    /// MessageStore stays free of extra dependencies.
+    func partitioningIndex(where predicate: (Element) -> Bool) -> Index {
+        var lo = startIndex
+        var hi = endIndex
+        while lo < hi {
+            let mid = index(lo, offsetBy: distance(from: lo, to: hi) / 2)
+            if predicate(self[mid]) {
+                hi = mid
+            } else {
+                lo = index(after: mid)
+            }
+        }
+        return lo
     }
 }
