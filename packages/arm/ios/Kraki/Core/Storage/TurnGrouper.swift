@@ -82,6 +82,30 @@ extension Initiator {
 }
 
 /// One visual block in the chat. Replaces the older `Turn` struct.
+///
+/// **Seq range.** `startSeq` and `endSeq` describe the seq window
+/// this block occupies in the session's message stream. Two reasons
+/// to store them explicitly rather than deriving from children:
+///
+///   1. `endSeq` for a closed block is the **closing `idle`'s seq**.
+///      The idle isn't promoted to `finalMessage`; we'd otherwise
+///      need to either look it up via the always-last `thinkingMessages`
+///      entry (fragile) or scan all children for the max (O(k)).
+///   2. Reconstructing the raw seq order from a cached block
+///      (the gap-fill / island-merge paths in `SessionGrouperCache`)
+///      needs to know "where did this block end" without re-running
+///      the grouper. With explicit endSeq we can emit a fake `idle`
+///      with the exact original seq when flattening, instead of the
+///      old workaround of synthesising one with the block's
+///      max-internal seq.
+///
+/// **isActive** is also still explicit (not derived from `endSeq`)
+/// because there are two distinct "closed without final reply"
+/// states — `(closed, no final agent_message)` for tool-only or
+/// errored turns — and we need the grouper to mark the difference
+/// at flush time. `isActive == true` ⇒ block is still receiving
+/// content (no idle seen); the trailing `endSeq` is the seq of the
+/// last in-progress message and is **provisional**.
 struct ActivityBlock: Identifiable {
     let id: String
 
@@ -101,6 +125,17 @@ struct ActivityBlock: Identifiable {
     /// agent_message (tool-only blocks, errored blocks, blocks
     /// terminated by an external event before producing a reply).
     var finalMessage: ChatMessage?
+
+    /// Smallest seq covered by this block: the initiator's user
+    /// message seq, or the first thinking entry's seq for
+    /// `.implicit` blocks.
+    var startSeq: Int
+
+    /// Largest seq covered by this block. For closed blocks this is
+    /// the **closing `idle`'s seq**. For active blocks it's the seq
+    /// of the latest message we've ingested; it will keep climbing
+    /// until the block closes.
+    var endSeq: Int
 
     /// True until the closing `idle` (or any future explicit
     /// terminator) arrives. Drives streaming-bubble affordances on
@@ -223,7 +258,16 @@ func groupMessagesIntoTurns(
             || !currentThinking.isEmpty
     }
 
-    func flushBlock(blockComplete: Bool) {
+    func flushBlock(closingSeq: Int?) {
+        // closingSeq:
+        //   - Real idle seq when called by the idle branch.
+        //   - nil when called by "force-close before opening a new
+        //     block" paths (user-message-back-to-back, standalone
+        //     arrival, unknown type) — in those cases we mark the
+        //     block as still active so the UI doesn't claim it
+        //     finished cleanly. endSeq falls back to the seq of the
+        //     last thinking message.
+        //   - nil when called at end-of-stream → block stays active.
         defer { unresolvedPermIds.removeAll() }
         guard hasOpenBlock() else { return }
         // Anchor on a stable message id — the .user initiator's
@@ -239,7 +283,19 @@ func groupMessagesIntoTurns(
         let blockId = "turn:\(anchor)"
         let initiator = currentInitiator ?? .implicit
 
-        if !blockComplete {
+        let startSeq = currentInitiator?.userMessage?.seq
+            ?? currentThinking.first?.seq
+            ?? 0
+        // For closed blocks: closingSeq is the real idle. For active
+        // blocks: the seq of the latest piece we have.
+        let lastInternalSeq = max(
+            currentInitiator?.userMessage?.seq ?? 0,
+            currentThinking.map(\.seq).max() ?? 0
+        )
+        let endSeq = closingSeq ?? lastInternalSeq
+        let isActive = (closingSeq == nil)
+
+        if isActive {
             // Block still in progress — everything stays in thinking,
             // no final reply yet.
             result.append(.block(ActivityBlock(
@@ -247,6 +303,8 @@ func groupMessagesIntoTurns(
                 initiator: initiator,
                 thinkingMessages: currentThinking,
                 finalMessage: nil,
+                startSeq: startSeq,
+                endSeq: endSeq,
                 isActive: true
             )))
         } else {
@@ -267,6 +325,8 @@ func groupMessagesIntoTurns(
                     initiator: initiator,
                     thinkingMessages: currentThinking,
                     finalMessage: nil,
+                    startSeq: startSeq,
+                    endSeq: endSeq,
                     isActive: false
                 )))
             } else {
@@ -279,6 +339,8 @@ func groupMessagesIntoTurns(
                     initiator: initiator,
                     thinkingMessages: thinking,
                     finalMessage: finalMsg,
+                    startSeq: startSeq,
+                    endSeq: endSeq,
                     isActive: false
                 )))
             }
@@ -303,7 +365,10 @@ func groupMessagesIntoTurns(
         }
 
         if standaloneTypes.contains(msg.type) {
-            flushBlock(blockComplete: true)
+            // Force-close: there's no idle here, so endSeq falls
+            // back to the last in-block seq and the block stays
+            // active (closingSeq: nil).
+            flushBlock(closingSeq: nil)
             result.append(.standalone(msg))
         } else if userMessageTypes.contains(msg.type) {
             // User-side message opens a new block. Tentacle today
@@ -319,7 +384,7 @@ func groupMessagesIntoTurns(
             // is single-opener today; multi-opener would require
             // bringing back the array shape.
             if hasOpenBlock() {
-                flushBlock(blockComplete: true)
+                flushBlock(closingSeq: nil)
             }
             currentInitiator = .user(msg)
         } else if turnCompleteTypes.contains(msg.type) {
@@ -331,7 +396,9 @@ func groupMessagesIntoTurns(
             if !unresolvedPermIds.isEmpty {
                 continue
             }
-            flushBlock(blockComplete: true)
+            // Real idle closes the block; its seq becomes the
+            // block's endSeq.
+            flushBlock(closingSeq: msg.seq)
         } else if thinkingTypes.contains(msg.type) {
             // Open an implicit block if a thinking-class message
             // arrives with no opener — this happens in legitimate
@@ -417,7 +484,7 @@ func groupMessagesIntoTurns(
             }
         } else {
             // Unknown type — treat as standalone to be safe
-            flushBlock(blockComplete: true)
+            flushBlock(closingSeq: nil)
             result.append(.standalone(msg))
         }
     }
@@ -445,8 +512,8 @@ func groupMessagesIntoTurns(
         currentThinking.append(syntheticMessage)
     }
 
-    // Flush remaining block — still in progress
-    flushBlock(blockComplete: false)
+    // Flush remaining block — still in progress (no closing idle).
+    flushBlock(closingSeq: nil)
 
     return result
 }

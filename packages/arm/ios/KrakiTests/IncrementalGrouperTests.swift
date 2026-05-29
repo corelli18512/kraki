@@ -418,4 +418,76 @@ final class IncrementalGrouperTests: XCTestCase {
         XCTAssertEqual(bs[0].finalMessage?.content, "v2-reply",
                        "re-ingest should update final message content")
     }
+
+    // MARK: - startSeq / endSeq
+
+    /// Closed block: startSeq == user msg seq; endSeq == closing idle seq.
+    func testClosedBlockSeqRange() {
+        var cache = SessionGrouperCache()
+        cache.ingest([
+            userMsg(seq: 10),
+            agentMsg(seq: 11),
+            idle(seq: 12),
+        ])
+        let b = blocks(cache.items(streamingContent: nil))[0]
+        XCTAssertEqual(b.startSeq, 10)
+        XCTAssertEqual(b.endSeq, 12, "endSeq should be the closing idle's seq, not the final message's seq")
+        XCTAssertFalse(b.isActive)
+    }
+
+    /// Active block: endSeq is the latest message seq we've seen,
+    /// will climb as the block grows.
+    func testActiveBlockSeqRangeUpdatesWithEachIngest() {
+        var cache = SessionGrouperCache()
+        cache.ingest([userMsg(seq: 5)])
+        XCTAssertEqual(blocks(cache.items(streamingContent: nil))[0].endSeq, 5)
+        cache.ingest([agentMsg(seq: 6)])
+        XCTAssertEqual(blocks(cache.items(streamingContent: nil))[0].endSeq, 6)
+        cache.ingest([agentMsg(seq: 7)])
+        XCTAssertEqual(blocks(cache.items(streamingContent: nil))[0].endSeq, 7)
+    }
+
+    /// Two adjacent blocks have non-overlapping seq ranges, and the
+    /// next block's startSeq is exactly the previous block's
+    /// endSeq + 1 (assuming no gap between idle and next user msg).
+    func testAdjacentBlocksHaveContiguousSeqRanges() {
+        var cache = SessionGrouperCache()
+        cache.ingest([
+            userMsg(seq: 1),
+            agentMsg(seq: 2),
+            idle(seq: 3),
+            userMsg(seq: 4),
+            agentMsg(seq: 5),
+            idle(seq: 6),
+        ])
+        let bs = blocks(cache.items(streamingContent: nil))
+        XCTAssertEqual(bs[0].startSeq, 1)
+        XCTAssertEqual(bs[0].endSeq, 3)
+        XCTAssertEqual(bs[1].startSeq, 4)
+        XCTAssertEqual(bs[1].endSeq, 6)
+    }
+
+    /// gap-fill (island merge) preserves the seq ranges of the
+    /// blocks that were already closed — confirms flattenMessages
+    /// using endSeq round-trips correctly through the regroup.
+    func testGapFillPreservesClosedBlockSeqRanges() {
+        var cache = SessionGrouperCache()
+        cache.ingest([
+            userMsg(seq: 1), agentMsg(seq: 2), idle(seq: 3),
+        ])
+        cache.ingest([
+            userMsg(seq: 7), agentMsg(seq: 8), idle(seq: 9),
+        ])
+        // Bridge: [4..6] fully fills the [4..6] gap and makes the
+        // two islands contiguous.
+        cache.ingest([
+            userMsg(seq: 4), agentMsg(seq: 5), idle(seq: 6),
+        ])
+        XCTAssertEqual(cache.islandCount, 1, "should merge to one island after bridging")
+        let bs = blocks(cache.items(streamingContent: nil))
+        XCTAssertEqual(bs.count, 3)
+        XCTAssertEqual(bs[0].startSeq, 1); XCTAssertEqual(bs[0].endSeq, 3)
+        XCTAssertEqual(bs[1].startSeq, 4); XCTAssertEqual(bs[1].endSeq, 6)
+        XCTAssertEqual(bs[2].startSeq, 7); XCTAssertEqual(bs[2].endSeq, 9)
+    }
 }

@@ -152,6 +152,8 @@ struct SessionGrouperCache {
                     initiator: .implicit,
                     thinkingMessages: [synth],
                     finalMessage: nil,
+                    startSeq: synth.seq,  // -1 sentinel; renderer doesn't
+                    endSeq: synth.seq,    // care about ordering for this case
                     isActive: true
                 )))
             }
@@ -346,7 +348,8 @@ struct SessionGrouperCache {
 
         if userMessageTypes.contains(msg.type) {
             if state.hasOpenBlock {
-                flush(state: &state, closed: &closed, complete: true)
+                // Force-close: no idle, block stays active.
+                flush(state: &state, closed: &closed, closingSeq: nil)
             }
             state.currentInitiator = .user(msg)
             return
@@ -356,7 +359,9 @@ struct SessionGrouperCache {
                 // Deferred — drop the idle, agent isn't done yet.
                 return
             }
-            flush(state: &state, closed: &closed, complete: true)
+            // Real idle — closingSeq is this message's seq, which
+            // becomes the block's endSeq.
+            flush(state: &state, closed: &closed, closingSeq: msg.seq)
             return
         }
         if thinkingTypes.contains(msg.type) {
@@ -430,13 +435,20 @@ struct SessionGrouperCache {
         // close any open block. The standalone itself is appended at
         // the cache level (we don't carry it here).
         if state.hasOpenBlock {
-            flush(state: &state, closed: &closed, complete: true)
+            flush(state: &state, closed: &closed, closingSeq: nil)
         }
     }
 
     /// Close the current state's accumulated block (if any) and
     /// append it to `closed`. Mirrors the original `flushTurn`.
-    private static func flush(state: inout GrouperState, closed: inout [ActivityBlock], complete: Bool) {
+    ///
+    /// `closingSeq`:
+    ///   - Real idle seq when closing via the idle branch — becomes
+    ///     the block's `endSeq` and marks it `isActive = false`.
+    ///   - nil for force-close (back-to-back user message, unknown
+    ///     type, end-of-stream) — block stays active, endSeq is
+    ///     the last internal-message seq.
+    private static func flush(state: inout GrouperState, closed: inout [ActivityBlock], closingSeq: Int?) {
         defer { state.unresolvedPermIds.removeAll() }
         guard state.hasOpenBlock else { return }
         let anchor = state.currentInitiator?.userMessage?.id
@@ -445,12 +457,24 @@ struct SessionGrouperCache {
         let blockId = "turn:\(anchor)"
         let initiator = state.currentInitiator ?? .implicit
 
-        if !complete {
+        let startSeq = state.currentInitiator?.userMessage?.seq
+            ?? state.currentThinking.first?.seq
+            ?? 0
+        let lastInternalSeq = max(
+            state.currentInitiator?.userMessage?.seq ?? 0,
+            state.currentThinking.map(\.seq).max() ?? 0
+        )
+        let endSeq = closingSeq ?? lastInternalSeq
+        let isActive = (closingSeq == nil)
+
+        if isActive {
             closed.append(ActivityBlock(
                 id: blockId,
                 initiator: initiator,
                 thinkingMessages: state.currentThinking,
                 finalMessage: nil,
+                startSeq: startSeq,
+                endSeq: endSeq,
                 isActive: true
             ))
         } else {
@@ -467,6 +491,8 @@ struct SessionGrouperCache {
                     initiator: initiator,
                     thinkingMessages: state.currentThinking,
                     finalMessage: nil,
+                    startSeq: startSeq,
+                    endSeq: endSeq,
                     isActive: false
                 ))
             } else {
@@ -479,6 +505,8 @@ struct SessionGrouperCache {
                     initiator: initiator,
                     thinkingMessages: thinking,
                     finalMessage: finalMsg,
+                    startSeq: startSeq,
+                    endSeq: endSeq,
                     isActive: false
                 ))
             }
@@ -495,11 +523,20 @@ struct SessionGrouperCache {
         let anchor = state.currentInitiator?.userMessage?.id
             ?? state.currentThinking.first?.id
             ?? "unknown"
+        let startSeq = state.currentInitiator?.userMessage?.seq
+            ?? state.currentThinking.first?.seq
+            ?? 0
+        let endSeq = max(
+            state.currentInitiator?.userMessage?.seq ?? 0,
+            state.currentThinking.map(\.seq).max() ?? 0
+        )
         return ActivityBlock(
             id: "turn:\(anchor)",
             initiator: state.currentInitiator ?? .implicit,
             thinkingMessages: state.currentThinking,
             finalMessage: nil,
+            startSeq: startSeq,
+            endSeq: endSeq,
             isActive: true
         )
     }
@@ -509,39 +546,24 @@ struct SessionGrouperCache {
     /// Reconstruct an island's raw message stream from its cached
     /// blocks. Used by gap-fill / replace paths that regroup an
     /// island from scratch.
+    ///
+    /// Closed blocks emit `[user_message?, ...thinking, final?, idle]`
+    /// where the trailing idle uses the block's recorded `endSeq` —
+    /// the actual seq of the closing idle observed during the
+    /// original ingest. Earlier versions had to synthesise this seq
+    /// because ActivityBlock didn't carry it; the resulting
+    /// soft-collision required a fragile sort tiebreaker. With
+    /// `endSeq` stored explicitly the regroup produces byte-identical
+    /// blocks against the original ingest sequence.
     private static func flattenMessages(_ island: SeqIsland) -> [ChatMessage] {
         var out: [ChatMessage] = []
         for b in island.closedBlocks {
             if let u = b.initiator.userMessage { out.append(u) }
             out.append(contentsOf: b.thinkingMessages)
             if let f = b.finalMessage { out.append(f) }
-            // We also need to re-emit a synthetic `idle` to close
-            // the block on regroup. Since we don't keep the original
-            // idle's seq, fabricate one between final and next
-            // user_message — sort-by-seq later. Using the final
-            // message's seq + 0.5 won't work for Int, so use the
-            // next contiguous seq we know belongs to this island.
-            // Simpler approach: emit a placeholder idle with seq =
-            // (final.seq ?? thinking.last.seq) + epsilon … but seqs
-            // are Int.
-            // For correctness we synthesise an idle with seq one
-            // larger than the block's highest message seq. If the
-            // next real message has the same seq, the
-            // sort-and-process will sort idle first (because the
-            // idle's type sorts predictably) — that's wrong.
-            // Practical fix: track the original closing-idle seq on
-            // the ActivityBlock. We don't today, so for now we
-            // synthesise a fake idle with the highest seq the block
-            // contains. This means re-grouping a closed block on
-            // gap-fill will produce the exact same blocks as long as
-            // no message lands in the [closingIdle..nextOpenerSeq-1]
-            // gap — which is the empirical case in practice.
-            let maxSeq = max(b.initiator.userMessage?.seq ?? 0,
-                             b.thinkingMessages.map(\.seq).max() ?? 0,
-                             b.finalMessage?.seq ?? 0)
             out.append(ChatMessage(
                 type: "idle",
-                seq: maxSeq,  // sorts equal to last block msg; processOne sees user→thinking→idle order from sorting
+                seq: b.endSeq,
                 sessionId: b.initiator.userMessage?.sessionId,
                 deviceId: b.initiator.userMessage?.deviceId,
                 timestamp: b.initiator.userMessage?.timestamp,
@@ -551,33 +573,20 @@ struct SessionGrouperCache {
         if let rp = island.rightPartial {
             if let u = rp.initiator.userMessage { out.append(u) }
             out.append(contentsOf: rp.thinkingMessages)
-            // No final, no synthesised idle — it's still active.
+            // No final, no idle — block is still active.
         }
-        // The synthesised idles use seq equal to the last real
-        // message; that's a soft collision. Push idles to the back of
-        // their group via a stable sort with type priority.
-        out.sort { (a, b) -> Bool in
-            if a.seq != b.seq { return a.seq < b.seq }
-            // Same seq → idle goes last (so the block closes after
-            // its thinking content).
-            if a.type == "idle" && b.type != "idle" { return false }
-            if b.type == "idle" && a.type != "idle" { return true }
-            return false
-        }
+        out.sort { $0.seq < $1.seq }
         return out
     }
 
     private func interleave(_ blockItems: [TurnItem], with standalones: [ChatMessage]) -> [TurnItem] {
         // Build (seq, item) list then sort. Blocks are keyed by
-        // their lowest seq.
+        // their startSeq.
         struct Entry { let seq: Int; let item: TurnItem }
         var entries: [Entry] = []
         for item in blockItems {
             if case .block(let b) = item {
-                let seq = b.initiator.userMessage?.seq
-                    ?? b.thinkingMessages.first?.seq
-                    ?? 0
-                entries.append(Entry(seq: seq, item: item))
+                entries.append(Entry(seq: b.startSeq, item: item))
             }
         }
         for s in standalones {
