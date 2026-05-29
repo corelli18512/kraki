@@ -153,11 +153,15 @@ struct ChatView: View {
         _ = viewModel?.refreshGroupingCache()
     }
 
-    /// TurnItem id for the entry-scroll target — the first turn
-    /// whose user message arrived AFTER the captured `readSeq`
+    /// TurnItem id for the entry-scroll target — the first block
+    /// whose user opener arrived AFTER the captured `readSeq`
     /// boundary. Nil for read sessions (entry scroll falls back to
     /// the bottom) or when the unread tail wasn't grouped into a
-    /// turn yet (the controller likewise falls back to the bottom).
+    /// block yet (the controller likewise falls back to the bottom).
+    ///
+    /// Iterates `openers` rather than reading a single user-message
+    /// slot so the lookup remains correct when queue support lands
+    /// (multiple user messages per block).
     ///
     /// Recomputed on each body evaluation — the controller's
     /// one-shot guard means a transient nil/non-nil flip before the
@@ -165,31 +169,30 @@ struct ChatView: View {
     private var entryScrollTargetId: String? {
         guard let boundary = entryUnreadSeqBoundary,
               let viewModel else { return nil }
-        for turn in viewModel.cachedRawTurns {
-            if case .turn(let t) = turn,
-               let userMsg = t.userMessage,
-               userMsg.seq > boundary {
-                return turn.id
+        for item in viewModel.cachedRawTurns {
+            if case .block(let block) = item,
+               block.openers.contains(where: { $0.seq > boundary }) {
+                return item.id
             }
         }
         return nil
     }
 
-    /// TurnItem id for the idle anchor target — the turn containing
+    /// TurnItem id for the idle anchor target — the block containing
     /// the most recent user message. Non-nil only while the session
     /// is idle; the controller releases the anchor whenever this
     /// goes back to nil. Stage 6 semantics: hold the visible user
     /// bubble at a fixed screen Y while tool entries or expand/
     /// collapse mutate other parts of the list during the quiet
-    /// period between turns.
+    /// period between blocks.
     private var idleAnchorTargetId: String? {
         guard let vm = viewModel,
               vm.sessionIdle,
               let lastUserMsg = vm.lastUserMessage else { return nil }
-        for turn in vm.cachedRawTurns {
-            if case .turn(let t) = turn,
-               t.userMessage?.id == lastUserMsg.id {
-                return turn.id
+        for item in vm.cachedRawTurns {
+            if case .block(let block) = item,
+               block.openers.contains(where: { $0.id == lastUserMsg.id }) {
+                return item.id
             }
         }
         return nil
