@@ -31,35 +31,81 @@ final class DeviceStore {
     /// device's detail panel. Mirrors `SessionStore.navigateToSession`.
     var navigateToDeviceId: String?
 
-    /// Disk-backed snapshot of device metadata. Hydrated on init so the
-    /// Devices tab and per-session device-name lookups have data on cold
-    /// launch before the WS reconnects. All restored devices are forced
-    /// `online = false` — authoritative online state arrives via
-    /// `auth_ok` / `device_joined`.
-    let persistentCache = PersistentDeviceCache()
+    /// On-disk snapshot of device metadata. Hydrated on init so the
+    /// Devices tab and per-session device-name lookups have data on
+    /// cold launch before the WS reconnects. All restored devices are
+    /// forced `online = false` — authoritative online state arrives
+    /// via `auth_ok` / `device_joined`. Stored at
+    /// `<ApplicationSupport>/Kraki/devices.json`.
+
+    private struct Snapshot: Codable {
+        var devices: [String: DeviceSummary]
+        var deviceModels: [String: [String]]
+        var deviceModelDetails: [String: [ModelDetail]]
+        var deviceVersions: [String: String]
+    }
+
+    private static let saveDebounce: TimeInterval = 1.0
+    private var saveTask: DispatchWorkItem?
+    private var pendingSnapshot: Snapshot?
+
+    private static let snapshotURL: URL = {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("devices.json", isDirectory: false)
+    }()
 
     init() {
-        guard let snapshot = persistentCache.load() else { return }
+        guard FileManager.default.fileExists(atPath: Self.snapshotURL.path),
+              let data = try? Data(contentsOf: Self.snapshotURL),
+              var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        // Force every restored device offline — authoritative online
+        // state arrives later from auth_ok.
+        for (id, var device) in snapshot.devices {
+            device.online = false
+            snapshot.devices[id] = device
+        }
         self.devices = snapshot.devices
         self.deviceModels = snapshot.deviceModels
         self.deviceModelDetails = snapshot.deviceModelDetails
         self.deviceVersions = snapshot.deviceVersions
     }
 
-    /// Debounced write of the current persistable state to disk. Called
-    /// after any mutation that changes a persisted field.
+    /// Debounced write of the current persistable state to disk.
+    /// Called after any mutation that changes a persisted field.
     fileprivate func scheduleSave() {
-        persistentCache.save(.init(
+        pendingSnapshot = Snapshot(
             devices: devices,
             deviceModels: deviceModels,
             deviceModelDetails: deviceModelDetails,
             deviceVersions: deviceVersions
-        ))
+        )
+        saveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.flushCache() }
+        saveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDebounce, execute: task)
     }
 
-    /// Force-flush the cache. Called from app background / logout.
+    /// Force-flush the pending snapshot to disk immediately.
     func flushCache() {
-        persistentCache.flushNow()
+        saveTask?.cancel()
+        saveTask = nil
+        guard let snapshot = pendingSnapshot else { return }
+        pendingSnapshot = nil
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: Self.snapshotURL, options: .atomic)
+    }
+
+    /// Wipe the on-disk file. Logout / reset.
+    func clearPersistentSnapshot() {
+        saveTask?.cancel()
+        saveTask = nil
+        pendingSnapshot = nil
+        try? FileManager.default.removeItem(at: Self.snapshotURL)
     }
 
     // MARK: - Computed
@@ -166,7 +212,7 @@ final class DeviceStore {
         deviceModelDetails.removeAll()
         deviceVersions.removeAll()
         pendingGreetingIds.removeAll()
-        persistentCache.clear()
+        clearPersistentSnapshot()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)

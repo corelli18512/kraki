@@ -41,11 +41,11 @@ struct SessionInfo: Identifiable, Equatable, Codable {
 
     // MARK: - Codable
     //
-    // Persistent cache (PersistentSessionCache) encodes/decodes via these
-    // keys. Transient fields (`activity`, `currentToolName`,
-    // `currentToolHeadline`) are intentionally omitted — on cold launch
-    // the "what's running now" state is stale and gets refilled by the
-    // live message stream.
+    // SessionStore's on-disk snapshot uses these keys. Transient
+    // fields (`activity`, `currentToolName`, `currentToolHeadline`)
+    // are intentionally omitted — on cold launch the "what's running
+    // now" state is stale and gets refilled by the live message
+    // stream.
 
     private enum CodingKeys: String, CodingKey {
         case id, deviceId, deviceName, agent, model, title, autoTitle
@@ -172,14 +172,41 @@ final class SessionStore {
     var popToSessionListSignal: Int = 0
     var streamingContent: [String: String] = [:]
 
-    /// Disk-backed snapshot of session metadata + previews. Hydrated
-    /// synchronously on init so cold-launch users see a populated session
-    /// list before the WS reconnects; overwritten by authoritative data
-    /// once `session_list` arrives.
-    let persistentCache = PersistentSessionCache()
+    // MARK: - Disk snapshot
+
+    /// On-disk snapshot of session metadata + previews. Hydrated
+    /// synchronously on init so cold-launch users see a populated
+    /// session list before the WS reconnects; overwritten by
+    /// authoritative `session_list` data once it arrives.
+    /// Stored at `<ApplicationSupport>/Kraki/sessions.json` (a single
+    /// JSON file — small, infrequent writes, atomic).
+
+    private struct Snapshot: Codable {
+        var sessions: [String: SessionInfo]
+        var previews: [String: SessionPreview]
+    }
+
+    /// Debounce window for save coalescing. Many small mutations in
+    /// one burst (bumpLastSeq, setPreview, setMode, …) should result
+    /// in one write, not N.
+    private static let saveDebounce: TimeInterval = 1.0
+    private var saveTask: DispatchWorkItem?
+    private var pendingSnapshot: Snapshot?
+
+    private static let snapshotURL: URL = {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("sessions.json", isDirectory: false)
+    }()
 
     init() {
-        guard let snapshot = persistentCache.load() else { return }
+        guard FileManager.default.fileExists(atPath: Self.snapshotURL.path),
+              let data = try? Data(contentsOf: Self.snapshotURL),
+              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
         self.sessions = snapshot.sessions
         self.sessionPreviews = snapshot.previews
         // Rebuild derived state from the restored sessions.
@@ -194,13 +221,34 @@ final class SessionStore {
     /// disk. Called after any mutation that changes a card-visible field.
     /// Safe to call frequently — the cache coalesces.
     fileprivate func scheduleSave() {
-        persistentCache.save(.init(sessions: sessions, previews: sessionPreviews))
+        pendingSnapshot = Snapshot(sessions: sessions, previews: sessionPreviews)
+        saveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.flushCache() }
+        saveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDebounce, execute: task)
     }
 
-    /// Force-flush the cache. Called from app background / logout so the
-    /// latest state survives termination.
+    /// Force-flush the pending snapshot to disk immediately. Called
+    /// from app background / logout so the latest state survives
+    /// termination even if the user kills the app before the debounce
+    /// fires.
     func flushCache() {
-        persistentCache.flushNow()
+        saveTask?.cancel()
+        saveTask = nil
+        guard let snapshot = pendingSnapshot else { return }
+        pendingSnapshot = nil
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: Self.snapshotURL, options: .atomic)
+    }
+
+    /// Wipe the persisted snapshot file (called by logout / reset).
+    /// In-memory state is untouched; callers usually clear it
+    /// separately.
+    func clearPersistentSnapshot() {
+        saveTask?.cancel()
+        saveTask = nil
+        pendingSnapshot = nil
+        try? FileManager.default.removeItem(at: Self.snapshotURL)
     }
 
     /// Sessions for which a `create_session` / `fork_session` /
@@ -693,7 +741,7 @@ final class SessionStore {
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
-        persistentCache.clear()
+        clearPersistentSnapshot()
     }
 
     /// Cancel every in-flight delta debounce + drop buffered bytes.
