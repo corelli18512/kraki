@@ -67,6 +67,7 @@ interface SessionEntry {
   query: Query | null;
   abortController: AbortController;
   inputChannel: InputChannel;
+  inputIterable: AsyncIterable<SDKUserMessage>;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
   sessionId: string;
@@ -343,6 +344,7 @@ export class ClaudeAdapter extends AgentAdapter {
       query: null,
       abortController,
       inputChannel: channel,
+      inputIterable: iterable,
       pendingPermissions,
       pendingQuestions,
       sessionId,
@@ -373,6 +375,7 @@ export class ClaudeAdapter extends AgentAdapter {
       query: null,
       abortController,
       inputChannel: channel,
+      inputIterable: iterable,
       pendingPermissions,
       pendingQuestions,
       sessionId,
@@ -395,6 +398,7 @@ export class ClaudeAdapter extends AgentAdapter {
       query: null,
       abortController,
       inputChannel: channel,
+      inputIterable: iterable,
       pendingPermissions,
       pendingQuestions,
       sessionId: newSessionId,
@@ -443,16 +447,25 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /**
-   * Spawn the SDK query() for a session. Called on first sendMessage
-   * or when explicitly resuming.
+   * Spawn the SDK query() for a session. Called on first sendMessage.
+   * Pushes the initial prompt into the streaming input channel so the
+   * SDK gets its first user message, then starts the consumer loop for
+   * multi-turn conversation.
    */
-  private async spawnQuery(sessionId: string, initialPrompt?: string): Promise<void> {
+  private async spawnQuery(sessionId: string, initialPrompt: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
 
     const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
     const config = entry.deferredConfig;
-    const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+
+    // Push the first user message into the channel BEFORE creating the query.
+    // The SDK's async iterable reads the first value immediately on start.
+    entry.inputChannel.push({
+      type: 'user',
+      message: { role: 'user', content: initialPrompt },
+      parent_tool_use_id: null,
+    } as unknown as SDKUserMessage);
 
     const options: Options = {
       abortController: entry.abortController,
@@ -460,8 +473,6 @@ export class ClaudeAdapter extends AgentAdapter {
       ...(config?.cwd && { cwd: config.cwd }),
       ...(config?.resume && { resume: config.resume }),
       ...(config?.fork && { forkSession: true }),
-      // Do NOT pass Kraki session IDs to the SDK — it requires UUIDs.
-      // Let the SDK generate its own session ID; we track the mapping internally.
       permissionMode: 'default' as PermissionMode,
       tools: { type: 'preset' as const, preset: 'claude_code' as const },
       systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
@@ -472,9 +483,9 @@ export class ClaudeAdapter extends AgentAdapter {
       }),
     };
 
-    // Use direct prompt for first message, streaming input for subsequent
-    const prompt = initialPrompt ?? entry.inputChannel;
-    const q = queryFn({ prompt: prompt as string, options });
+    // Use the streaming input iterable — supports multi-turn.
+    // The first message is already queued in the channel above.
+    const q = queryFn({ prompt: entry.inputIterable, options });
 
     entry.query = q;
     entry.deferredConfig = undefined;
