@@ -64,7 +64,7 @@ interface InputChannel {
 
 /** Everything we track per session. */
 interface SessionEntry {
-  query: Query;
+  query: Query | null;
   abortController: AbortController;
   inputChannel: InputChannel;
   pendingPermissions: Map<string, PendingPermission>;
@@ -72,6 +72,8 @@ interface SessionEntry {
   sessionId: string;
   model?: string;
   consumerLoop: Promise<void>;
+  /** Deferred config — used to lazily spawn query() on first sendMessage */
+  deferredConfig?: CreateSessionConfig & { resume?: string; fork?: boolean };
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -331,33 +333,14 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Session management ──────────────────────────────
 
   async createSession(config: CreateSessionConfig): Promise<{ sessionId: string }> {
-    const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
-
+    const sessionId = config.sessionId ?? `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const pendingPermissions = new Map<string, PendingPermission>();
     const pendingQuestions = new Map<string, PendingQuestion>();
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
 
-    const options: Options = {
-      abortController,
-      ...(config.model && { model: config.model }),
-      ...(config.cwd && { cwd: config.cwd }),
-      ...(config.sessionId && { sessionId: config.sessionId }),
-      permissionMode: 'default' as PermissionMode,
-      tools: { type: 'preset' as const, preset: 'claude_code' as const },
-      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
-      includePartialMessages: true,
-      canUseTool: this.makeCanUseToolHandler(pendingPermissions, pendingQuestions),
-      ...(config.reasoningEffort && {
-        effort: config.reasoningEffort as Options['effort'],
-      }),
-    };
-
-    const q = queryFn({ prompt: iterable, options });
-    const sessionId = config.sessionId ?? `claude-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
     const entry: SessionEntry = {
-      query: q,
+      query: null,
       abortController,
       inputChannel: channel,
       pendingPermissions,
@@ -365,12 +348,11 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId,
       model: config.model,
       consumerLoop: Promise.resolve(),
+      deferredConfig: config,
     };
 
     this.sessions.set(sessionId, entry);
-    entry.consumerLoop = this.consumeMessages(sessionId, q);
-
-    logger.info({ sessionId, model: config.model }, 'session created');
+    logger.info({ sessionId, model: config.model }, 'session created (deferred — query starts on first message)');
 
     this.onSessionCreated?.({
       sessionId,
@@ -382,87 +364,52 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> {
-    const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
-
     const pendingPermissions = new Map<string, PendingPermission>();
     const pendingQuestions = new Map<string, PendingQuestion>();
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
 
-    const mode = this.sessionModes.get(sessionId) ?? 'discuss';
-
-    const options: Options = {
-      abortController,
-      resume: sessionId,
-      permissionMode: 'default' as PermissionMode,
-      tools: { type: 'preset' as const, preset: 'claude_code' as const },
-      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
-      includePartialMessages: true,
-      canUseTool: this.makeCanUseToolHandler(pendingPermissions, pendingQuestions),
-    };
-
-    const q = queryFn({ prompt: iterable, options });
-
     const entry: SessionEntry = {
-      query: q,
+      query: null,
       abortController,
       inputChannel: channel,
       pendingPermissions,
       pendingQuestions,
       sessionId,
       consumerLoop: Promise.resolve(),
+      deferredConfig: { resume: sessionId },
     };
 
     this.sessions.set(sessionId, entry);
-    entry.consumerLoop = this.consumeMessages(sessionId, q);
-
-    logger.info({ sessionId }, 'session resumed');
+    logger.info({ sessionId }, 'session resumed (deferred)');
     return { sessionId };
   }
 
   async forkSession(sourceSessionId: string, newSessionId: string): Promise<{ sessionId: string }> {
-    const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
-
     const pendingPermissions = new Map<string, PendingPermission>();
     const pendingQuestions = new Map<string, PendingQuestion>();
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
 
-    const mode = this.sessionModes.get(sourceSessionId) ?? 'discuss';
-
-    const options: Options = {
-      abortController,
-      resume: sourceSessionId,
-      forkSession: true,
-      sessionId: newSessionId,
-      permissionMode: 'default' as PermissionMode,
-      tools: { type: 'preset' as const, preset: 'claude_code' as const },
-      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
-      includePartialMessages: true,
-      canUseTool: this.makeCanUseToolHandler(pendingPermissions, pendingQuestions),
-    };
-
-    const q = queryFn({ prompt: iterable, options });
-
     const entry: SessionEntry = {
-      query: q,
+      query: null,
       abortController,
       inputChannel: channel,
       pendingPermissions,
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
+      deferredConfig: { resume: sourceSessionId, fork: true, sessionId: newSessionId },
     };
 
     this.sessions.set(newSessionId, entry);
-    entry.consumerLoop = this.consumeMessages(newSessionId, q);
 
     this.onSessionCreated?.({
       sessionId: newSessionId,
       agent: 'claude',
     });
 
-    logger.info({ sourceSessionId, newSessionId }, 'session forked');
+    logger.info({ sourceSessionId, newSessionId }, 'session forked (deferred)');
     return { sessionId: newSessionId };
   }
 
@@ -480,11 +427,59 @@ export class ClaudeAdapter extends AgentAdapter {
       text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
     }
 
+    // Lazily start the query on first message — the SDK binary needs a
+    // prompt to work with, so we pass the first user message directly
+    // instead of using the streaming input channel.
+    if (!entry.query) {
+      await this.spawnQuery(sessionId, text);
+      return;
+    }
+
     entry.inputChannel.push({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
+  }
+
+  /**
+   * Spawn the SDK query() for a session. Called on first sendMessage
+   * or when explicitly resuming.
+   */
+  private async spawnQuery(sessionId: string, initialPrompt?: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+
+    const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
+    const config = entry.deferredConfig;
+    const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+
+    const options: Options = {
+      abortController: entry.abortController,
+      ...(config?.model && { model: config.model }),
+      ...(config?.cwd && { cwd: config.cwd }),
+      ...(config?.resume && { resume: config.resume }),
+      ...(config?.fork && { forkSession: true }),
+      // Do NOT pass Kraki session IDs to the SDK — it requires UUIDs.
+      // Let the SDK generate its own session ID; we track the mapping internally.
+      permissionMode: 'default' as PermissionMode,
+      tools: { type: 'preset' as const, preset: 'claude_code' as const },
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: ClaudeAdapter.SYSTEM_PROMPT },
+      includePartialMessages: true,
+      canUseTool: this.makeCanUseToolHandler(entry.pendingPermissions, entry.pendingQuestions),
+      ...(config?.reasoningEffort && {
+        effort: config.reasoningEffort as Options['effort'],
+      }),
+    };
+
+    // Use direct prompt for first message, streaming input for subsequent
+    const prompt = initialPrompt ?? entry.inputChannel;
+    const q = queryFn({ prompt: prompt as string, options });
+
+    entry.query = q;
+    entry.deferredConfig = undefined;
+    entry.consumerLoop = this.consumeMessages(sessionId, q);
+    logger.debug({ sessionId }, 'SDK query spawned');
   }
 
   async respondToPermission(
@@ -575,10 +570,12 @@ export class ClaudeAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (entry) {
       this.broadcastPendingResolutions(sessionId);
-      try {
-        await entry.query.interrupt();
-      } catch {
-        // Interrupt may fail if query already completed
+      if (entry.query) {
+        try {
+          await entry.query.interrupt();
+        } catch {
+          // Interrupt may fail if query already completed
+        }
       }
       logger.debug({ sessionId }, 'session aborted');
     }
@@ -617,7 +614,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
     // Also update SDK permission mode on the running query
     const entry = this.sessions.get(sessionId);
-    if (entry) {
+    if (entry?.query) {
       entry.query.setPermissionMode('default' as PermissionMode).catch((err) => {
         logger.warn({ err, sessionId }, 'Failed to set SDK permission mode');
       });
@@ -632,7 +629,9 @@ export class ClaudeAdapter extends AgentAdapter {
       logger.warn({ sessionId }, 'setSessionModel: session not found');
       return;
     }
-    await entry.query.setModel(model);
+    if (entry.query) {
+      await entry.query.setModel(model);
+    }
     entry.model = model;
     logger.info({ sessionId, model }, 'Session model changed');
   }
