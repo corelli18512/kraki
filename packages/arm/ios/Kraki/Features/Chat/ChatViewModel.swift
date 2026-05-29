@@ -48,14 +48,32 @@ final class ChatViewModel {
 
     // MARK: - Cached groupings
 
-    /// Raw turns from `groupMessagesIntoTurns(filteredMessages)`.
-    /// Recomputed only on `refreshGroupingCache()` calls — never on
-    /// observation reads. The grouping is O(n) over all in-memory
-    /// messages (2000+ in long sessions) and accessing it as a plain
-    /// computed property caused the main thread to stall long enough
-    /// for WebSocket heartbeats to time out — symptom: opening the
-    /// session disconnected the relay.
+    /// Raw turns derived from the current window. Computed
+    /// incrementally via `grouperCache` (Stage F): closed blocks
+    /// (idle-bounded, finalised) are kept across calls and never
+    /// re-grouped; each `refreshGroupingCache()` only feeds the
+    /// delta of new messages into the cache.
+    ///
+    /// Historical note: the original implementation walked the full
+    /// message list on every call. On long sessions (2000+ msgs)
+    /// that stalled the main thread enough to time out the WS
+    /// heartbeat. Caching the full result here cut that to "once per
+    /// data change", and Stage F brings it down further to "once
+    /// per new tail message".
     private(set) var cachedRawTurns: [TurnItem] = []
+
+    /// Per-session incremental grouper cache. Holds islands of
+    /// closed ActivityBlocks + their per-island tail state. Fed
+    /// by `refreshGroupingCache()` with whatever messages have
+    /// appeared in the window since the last call.
+    private var grouperCache = SessionGrouperCache()
+
+    /// Seqs of messages already passed to the grouper cache. Used to
+    /// compute the per-call delta — anything in `filteredMessages`
+    /// whose `(seq, type)` key isn't in here gets fed in. The set is
+    /// small (always within the loaded window) so the membership
+    /// check is cheap.
+    private var groupedKeys: Set<String> = []
 
     /// Mirror of `cachedRawTurns.count + (streaming-extra-turn ? 1 : 0)`
     /// for cheap O(1) reads. Kept in sync with `cachedRawTurns` in
@@ -231,7 +249,39 @@ final class ChatViewModel {
     /// physical turns across backfill arrivals.
     @discardableResult
     func refreshGroupingCache() -> GroupingRefreshResult {
-        let newRaw = groupMessagesIntoTurns(filteredMessages)
+        let windowMessages = filteredMessages
+
+        // Feed any messages we haven't grouped yet into the cache.
+        // The grouper de-dupes by (seq, type) and replaces in place,
+        // so re-feeding an already-known key is safe but wasted work —
+        // hence the local key set.
+        var delta: [ChatMessage] = []
+        var freshKeys: Set<String> = []
+        for msg in windowMessages where msg.type != "pending_input" {
+            let key = "\(msg.seq)|\(msg.type)"
+            freshKeys.insert(key)
+            if !groupedKeys.contains(key) {
+                delta.append(msg)
+            }
+        }
+        // If the window shrunk (e.g. unload + reload, drop-above-seq),
+        // the simplest correct thing is to rebuild from scratch.
+        // Detect by checking whether anything we previously grouped
+        // is missing from the new window — that means the window
+        // moved/shrunk and the cache no longer represents the
+        // current state.
+        let droppedSomething = !groupedKeys.isSubset(of: freshKeys)
+        if droppedSomething {
+            grouperCache = SessionGrouperCache()
+            groupedKeys = []
+            grouperCache.ingest(windowMessages.filter { $0.type != "pending_input" })
+            groupedKeys = freshKeys
+        } else if !delta.isEmpty {
+            grouperCache.ingest(delta)
+            groupedKeys.formUnion(freshKeys)
+        }
+
+        let newRaw = grouperCache.items(streamingContent: streaming)
         let previousFirstTurnId = lastKnownFirstTurnId
         cachedRawTurns = newRaw
         // Count includes the synthetic streaming turn only when

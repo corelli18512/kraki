@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
 		063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9656866F24E385A14F14E699 /* NavigationIDs.swift */; };
-		06E56E8528A16D9D6D294135 /* MessageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9B1FD19F5052C3B8BD91E4 /* MessageStoreTests.swift */; };
 		07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A6162027FE71CB62BA4255 /* DeviceListView.swift */; };
 		0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02010E839BEA2321FB4E19C7 /* MessageStore.swift */; };
 		09D96A4CAA9B66E0546321D5 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
@@ -24,6 +23,7 @@
 		1E7205DAE9C7788A1CB2A8CF /* ChatScrollCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB3EBB4CD6EF80F8A754079C /* ChatScrollCoordinator.swift */; };
 		20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */; };
 		246B2E3CF227103C6D04076D /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
+		253909D7E00B96BDB524EE36 /* IncrementalGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */; };
 		2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
 		2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33641605B16E960C6A553E38 /* ChatView.swift */; };
 		2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */; };
@@ -54,6 +54,7 @@
 		87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */; };
 		96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
 		A28917FCF94F3FE2A0B5AD2A /* LazyImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A84BF94261411BEF2B51101 /* LazyImageView.swift */; };
+		A66307FD3E49C88B414DB5A8 /* IncrementalGrouperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */; };
 		A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF54424FDF29034ACFC16B5A /* SettingsView.swift */; };
 		AF7953ABEEC72701AE83C546 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */; };
 		AF7FED5739CBD5B59ADEF03D /* TurnGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA25F949A584169D7628316 /* TurnGrouper.swift */; };
@@ -134,6 +135,7 @@
 		2DA25F949A584169D7628316 /* TurnGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouper.swift; sourceTree = "<group>"; };
 		33641605B16E960C6A553E38 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
+		39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalGrouperTests.swift; sourceTree = "<group>"; };
 		3C568CFF12F4C661F328D4DA /* Kraki.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.entitlements; sourceTree = "<group>"; };
 		3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypes.swift; sourceTree = "<group>"; };
 		41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionHandler.swift; sourceTree = "<group>"; };
@@ -176,9 +178,9 @@
 		C1B2ACA651B6DE122BE92C76 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		C97B0E319E0F6D893D83C12A /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalGrouper.swift; sourceTree = "<group>"; };
 		D5B791C3F6BA99245733A941 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProvider.swift; sourceTree = "<group>"; };
-		DC9B1FD19F5052C3B8BD91E4 /* MessageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStoreTests.swift; sourceTree = "<group>"; };
 		DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionSheet.swift; sourceTree = "<group>"; };
 		E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageDatabase.swift; sourceTree = "<group>"; };
 		E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCardView.swift; sourceTree = "<group>"; };
@@ -220,6 +222,7 @@
 				77E056700BA106FD1E130382 /* AttachmentStore.swift */,
 				2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */,
 				04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */,
+				CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */,
 				E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */,
 				D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */,
 				02010E839BEA2321FB4E19C7 /* MessageStore.swift */,
@@ -431,8 +434,8 @@
 				0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */,
 				A429810ED3F81077317149B3 /* DeviceStoreTests.swift */,
 				64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */,
+				39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */,
 				1D6472A002F2CB9C07380792 /* MessagesTests.swift */,
-				DC9B1FD19F5052C3B8BD91E4 /* MessageStoreTests.swift */,
 				22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */,
 				6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */,
 				91E943A85024601D5C97D75E /* TurnGrouperTests.swift */,
@@ -579,7 +582,7 @@
 				70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */,
 				45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */,
 				DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */,
-				06E56E8528A16D9D6D294135 /* MessageStoreTests.swift in Sources */,
+				A66307FD3E49C88B414DB5A8 /* IncrementalGrouperTests.swift in Sources */,
 				C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */,
 				5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */,
 				56FB3ED616BE7D72DFB31261 /* SessionStoreTests.swift in Sources */,
@@ -610,6 +613,7 @@
 				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
 				33284C120326EAC492164F6D /* Helpers.swift in Sources */,
 				1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */,
+				253909D7E00B96BDB524EE36 /* IncrementalGrouper.swift in Sources */,
 				41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */,
 				39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */,
 				D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */,
