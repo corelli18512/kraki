@@ -2,12 +2,15 @@
  * Kraki tentacle daemon worker.
  *
  * This file is spawned as a background process by daemon.ts.
- * It loads config, resolves authentication, starts the Copilot adapter,
+ * It loads config, resolves authentication, starts the agent adapter,
  * and connects to the head via RelayClient.
  *
  * RelayClient wires all adapter events to the head automatically.
  * SessionManager handles durable session state and crash recovery.
  * KeyManager handles E2E encryption keys.
+ *
+ * Agent selection: set KRAKI_AGENT=claude to use the Claude Code adapter
+ * instead of the default Copilot adapter.
  */
 
 import { execSync } from 'node:child_process';
@@ -15,6 +18,7 @@ import { platform } from 'node:os';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
 import { ensureWindowsSystemPath, probeFda } from './checks.js';
 import { CopilotAdapter } from './adapters/copilot.js';
+import { ClaudeAdapter } from './adapters/claude.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -56,7 +60,7 @@ const logger = createLogger('daemon');
 // ── Main ────────────────────────────────────────────────
 
 export interface WorkerResult {
-  adapter: CopilotAdapter;
+  adapter: AgentAdapter;
   relay: RelayClient;
   sessionManager: SessionManager;
   shutdown: () => Promise<void>;
@@ -142,10 +146,19 @@ export async function startWorker(): Promise<WorkerResult> {
     mcpServer = null;
   }
 
-  const adapter = new CopilotAdapter({
-    attachmentStore,
-    ...(mcpInfo && { krakiMcp: mcpInfo }),
-  });
+  // 3c. Select agent adapter based on KRAKI_AGENT env var
+  const agentType = (process.env.KRAKI_AGENT ?? 'copilot').toLowerCase();
+  let adapter: AgentAdapter;
+  if (agentType === 'claude') {
+    adapter = new ClaudeAdapter();
+    logger.info('Using Claude Code adapter');
+  } else {
+    adapter = new CopilotAdapter({
+      attachmentStore,
+      ...(mcpInfo && { krakiMcp: mcpInfo }),
+    });
+    logger.info('Using Copilot adapter');
+  }
   const keyManager = new KeyManager();
   const deviceId = getOrCreateDeviceId();
 
@@ -157,10 +170,9 @@ export async function startWorker(): Promise<WorkerResult> {
   try {
     await adapter.start();
     adapterReady = true;
-    logger.info('Copilot adapter started');
+    logger.info(`${agentType} adapter started`);
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Copilot adapter failed to start — run "copilot login" to authenticate');
-    // Clean up streams/promises from the failed adapter to prevent unhandled rejections
+    logger.warn({ err: (err as Error).message }, `${agentType} adapter failed to start`);
     try { await adapter.stop(); } catch { /* already dead */ }
   }
 
@@ -190,7 +202,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 6. Connect to relay via RelayClient
   const relay = new RelayClient(
-    adapter as unknown as AgentAdapter,
+    adapter,
     sessionManager,
     {
       relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
