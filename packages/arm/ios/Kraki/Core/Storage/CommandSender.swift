@@ -92,39 +92,37 @@ final class CommandSender {
 
     // MARK: - Permissions
 
+    // Permission / question resolve buttons send the command and
+    // rely on tentacle's `permission_resolved` / `question_resolved`
+    // echo to materialise the badge on the bubble (grouper folds the
+    // resolver into the originating row). Round-trip is ~100-300ms;
+    // future work could layer in optimistic UI via the pending_input
+    // pattern (see the storage-refactor discussion).
     func approve(sessionId: String, permissionId: String) {
-        guard let appState else { return }
         send(["type": "approve", "payload": ["permissionId": permissionId]], sessionId: sessionId)
-        appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "approved")
     }
 
     func deny(sessionId: String, permissionId: String, reason: String? = nil) {
-        guard let appState else { return }
         var payload: [String: Any] = ["permissionId": permissionId]
         if let reason, !reason.isEmpty {
             payload["reason"] = reason
         }
         send(["type": "deny", "payload": payload], sessionId: sessionId)
-        appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "denied")
     }
 
     func alwaysAllow(sessionId: String, permissionId: String, toolKind: String? = nil) {
-        guard let appState else { return }
         var payload: [String: Any] = ["permissionId": permissionId]
         if let toolKind { payload["toolKind"] = toolKind }
         send(["type": "always_allow", "payload": payload], sessionId: sessionId)
-        appState.messageStore.resolvePermissionMessage(sessionId, permissionId: permissionId, resolution: "always_allowed")
     }
 
     // MARK: - Questions
 
     func answer(sessionId: String, questionId: String, answer: String) {
-        guard let appState else { return }
         send([
             "type": "answer",
             "payload": ["questionId": questionId, "answer": answer],
         ], sessionId: sessionId)
-        appState.messageStore.resolveQuestionMessage(sessionId, questionId: questionId, answerText: answer)
     }
 
     // MARK: - Session Control
@@ -160,7 +158,6 @@ final class CommandSender {
         case .execute, .delegate:
             for perm in pending {
                 send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "approved")
             }
         case .discuss:
             for perm in pending {
@@ -171,10 +168,8 @@ final class CommandSender {
 
                 if !isWrite || isPlanMd {
                     send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                    appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "approved")
                 } else {
                     send(["type": "deny", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                    appState.messageStore.resolvePermissionMessage(sessionId, permissionId: perm.id, resolution: "denied")
                 }
             }
         case .safe:
@@ -205,10 +200,8 @@ final class CommandSender {
         var out: [PendingPermission] = []
         for m in msgs where m.type == "permission" {
             guard let pid = m.permissionId else { continue }
-            // Either the message itself has a resolution stamp (set
-            // by resolvePermissionMessage) or a matching resolver
-            // arrived later in the stream.
-            if m.payload["resolution"] != nil { continue }
+            // Resolved iff a matching approve/deny/always_allow/
+            // permission_resolved appears later in the stream.
             if resolvedIds.contains(pid) { continue }
             out.append(PendingPermission(
                 id: pid,

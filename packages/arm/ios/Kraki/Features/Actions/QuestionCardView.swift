@@ -140,7 +140,6 @@ struct QuestionStackView: View {
         var out: [PendingQuestion] = []
         for m in msgs where m.type == "question" {
             guard let qid = m.questionId else { continue }
-            if m.payload["answer"] != nil { continue }
             if resolvedIds.contains(qid) { continue }
             let ts = Self.parseTimestamp(m.timestamp)
             out.append(PendingQuestion(
