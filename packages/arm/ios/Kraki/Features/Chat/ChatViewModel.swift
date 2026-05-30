@@ -142,7 +142,6 @@ final class ChatViewModel {
         var out: [PendingPermission] = []
         for m in msgs where m.type == "permission" {
             guard let pid = m.permissionId else { continue }
-            if m.payload["resolution"] != nil { continue }
             if resolvedIds.contains(pid) { continue }
             out.append(PendingPermission(
                 id: pid,
@@ -175,7 +174,6 @@ final class ChatViewModel {
         var out: [PendingQuestion] = []
         for m in msgs where m.type == "question" {
             guard let qid = m.questionId else { continue }
-            if m.payload["answer"] != nil { continue }
             if resolvedIds.contains(qid) { continue }
             out.append(PendingQuestion(
                 id: qid,

@@ -417,25 +417,17 @@ final class MessageRouter {
             }
 
         case "permission_resolved":
-            if let permId = payload?["permissionId"] as? String,
-               let resolution = payload?["resolution"] as? String {
-                appState.messageStore.resolvePermissionMessage(
-                    sessionId, permissionId: permId, resolution: resolution
-                )
-            }
+            // Grouper folds the resolution into the originating
+            // permission row (backpatchPermission). Just persist.
             appState.messageStore.append(sessionId, json: json)
 
         case "approve", "deny", "always_allow":
-            if let permId = payload?["permissionId"] as? String {
-                let resolution: String = switch type {
-                case "approve": "approved"
-                case "deny": "denied"
-                default: "always_allowed"
-                }
-                appState.messageStore.resolvePermissionMessage(
-                    sessionId, permissionId: permId, resolution: resolution
-                )
-            }
+            // Defensive: these are inbound commands from arm; tentacle
+            // doesn't broadcast them back today. If they ever do arrive
+            // (cross-device or protocol drift), the grouper will fold
+            // them the same way as permission_resolved. No special
+            // handling needed here.
+            break
 
         // ── Questions ────────────────────────────────────────────────────
 
@@ -453,25 +445,13 @@ final class MessageRouter {
             }
 
         case "question_resolved":
-            if let qId = payload?["questionId"] as? String {
-                let answer = payload?["answer"] as? String
-                appState.messageStore.resolveQuestionMessage(
-                    sessionId, questionId: qId, answer: answer
-                )
-                if let answer, !answer.isEmpty {
-                    updatePreview(sessionId, text: answer, type: "answer",
-                                  timestamp: timestamp)
-                }
+            if let answer = payload?["answer"] as? String, !answer.isEmpty {
+                updatePreview(sessionId, text: answer, type: "answer",
+                              timestamp: timestamp)
             }
             appState.messageStore.append(sessionId, json: json)
 
         case "answer":
-            if let qId = payload?["questionId"] as? String {
-                let answer = payload?["answer"] as? String
-                appState.messageStore.resolveQuestionMessage(
-                    sessionId, questionId: qId, answer: answer
-                )
-            }
             appState.messageStore.append(sessionId, json: json)
             if let answer = payload?["answer"] as? String, !answer.isEmpty {
                 updatePreview(sessionId, text: answer, type: "answer",

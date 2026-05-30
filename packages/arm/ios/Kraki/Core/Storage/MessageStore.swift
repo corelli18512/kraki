@@ -291,55 +291,6 @@ final class MessageStore {
         windows[sessionId] = updated
     }
 
-    // MARK: - Resolution stamps (on existing messages in window)
-
-    /// Stamp `resolution` on the matching permission message *if it's
-    /// in the current window*. The DB copy is not rewritten — the
-    /// payload there reflects the moment of insert, and clients re-
-    /// hydrating later can re-derive resolution from subsequent
-    /// approve/deny/permission_resolved rows.
-    ///
-    /// (Future improvement: also update the DB payload so even a
-    /// cold-start window-load shows the resolution stamp; deferred
-    /// until a concrete bug demands it.)
-    func resolvePermissionMessage(_ sessionId: String, permissionId: String, resolution: String) {
-        guard var window = messages[sessionId] else { return }
-        var changed = false
-        for i in stride(from: window.count - 1, through: 0, by: -1) {
-            let m = window[i]
-            if m.type == "permission" && m.permissionId == permissionId {
-                var updated = m
-                updated.payload["resolution"] = AnyCodable(resolution)
-                window[i] = updated
-                changed = true
-                break
-            }
-        }
-        if changed { messages[sessionId] = window }
-    }
-
-    func resolveQuestionMessage(_ sessionId: String, questionId: String, answerText: String) {
-        guard var window = messages[sessionId] else { return }
-        var changed = false
-        for i in stride(from: window.count - 1, through: 0, by: -1) {
-            let m = window[i]
-            if m.type == "question" && m.questionId == questionId {
-                var updated = m
-                updated.payload["answer"] = AnyCodable(answerText)
-                window[i] = updated
-                changed = true
-                break
-            }
-        }
-        if changed { messages[sessionId] = window }
-    }
-
-    /// Convenience overload for callers that pass `String?` (mostly
-    /// MessageRouter handling answer envelopes with optional text).
-    func resolveQuestionMessage(_ sessionId: String, questionId: String, answer: String?) {
-        resolveQuestionMessage(sessionId, questionId: questionId, answerText: answer ?? "")
-    }
-
     // MARK: - Pending input (optimistic local placeholder)
 
     /// Replace a `pending_input` (clientId/content-matched) with the

@@ -240,14 +240,22 @@ func groupMessagesIntoTurns(
     var result: [TurnItem] = []
     var currentInitiator: Initiator? = nil
     var currentThinking: [ChatMessage] = []
-    /// Permission IDs that have been asked but not yet resolved, tracked in
-    /// stream order. We can't rely on `ChatMessage.resolution` because
-    /// `MessageStore.resolvePermissionMessage` stamps that field
-    /// retroactively — by the time the grouper re-runs after the user
-    /// approves, the original permission message already looks "resolved",
-    /// which would cause the `idle` that fired *during* the wait to flush
-    /// the block. Stream-order tracking avoids that.
+    /// Permission IDs that have been asked but not yet resolved,
+    /// tracked in stream order. Idle is deferred while this is
+    /// non-empty so the resolver lands inside the same open block —
+    /// the grouper can then backpatch the originating permission row
+    /// with the resolution badge. Tracking by id (rather than
+    /// scanning `currentThinking` payloads) keeps the deferral logic
+    /// cheap and lets us survive future changes to how the resolution
+    /// is encoded on the row.
     var unresolvedPermIds: Set<String> = []
+    /// Question IDs that have been asked but not yet answered. Same
+    /// mechanism as permissions — defers idle so the answer lands in
+    /// the same open block for backpatch. `ask_user` is a blocking
+    /// tool so in practice the agent doesn't idle before the answer,
+    /// but the explicit gate matches the permission path and protects
+    /// against future agent SDKs with different timing.
+    var unresolvedQuestionIds: Set<String> = []
     var skipNextToolComplete = false
 
     /// True iff there's an in-progress block accumulating state that
@@ -268,7 +276,10 @@ func groupMessagesIntoTurns(
         //     finished cleanly. endSeq falls back to the seq of the
         //     last thinking message.
         //   - nil when called at end-of-stream → block stays active.
-        defer { unresolvedPermIds.removeAll() }
+        defer {
+            unresolvedPermIds.removeAll()
+            unresolvedQuestionIds.removeAll()
+        }
         guard hasOpenBlock() else { return }
         // Anchor on a stable message id — the .user initiator's
         // message (if any), else first accumulated thinking entry.
@@ -352,14 +363,47 @@ func groupMessagesIntoTurns(
 
     for msg in messages {
         // Track permission lifecycle in stream order so a deferred
-        // `idle` fires correctly even after MessageStore retroactively
-        // stamps `resolution` on the original permission message.
+        // `idle` fires correctly. When a resolver arrives we also
+        // backpatch the matching permission row in `currentThinking`
+        // with its resolution — the rendered bubble reads
+        // `payload["resolution"]` to show the approved/denied badge.
+        // This replaces the old `MessageStore.resolvePermissionMessage`
+        // in-memory stamp; folding inside the grouper means cold-start
+        // (re-derive from raw messages) and live ingest converge on
+        // the same render state.
         switch msg.type {
         case "permission":
             if let pid = msg.permissionId { unresolvedPermIds.insert(pid) }
         case "approve", "deny", "always_allow", "permission_resolved":
-            if let pid = msg.payload["permissionId"]?.stringValue {
+            let pid = msg.payload["permissionId"]?.stringValue
+            let resolution = derivedPermissionResolution(msg)
+            if let pid {
                 unresolvedPermIds.remove(pid)
+                if let resolution {
+                    backpatchPermission(in: &currentThinking,
+                                        permissionId: pid,
+                                        resolution: resolution)
+                }
+            }
+        case "question":
+            // Only track question lifecycle when there's a matching
+            // `ask_user` tool_start to merge into — orphan questions
+            // (no preceding tool) get dropped by the grouper, so they
+            // can't be backpatched and shouldn't gate idle.
+            if let qid = msg.payload["id"]?.stringValue,
+               currentThinking.contains(where: {
+                   $0.type == "tool_start" && ($0.toolName == "ask_user" || $0.toolName == "ask")
+               }) {
+                unresolvedQuestionIds.insert(qid)
+            }
+        case "answer", "question_resolved":
+            if let qid = msg.payload["questionId"]?.stringValue {
+                unresolvedQuestionIds.remove(qid)
+                if let answer = msg.payload["answer"]?.stringValue {
+                    backpatchQuestion(in: &currentThinking,
+                                      questionId: qid,
+                                      answer: answer)
+                }
             }
         default: break
         }
@@ -389,11 +433,11 @@ func groupMessagesIntoTurns(
             currentInitiator = .user(msg)
         } else if turnCompleteTypes.contains(msg.type) {
             // Defer the flush if the current block has a permission
-            // that hasn't been resolved yet — agents typically emit
-            // `idle` while waiting on user approval, but the activity
-            // that follows the approval is conceptually part of the
-            // same block (one agent thought = one bubble).
-            if !unresolvedPermIds.isEmpty {
+            // or question that hasn't been resolved/answered yet —
+            // agents typically emit `idle` while waiting on user
+            // input, but the activity that follows is conceptually
+            // part of the same block (one agent thought = one bubble).
+            if !unresolvedPermIds.isEmpty || !unresolvedQuestionIds.isEmpty {
                 continue
             }
             // Real idle closes the block; its seq becomes the
@@ -432,8 +476,12 @@ func groupMessagesIntoTurns(
                     )
                 }
                 // Don't append — question is now merged into the tool entry
-            } else if msg.type == "question_resolved" || msg.type == "answer" || msg.type == "permission_resolved" {
-                // Structural — skip, the originating message carries the visible result
+            } else if msg.type == "question_resolved" || msg.type == "answer"
+                        || msg.type == "permission_resolved"
+                        || msg.type == "approve" || msg.type == "deny" || msg.type == "always_allow" {
+                // Structural resolver echoes — the originating
+                // permission/question row carries the visible result
+                // after the backpatch above. Don't emit them.
             } else if msg.type == "tool_complete" && skipNextToolComplete {
                 skipNextToolComplete = false
             } else if msg.type == "tool_complete" {
@@ -516,4 +564,57 @@ func groupMessagesIntoTurns(
     flushBlock(closingSeq: nil)
 
     return result
+}
+
+// MARK: - Resolution backpatch helpers
+//
+// Shared with IncrementalGrouper via the same logic (both grouper
+// paths must produce identical output for `testStreamingMatchesBatch`
+// to pass). IncrementalGrouper has its own file-private copies in
+// SessionGrouperCache — keep these in sync.
+
+/// Map a resolver message onto the canonical resolution string carried
+/// by the originating permission row. `permission_resolved` ships the
+/// resolution explicitly; the legacy `approve`/`deny`/`always_allow`
+/// types derive it from the type itself.
+fileprivate func derivedPermissionResolution(_ msg: ChatMessage) -> String? {
+    switch msg.type {
+    case "approve": return "approved"
+    case "deny": return "denied"
+    case "always_allow": return "always_allowed"
+    case "permission_resolved": return msg.payload["resolution"]?.stringValue
+    default: return nil
+    }
+}
+
+/// Stamp `resolution` onto the most recent matching `permission` row
+/// in `thinking`. Idle is gated by `unresolvedPermIds` so the
+/// originating row is always still in `currentThinking` when its
+/// resolver arrives — no need to scan closed blocks.
+fileprivate func backpatchPermission(in thinking: inout [ChatMessage],
+                                     permissionId: String,
+                                     resolution: String) {
+    guard let idx = thinking.lastIndex(where: {
+        $0.type == "permission" && $0.permissionId == permissionId
+    }) else { return }
+    var patched = thinking[idx]
+    patched.payload["resolution"] = AnyCodable(resolution)
+    thinking[idx] = patched
+}
+
+/// Stamp `answer` onto the entry carrying `questionId`. After the
+/// `question` merges into the preceding `ask_user` tool_start (and
+/// possibly further into a subsequent tool_complete), the questionId
+/// lives in that merged entry's payload. Idle is gated by
+/// `unresolvedQuestionIds` so the entry is still in `currentThinking`
+/// when the answer arrives.
+fileprivate func backpatchQuestion(in thinking: inout [ChatMessage],
+                                   questionId: String,
+                                   answer: String) {
+    guard let idx = thinking.lastIndex(where: {
+        $0.payload["questionId"]?.stringValue == questionId
+    }) else { return }
+    var patched = thinking[idx]
+    patched.payload["answer"] = AnyCodable(answer)
+    thinking[idx] = patched
 }
