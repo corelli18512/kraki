@@ -308,22 +308,12 @@ final class MessageProvider {
         // on disk. If batch starts at seq B and DB contains B-1 we're
         // contiguous; otherwise the gap [DB max below B + 1 .. B - 1]
         // needs a bridge fetch.
-        //
-        // Note: `priorMaxBelowBatch == 0` (no rows below) is not a
-        // gap — it just means this batch is the oldest we have so
-        // far. Only flag a gap when there's *some* row below the
-        // batch but it's not B-1.
         let batchMinSeq = messages.map(\.seq).min() ?? 0
+        let dbLastSeq = appState.messageStore.dbLastSeq(sessionId)
         let hasContiguousBelow: Bool = {
             guard batchMinSeq > 1 else { return true }
             return appState.messageStore.hasInDB(sessionId, seq: batchMinSeq - 1)
         }()
-        let priorMaxIsZero = appState.messageStore.dbLastSeq(sessionId) == 0
-            || appState.messageStore.dbLastSeq(sessionId) >= batchMinSeq
-        // priorMaxIsZero is true when DB is empty for this session,
-        // or when DB already has rows at/above batchMinSeq (so
-        // there's nothing strictly below the batch to bridge from).
-        // Either way no gap-bridge is needed.
 
         if !messages.isEmpty {
             appState.messageStore.ingestBatch(sessionId, messages)
@@ -346,28 +336,24 @@ final class MessageProvider {
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
-        // hole between [existing-max-below..batchMinSeq-1] — happens
-        // when disk holds a stale middle slice and the latest-turn
-        // fetch anchors above it. Schedule a one-shot bridge fetch
-        // ending at batchMinSeq; subsequent batches will re-enter
-        // this guard and keep walking the hole closed.
+        // hole between [dbLastSeq + 1 .. batchMinSeq - 1]. Common
+        // case: user hadn't opened this session for a while; DB
+        // stops at some old seq, `requestLatest` anchors at the most
+        // recent turn whose start is well above that. Schedule a
+        // one-shot bridge fetch ending at batchMinSeq; subsequent
+        // batches will re-enter this guard and keep walking the
+        // hole closed.
         //
-        // Check by asking the DB: does the slot immediately below
-        // batchMinSeq exist? If no but we have *something* below
-        // batchMinSeq (i.e. the DB isn't empty AND isn't entirely
-        // at/above the batch), there's a gap to bridge.
+        // Detection: DB has *something* (dbLastSeq > 0) AND its
+        // tail is strictly below batchMinSeq - 1 (i.e. not
+        // contiguous). The earlier `hasInDB(batchMinSeq - 2)` probe
+        // only caught single-message gaps and missed every larger
+        // hole — `dbLastSeq` gives us the size-independent answer.
         let needsGapBridge: Bool = {
             guard batchMinSeq > 1 else { return false }
             if hasContiguousBelow { return false }
-            // Some content below the batch exists iff dbLastSeq < batchMinSeq
-            // is false AND we're not in an empty DB. Use a hasInDB
-            // probe at batchMinSeq - 2 to confirm "something below
-            // but not contiguous".
-            return appState.messageStore.hasInDB(sessionId, seq: max(1, batchMinSeq - 2))
+            return dbLastSeq > 0 && dbLastSeq < batchMinSeq - 1
         }()
-        _ = priorMaxIsZero  // computed but only the gap-bridge boolean
-                            // above actually drives action — kept for
-                            // future telemetry hooks.
 
         // Clear in-flight tracking for the *specific* request this
         // batch answers — not every in-flight key for the session.
