@@ -1354,13 +1354,13 @@ export class RelayClient {
             this.sessionManager.markIdle(meta.id);
           }
         } catch (err) {
-          logger.warn({ err, sessionId: meta.id }, 'Session resume failed after restart');
-          this.sessionManager.endSession(meta.id, 'resume_failed');
-          this.send({
-            type: 'session_ended',
-            sessionId: meta.id,
-            payload: { reason: 'resume_failed' },
-          });
+          // Leave state as 'disconnected' so the next daemon restart will
+          // retry the resume. Flipping to 'ended' here turns a transient
+          // resume failure (e.g. corrupted events.jsonl from a known Copilot
+          // CLI writer-side bug, a rogue colliding daemon, a temporary SDK
+          // issue) into permanent session loss with no automatic recovery.
+          logger.warn({ err, sessionId: meta.id }, 'Session resume failed; leaving as disconnected for retry on next restart');
+          this.sessionManager.markDisconnected(meta.id);
         }
       }
     }
@@ -1688,8 +1688,13 @@ export class RelayClient {
       this.flushDelta(msg.sessionId);
     }
 
-    // Outbound messages also prove connectivity
-    this.lastActivityAt = Date.now();
+    // NOTE: do NOT update lastActivityAt here. Outbound send() writes to a
+    // local TCP buffer (or to a proxy on 127.0.0.1) and always succeeds
+    // synchronously — it does not prove the bytes reached the relay. During
+    // an outbound-only network blip (e.g. proxy reconnecting upstream),
+    // counting our own sends as activity makes the stale-detector think the
+    // link is healthy while the relay times us out. Track inbound traffic
+    // only — those frames are proof of bidirectional connectivity.
 
     // Tentacle assigns seq and timestamp before encryption
     const enriched = msg as Record<string, unknown>;

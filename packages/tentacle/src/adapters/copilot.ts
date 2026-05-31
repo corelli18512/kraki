@@ -25,7 +25,7 @@ import type {
   MCPServerConfig,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync, renameSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, basename } from 'node:path';
@@ -147,6 +147,75 @@ export function resolveCopilotCliPath(): string | undefined {
 function isRecoverableSessionError(err: unknown): boolean {
   const message = getErrorMessage(err);
   return message.includes('Session not found:') || message.includes('Connection is disposed');
+}
+
+/**
+ * Repair known Copilot CLI writer-side schema violations in an events.jsonl
+ * file so the SDK's loader-side validator accepts it on `session.resume()`.
+ *
+ * Returns the number of lines fixed. 0 means the file was already valid
+ * (or did not exist) and was not rewritten.
+ *
+ * Known fixups:
+ *   - `data.tokensRemoved` on `session.compaction_complete`: the schema
+ *     requires `>= 0` but the writer sometimes produces negatives like -2098.
+ *     We clamp to 0. This is metadata accounting only — does not affect
+ *     conversation history or agent behaviour.
+ *
+ * Atomic file replace via tmp+rename. On any I/O error the original file is
+ * left untouched and 0 is returned.
+ *
+ * Add new fixups here as more writer-side bugs are identified upstream
+ * (github/copilot-cli has a recurring pattern of these: #3454, #3432, #3520).
+ *
+ * Exported for unit testing — production code should call the wrapper on
+ * CopilotAdapter so the log line is attached to a sessionId.
+ */
+export function sanitizeCopilotEventsFile(eventsPath: string): number {
+  if (!existsSync(eventsPath)) return 0;
+
+  let raw: string;
+  try {
+    raw = readFileSync(eventsPath, 'utf8');
+  } catch {
+    return 0;
+  }
+
+  const lines = raw.split('\n');
+  let fixed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    try {
+      const ev = JSON.parse(line) as Record<string, unknown>;
+      const data = ev?.data as Record<string, unknown> | undefined;
+      if (data && typeof data === 'object') {
+        // github/copilot-cli: negative `tokensRemoved` on
+        // session.compaction_complete violates the schema's `>= 0`
+        // constraint. Clamp to 0.
+        if (typeof data.tokensRemoved === 'number' && data.tokensRemoved < 0) {
+          data.tokensRemoved = 0;
+          lines[i] = JSON.stringify(ev);
+          fixed++;
+        }
+      }
+    } catch {
+      // Malformed line — leave verbatim. The SDK will report its own error
+      // with the original line number, which we want to preserve.
+    }
+  }
+
+  if (fixed === 0) return 0;
+
+  const tmpPath = `${eventsPath}.kraki-sanitize.tmp`;
+  try {
+    writeFileSync(tmpPath, lines.join('\n'), 'utf8');
+    renameSync(tmpPath, eventsPath);
+    return fixed;
+  } catch {
+    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    return 0;
+  }
 }
 
 /** Defensive basename — strips any leading directory components and never
@@ -1128,6 +1197,8 @@ export class CopilotAdapter extends AgentAdapter {
   private async resumeTrackedSession(sessionId: string): Promise<SessionEntry> {
     this.ensureClient();
 
+    this.sanitizeEventsBeforeResume(sessionId);
+
     const pendingPermissions = new Map<string, PendingPermission>();
     const pendingQuestions = new Map<string, PendingQuestion>();
     const session = await this.client!.resumeSession(
@@ -1141,6 +1212,29 @@ export class CopilotAdapter extends AgentAdapter {
     logger.debug({ sessionId }, 'session resumed');
 
     return entry;
+  }
+
+  /**
+   * Pre-scan events.jsonl for known Copilot CLI writer-side bugs that cause
+   * the SDK's loader-side Zod validation to throw "Session file is corrupted"
+   * on resume.
+   *
+   * The CLI has a recurring pattern: its writer produces values that fail
+   * its own bundled schema (github/copilot-cli #3454 exitCode<0,
+   * #3432 totalPremiumRequests as float, #3520 ephemeral missing). When this
+   * happens, `session.resume()` rejects the whole file and every conversation
+   * turn is lost.
+   *
+   * We clamp known-bad values to schema-valid equivalents before resume so
+   * the SDK accepts the file. Atomic file replace; no-op (fast read-only
+   * scan) when nothing is wrong.
+   */
+  private sanitizeEventsBeforeResume(sessionId: string): void {
+    const eventsPath = join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
+    const fixed = sanitizeCopilotEventsFile(eventsPath);
+    if (fixed > 0) {
+      logger.info({ sessionId, fixed }, 'sanitized Copilot events.jsonl before resume');
+    }
   }
 
   private handleUnavailableSession(sessionId: string, err: unknown): void {
