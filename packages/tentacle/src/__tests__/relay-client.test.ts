@@ -1012,3 +1012,115 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 });
+
+describe('RelayClient delta debounce', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function connectClient() {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      null,
+    );
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [],
+    })));
+    sockets[0].sent.length = 0;
+    return { adapter, sm, client };
+  }
+
+  it('coalesces a burst of agent_message_delta into one merged send after the debounce window', () => {
+    const { adapter } = connectClient();
+    const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
+
+    onDelta('s1', { content: 'Hel' });
+    onDelta('s1', { content: 'lo, ' });
+    onDelta('s1', { content: 'world!' });
+
+    // Nothing on the wire yet — buffered.
+    expect(sockets[0].sent.filter(s => JSON.parse(s).type === 'agent_message_delta')).toHaveLength(0);
+
+    vi.advanceTimersByTime(40);
+
+    const deltas = sockets[0].sent
+      .map(s => JSON.parse(s))
+      .filter(m => m.type === 'agent_message_delta');
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].payload.content).toBe('Hello, world!');
+    expect(deltas[0].sessionId).toBe('s1');
+  });
+
+  it('flushes pending deltas before a non-delta message for the same session', () => {
+    const { adapter } = connectClient();
+    const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
+    const onMessage = adapter.onMessage as (sid: string, e: { content: string }) => void;
+
+    onDelta('s1', { content: 'streaming ' });
+    onDelta('s1', { content: 'text' });
+    // Final message arrives before the timer fires — must trigger a sync flush.
+    onMessage('s1', { content: 'final reply' });
+
+    const types = sockets[0].sent.map(s => JSON.parse(s).type);
+    const deltaIdx = types.indexOf('agent_message_delta');
+    const finalIdx = types.indexOf('agent_message');
+    expect(deltaIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThan(deltaIdx);
+
+    const delta = JSON.parse(sockets[0].sent[deltaIdx]);
+    expect(delta.payload.content).toBe('streaming text');
+  });
+
+  it('keeps separate buffers per session', () => {
+    const { adapter } = connectClient();
+    const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
+
+    onDelta('s1', { content: 'a' });
+    onDelta('s2', { content: 'b' });
+    onDelta('s1', { content: 'a' });
+
+    vi.advanceTimersByTime(40);
+
+    const deltas = sockets[0].sent
+      .map(s => JSON.parse(s))
+      .filter(m => m.type === 'agent_message_delta');
+    const bySession = new Map(deltas.map(d => [d.sessionId, d.payload.content]));
+    expect(bySession.get('s1')).toBe('aa');
+    expect(bySession.get('s2')).toBe('b');
+  });
+
+  it('disconnect() clears pending delta timers', () => {
+    const { adapter, client } = connectClient();
+    const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
+    onDelta('s1', { content: 'pending' });
+
+    const c = client as unknown as { deltaBuffers: Map<string, unknown> };
+    expect(c.deltaBuffers.size).toBe(1);
+
+    client.disconnect();
+
+    expect(c.deltaBuffers.size).toBe(0);
+    // No socket traffic for the cleared delta after timer would have fired.
+    vi.advanceTimersByTime(50);
+    const deltasAfter = sockets[0].sent
+      .map(s => JSON.parse(s))
+      .filter(m => m.type === 'agent_message_delta');
+    expect(deltasAfter).toHaveLength(0);
+  });
+});

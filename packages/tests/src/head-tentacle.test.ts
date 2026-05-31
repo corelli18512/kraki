@@ -271,19 +271,27 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
   // ── 6. Streaming (agent_message_delta) ───────────────
 
-  it("6. agent_message_delta broadcasts arrive at app", async () => {
+  it("6. agent_message_delta broadcasts arrive at app (coalesced within debounce window)", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
 
+    // Burst within the debounce window — tentacle coalesces these into
+    // one merged delta to amortize per-recipient RSA encryption cost.
     adapter.simulateAgentDelta(sessionId, "hel");
     adapter.simulateAgentDelta(sessionId, "lo");
 
-    const d1 = await app.waitFor("agent_message_delta");
-    const d2 = await app.waitFor("agent_message_delta");
-    expect(d1.payload.content + d2.payload.content).toBe("hello");
+    const merged = await app.waitFor("agent_message_delta");
+    expect(merged.payload.content).toBe("hello");
+
+    // A delta sent after the debounce window flushes flows through as a
+    // separate message, confirming the buffer is per-window not per-session.
+    await waitMs(80);
+    adapter.simulateAgentDelta(sessionId, " world");
+    const second = await app.waitFor("agent_message_delta");
+    expect(second.payload.content).toBe(" world");
 
     app.close();
   });

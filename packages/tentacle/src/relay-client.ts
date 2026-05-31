@@ -99,6 +99,18 @@ export class RelayClient {
   /** Last agent message content per session (for idle push preview) */
   private lastAgentContent = new Map<string, string>();
 
+  // ── Streaming delta debounce ───────────────────────
+  // Each agent_message_delta otherwise triggers a full hybrid encryption
+  // (sync RSA-4096 wrap per recipient + AES-GCM) on the JS main thread.
+  // Coalescing a short window of token-sized deltas into one merged
+  // payload roughly drops main-thread crypto work proportionally without
+  // changing the on-the-wire content seen by arms.
+  private static readonly DELTA_DEBOUNCE_MS = 40;
+  private deltaBuffers = new Map<string, { content: string; timer: ReturnType<typeof setTimeout> }>();
+  /** Sessions currently inside flushDelta — prevents the recursive send()
+   *  from re-buffering the already-merged delta. */
+  private flushingDeltas = new Set<string>();
+
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -304,6 +316,7 @@ export class RelayClient {
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.stopStaleCheck();
+    this.clearAllDeltaTimers();
     if (this.eventsWatcher) {
       this.eventsWatcher.close();
       this.eventsWatcher = null;
@@ -1649,6 +1662,26 @@ export class RelayClient {
   private send(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
+    // Coalesce streaming deltas to amortize per-recipient RSA cost.
+    // Skip the buffer when we're already inside a flush (the recursive
+    // send below) — otherwise the merged delta would just be re-buffered.
+    if (
+      msg.type === 'agent_message_delta'
+      && msg.sessionId
+      && !this.flushingDeltas.has(msg.sessionId)
+    ) {
+      const content = (msg.payload as { content?: string } | undefined)?.content ?? '';
+      this.bufferDelta(msg.sessionId, content);
+      return;
+    }
+
+    // Any non-delta message for a session with pending deltas must
+    // flush first so the merged delta arrives before the subsequent
+    // agent_message / tool_start / idle / etc.
+    if (msg.sessionId && this.deltaBuffers.has(msg.sessionId)) {
+      this.flushDelta(msg.sessionId);
+    }
+
     // Outbound messages also prove connectivity
     this.lastActivityAt = Date.now();
 
@@ -1705,6 +1738,49 @@ export class RelayClient {
     } catch (err) {
       logger.error({ err }, 'ws.send failed');
     }
+  }
+
+  /** Append to a session's delta buffer, arming a flush timer on first append. */
+  private bufferDelta(sessionId: string, content: string): void {
+    if (!content) return;
+    let entry = this.deltaBuffers.get(sessionId);
+    if (!entry) {
+      entry = {
+        content: '',
+        timer: setTimeout(() => this.flushDelta(sessionId), RelayClient.DELTA_DEBOUNCE_MS),
+      };
+      this.deltaBuffers.set(sessionId, entry);
+    }
+    entry.content += content;
+  }
+
+  /** Emit one merged delta for a session and drop its buffer. Safe to call
+   *  from a timer or synchronously before another send. */
+  private flushDelta(sessionId: string): void {
+    const entry = this.deltaBuffers.get(sessionId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.deltaBuffers.delete(sessionId);
+    if (!entry.content) return;
+    this.flushingDeltas.add(sessionId);
+    try {
+      this.send({
+        type: 'agent_message_delta',
+        sessionId,
+        payload: { content: entry.content },
+      });
+    } finally {
+      this.flushingDeltas.delete(sessionId);
+    }
+  }
+
+  /** Drop all pending delta timers without flushing. Used at intentional
+   *  shutdown so the event loop can exit promptly. */
+  private clearAllDeltaTimers(): void {
+    for (const entry of this.deltaBuffers.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.deltaBuffers.clear();
   }
 
   /** Inject cumulative ack into an outbound envelope. Piggybacks delivery
