@@ -121,7 +121,17 @@ struct SessionSummary: Codable, Identifiable, Sendable {
 /// Bridges between the strongly-typed protocol messages and the
 /// generic key-value store used by MessageStore and views.
 struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
-    var id: String { "\(sessionId ?? "none"):\(seq)" }
+    /// Stable identity for diffable rendering. Confirmed messages
+    /// use `(sessionId, seq)` since seq is unique within a session.
+    /// Optimistic pending placeholders have `seq == 0` so we fall
+    /// back to the `clientId` correlation id — without this, two
+    /// simultaneous in-flight sends would collide on `session:0`.
+    var id: String {
+        if seq == 0, let cid = payload["clientId"]?.stringValue {
+            return "\(sessionId ?? "none"):pending:\(cid)"
+        }
+        return "\(sessionId ?? "none"):\(seq)"
+    }
     let type: String
     let seq: Int
     let sessionId: String?

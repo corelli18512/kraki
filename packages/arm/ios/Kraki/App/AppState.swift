@@ -266,6 +266,7 @@ final class AppState {
         sessionStore.reset()
         deviceStore.reset()
         messageStore.reset()
+        commandSender?.reset()
     }
 
     /// Called when the app returns to foreground. Reset backoff and

@@ -70,8 +70,10 @@ final class MessageStore {
 
     /// Message types that get written to disk. Mirrors tentacle's
     /// `PERSISTENT_TYPES` — anything outside this set is transient
-    /// (deltas, pending_input, attachment_data, active, mode/title/pin
-    /// updates, etc.) and lives only in memory.
+    /// (deltas, attachment_data, active, mode/title/pin updates,
+    /// etc.) and lives only in memory. Optimistic pending input
+    /// placeholders never reach this store — they live in
+    /// `CommandSender.outbox` and are appended at render time.
     static let persistentTypes: Set<String> = [
         "session_created",
         "agent_message",
@@ -115,23 +117,9 @@ final class MessageStore {
     ///   - msg.seq <= bottomSeq     → dedup / late re-broadcast;
     ///     replace the matching (seq, type) in the window if it's
     ///     in range.
-    ///   - pending_input            → seq == 0, sorted to tail by
-    ///     SortKey; always appended in memory if a window exists,
-    ///     never persisted.
     func append(_ sessionId: String, _ message: ChatMessage) {
         if Self.isPersistent(message) {
             try? db.insert(sessionId, [message])
-        }
-
-        // pending_input: optimistic local placeholder, seq==0, never
-        // persisted. Only meaningful while a window is open
-        // (resolvePendingInput rewrites it once the server echo
-        // lands).
-        if message.type == "pending_input" {
-            guard var window = messages[sessionId] else { return }
-            window.append(message)
-            messages[sessionId] = window
-            return
         }
 
         guard let state = windows[sessionId] else { return }
@@ -150,11 +138,7 @@ final class MessageStore {
 
         if message.seq == state.bottomSeq + 1 {
             var window = messages[sessionId] ?? []
-            // Pending_inputs sort to the tail; insert the real
-            // message before any pendings so the chronology stays
-            // right.
-            let insertAt = window.lastIndex(where: { $0.type != "pending_input" }).map { $0 + 1 } ?? 0
-            window.insert(message, at: insertAt)
+            window.append(message)
             messages[sessionId] = window
             var updated = state
             updated.bottomSeq = message.seq
@@ -281,84 +265,12 @@ final class MessageStore {
                 endIdx += 1
             }
             let append = Array(extendsBotSlice[extendsBotSlice.startIndex...endIdx])
-            // Pendings always sort to the tail.
-            let insertAt = window.lastIndex(where: { $0.type != "pending_input" }).map { $0 + 1 } ?? window.count
-            window.insert(contentsOf: append, at: insertAt)
+            window.append(contentsOf: append)
             updated.bottomSeq = append.last!.seq
         }
 
         messages[sessionId] = window
         windows[sessionId] = updated
-    }
-
-    // MARK: - Pending input (optimistic local placeholder)
-
-    /// Replace a `pending_input` (clientId/content-matched) with the
-    /// server's persisted `user_message`. Returns true if a pending
-    /// was actually resolved; the caller (MessageRouter) uses that to
-    /// skip appending the broadcast (which would otherwise
-    /// duplicate). Always persists the resolved message regardless of
-    /// window state — the server seq is authoritative.
-    @discardableResult
-    func resolvePendingInput(_ sessionId: String,
-                             seq: Int,
-                             clientId: String?,
-                             content: String?) -> Bool {
-        // Find and rewrite the in-window pending (if any).
-        var rewrittenInWindow = false
-        var resolved: ChatMessage?
-        if var window = messages[sessionId] {
-            let idx: Int?
-            if let clientId {
-                idx = window.firstIndex(where: { $0.type == "pending_input" && $0.clientId == clientId })
-            } else if let content {
-                // Match the most recent duplicate, not the oldest. If
-                // the user rapid-fires the same text twice (e.g.
-                // retry, copy-paste), the server echo for the second
-                // send should resolve the second pending, not orphan
-                // it by claiming the first. clientId is the primary
-                // matcher above; this fallback only fires if a
-                // historical client sent without one.
-                idx = window.lastIndex(where: { $0.type == "pending_input" && $0.content == content })
-            } else {
-                idx = nil
-            }
-            if let idx {
-                let pending = window[idx]
-                var newPayload = pending.payload
-                if let content { newPayload["content"] = AnyCodable(content) }
-                newPayload.removeValue(forKey: "clientId")
-                let real = ChatMessage(
-                    type: "user_message",
-                    seq: seq,
-                    sessionId: sessionId,
-                    deviceId: pending.deviceId,
-                    timestamp: pending.timestamp,
-                    payload: newPayload
-                )
-                resolved = real
-                // Remove the pending; the real one will be inserted
-                // by append() in the right sorted spot.
-                window.remove(at: idx)
-                messages[sessionId] = window
-                rewrittenInWindow = true
-            }
-        }
-
-        if let resolved {
-            // Persist + integrate into window via the normal path.
-            append(sessionId, resolved)
-            return true
-        }
-        return rewrittenInWindow
-    }
-
-    /// Legacy single-arg overload — kept for backwards compat with
-    /// any caller that hasn't migrated to passing clientId yet.
-    func resolvePendingInput(_ sessionId: String, seq: Int) {
-        guard let window = messages[sessionId],
-              let pending = window.first(where: { $0.type == "pending_input" }) else { return }
-        _ = resolvePendingInput(sessionId, seq: seq, clientId: pending.clientId, content: pending.content)
     }
 
     // MARK: - Memory window control
@@ -438,8 +350,7 @@ final class MessageStore {
         let newer = db.messages(sessionId, from: from, to: to)
         guard !newer.isEmpty else { return false }
         var window = messages[sessionId] ?? []
-        let insertAt = window.lastIndex(where: { $0.type != "pending_input" }).map { $0 + 1 } ?? window.count
-        window.insert(contentsOf: newer, at: insertAt)
+        window.append(contentsOf: newer)
         messages[sessionId] = window
         var updated = state
         updated.bottomSeq = newer.last!.seq
@@ -466,17 +377,16 @@ final class MessageStore {
     // MARK: - Memory queries (synchronous)
 
     /// Returns the current window contents. Always a contiguous
-    /// `[topSeq..bottomSeq]` slice (plus any trailing pendings).
+    /// `[topSeq..bottomSeq]` slice of server-confirmed messages.
+    /// Optimistic pending input placeholders are NOT included —
+    /// callers that want to render those merge `CommandSender.outbox`
+    /// at their own layer.
     func currentWindow(_ sessionId: String) -> [ChatMessage] {
         messages[sessionId] ?? []
     }
 
     func windowState(_ sessionId: String) -> WindowState? {
         windows[sessionId]
-    }
-
-    func hasPendingInput(_ sessionId: String) -> Bool {
-        messages[sessionId]?.contains(where: { $0.type == "pending_input" }) ?? false
     }
 
     // MARK: - DB-only queries (no window mutation)
@@ -572,7 +482,7 @@ final class MessageStore {
             if state.bottomSeq > seq {
                 // Trim window in memory too.
                 var window = messages[sessionId] ?? []
-                window.removeAll { $0.type != "pending_input" && $0.seq > seq }
+                window.removeAll { $0.seq > seq }
                 messages[sessionId] = window
                 state.bottomSeq = min(state.bottomSeq, seq)
                 if state.bottomSeq < state.topSeq {
@@ -596,19 +506,6 @@ final class MessageStore {
         messages.removeAll()
         windows.removeAll()
         try? db.deleteAll()
-    }
-
-    /// Wipe transient state without touching persisted history.
-    /// Currently only pending_inputs — old code also dropped the
-    /// pending dicts here, but those no longer exist.
-    func clearTransientState() {
-        for (sessionId, var window) in messages {
-            let before = window.count
-            window.removeAll { $0.type == "pending_input" }
-            if window.count != before {
-                messages[sessionId] = window
-            }
-        }
     }
 }
 
