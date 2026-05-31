@@ -805,17 +805,15 @@ final class MessageRouter {
             sessionId: sessionId,
             messages: parsed,
             lastSeq: lastSeq,
-            totalLastSeq: totalLastSeq,
-            containsHead: true
+            totalLastSeq: totalLastSeq
         )
     }
 
-    /// Handle the turn-aligned response from tentacle's new
+    /// Handle the turn-aligned response from tentacle's
     /// `request_session_messages` endpoint. Same delivery path as the
-    /// legacy `session_replay_batch` but carries `firstSeq` /
-    /// `containsHead` so the provider can detect "we asked for head but
-    /// didn't get it" (e.g. hard-cap clipped an enormous in-progress
-    /// turn) and recover.
+    /// legacy `session_replay_batch`; the provider relies on the
+    /// session_list `lastSeq` to track head, so we don't need to
+    /// signal head-coverage in the per-batch payload.
     private func handleSessionMessagesBatch(_ dict: [String: Any]) {
         guard let appState else { return }
         let payload = dict["payload"] as? [String: Any] ?? dict
@@ -823,19 +821,16 @@ final class MessageRouter {
         let messagesArray = payload["messages"] as? [[String: Any]] ?? []
         let firstSeq = payload["firstSeq"] as? Int ?? 0
         let lastSeq = payload["lastSeq"] as? Int ?? 0
-        let containsHead = payload["containsHead"] as? Bool ?? false
-        KLog.d("📦 messages_batch: \(messagesArray.count) for \(sessionId.prefix(12)), firstSeq=\(firstSeq) lastSeq=\(lastSeq) head=\(containsHead)")
+        KLog.d("📦 messages_batch: \(messagesArray.count) for \(sessionId.prefix(12)), firstSeq=\(firstSeq) lastSeq=\(lastSeq)")
         let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
         appState.messageProvider?.handleBatch(
             sessionId: sessionId,
             messages: parsed,
             lastSeq: lastSeq,
-            // For the new endpoint, totalLastSeq is implicit: if
-            // containsHead is true, lastSeq equals the session head;
-            // if false, tentacle's head may be higher but we'll rely
-            // on live messages or a follow-up requestLatest to catch up.
-            totalLastSeq: lastSeq,
-            containsHead: containsHead
+            // The new endpoint doesn't carry a separate head marker;
+            // tentacleLastSeq is kept fresh via session_list and the
+            // store's own ingestion ceiling.
+            totalLastSeq: lastSeq
         )
     }
 

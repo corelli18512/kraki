@@ -24,8 +24,9 @@ final class MessageProvider {
     private var tentacleDeviceMap: [String: String] = [:]
 
     /// Sessions whose latest in-flight request asked for the head
-    /// (beforeSeq=nil). Used by `handleBatch` to decide whether to
-    /// schedule a follow-up requestLatest when `containsHead=false`.
+    /// (beforeSeq=nil). Used by `handleBatch` to identify which
+    /// in-flight key to clear (head responses land on "sessionId:head"
+    /// rather than "sessionId:lastSeq+1").
     private var pendingHeadRequests: Set<String> = []
 
     /// Safety timeout handles.
@@ -288,21 +289,20 @@ final class MessageProvider {
 
     // MARK: - Handle Batch
 
-    /// Process a turn-aligned batch from tentacle. Inserts into store
-    /// and clears in-flight tracking. If `containsHead == false` after
-    /// asking for head (beforeSeq=nil request), schedule a follow-up
-    /// `requestLatest` to catch up — guards against the rare case
-    /// where a single in-progress turn exceeds tentacle's HARD_CAP.
+    /// Process a turn-aligned batch from tentacle. Inserts into the
+    /// store, clears in-flight tracking, and schedules a gap-bridge
+    /// fetch when the batch lands above a non-contiguous DB tail
+    /// (common after the user returns to a session that has advanced
+    /// while they were away).
     func handleBatch(
         sessionId: String,
         messages: [ChatMessage],
         lastSeq: Int,
-        totalLastSeq: Int,
-        containsHead: Bool
+        totalLastSeq: Int
     ) {
         guard let appState else { return }
 
-        KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq), head=\(containsHead)")
+        KLog.d("📦 handleBatch(\(sessionId.prefix(12))): \(messages.count) msgs, lastSeq=\(lastSeq), totalLastSeq=\(totalLastSeq)")
 
         // Detect a hole between this batch and what we already have
         // on disk. If batch starts at seq B and DB contains B-1 we're
@@ -326,13 +326,7 @@ final class MessageProvider {
             tentacleLastSeq[sessionId] = totalLastSeq
         }
 
-        // Was this batch a "fetch head" request whose response didn't
-        // actually reach head? Schedule a one-shot follow-up to catch
-        // up. Rare — only happens when an in-progress turn exceeds
-        // tentacle's HARD_CAP — but cheap insurance.
         let wasHeadRequest = pendingHeadRequests.remove(sessionId) != nil
-        let needsCatchUp = wasHeadRequest && !containsHead
-            && lastSeq < (tentacleLastSeq[sessionId] ?? 0)
 
         // Did we just land a batch above a pre-existing slice that
         // *isn't* contiguous with it? That means there's a silent
@@ -382,17 +376,12 @@ final class MessageProvider {
             appState.sessionStore.setLoading(sessionId, false)
         }
 
-        // Sync follow-up dispatches: we're already on the main queue
+        // Sync follow-up dispatch: we're already on the main queue
         // (WS receive → MessageRouter → MessageProvider), and the
-        // bridge / catch-up calls just enqueue another WS send. Doing
-        // them synchronously prevents a one-runloop-turn window where
+        // bridge call just enqueues another WS send. Doing it
+        // synchronously prevents a one-runloop-turn window where
         // setLoading drops to false and the chat view's auto-load can
         // race in to send a duplicate before our follow-up registers.
-        if needsCatchUp {
-            KLog.d("⚠️ batch didn't reach head; firing follow-up requestLatest for \(sessionId.prefix(12))")
-            requestLatest(sessionId: sessionId)
-        }
-
         if needsGapBridge {
             KLog.d("🪡 detected gap below \(batchMinSeq) in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
             requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
