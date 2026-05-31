@@ -114,10 +114,16 @@ export class RelayClient {
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
-  /** How long without any activity before we consider the connection stale (ms) */
-  private static readonly STALE_THRESHOLD = 60_000;
+  /** Tick instrumentation: last time the staleCheck callback ran (ms epoch).
+   *  Used to detect timer drift / event-loop block. 0 = first tick. */
+  private staleCheckLastTickAt = 0;
+  /** How long without any activity before we consider the connection stale (ms).
+   *  Must be < relay's PING_INTERVAL * 2 (60s) so we reconnect first, instead
+   *  of being killed by the relay's slower stale-detection. Tentacle-initiated
+   *  reconnects take ~3s vs ~10s for relay-kill→close-frame→reconnect. */
+  private static readonly STALE_THRESHOLD = 45_000;
   /** How often to check for stale connection (ms) */
-  private static readonly STALE_CHECK_INTERVAL = 10_000;
+  private static readonly STALE_CHECK_INTERVAL = 5_000;
 
   // ── Delivery assurance state (per-connection) ──────────────
   /** Highest relaySeq received from head on this connection. Echoed back as
@@ -2037,9 +2043,23 @@ export class RelayClient {
 
   private startStaleCheck(): void {
     this.stopStaleCheck();
+    this.staleCheckLastTickAt = 0;
     this.staleCheckTimer = setInterval(() => {
+      const now = Date.now();
+      // Tick instrumentation: detect timer drift / event-loop block
+      if (this.staleCheckLastTickAt > 0) {
+        const tickDrift = now - this.staleCheckLastTickAt - RelayClient.STALE_CHECK_INTERVAL;
+        if (tickDrift > 2_000) {
+          logger.warn(
+            { tickDriftMs: tickDrift, intervalMs: RelayClient.STALE_CHECK_INTERVAL },
+            'staleCheck tick was late (event-loop block or timer drift)',
+          );
+        }
+      }
+      this.staleCheckLastTickAt = now;
+
       if (this.state !== 'connected' && this.state !== 'authenticating') return;
-      const elapsed = Date.now() - this.lastActivityAt;
+      const elapsed = now - this.lastActivityAt;
       // Warn before kill so we capture context for slow-but-not-yet-stale connections
       if (elapsed > RelayClient.STALE_THRESHOLD / 2 && elapsed <= RelayClient.STALE_THRESHOLD) {
         logger.info(
