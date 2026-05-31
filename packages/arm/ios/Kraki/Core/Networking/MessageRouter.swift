@@ -350,22 +350,17 @@ final class MessageRouter {
         // ── Chat messages ────────────────────────────────────────────────
 
         case "user_message":
-            // Tentacle echoes user_message broadcasts for every send_input.
-            // Resolve our optimistic pending placeholder by clientId
-            // (preferred) or content match (legacy fallback). If no
-            // pending matched, append — this handles history replays,
-            // multi-device broadcasts, etc.
+            // Persist + materialise the real user_message, then clear
+            // any optimistic pending placeholder our outbox is
+            // holding for the matching clientId. The render layer
+            // will drop the placeholder on its next read and the
+            // real bubble — produced via the normal store + grouper
+            // pipeline — takes over.
             let clientId = payload?["clientId"] as? String
             let content = payload?["content"] as? String
-            let seqValue = dict["seq"] as? Int ?? 0
-            let resolved = appState.messageStore.resolvePendingInput(
-                sessionId,
-                seq: seqValue,
-                clientId: clientId,
-                content: content
-            )
-            if !resolved {
-                appState.messageStore.append(sessionId, json: json)
+            appState.messageStore.append(sessionId, json: json)
+            if let clientId {
+                appState.commandSender?.clearPending(sessionId, clientId: clientId)
             }
             if let content {
                 updatePreview(sessionId, text: content, type: "user", timestamp: timestamp)

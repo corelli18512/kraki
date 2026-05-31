@@ -337,15 +337,19 @@ final class TurnGrouperTests: XCTestCase {
         } else { XCTFail("Expected standalone") }
     }
 
-    func testPendingInputInsideActivityBlock() {
+    func testPendingInputTreatedAsStandalone() {
+        // pending_input lives in CommandSender.outbox now — the
+        // ChatViewModel synthesises a `.standalone` TurnItem from
+        // each outbox entry at render time, so the grouper never
+        // sees these. Defensive: if one ever leaks in, it falls
+        // through the grouper's unknown-type branch as standalone
+        // rather than opening a spurious activity block.
         let msgs = [makeMsg(type: "pending_input", seq: 0)]
         let result = groupMessagesIntoTurns(msgs)
         XCTAssertEqual(result.count, 1)
-        // pending_input is a user-side message: lives inside its turn.
-        if case .block(let turn) = result[0] {
-            XCTAssertEqual(turn.initiator.userMessage?.type, "pending_input")
-            XCTAssertTrue(turn.isActive)
-        } else { XCTFail("Expected turn") }
+        if case .standalone(let msg) = result[0] {
+            XCTAssertEqual(msg.type, "pending_input")
+        } else { XCTFail("Expected standalone") }
     }
 
     // MARK: - Turn IDs
