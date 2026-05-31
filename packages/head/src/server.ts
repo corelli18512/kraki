@@ -57,6 +57,10 @@ interface ClientState {
   pongOverdueAt: number | null;
   /** Whether we already broadcast device_pending for this ping cycle. */
   pendingLivenessBroadcast: boolean;
+  /** Diagnostic: last time we sent a ping to this client (ms epoch). */
+  lastPingSentAt?: number;
+  /** Diagnostic: last time we received a pong from this client (ms epoch). */
+  lastPongRecvAt?: number;
 
   // ── Delivery assurance (per-connection, head→peer direction) ──
   /** Monotonic counter for relaySeq head stamps on outbound tracked sends. */
@@ -177,11 +181,18 @@ export class HeadServer {
 
   private startPingInterval(): void {
     this.pingTimer = setInterval(() => {
+      const now = Date.now();
       for (const [deviceId, ws] of this.connections) {
         const state = this.clients.get(ws);
         if (state && !state.isAlive) {
-          // Missed last pong — connection is dead
-          getLogger().info('Terminating stale connection (no pong)', { deviceId });
+          // Missed last pong — connection is dead. Log diagnostic timing so
+          // post-mortems can tell network drop from event-loop block.
+          getLogger().info('Terminating stale connection (no pong)', {
+            deviceId,
+            msSincePingSent: state.lastPingSentAt ? now - state.lastPingSentAt : null,
+            msSinceLastPong: state.lastPongRecvAt ? now - state.lastPongRecvAt : null,
+            wsReadyState: ws.readyState,
+          });
           this.removeConnection(deviceId);
           continue;
         }
@@ -196,19 +207,26 @@ export class HeadServer {
               pingMsg.ack = state.lastReceivedRelaySeq;
             }
             ws.send(JSON.stringify(pingMsg));
-            // Start the grace timer for device_pending broadcast
             if (state) {
-              state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
+              state.pongOverdueAt = now + PONG_GRACE_MS;
               state.pendingLivenessBroadcast = false;
+              state.lastPingSentAt = now;
             }
+            getLogger().debug('Sent ping', {
+              deviceId,
+              msSinceLastPong: state?.lastPongRecvAt ? now - state.lastPongRecvAt : null,
+            });
           }
-        } catch {
+        } catch (err) {
+          getLogger().warn('Ping send failed', {
+            deviceId,
+            error: (err as Error)?.message,
+          });
           this.removeConnection(deviceId);
         }
       }
 
       // Sweep expired pairing tokens
-      const now = Date.now();
       for (const [token, data] of this.pairingTokens) {
         if (now > data.expiresAt) this.pairingTokens.delete(token);
       }
@@ -494,7 +512,8 @@ export class HeadServer {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      const reasonStr = reason?.toString?.() || '';
       if (state.deviceId) {
         const disconnectedDeviceId = state.deviceId;
         const disconnectedUserId = state.userId;
@@ -505,19 +524,35 @@ export class HeadServer {
           try { this.storage.touchDeviceLastSeen(disconnectedDeviceId); } catch { /* storage may be closed */ }
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
-          logger.info('Device disconnected', { deviceId: disconnectedDeviceId });
+          logger.info('Device disconnected', {
+            deviceId: disconnectedDeviceId,
+            closeCode: code,
+            closeReason: reasonStr,
+          });
 
           if (disconnectedUserId) {
             this.broadcastDeviceLeft(disconnectedUserId, disconnectedDeviceId);
           }
         } else {
-          logger.debug('Stale socket closed (already replaced by reconnect)', { deviceId: disconnectedDeviceId });
+          logger.debug('Stale socket closed (already replaced by reconnect)', {
+            deviceId: disconnectedDeviceId,
+            closeCode: code,
+            closeReason: reasonStr,
+          });
         }
+      } else {
+        logger.debug('WebSocket closed before auth', { ip: state.ip, closeCode: code, closeReason: reasonStr });
       }
       this.clients.delete(ws);
     });
 
-    ws.on('error', () => {
+    ws.on('error', (err: Error) => {
+      logger.warn('WebSocket error', {
+        deviceId: state.deviceId,
+        ip: state.ip,
+        error: err?.message,
+        code: (err as NodeJS.ErrnoException)?.code,
+      });
       ws.close();
     });
   }
@@ -1466,10 +1501,16 @@ export class HeadServer {
    *  Re-promotes to device_joined if we already broadcast device_pending.
    *  Guards against stale pongs from replaced connections (reconnect race). */
   private onPongReceived(state: ClientState): void {
+    const now = Date.now();
+    const rttMs = state.lastPingSentAt ? now - state.lastPingSentAt : null;
     state.isAlive = true;
     const wasPending = state.pendingLivenessBroadcast;
     state.pongOverdueAt = null;
     state.pendingLivenessBroadcast = false;
+    state.lastPongRecvAt = now;
+    if (state.deviceId) {
+      getLogger().debug('Received pong', { deviceId: state.deviceId, rttMs });
+    }
 
     if (wasPending && state.userId && state.deviceId) {
       // Only re-promote if this state still belongs to the active connection.

@@ -271,22 +271,30 @@ export class RelayClient {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      const reasonStr = reason?.toString?.() || '';
       this.stopStaleCheck();
       this.ws = null;
+      logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
     });
 
-    ws.on('error', () => {
+    ws.on('error', (err: Error) => {
+      logger.warn({ err: err?.message, code: (err as NodeJS.ErrnoException)?.code }, 'WS error');
       // Error triggers close, which handles reconnect
     });
 
     // Track any incoming frames as activity for stale detection
     ws.on('ping', () => {
       this.lastActivityAt = Date.now();
+      logger.debug('Received WS ping from relay');
+    });
+
+    ws.on('pong', () => {
+      logger.debug('Received WS pong from relay');
     });
   }
 
@@ -385,14 +393,19 @@ export class RelayClient {
     }
 
     if (msg.type === 'pong') {
+      logger.debug('Received JSON pong from relay');
       return;
     }
 
     if (msg.type === 'ping') {
+      logger.debug('Received JSON ping from relay');
       if (this.ws?.readyState === WebSocket.OPEN) {
         const pong: Record<string, unknown> = { type: 'pong' };
         if (this.lastReceivedRelaySeq > 0) pong.ack = this.lastReceivedRelaySeq;
         this.ws.send(JSON.stringify(pong));
+        logger.debug('Sent JSON pong to relay');
+      } else {
+        logger.warn({ readyState: this.ws?.readyState }, 'Could not pong — WS not open');
       }
       return;
     }
@@ -1951,6 +1964,13 @@ export class RelayClient {
     this.staleCheckTimer = setInterval(() => {
       if (this.state !== 'connected' && this.state !== 'authenticating') return;
       const elapsed = Date.now() - this.lastActivityAt;
+      // Warn before kill so we capture context for slow-but-not-yet-stale connections
+      if (elapsed > RelayClient.STALE_THRESHOLD / 2 && elapsed <= RelayClient.STALE_THRESHOLD) {
+        logger.info(
+          { elapsedSec: Math.round(elapsed / 1000), thresholdSec: RelayClient.STALE_THRESHOLD / 1000 },
+          'Activity gap approaching stale threshold',
+        );
+      }
       if (elapsed > RelayClient.STALE_THRESHOLD) {
         logger.warn(`No activity for ${Math.round(elapsed / 1000)}s — connection stale, reconnecting`);
         this.ws?.close();
