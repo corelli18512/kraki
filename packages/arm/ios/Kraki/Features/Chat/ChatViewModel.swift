@@ -54,6 +54,11 @@ final class ChatViewModel {
     /// re-grouped; each `refreshGroupingCache()` only feeds the
     /// delta of new messages into the cache.
     ///
+    /// This list is pure store-derived (seq ≥ 1, server-confirmed).
+    /// Optimistic pending input placeholders are NOT included — for
+    /// rendering, use `displayTurns`, which appends the per-session
+    /// pending bubbles from `CommandSender.outbox` at the tail.
+    ///
     /// Historical note: the original implementation walked the full
     /// message list on every call. On long sessions (2000+ msgs)
     /// that stalled the main thread enough to time out the WS
@@ -61,6 +66,34 @@ final class ChatViewModel {
     /// data change", and Stage F brings it down further to "once
     /// per new tail message".
     private(set) var cachedRawTurns: [TurnItem] = []
+
+    /// Synthesised pending-input turns derived from
+    /// `CommandSender.outbox`. One `.standalone(pending_input)` per
+    /// outstanding optimistic send, in send order. Reads through
+    /// `@Observable` so SwiftUI re-evaluates the body that consumes
+    /// `displayTurns` whenever the outbox mutates (new send / echo
+    /// arrival / cancel).
+    ///
+    /// `MessageBubbleView` dispatches on `message.type` and renders
+    /// these via `pendingInputBubble` (with the "Sending…"
+    /// indicator).
+    var pendingTurns: [TurnItem] {
+        guard let pendings = appState?.commandSender?.pendingInputs(sessionId), !pendings.isEmpty else {
+            return []
+        }
+        return pendings.map { .standalone($0) }
+    }
+
+    /// Turns to render in the chat list. Pure store-derived turns
+    /// followed by any optimistic pending placeholders. This is what
+    /// `ChatListView` consumes; `cachedRawTurns` stays pure so the
+    /// entry-scroll / idle-anchor logic in `ChatView` reasons about
+    /// confirmed turns only.
+    var displayTurns: [TurnItem] {
+        let pending = pendingTurns
+        if pending.isEmpty { return cachedRawTurns }
+        return cachedRawTurns + pending
+    }
 
     /// Per-session incremental grouper cache. Holds islands of
     /// closed ActivityBlocks + their per-island tail state. Fed
@@ -255,7 +288,7 @@ final class ChatViewModel {
         // hence the local key set.
         var delta: [ChatMessage] = []
         var freshKeys: Set<String> = []
-        for msg in windowMessages where msg.type != "pending_input" {
+        for msg in windowMessages {
             let key = "\(msg.seq)|\(msg.type)"
             freshKeys.insert(key)
             if !groupedKeys.contains(key) {
@@ -272,7 +305,7 @@ final class ChatViewModel {
         if droppedSomething {
             grouperCache = SessionGrouperCache()
             groupedKeys = []
-            grouperCache.ingest(windowMessages.filter { $0.type != "pending_input" })
+            grouperCache.ingest(windowMessages)
             groupedKeys = freshKeys
         } else if !delta.isEmpty {
             grouperCache.ingest(delta)

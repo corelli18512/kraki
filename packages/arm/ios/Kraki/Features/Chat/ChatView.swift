@@ -229,7 +229,7 @@ struct ChatView: View {
 
     // MARK: - UIKit Messages
 
-    /// UIKit-backed message list. Renders `viewModel.cachedRawTurns`
+    /// UIKit-backed message list. Renders `viewModel.displayTurns`
     /// directly — no windowing — and lets `UICollectionView` handle
     /// cell virtualisation. `coordinator` provides
     /// scroll-derived state (isAtBottom, isNearTop, growMode, idle
@@ -246,7 +246,7 @@ struct ChatView: View {
                 streamingText: streaming,
                 entryScrollTargetId: entryScrollTargetId,
                 idleAnchorTargetId: idleAnchorTargetId,
-                turns: viewModel.cachedRawTurns
+                turns: viewModel.displayTurns
             )
         } else {
             Color.clear

@@ -117,9 +117,7 @@ struct SessionGrouperCache {
         // Process strictly in seq order so the tail-append fast path
         // sees them in arrival order, and so the island-routing
         // decisions are deterministic.
-        let sorted = messages
-            .filter { $0.seq > 0 }
-            .sorted { $0.seq < $1.seq }
+        let sorted = messages.sorted { $0.seq < $1.seq }
         for msg in sorted {
             ingestOne(msg)
         }
@@ -730,7 +728,7 @@ struct SessionGrouperCache {
 // input and compares outputs.
 
 private let userMessageTypes: Set<String> = [
-    "user_message", "send_input", "pending_input",
+    "user_message", "send_input",
 ]
 
 private let thinkingTypes: Set<String> = [

@@ -22,6 +22,20 @@ final class CommandSender {
     /// Count of in-flight mode changes per session (for echo suppression).
     private var pendingModeChanges: [String: Int] = [:]
 
+    /// Optimistic outbound user messages awaiting their server echo.
+    /// Keyed `sessionId → clientId → pending placeholder`. Lives only
+    /// in memory; never persisted; never enters `MessageStore`. The
+    /// chat view model reads this through `pendingInputs(_:)` and
+    /// appends the entries to the rendered turn list as standalone
+    /// items.
+    ///
+    /// Echo arrival path: `MessageRouter` calls `clearPending(_:_:)`
+    /// when a `user_message` lands carrying the same `clientId`. The
+    /// real user_message then materialises through the normal store
+    /// → grouper pipeline, and the synthesised pending entry simply
+    /// disappears on the next render.
+    private(set) var outbox: [String: [String: ChatMessage]] = [:]
+
     private weak var appState: AppState?
 
     init(appState: AppState) {
@@ -53,13 +67,21 @@ final class CommandSender {
         // in-flight sends, reconnects, or multi-device scenarios.
         let clientId = UUID().uuidString
 
-        // Optimistic: insert pending_input. Stash attachments on the
-        // pending payload so the pending bubble can render the image
-        // grid immediately (otherwise the image only appears after the
-        // server echoes user_message back). The `attachments` accessor
-        // on ChatMessage reads from `payload.attachments`, so we
-        // encode them in the same shape the server's user_message
-        // uses — array of [type, mimeType, data] dicts.
+        // Optimistic: stash a pending placeholder in our in-memory
+        // outbox. Render layer (ChatViewModel) reads this and appends
+        // it to the turn list at render time; it never touches
+        // MessageStore. When tentacle echoes `user_message` back
+        // (MessageRouter clears the matching clientId from the
+        // outbox), the placeholder disappears and the real bubble —
+        // produced by the normal store + grouper pipeline — takes
+        // its place.
+        //
+        // Attachments are stashed on the pending payload so the
+        // pending bubble can render the image grid immediately. The
+        // `attachments` accessor on ChatMessage reads from
+        // `payload.attachments`, so we encode them in the same shape
+        // the server's user_message uses — array of [type, mimeType,
+        // data] dicts.
         var pendingPayload: [String: AnyCodable] = [
             "content": AnyCodable(text),
             "clientId": AnyCodable(clientId),
@@ -78,7 +100,9 @@ final class CommandSender {
             timestamp: ISO8601.now(),
             payload: pendingPayload
         )
-        appState.messageStore.append(sessionId, pending)
+        var bucket = outbox[sessionId] ?? [:]
+        bucket[clientId] = pending
+        outbox[sessionId] = bucket
 
         var payload: [String: Any] = ["text": text, "clientId": clientId]
         if let attachments, !attachments.isEmpty {
@@ -88,6 +112,37 @@ final class CommandSender {
             payload["attachments"] = encoded
         }
         send(["type": "send_input", "payload": payload], sessionId: sessionId)
+    }
+
+    // MARK: - Outbox queries / mutators
+
+    /// Pending placeholders for a session in send order (oldest
+    /// first). Used by `ChatViewModel` to append to the turn list at
+    /// render time.
+    func pendingInputs(_ sessionId: String) -> [ChatMessage] {
+        guard let bucket = outbox[sessionId], !bucket.isEmpty else { return [] }
+        return bucket.values.sorted { ($0.timestamp ?? "") < ($1.timestamp ?? "") }
+    }
+
+    /// Remove a single pending entry by clientId. Called by
+    /// `MessageRouter` when the matching `user_message` echo lands;
+    /// also called from compose-side retry/cancel UI (when it exists).
+    /// No-op if the entry is gone — multi-device echoes or replays
+    /// can fire this more than once.
+    func clearPending(_ sessionId: String, clientId: String) {
+        guard var bucket = outbox[sessionId] else { return }
+        guard bucket.removeValue(forKey: clientId) != nil else { return }
+        if bucket.isEmpty {
+            outbox.removeValue(forKey: sessionId)
+        } else {
+            outbox[sessionId] = bucket
+        }
+    }
+
+    /// Drop every pending entry for a session. Used on logout /
+    /// session deletion / explicit cancel-all.
+    func clearAllPending(_ sessionId: String) {
+        outbox.removeValue(forKey: sessionId)
     }
 
     // MARK: - Permissions
@@ -524,6 +579,7 @@ final class CommandSender {
     }
 
     func reset() {
+        outbox.removeAll()
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()

@@ -180,7 +180,6 @@ private let standaloneTypes: Set<String> = [
 private let userMessageTypes: Set<String> = [
     "user_message",
     "send_input",
-    "pending_input",
 ]
 
 /// Message types that belong in the thinking box.
@@ -215,7 +214,7 @@ private let turnCompleteTypes: Set<String> = [
 /// - A **block** is everything between two `idle` markers (the
 ///   trailing `idle` closes it). Each block typically has one
 ///   user-side opener + agent activity + a final agent reply.
-/// - `user_message` / `send_input` / `pending_input` open a new block
+/// - `user_message` / `send_input` open a new block
 ///   with `initiator = .user(msg)`. Tentacle never emits two
 ///   user-side messages without an intervening idle, so today each
 ///   `.user` block is opened by exactly one message.
