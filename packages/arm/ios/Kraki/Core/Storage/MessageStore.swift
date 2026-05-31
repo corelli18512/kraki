@@ -312,7 +312,14 @@ final class MessageStore {
             if let clientId {
                 idx = window.firstIndex(where: { $0.type == "pending_input" && $0.clientId == clientId })
             } else if let content {
-                idx = window.firstIndex(where: { $0.type == "pending_input" && $0.content == content })
+                // Match the most recent duplicate, not the oldest. If
+                // the user rapid-fires the same text twice (e.g.
+                // retry, copy-paste), the server echo for the second
+                // send should resolve the second pending, not orphan
+                // it by claiming the first. clientId is the primary
+                // matcher above; this fallback only fires if a
+                // historical client sent without one.
+                idx = window.lastIndex(where: { $0.type == "pending_input" && $0.content == content })
             } else {
                 idx = nil
             }
