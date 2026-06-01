@@ -12,7 +12,17 @@
 
 import { execSync } from 'node:child_process';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
+import { ensureWindowsSystemPath } from './checks.js';
 import { CopilotAdapter } from './adapters/copilot.js';
+
+// Self-heal PATH on Windows BEFORE any child process is spawned. The
+// daemon may have been started from a context with a minimal PATH
+// (Startup-folder shortcut, Task Scheduler, double-clicked SEA binary),
+// in which case the Copilot SDK's PowerShell tool — which spawns
+// `pwsh.exe` / `powershell.exe` by short name — would fail with
+// ENOENT and surface as "PowerShell is not available" inside sessions.
+// See checks.ts::ensureWindowsSystemPath() for the rationale.
+const _ensuredWindowsPathDirs = ensureWindowsSystemPath();
 
 // On macOS the daemon is NOT detached (no setsid) to preserve the
 // Gatekeeper session for code signing. Ignore SIGHUP so we survive
@@ -58,6 +68,12 @@ export async function startWorker(): Promise<WorkerResult> {
   // Write PID immediately so the launcher (launchctl or CLI) can find us
   saveDaemonPid(process.pid);
   logger.info('Daemon starting…');
+  if (_ensuredWindowsPathDirs.length > 0) {
+    logger.info(
+      { addedPathDirs: _ensuredWindowsPathDirs },
+      'Self-healed PATH on Windows (System32 and friends were missing)',
+    );
+  }
   const configPath = getConfigPath();
   const channelKeyPath = getChannelKeyPath();
 

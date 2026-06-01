@@ -14,6 +14,45 @@ import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
 
 /**
+ * On Windows, ensure essential system directories are present in
+ * `process.env.PATH`. Returns the list of directories that were
+ * prepended (empty if nothing was missing).
+ *
+ * Why: the daemon may be launched from a context with a minimal PATH
+ * (Startup folder shortcut, Task Scheduler, double-clicked SEA binary),
+ * where even `%SystemRoot%\System32` is absent. Tools that spawn
+ * `powershell.exe` / `pwsh.exe` / `where` / `cmd` by short name then
+ * fail with ENOENT — notably the GitHub Copilot SDK, whose PowerShell
+ * tool looks up `pwsh.exe` and `powershell.exe` via PATH and surfaces
+ * "PowerShell is not available" inside agent sessions.
+ *
+ * This helper is idempotent and merges (rather than wholesale-replaces)
+ * existing PATH entries so it can run alongside other PATH manipulation
+ * (e.g. the `node_modules/.bin` prepend in resolveDaemonLaunch).
+ *
+ * No-op on non-Windows platforms.
+ */
+export function ensureWindowsSystemPath(): string[] {
+  if (platform() !== 'win32') return [];
+
+  const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const required = [
+    `${sysRoot}\\System32`,
+    `${sysRoot}\\System32\\WindowsPowerShell\\v1.0`,
+    `${sysRoot}\\System32\\Wbem`,
+    sysRoot,
+  ];
+
+  const current = (process.env.PATH ?? '').split(';');
+  const currentLower = new Set(current.map((p) => p.toLowerCase()));
+  const missing = required.filter((p) => !currentLower.has(p.toLowerCase()));
+
+  if (missing.length === 0) return [];
+  process.env.PATH = [...missing, ...current].filter(Boolean).join(';');
+  return missing;
+}
+
+/**
  * On Windows, refresh process.env.PATH from the registry so that
  * newly-installed tools are visible without opening a new terminal.
  * No-op on other platforms.

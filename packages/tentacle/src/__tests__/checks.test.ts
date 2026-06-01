@@ -59,7 +59,7 @@ import { input } from '@inquirer/prompts';
 import { existsSync, promises as fsp } from 'node:fs';
 import { createConnection } from 'node:net';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
@@ -233,6 +233,118 @@ describe('withRetry()', () => {
     const result = await withRetry(check, 'Auth', 'login hint');
     expect(result).toEqual({ authenticated: true, username: 'u' });
     expect(check).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── ensureWindowsSystemPath ─────────────────────────────
+
+describe('ensureWindowsSystemPath()', () => {
+  let origPath: string | undefined;
+  let origSystemRoot: string | undefined;
+  let origWindir: string | undefined;
+
+  beforeEach(() => {
+    origPath = process.env.PATH;
+    origSystemRoot = process.env.SystemRoot;
+    origWindir = process.env.windir;
+  });
+
+  const restore = () => {
+    if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
+    if (origSystemRoot === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = origSystemRoot;
+    if (origWindir === undefined) delete process.env.windir; else process.env.windir = origWindir;
+  };
+
+  it('returns [] and leaves PATH untouched on non-win32', () => {
+    mockPlatform.mockReturnValue('darwin');
+    process.env.PATH = '/usr/bin:/bin';
+    expect(ensureWindowsSystemPath()).toEqual([]);
+    expect(process.env.PATH).toBe('/usr/bin:/bin');
+    restore();
+  });
+
+  it('prepends all four required dirs when PATH is empty on win32', () => {
+    mockPlatform.mockReturnValue('win32');
+    process.env.SystemRoot = 'C:\\Windows';
+    process.env.PATH = '';
+
+    const added = ensureWindowsSystemPath();
+    expect(added).toEqual([
+      'C:\\Windows\\System32',
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+      'C:\\Windows\\System32\\Wbem',
+      'C:\\Windows',
+    ]);
+    expect(process.env.PATH).toBe(
+      'C:\\Windows\\System32;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\Wbem;C:\\Windows',
+    );
+    restore();
+  });
+
+  it('only adds missing entries and preserves order of existing ones', () => {
+    mockPlatform.mockReturnValue('win32');
+    process.env.SystemRoot = 'C:\\Windows';
+    process.env.PATH = 'C:\\Windows\\System32;C:\\Users\\me\\bin';
+
+    const added = ensureWindowsSystemPath();
+    expect(added).toEqual([
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+      'C:\\Windows\\System32\\Wbem',
+      'C:\\Windows',
+    ]);
+    expect(process.env.PATH).toBe(
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32\\Wbem;C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\bin',
+    );
+    restore();
+  });
+
+  it('is idempotent — running twice changes nothing the second time', () => {
+    mockPlatform.mockReturnValue('win32');
+    process.env.SystemRoot = 'C:\\Windows';
+    process.env.PATH = '';
+
+    ensureWindowsSystemPath();
+    const after1 = process.env.PATH;
+    const added2 = ensureWindowsSystemPath();
+    expect(added2).toEqual([]);
+    expect(process.env.PATH).toBe(after1);
+    restore();
+  });
+
+  it('matches case-insensitively so c:\\windows\\system32 also counts as present', () => {
+    mockPlatform.mockReturnValue('win32');
+    process.env.SystemRoot = 'C:\\Windows';
+    process.env.PATH = 'c:\\windows\\system32;c:\\windows\\system32\\windowspowershell\\v1.0;c:\\windows\\system32\\wbem;c:\\windows';
+
+    const added = ensureWindowsSystemPath();
+    expect(added).toEqual([]);
+    expect(process.env.PATH).toBe(
+      'c:\\windows\\system32;c:\\windows\\system32\\windowspowershell\\v1.0;c:\\windows\\system32\\wbem;c:\\windows',
+    );
+    restore();
+  });
+
+  it('falls back to %windir% when SystemRoot is unset', () => {
+    mockPlatform.mockReturnValue('win32');
+    delete process.env.SystemRoot;
+    process.env.windir = 'D:\\Windows';
+    process.env.PATH = '';
+
+    const added = ensureWindowsSystemPath();
+    expect(added[0]).toBe('D:\\Windows\\System32');
+    expect(added[added.length - 1]).toBe('D:\\Windows');
+    restore();
+  });
+
+  it('falls back to C:\\Windows when both SystemRoot and windir are unset', () => {
+    mockPlatform.mockReturnValue('win32');
+    delete process.env.SystemRoot;
+    delete process.env.windir;
+    process.env.PATH = '';
+
+    const added = ensureWindowsSystemPath();
+    expect(added[0]).toBe('C:\\Windows\\System32');
+    restore();
   });
 });
 

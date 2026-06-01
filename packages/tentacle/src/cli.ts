@@ -26,6 +26,15 @@ import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 import { readStatusFile } from './status-file.js';
+import { ensureWindowsSystemPath } from './checks.js';
+
+// Self-heal PATH on Windows BEFORE any setup/check spawns a child
+// process. If kraki is launched from a context with a minimal PATH
+// (e.g. double-clicked SEA binary), tools like `gh`, `copilot`, and
+// `powershell.exe` would otherwise be invisible. The daemon worker
+// re-runs this on its side as a belt-and-suspenders for autostart
+// paths that bypass the CLI entirely.
+ensureWindowsSystemPath();
 
 // Detect Node.js SEA (Single Executable Application)
 const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
