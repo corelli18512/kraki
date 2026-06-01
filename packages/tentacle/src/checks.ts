@@ -6,7 +6,7 @@
  */
 
 import { execSync, execFile } from 'node:child_process';
-import { existsSync, promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -49,6 +49,28 @@ export function ensureWindowsSystemPath(): string[] {
 
   if (missing.length === 0) return [];
   process.env.PATH = [...missing, ...current].filter(Boolean).join(';');
+
+  // Record that we patched PATH so it's diagnosable after the fact.
+  // The daemon-worker child usually inherits the already-patched PATH
+  // from cli.ts and so this branch never fires there — meaning the log
+  // file is effectively a record of the *parent* cli.ts process having
+  // had to self-heal. Best-effort; never throw from this helper.
+  try {
+    const krakiHome = process.env.KRAKI_HOME?.trim() || join(homedir(), '.kraki');
+    const logsDir = join(krakiHome, 'logs');
+    mkdirSync(logsDir, { recursive: true });
+    const entry = JSON.stringify({
+      time: new Date().toISOString(),
+      pid: process.pid,
+      argv0: process.argv0,
+      script: process.argv[1] ?? '',
+      addedPathDirs: missing,
+    }) + '\n';
+    appendFileSync(join(logsDir, 'path-self-heal.log'), entry);
+  } catch {
+    /* best effort */
+  }
+
   return missing;
 }
 
