@@ -18,6 +18,10 @@ vi.mock('node:child_process', () => ({
   }),
 }));
 
+vi.mock('../config.js', () => ({
+  getConfigDir: () => '/tmp/fake-kraki',
+}));
+
 vi.mock('@inquirer/prompts', () => ({
   input: vi.fn(),
 }));
@@ -36,9 +40,13 @@ vi.mock('node:fs', async (importActual) => {
   return {
     ...actual,
     existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    unlinkSync: vi.fn(),
     promises: {
       ...actual.promises,
       readdir: vi.fn(),
+      access: vi.fn(), // FDA probe — default: resolves (granted)
     },
   };
 });
@@ -56,16 +64,20 @@ vi.mock('node:net', () => ({
 
 import { execSync, execFile } from 'node:child_process';
 import { input } from '@inquirer/prompts';
-import { existsSync, promises as fsp } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, promises as fsp } from 'node:fs';
 import { createConnection } from 'node:net';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath, needsTccWarmup, getWarmupLabels, markTccWarmed, clearTccWarmedMarker } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
+const mockReadFileSync = readFileSync as unknown as ReturnType<typeof vi.fn>;
+const mockWriteFileSync = writeFileSync as unknown as ReturnType<typeof vi.fn>;
+const mockUnlinkSync = unlinkSync as unknown as ReturnType<typeof vi.fn>;
 const mockReaddir = fsp.readdir as unknown as ReturnType<typeof vi.fn>;
+const mockAccess = fsp.access as unknown as ReturnType<typeof vi.fn>;
 const mockPlatform = platform as unknown as ReturnType<typeof vi.fn>;
 const mockHomedir = homedir as unknown as ReturnType<typeof vi.fn>;
 const mockCreateConnection = createConnection as unknown as ReturnType<typeof vi.fn>;
@@ -364,14 +376,15 @@ describe('warmupTccPermissions()', () => {
     expect(result).toEqual([]);
   });
 
-  it('probes all 7 protected folders plus App Data and Local Network on darwin', async () => {
+  it('probes all 7 protected folders plus App Data, Local Network, and Full Disk Access on darwin', async () => {
     mockReaddir.mockResolvedValue([]);
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(9);
-    // 7 folder probes + 1 App Data + 1 network probe
+    expect(result).toHaveLength(10);
+    // 7 folder probes + App Data + Local Network + FDA
     expect(result.slice(0, 7).every(r => r.status === 'granted')).toBe(true);
     expect(result[7]).toMatchObject({ label: 'App Data', path: '(file provider)', status: 'granted' });
     expect(result[8]).toMatchObject({ label: 'Local Network', path: '(network)', status: 'granted' });
+    expect(result[9]).toMatchObject({ label: 'Full Disk Access', path: '(system)', status: 'granted' });
     expect(mockReaddir).toHaveBeenCalledTimes(7);
   });
 
@@ -411,14 +424,16 @@ describe('warmupTccPermissions()', () => {
       (label) => { starts.push(label); },
       (r) => { results.push(`${r.label}:${r.status}`); },
     );
-    expect(starts).toHaveLength(9);
-    expect(results).toHaveLength(9);
+    expect(starts).toHaveLength(10);
+    expect(results).toHaveLength(10);
     expect(starts[0]).toBe('~/Documents');
     expect(results[0]).toBe('~/Documents:granted');
     expect(starts[7]).toBe('App Data');
     expect(results[7]).toBe('App Data:granted');
     expect(starts[8]).toBe('Local Network');
     expect(results[8]).toBe('Local Network:granted');
+    expect(starts[9]).toBe('Full Disk Access');
+    expect(results[9]).toBe('Full Disk Access:granted');
   });
 
   it('uses absolute paths under homedir', async () => {
@@ -440,7 +455,7 @@ describe('warmupTccPermissions()', () => {
       return [];
     });
     const result = await warmupTccPermissions();
-    expect(result).toHaveLength(9);
+    expect(result).toHaveLength(10);
     expect(result[1].status).toBe('denied');
     expect(result[0].status).toBe('granted');
     expect(result[2].status).toBe('granted');
@@ -504,5 +519,97 @@ describe('warmupTccPermissions()', () => {
     const result = await warmupTccPermissions();
     const appData = result.find(r => r.label === 'App Data');
     expect(appData).toMatchObject({ label: 'App Data', status: 'missing' });
+  });
+
+  it('reports Full Disk Access granted when TCC.db is readable', async () => {
+    mockReaddir.mockResolvedValue([]);
+    // Default mockAccess resolves → granted
+    const result = await warmupTccPermissions();
+    const fda = result.find(r => r.label === 'Full Disk Access');
+    expect(fda).toMatchObject({ label: 'Full Disk Access', path: '(system)', status: 'granted' });
+  });
+
+  it('reports Full Disk Access denied when TCC.db returns EPERM', async () => {
+    mockReaddir.mockResolvedValue([]);
+    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    const result = await warmupTccPermissions();
+    const fda = result.find(r => r.label === 'Full Disk Access');
+    expect(fda).toMatchObject({ label: 'Full Disk Access', status: 'denied' });
+  });
+
+  it('reports Full Disk Access missing when TCC.db does not exist', async () => {
+    mockReaddir.mockResolvedValue([]);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('TCC.db')) return false;
+      return true;
+    });
+    const result = await warmupTccPermissions();
+    const fda = result.find(r => r.label === 'Full Disk Access');
+    expect(fda).toMatchObject({ label: 'Full Disk Access', status: 'missing' });
+  });
+});
+
+// ── TCC marker functions ────────────────────────────────
+
+describe('needsTccWarmup()', () => {
+  it('returns false on non-darwin', () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(needsTccWarmup()).toBe(false);
+  });
+
+  it('returns true when marker file does not exist', () => {
+    mockExistsSync.mockReturnValue(false);
+    expect(needsTccWarmup()).toBe(true);
+  });
+
+  it('returns false when all labels are in the marker', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(getWarmupLabels().join('\n') + '\n');
+    expect(needsTccWarmup()).toBe(false);
+  });
+
+  it('returns true when a new label is missing from the marker', () => {
+    mockExistsSync.mockReturnValue(true);
+    // Simulate old marker missing Full Disk Access
+    const oldLabels = getWarmupLabels().filter(l => l !== 'Full Disk Access');
+    mockReadFileSync.mockReturnValue(oldLabels.join('\n') + '\n');
+    expect(needsTccWarmup()).toBe(true);
+  });
+});
+
+describe('getWarmupLabels()', () => {
+  it('includes Full Disk Access', () => {
+    expect(getWarmupLabels()).toContain('Full Disk Access');
+  });
+
+  it('has 10 labels matching warmupTccPermissions probe count', () => {
+    expect(getWarmupLabels()).toHaveLength(10);
+  });
+});
+
+describe('markTccWarmed()', () => {
+  it('writes labels to marker file', () => {
+    const results = [
+      { label: '~/Documents', path: '/home/test/Documents', status: 'granted' as const },
+      { label: 'Full Disk Access', path: '(system)', status: 'denied' as const },
+    ];
+    markTccWarmed(results);
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.tcc-warmed'),
+      '~/Documents\nFull Disk Access\n',
+      'utf8',
+    );
+  });
+});
+
+describe('clearTccWarmedMarker()', () => {
+  it('removes the marker file', () => {
+    clearTccWarmedMarker();
+    expect(mockUnlinkSync).toHaveBeenCalledWith(expect.stringContaining('.tcc-warmed'));
+  });
+
+  it('does not throw if file does not exist', () => {
+    mockUnlinkSync.mockImplementation(() => { throw Object.assign(new Error('enoent'), { code: 'ENOENT' }); });
+    expect(() => clearTccWarmedMarker()).not.toThrow();
   });
 });

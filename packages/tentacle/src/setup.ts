@@ -9,7 +9,7 @@ import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { hostname, platform } from 'node:os';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
@@ -20,9 +20,8 @@ import {
   saveChannelKey,
   getOrCreateDeviceId,
   getConfigPath,
-  getConfigDir,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, type TccProbeResult } from './checks.js';
+import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, needsTccWarmup, markTccWarmed, type TccProbeResult } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 
@@ -88,58 +87,6 @@ const icon = '◈';
 function step(n: number, total: number) { return chalk.dim(`[${n}/${total}]`); }
 function divider() { console.log(chalk.dim('  ─────────────────────────────────')); }
 
-// ── macOS TCC warm-up ────────────────────────────────────
-
-const TCC_WARMED_MARKER = '.tcc-warmed';
-
-/**
- * True when this is a macOS install whose TCC warm-up is incomplete.
- * Reads the stored set of probed labels from the marker file and
- * compares against the current probe list.  Returns true if any
- * current probe label is missing — this way newly-added probes
- * (e.g. App Data) are automatically detected without version numbers.
- */
-function needsTccWarmup(): boolean {
-  if (platform() !== 'darwin') return false;
-  const markerPath = join(getConfigDir(), TCC_WARMED_MARKER);
-  if (!existsSync(markerPath)) return true;
-  try {
-    const stored = readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean);
-    // Run a synchronous warmup probe to get the current list of labels.
-    // This is cheap: we only need the labels, not actual probing.
-    const currentLabels = getWarmupLabels();
-    return currentLabels.some(label => !stored.includes(label));
-  } catch {
-    return true;
-  }
-}
-
-/** Return the full set of labels that warmupTccPermissions() will probe. */
-function getWarmupLabels(): string[] {
-  // Must stay in sync with the labels in checks.ts warmupTccPermissions().
-  // We import and run it with a dry callback to collect labels, but since
-  // warmupTccPermissions is async and actually probes, we hardcode the
-  // list here.  This is intentionally a simple string array so adding a
-  // new probe in checks.ts requires a matching entry here — the test
-  // suite enforces they stay in sync.
-  return [
-    '~/Documents', '~/Desktop', '~/Downloads', '~/iCloud Drive',
-    '~/Pictures', '~/Movies', '~/Music',
-    'App Data', 'Local Network',
-  ];
-}
-
-function markTccWarmed(results: TccProbeResult[]): void {
-  try {
-    const labels = results.map(r => r.label);
-    writeFileSync(join(getConfigDir(), TCC_WARMED_MARKER),
-      labels.join('\n') + '\n', 'utf8');
-  } catch {
-    // Best-effort — if we can't write the marker, the worst case is that
-    // the warm-up runs again next time the wizard is invoked.
-  }
-}
-
 /**
  * Render the TCC warm-up step. Probes each protected folder one at a
  * time, printing a status line as we go. macOS surfaces the permission
@@ -175,6 +122,14 @@ async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
     console.log('');
     console.log(chalk.dim('    You can grant access later in System Settings →'));
     console.log(chalk.dim('    Privacy & Security → Files and Folders / Local Network → kraki.'));
+  }
+
+  const fda = results.find(r => r.label === 'Full Disk Access');
+  if (fda?.status === 'denied') {
+    console.log('');
+    console.log(chalk.dim('    💡 Tip: Grant Full Disk Access to eliminate the "data from'));
+    console.log(chalk.dim('    other apps" dialog. System Settings → Privacy & Security →'));
+    console.log(chalk.dim('    Full Disk Access → add kraki.'));
   }
 
   markTccWarmed(results);

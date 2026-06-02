@@ -6,12 +6,13 @@
  */
 
 import { execSync, execFile } from 'node:child_process';
-import { existsSync, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
+import { getConfigDir } from './config.js';
 
 /**
  * On Windows, ensure essential system directories are present in
@@ -188,6 +189,60 @@ export interface TccProbeResult {
   status: TccProbeStatus;
 }
 
+// ── macOS TCC marker ────────────────────────────────────
+
+const TCC_WARMED_MARKER = '.tcc-warmed';
+
+/**
+ * True when this is a macOS install whose TCC warm-up is incomplete.
+ * Reads the stored set of probed labels from the marker file and
+ * compares against the current probe list.  Returns true if any
+ * current probe label is missing — this way newly-added probes
+ * (e.g. Full Disk Access) are automatically detected without version numbers.
+ */
+export function needsTccWarmup(): boolean {
+  if (platform() !== 'darwin') return false;
+  const markerPath = join(getConfigDir(), TCC_WARMED_MARKER);
+  if (!existsSync(markerPath)) return true;
+  try {
+    const stored = readFileSync(markerPath, 'utf8').trim().split('\n').filter(Boolean);
+    const currentLabels = getWarmupLabels();
+    return currentLabels.some(label => !stored.includes(label));
+  } catch {
+    return true;
+  }
+}
+
+/** Return the full set of labels that warmupTccPermissions() will probe. */
+export function getWarmupLabels(): string[] {
+  // Must stay in sync with the labels used in warmupTccPermissions() below.
+  return [
+    '~/Documents', '~/Desktop', '~/Downloads', '~/iCloud Drive',
+    '~/Pictures', '~/Movies', '~/Music',
+    'App Data', 'Local Network', 'Full Disk Access',
+  ];
+}
+
+export function markTccWarmed(results: TccProbeResult[]): void {
+  try {
+    const labels = results.map(r => r.label);
+    writeFileSync(join(getConfigDir(), TCC_WARMED_MARKER),
+      labels.join('\n') + '\n', 'utf8');
+  } catch {
+    // Best-effort — if we can't write the marker, the worst case is that
+    // the warm-up runs again next time.
+  }
+}
+
+/** Remove the TCC warmup marker so the next startup re-probes permissions. */
+export function clearTccWarmedMarker(): void {
+  try {
+    unlinkSync(join(getConfigDir(), TCC_WARMED_MARKER));
+  } catch {
+    // File may not exist — that's fine
+  }
+}
+
 /**
  * Folders that macOS protects via TCC (Transparency, Consent, Control).
  * Touching any of these for the first time triggers a system permission
@@ -307,11 +362,35 @@ async function probeLocalNetwork(): Promise<TccProbeStatus> {
 }
 
 /**
+ * Probe macOS Full Disk Access (kTCCServiceSystemPolicyAllFiles) by
+ * attempting to read the user-level TCC database. This file is only
+ * readable when Full Disk Access has been granted.
+ *
+ * Unlike other probes, this does NOT trigger any system dialog — it only
+ * checks the current permission state. FDA bypasses the AppData TCC
+ * category entirely, so granting it eliminates the recurring "data from
+ * other apps" dialog.
+ */
+async function probeFda(): Promise<TccProbeStatus> {
+  const target = join(homedir(), 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
+  if (!existsSync(target)) return 'missing';
+  try {
+    await fsp.access(target, fsConstants.R_OK);
+    return 'granted';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EACCES') return 'denied';
+    if (code === 'ENOENT') return 'missing';
+    return 'denied';
+  }
+}
+
+/**
  * Probe each macOS TCC-protected resource in turn, triggering the system
  * permission prompt on first run. Probes folders first, then Local
- * Network. Calls `onStart` before each probe so a UI can render the
- * status line before the modal blocks, then `onResult` after the probe
- * resolves so the UI can show the outcome.
+ * Network, then checks Full Disk Access status. Calls `onStart` before
+ * each probe so a UI can render the status line before the modal blocks,
+ * then `onResult` after the probe resolves so the UI can show the outcome.
  *
  * Returns one result per resource. On non-macOS platforms returns [].
  */
@@ -351,6 +430,16 @@ export async function warmupTccPermissions(
   const netResult: TccProbeResult = { label: netLabel, path: '(network)', status: netStatus };
   results.push(netResult);
   onResult?.(netResult);
+
+  // Full Disk Access — informational check only, never triggers a dialog.
+  // FDA (kTCCServiceSystemPolicyAllFiles) bypasses AppData TCC, so if
+  // granted, the "data from other apps" dialog will never appear.
+  const fdaLabel = 'Full Disk Access';
+  onStart?.(fdaLabel);
+  const fdaStatus = await probeFda();
+  const fdaResult: TccProbeResult = { label: fdaLabel, path: '(system)', status: fdaStatus };
+  results.push(fdaResult);
+  onResult?.(fdaResult);
 
   return results;
 }

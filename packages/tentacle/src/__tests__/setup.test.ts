@@ -78,6 +78,8 @@ vi.mock("../checks.js", () => ({
   checkCopilotCli: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
   warmupTccPermissions: vi.fn().mockResolvedValue([]),
+  needsTccWarmup: vi.fn().mockReturnValue(false),
+  markTccWarmed: vi.fn(),
 }));
 
 // Mock pair module to avoid real WebSocket connection

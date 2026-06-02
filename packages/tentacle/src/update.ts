@@ -20,6 +20,7 @@ import { isSea } from 'node:sea';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getKrakiHome } from './config.js';
+import { clearTccWarmedMarker } from './checks.js';
 
 const GITHUB_REPO = 'corelli18512/kraki';
 const NPM_PACKAGE = '@kraki/tentacle';
@@ -399,6 +400,10 @@ export async function performUpdate(currentVersion: string): Promise<void> {
 
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
     writeCache(latest);
+
+    // Clear TCC warmup marker so the daemon re-probes permissions after
+    // the binary is replaced (code signature may differ).
+    clearTccWarmedMarker();
 
     // Restart daemon if it was running before the update
     if (daemonWasRunning) {
