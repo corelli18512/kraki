@@ -21,7 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, needsTccWarmup, markTccWarmed, type TccProbeResult } from './checks.js';
+import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, needsTccWarmup, markTccWarmed, pollFda, type TccProbeResult } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 
@@ -127,9 +127,34 @@ async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
   const fda = results.find(r => r.label === 'Full Disk Access');
   if (fda?.status === 'denied') {
     console.log('');
-    console.log(chalk.dim('    💡 Tip: Grant Full Disk Access to eliminate the "data from'));
-    console.log(chalk.dim('    other apps" dialog. System Settings → Privacy & Security →'));
-    console.log(chalk.dim('    Full Disk Access → add kraki.'));
+    console.log(chalk.dim('    💡 Grant Full Disk Access to eliminate the recurring'));
+    console.log(chalk.dim('    "data from other apps" dialog during agent sessions.'));
+    console.log('');
+    console.log(chalk.dim('    Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+    console.log('');
+
+    const ac = new AbortController();
+    const spinner = ora({
+      indent: 4,
+      text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
+    }).start();
+
+    // Race: poll FDA every 2 s vs. user pressing Enter to skip
+    const granted = await Promise.race([
+      pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
+      input(
+        { message: '' },
+        { signal: ac.signal },
+      ).then(() => { ac.abort(); return false; })
+       .catch(() => false), // AbortError when poll wins
+    ]);
+
+    if (granted) {
+      spinner.succeed('Full Disk Access granted');
+      fda.status = 'granted';
+    } else {
+      spinner.warn('Skipped — grant Full Disk Access later to avoid the "data from other apps" dialog');
+    }
   }
 
   markTccWarmed(results);

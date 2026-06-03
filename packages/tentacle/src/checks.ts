@@ -371,7 +371,7 @@ async function probeLocalNetwork(): Promise<TccProbeStatus> {
  * category entirely, so granting it eliminates the recurring "data from
  * other apps" dialog.
  */
-async function probeFda(): Promise<TccProbeStatus> {
+export async function probeFda(): Promise<TccProbeStatus> {
   const target = join(homedir(), 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
   if (!existsSync(target)) return 'missing';
   try {
@@ -442,4 +442,37 @@ export async function warmupTccPermissions(
   onResult?.(fdaResult);
 
   return results;
+}
+
+/**
+ * Poll Full Disk Access at regular intervals until granted or the signal
+ * is aborted. Never triggers a system dialog — uses the same read-only
+ * TCC.db probe as `probeFda()`.
+ *
+ * Returns the final observed status ('granted' once the user toggles FDA
+ * in System Settings, or the last polled status if aborted early).
+ */
+export async function pollFda(
+  intervalMs = 2000,
+  signal?: AbortSignal,
+): Promise<TccProbeStatus> {
+  // Immediate check before entering the loop
+  const initial = await probeFda();
+  if (initial === 'granted') return 'granted';
+
+  while (!signal?.aborted) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, intervalMs);
+      if (signal) {
+        const onAbort = () => { clearTimeout(timer); resolve(); };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
+    if (signal?.aborted) break;
+    const status = await probeFda();
+    if (status === 'granted') return 'granted';
+  }
+
+  // Final check after abort — the user may have granted just before skip
+  return probeFda();
 }

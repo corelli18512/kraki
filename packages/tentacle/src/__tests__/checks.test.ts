@@ -67,7 +67,7 @@ import { input } from '@inquirer/prompts';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, promises as fsp } from 'node:fs';
 import { createConnection } from 'node:net';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath, needsTccWarmup, getWarmupLabels, markTccWarmed, clearTccWarmedMarker } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath, needsTccWarmup, getWarmupLabels, markTccWarmed, clearTccWarmedMarker, probeFda, pollFda } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
@@ -611,5 +611,72 @@ describe('clearTccWarmedMarker()', () => {
   it('does not throw if file does not exist', () => {
     mockUnlinkSync.mockImplementation(() => { throw Object.assign(new Error('enoent'), { code: 'ENOENT' }); });
     expect(() => clearTccWarmedMarker()).not.toThrow();
+  });
+});
+
+// ── probeFda() ──────────────────────────────────────────
+
+describe('probeFda()', () => {
+  it('returns granted when TCC.db is readable', async () => {
+    mockAccess.mockResolvedValue(undefined);
+    expect(await probeFda()).toBe('granted');
+  });
+
+  it('returns denied when TCC.db returns EPERM', async () => {
+    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    expect(await probeFda()).toBe('denied');
+  });
+
+  it('returns missing when TCC.db does not exist', async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('TCC.db')) return false;
+      return true;
+    });
+    expect(await probeFda()).toBe('missing');
+  });
+});
+
+// ── pollFda() ───────────────────────────────────────────
+
+describe('pollFda()', () => {
+  it('returns granted immediately if FDA is already granted', async () => {
+    mockAccess.mockResolvedValue(undefined);
+    const result = await pollFda(100);
+    expect(result).toBe('granted');
+  });
+
+  it('polls until FDA becomes granted', async () => {
+    let callCount = 0;
+    mockAccess.mockImplementation(() => {
+      callCount++;
+      if (callCount >= 3) return Promise.resolve(undefined);
+      return Promise.reject(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    });
+    const result = await pollFda(50);
+    expect(result).toBe('granted');
+    expect(callCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it('stops polling when signal is aborted', async () => {
+    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    const ac = new AbortController();
+    // Abort after a short delay
+    setTimeout(() => ac.abort(), 120);
+    const result = await pollFda(50, ac.signal);
+    expect(result).toBe('denied');
+  });
+
+  it('returns granted on final check after abort if FDA was granted', async () => {
+    let callCount = 0;
+    mockAccess.mockImplementation(() => {
+      callCount++;
+      // Grant on the final check (after abort)
+      if (callCount >= 4) return Promise.resolve(undefined);
+      return Promise.reject(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    });
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 150);
+    const result = await pollFda(50, ac.signal);
+    expect(result).toBe('granted');
   });
 });

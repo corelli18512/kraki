@@ -80,6 +80,8 @@ vi.mock("../checks.js", () => ({
   warmupTccPermissions: vi.fn().mockResolvedValue([]),
   needsTccWarmup: vi.fn().mockReturnValue(false),
   markTccWarmed: vi.fn(),
+  probeFda: vi.fn().mockResolvedValue('granted'),
+  pollFda: vi.fn().mockResolvedValue('granted'),
 }));
 
 // Mock pair module to avoid real WebSocket connection

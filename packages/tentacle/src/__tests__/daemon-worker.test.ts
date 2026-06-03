@@ -133,6 +133,8 @@ vi.mock('../checks.js', () => ({
   needsTccWarmup: vi.fn().mockReturnValue(false),
   warmupTccPermissions: vi.fn().mockResolvedValue([]),
   markTccWarmed: vi.fn(),
+  probeFda: vi.fn().mockResolvedValue('granted'),
+  pollFda: vi.fn().mockResolvedValue('granted'),
 }));
 
 // Prevent process.exit from killing the test runner
