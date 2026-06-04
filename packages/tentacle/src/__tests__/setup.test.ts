@@ -77,9 +77,6 @@ vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   checkCopilotCli: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
-  warmupTccPermissions: vi.fn().mockResolvedValue([]),
-  needsTccWarmup: vi.fn().mockReturnValue(false),
-  markTccWarmed: vi.fn(),
   probeFda: vi.fn().mockResolvedValue('granted'),
   pollFda: vi.fn().mockResolvedValue('granted'),
 }));

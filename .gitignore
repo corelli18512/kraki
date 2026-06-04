@@ -27,3 +27,9 @@ packages/toolbar/src-tauri/gen/
 packages/toolbar/src-tauri/icons/tray-*.png
 packages/toolbar/src-tauri/sidecar/
 packages/arm/web/e2e-*.png
+
+# Xcode / iOS build artifacts
+packages/arm/ios/build/
+packages/arm/ios/DerivedData/
+*.xcuserdata
+xcuserdata/

@@ -10,16 +10,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
-  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
-    // Default: simulate successful find (App Data granted)
-    setTimeout(() => cb(null), 0);
-    const { EventEmitter } = require('node:events');
-    return new EventEmitter();
-  }),
-}));
-
-vi.mock('../config.js', () => ({
-  getConfigDir: () => '/tmp/fake-kraki',
 }));
 
 vi.mock('@inquirer/prompts', () => ({
@@ -40,47 +30,25 @@ vi.mock('node:fs', async (importActual) => {
   return {
     ...actual,
     existsSync: vi.fn(() => true),
-    readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
-    unlinkSync: vi.fn(),
     promises: {
       ...actual.promises,
-      readdir: vi.fn(),
       access: vi.fn(), // FDA probe — default: resolves (granted)
     },
   };
 });
 
-vi.mock('node:net', () => ({
-  createConnection: vi.fn(() => {
-    const { EventEmitter } = require('node:events');
-    const socket = new EventEmitter();
-    socket.destroy = vi.fn();
-    // Simulate successful connection attempt (ECONNREFUSED = network allowed)
-    setTimeout(() => socket.emit('error', Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 0);
-    return socket;
-  }),
-}));
-
-import { execSync, execFile } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, promises as fsp } from 'node:fs';
-import { createConnection } from 'node:net';
+import { existsSync, promises as fsp } from 'node:fs';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, ensureWindowsSystemPath, needsTccWarmup, getWarmupLabels, markTccWarmed, clearTccWarmedMarker, probeFda, pollFda } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
-const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
-const mockReadFileSync = readFileSync as unknown as ReturnType<typeof vi.fn>;
-const mockWriteFileSync = writeFileSync as unknown as ReturnType<typeof vi.fn>;
-const mockUnlinkSync = unlinkSync as unknown as ReturnType<typeof vi.fn>;
-const mockReaddir = fsp.readdir as unknown as ReturnType<typeof vi.fn>;
 const mockAccess = fsp.access as unknown as ReturnType<typeof vi.fn>;
 const mockPlatform = platform as unknown as ReturnType<typeof vi.fn>;
 const mockHomedir = homedir as unknown as ReturnType<typeof vi.fn>;
-const mockCreateConnection = createConnection as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -360,260 +328,6 @@ describe('ensureWindowsSystemPath()', () => {
   });
 });
 
-// ── warmupTccPermissions ────────────────────────────────
-
-describe('warmupTccPermissions()', () => {
-  it('returns [] on non-darwin platforms', async () => {
-    mockPlatform.mockReturnValue('linux');
-    const result = await warmupTccPermissions();
-    expect(result).toEqual([]);
-    expect(mockReaddir).not.toHaveBeenCalled();
-  });
-
-  it('returns [] on win32', async () => {
-    mockPlatform.mockReturnValue('win32');
-    const result = await warmupTccPermissions();
-    expect(result).toEqual([]);
-  });
-
-  it('probes all 7 protected folders plus App Data, Local Network, and Full Disk Access on darwin', async () => {
-    mockReaddir.mockResolvedValue([]);
-    const result = await warmupTccPermissions();
-    expect(result).toHaveLength(10);
-    // 7 folder probes + App Data + Local Network + FDA
-    expect(result.slice(0, 7).every(r => r.status === 'granted')).toBe(true);
-    expect(result[7]).toMatchObject({ label: 'App Data', path: '(file provider)', status: 'granted' });
-    expect(result[8]).toMatchObject({ label: 'Local Network', path: '(network)', status: 'granted' });
-    expect(result[9]).toMatchObject({ label: 'Full Disk Access', path: '(system)', status: 'granted' });
-    expect(mockReaddir).toHaveBeenCalledTimes(7);
-  });
-
-  it('maps EPERM to denied', async () => {
-    const eperm = Object.assign(new Error('eperm'), { code: 'EPERM' });
-    mockReaddir.mockRejectedValue(eperm);
-    const result = await warmupTccPermissions();
-    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
-  });
-
-  it('maps EACCES to denied', async () => {
-    const eacces = Object.assign(new Error('eacces'), { code: 'EACCES' });
-    mockReaddir.mockRejectedValue(eacces);
-    const result = await warmupTccPermissions();
-    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
-  });
-
-  it('reports missing when folder does not exist', async () => {
-    mockExistsSync.mockReturnValue(false);
-    const result = await warmupTccPermissions();
-    expect(result.slice(0, 7).every(r => r.status === 'missing')).toBe(true);
-    expect(mockReaddir).not.toHaveBeenCalled();
-  });
-
-  it('treats unknown errno as denied (defensive)', async () => {
-    const eio = Object.assign(new Error('io'), { code: 'EIO' });
-    mockReaddir.mockRejectedValue(eio);
-    const result = await warmupTccPermissions();
-    expect(result.slice(0, 7).every(r => r.status === 'denied')).toBe(true);
-  });
-
-  it('invokes onStart before each probe and onResult after', async () => {
-    mockReaddir.mockResolvedValue([]);
-    const starts: string[] = [];
-    const results: string[] = [];
-    await warmupTccPermissions(
-      (label) => { starts.push(label); },
-      (r) => { results.push(`${r.label}:${r.status}`); },
-    );
-    expect(starts).toHaveLength(10);
-    expect(results).toHaveLength(10);
-    expect(starts[0]).toBe('~/Documents');
-    expect(results[0]).toBe('~/Documents:granted');
-    expect(starts[7]).toBe('App Data');
-    expect(results[7]).toBe('App Data:granted');
-    expect(starts[8]).toBe('Local Network');
-    expect(results[8]).toBe('Local Network:granted');
-    expect(starts[9]).toBe('Full Disk Access');
-    expect(results[9]).toBe('Full Disk Access:granted');
-  });
-
-  it('uses absolute paths under homedir', async () => {
-    mockReaddir.mockResolvedValue([]);
-    const result = await warmupTccPermissions();
-    expect(result[0].path).toBe('/home/test/Documents');
-    // iCloud Drive uses the long Library path
-    const icloud = result.find(r => r.label === '~/iCloud Drive');
-    expect(icloud?.path).toBe('/home/test/Library/Mobile Documents/com~apple~CloudDocs');
-  });
-
-  it('continues probing remaining folders even if one denies', async () => {
-    let callCount = 0;
-    mockReaddir.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 2) {
-        throw Object.assign(new Error('eperm'), { code: 'EPERM' });
-      }
-      return [];
-    });
-    const result = await warmupTccPermissions();
-    expect(result).toHaveLength(10);
-    expect(result[1].status).toBe('denied');
-    expect(result[0].status).toBe('granted');
-    expect(result[2].status).toBe('granted');
-  });
-
-  it('reports Local Network denied when socket returns EPERM', async () => {
-    const { EventEmitter } = require('node:events');
-    mockCreateConnection.mockImplementation(() => {
-      const socket = new EventEmitter();
-      socket.destroy = vi.fn();
-      setTimeout(() => socket.emit('error', Object.assign(new Error('perm'), { code: 'EPERM' })), 0);
-      return socket;
-    });
-    mockReaddir.mockResolvedValue([]);
-    const result = await warmupTccPermissions();
-    const net = result.find(r => r.label === 'Local Network');
-    expect(net).toMatchObject({ label: 'Local Network', status: 'denied' });
-  });
-
-  it('reports Local Network granted on ECONNREFUSED (network allowed, host unreachable)', async () => {
-    const { EventEmitter } = require('node:events');
-    mockCreateConnection.mockImplementation(() => {
-      const socket = new EventEmitter();
-      socket.destroy = vi.fn();
-      setTimeout(() => socket.emit('error', Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })), 0);
-      return socket;
-    });
-    mockReaddir.mockResolvedValue([]);
-    const result = await warmupTccPermissions();
-    const net = result.find(r => r.label === 'Local Network');
-    expect(net).toMatchObject({ label: 'Local Network', status: 'granted' });
-  });
-
-  it('reports App Data granted when find succeeds', async () => {
-    mockReaddir.mockResolvedValue([]);
-    // Default execFile mock already succeeds
-    const result = await warmupTccPermissions();
-    const appData = result.find(r => r.label === 'App Data');
-    expect(appData).toMatchObject({ label: 'App Data', path: '(file provider)', status: 'granted' });
-  });
-
-  it('reports App Data denied when find returns EPERM', async () => {
-    mockReaddir.mockResolvedValue([]);
-    const { EventEmitter } = require('node:events');
-    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
-      setTimeout(() => cb(Object.assign(new Error('perm'), { code: 'EPERM' })), 0);
-      return new EventEmitter();
-    });
-    const result = await warmupTccPermissions();
-    const appData = result.find(r => r.label === 'App Data');
-    expect(appData).toMatchObject({ label: 'App Data', status: 'denied' });
-  });
-
-  it('reports App Data missing when iCloud Drive folder does not exist', async () => {
-    mockReaddir.mockResolvedValue([]);
-    // existsSync returns false only for the iCloud Drive path
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === 'string' && p.includes('Mobile Documents')) return false;
-      return true;
-    });
-    const result = await warmupTccPermissions();
-    const appData = result.find(r => r.label === 'App Data');
-    expect(appData).toMatchObject({ label: 'App Data', status: 'missing' });
-  });
-
-  it('reports Full Disk Access granted when TCC.db is readable', async () => {
-    mockReaddir.mockResolvedValue([]);
-    // Default mockAccess resolves → granted
-    const result = await warmupTccPermissions();
-    const fda = result.find(r => r.label === 'Full Disk Access');
-    expect(fda).toMatchObject({ label: 'Full Disk Access', path: '(system)', status: 'granted' });
-  });
-
-  it('reports Full Disk Access denied when TCC.db returns EPERM', async () => {
-    mockReaddir.mockResolvedValue([]);
-    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
-    const result = await warmupTccPermissions();
-    const fda = result.find(r => r.label === 'Full Disk Access');
-    expect(fda).toMatchObject({ label: 'Full Disk Access', status: 'denied' });
-  });
-
-  it('reports Full Disk Access missing when TCC.db does not exist', async () => {
-    mockReaddir.mockResolvedValue([]);
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === 'string' && p.includes('TCC.db')) return false;
-      return true;
-    });
-    const result = await warmupTccPermissions();
-    const fda = result.find(r => r.label === 'Full Disk Access');
-    expect(fda).toMatchObject({ label: 'Full Disk Access', status: 'missing' });
-  });
-});
-
-// ── TCC marker functions ────────────────────────────────
-
-describe('needsTccWarmup()', () => {
-  it('returns false on non-darwin', () => {
-    mockPlatform.mockReturnValue('linux');
-    expect(needsTccWarmup()).toBe(false);
-  });
-
-  it('returns true when marker file does not exist', () => {
-    mockExistsSync.mockReturnValue(false);
-    expect(needsTccWarmup()).toBe(true);
-  });
-
-  it('returns false when all labels are in the marker', () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(getWarmupLabels().join('\n') + '\n');
-    expect(needsTccWarmup()).toBe(false);
-  });
-
-  it('returns true when a new label is missing from the marker', () => {
-    mockExistsSync.mockReturnValue(true);
-    // Simulate old marker missing Full Disk Access
-    const oldLabels = getWarmupLabels().filter(l => l !== 'Full Disk Access');
-    mockReadFileSync.mockReturnValue(oldLabels.join('\n') + '\n');
-    expect(needsTccWarmup()).toBe(true);
-  });
-});
-
-describe('getWarmupLabels()', () => {
-  it('includes Full Disk Access', () => {
-    expect(getWarmupLabels()).toContain('Full Disk Access');
-  });
-
-  it('has 10 labels matching warmupTccPermissions probe count', () => {
-    expect(getWarmupLabels()).toHaveLength(10);
-  });
-});
-
-describe('markTccWarmed()', () => {
-  it('writes labels to marker file', () => {
-    const results = [
-      { label: '~/Documents', path: '/home/test/Documents', status: 'granted' as const },
-      { label: 'Full Disk Access', path: '(system)', status: 'denied' as const },
-    ];
-    markTccWarmed(results);
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('.tcc-warmed'),
-      '~/Documents\nFull Disk Access\n',
-      'utf8',
-    );
-  });
-});
-
-describe('clearTccWarmedMarker()', () => {
-  it('removes the marker file', () => {
-    clearTccWarmedMarker();
-    expect(mockUnlinkSync).toHaveBeenCalledWith(expect.stringContaining('.tcc-warmed'));
-  });
-
-  it('does not throw if file does not exist', () => {
-    mockUnlinkSync.mockImplementation(() => { throw Object.assign(new Error('enoent'), { code: 'ENOENT' }); });
-    expect(() => clearTccWarmedMarker()).not.toThrow();
-  });
-});
-
 // ── probeFda() ──────────────────────────────────────────
 
 describe('probeFda()', () => {
@@ -633,6 +347,21 @@ describe('probeFda()', () => {
       return true;
     });
     expect(await probeFda()).toBe('missing');
+  });
+
+  it('returns granted on non-darwin platforms', async () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(await probeFda()).toBe('granted');
+  });
+
+  it('returns granted on win32', async () => {
+    mockPlatform.mockReturnValue('win32');
+    expect(await probeFda()).toBe('granted');
+  });
+
+  it('returns denied when TCC.db returns EACCES', async () => {
+    mockAccess.mockRejectedValue(Object.assign(new Error('eacces'), { code: 'EACCES' }));
+    expect(await probeFda()).toBe('denied');
   });
 });
 

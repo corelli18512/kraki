@@ -130,11 +130,7 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('../checks.js', () => ({
   ensureWindowsSystemPath: vi.fn().mockReturnValue([]),
-  needsTccWarmup: vi.fn().mockReturnValue(false),
-  warmupTccPermissions: vi.fn().mockResolvedValue([]),
-  markTccWarmed: vi.fn(),
   probeFda: vi.fn().mockResolvedValue('granted'),
-  pollFda: vi.fn().mockResolvedValue('granted'),
 }));
 
 // Prevent process.exit from killing the test runner

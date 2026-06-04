@@ -11,8 +11,9 @@
  */
 
 import { execSync } from 'node:child_process';
+import { platform } from 'node:os';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
-import { ensureWindowsSystemPath, needsTccWarmup, warmupTccPermissions, markTccWarmed } from './checks.js';
+import { ensureWindowsSystemPath, probeFda } from './checks.js';
 import { CopilotAdapter } from './adapters/copilot.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
@@ -75,19 +76,11 @@ export async function startWorker(): Promise<WorkerResult> {
     );
   }
 
-  // macOS: silently run TCC warmup on daemon start so folder-access and
-  // network permission dialogs are front-loaded rather than appearing
-  // mid-session when the Copilot agent triggers them.
-  if (needsTccWarmup()) {
-    logger.info('Running TCC permission warmup…');
-    const tccResults = await warmupTccPermissions();
-    markTccWarmed(tccResults);
-    const denied = tccResults.filter(r => r.status === 'denied');
-    if (denied.length > 0) {
-      logger.warn({ denied: denied.map(r => r.label) }, 'Some TCC permissions not granted');
-    }
-    const fda = tccResults.find(r => r.label === 'Full Disk Access');
-    if (fda?.status === 'denied') {
+  // macOS: check Full Disk Access status. FDA is required to prevent
+  // recurring TCC permission dialogs during agent sessions.
+  if (platform() === 'darwin') {
+    const fdaStatus = await probeFda();
+    if (fdaStatus !== 'granted') {
       logger.warn(
         'Full Disk Access not granted — grant in System Settings → Privacy & Security → Full Disk Access to prevent recurring permission dialogs',
       );

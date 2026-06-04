@@ -21,7 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, withRetry, warmupTccPermissions, needsTccWarmup, markTccWarmed, pollFda, type TccProbeResult } from './checks.js';
+import { checkGhAuth, checkCopilotCli, withRetry, probeFda, pollFda } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 
@@ -88,76 +88,44 @@ function step(n: number, total: number) { return chalk.dim(`[${n}/${total}]`); }
 function divider() { console.log(chalk.dim('  ─────────────────────────────────')); }
 
 /**
- * Render the TCC warm-up step. Probes each protected folder one at a
- * time, printing a status line as we go. macOS surfaces the permission
- * modal during each probe; the modal blocks until the user clicks.
+ * Check and guide the user through granting Full Disk Access.
+ * FDA is a superset of all per-folder and AppData TCC categories —
+ * granting it eliminates every recurring macOS permission dialog.
  */
-async function runTccWarmupStep(stepNum: number, total: number): Promise<void> {
+async function runFdaStep(stepNum: number, total: number): Promise<void> {
   console.log(`  ${icon} ${step(stepNum, total)} ${chalk.bold('macOS Privacy')}`);
-  console.log(chalk.dim('    macOS will ask kraki for permission to access folders where'));
-  console.log(chalk.dim('    your code lives and your local network. Click "Allow" on'));
-  console.log(chalk.dim('    each prompt — this only happens once.\n'));
 
-  const formatStatus = (r: TccProbeResult): string => {
-    switch (r.status) {
-      case 'granted': return chalk.green('✓ allowed');
-      case 'denied':  return chalk.yellow('⚠ denied');
-      case 'missing': return chalk.dim('— not present');
-    }
-  };
-
-  const results = await warmupTccPermissions(
-    (label) => {
-      // Print label + ellipsis on the same line; status overwrites it.
-      process.stdout.write(`    ${label.padEnd(22)} ${chalk.dim('checking…')}`);
-    },
-    (result) => {
-      // Carriage return + clear-line (ANSI EL), then re-print with status.
-      process.stdout.write(`\r\u001b[2K    ${result.label.padEnd(22)} ${formatStatus(result)}\n`);
-    },
-  );
-
-  const denied = results.filter(r => r.status === 'denied');
-  if (denied.length > 0) {
-    console.log('');
-    console.log(chalk.dim('    You can grant access later in System Settings →'));
-    console.log(chalk.dim('    Privacy & Security → Files and Folders / Local Network → kraki.'));
+  const fdaStatus = await probeFda();
+  if (fdaStatus === 'granted') {
+    console.log(chalk.green('    ✓ Full Disk Access granted'));
+    return;
   }
 
-  const fda = results.find(r => r.label === 'Full Disk Access');
-  if (fda?.status === 'denied') {
-    console.log('');
-    console.log(chalk.dim('    💡 Grant Full Disk Access to eliminate the recurring'));
-    console.log(chalk.dim('    "data from other apps" dialog during agent sessions.'));
-    console.log('');
-    console.log(chalk.dim('    Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
-    console.log('');
+  console.log(chalk.dim('    Grant Full Disk Access to prevent recurring permission dialogs'));
+  console.log(chalk.dim('    during agent sessions.\n'));
+  console.log(chalk.dim('    Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+  console.log('');
 
-    const ac = new AbortController();
-    const spinner = ora({
-      indent: 4,
-      text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
-    }).start();
+  const ac = new AbortController();
+  const spinner = ora({
+    indent: 4,
+    text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
+  }).start();
 
-    // Race: poll FDA every 2 s vs. user pressing Enter to skip
-    const granted = await Promise.race([
-      pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
-      input(
-        { message: '' },
-        { signal: ac.signal },
-      ).then(() => { ac.abort(); return false; })
-       .catch(() => false), // AbortError when poll wins
-    ]);
+  const granted = await Promise.race([
+    pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
+    input(
+      { message: '' },
+      { signal: ac.signal },
+    ).then(() => { ac.abort(); return false; })
+     .catch(() => false), // AbortError when poll wins
+  ]);
 
-    if (granted) {
-      spinner.succeed('Full Disk Access granted');
-      fda.status = 'granted';
-    } else {
-      spinner.warn('Skipped — grant Full Disk Access later to avoid the "data from other apps" dialog');
-    }
+  if (granted) {
+    spinner.succeed('Full Disk Access granted');
+  } else {
+    spinner.warn('Skipped — grant Full Disk Access later in System Settings');
   }
-
-  markTccWarmed(results);
 }
 
 // Align inquirer prefix (✔/?) with ora spinners (4-space indent)
@@ -354,8 +322,8 @@ export async function runSetup(): Promise<KrakiConfig> {
     return runSetupDirect(customRelay);
   }
 
-  const tccSteps = needsTccWarmup() ? 1 : 0;
-  const total = 4 + tccSteps;
+  const fdaSteps = platform() === 'darwin' ? 1 : 0;
+  const total = 4 + fdaSteps;
   const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
 
   // 1. Authentication
@@ -478,10 +446,10 @@ export async function runSetup(): Promise<KrakiConfig> {
     default: defaultName,
   });
 
-  // 5. macOS Privacy (TCC warm-up) — fresh installs only
-  if (tccSteps > 0) {
+  // 5. macOS Privacy (Full Disk Access)
+  if (fdaSteps > 0) {
     console.log('');
-    await runTccWarmupStep(5, total);
+    await runFdaStep(5, total);
   }
 
   // Build config
@@ -521,8 +489,8 @@ export async function runSetup(): Promise<KrakiConfig> {
  * Connects to the relay, queries capabilities, does inline auth.
  */
 async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
-  const tccSteps = needsTccWarmup() ? 1 : 0;
-  const total = 4 + tccSteps;
+  const fdaSteps = platform() === 'darwin' ? 1 : 0;
+  const total = 4 + fdaSteps;
 
   // 1. Relay URL (with retry loop)
   let relay: string = defaultRelay;
@@ -643,10 +611,10 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     default: defaultName,
   });
 
-  // 5. macOS Privacy (TCC warm-up) — fresh installs only
-  if (tccSteps > 0) {
+  // 5. macOS Privacy (Full Disk Access)
+  if (fdaSteps > 0) {
     console.log('');
-    await runTccWarmupStep(5, total);
+    await runFdaStep(5, total);
   }
 
   // Build config
