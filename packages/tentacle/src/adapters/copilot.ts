@@ -149,6 +149,7 @@ function isRecoverableSessionError(err: unknown): boolean {
   return message.includes('Session not found:') || message.includes('Connection is disposed');
 }
 
+
 /**
  * Repair known Copilot CLI writer-side schema violations in an events.jsonl
  * file so the SDK's loader-side validator accepts it on `session.resume()`.
@@ -559,25 +560,10 @@ export class CopilotAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
-    // Resolve GitHub token from `gh` CLI to bypass macOS Keychain prompts.
-    // Skip gho_ (OAuth) tokens — they are session-scoped Copilot CLI tokens
-    // that can't authenticate a separately spawned copilot process.
-    let githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-    if (githubToken?.startsWith('gho_')) {
-      logger.debug('Ignoring session-scoped gho_ token from environment');
-      githubToken = undefined;
-    }
-    if (!githubToken) {
-      try {
-        const cliToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-        if (cliToken && !cliToken.startsWith('gho_')) {
-          githubToken = cliToken;
-          logger.debug('Using GitHub token from `gh auth token`');
-        }
-      } catch {
-        // gh CLI unavailable — SDK will use its own auth chain
-      }
-    }
+    // Always prefer useLoggedInUser: true — the copilot CLI server manages
+    // its own credential store (keychain) and silently refreshes the ~8h
+    // access token for the lifetime of the daemon. Injecting a static gh
+    // token bypasses this and causes silent auth death when it expires.
 
     let cliPath = this.cliPath ?? resolveCopilotCliPath();
     if (!cliPath && isSea()) {
@@ -622,9 +608,7 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     const opts = {
-      // Use Copilot's own credential store when no gh token is available
-      useLoggedInUser: !githubToken,
-      ...(githubToken && { gitHubToken: githubToken }),
+      useLoggedInUser: true,
       ...(cliPath && { cliPath }),
     };
 
@@ -862,6 +846,10 @@ export class CopilotAdapter extends AgentAdapter {
       await entry.session.send(opts);
       return;
     } catch (err) {
+      if (await this.isAuthError()) {
+        this.fireAuthError(sessionId, err);
+        throw err;
+      }
       if (!isRecoverableSessionError(err)) {
         this.onError?.(sessionId, { message: getErrorMessage(err) });
         throw err;
@@ -879,7 +867,9 @@ export class CopilotAdapter extends AgentAdapter {
       try {
         await entry.session.send(opts);
       } catch (retryErr) {
-        if (isRecoverableSessionError(retryErr)) {
+        if (await this.isAuthError()) {
+          this.fireAuthError(sessionId, retryErr);
+        } else if (isRecoverableSessionError(retryErr)) {
           this.handleUnavailableSession(sessionId, retryErr);
         } else {
           this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
@@ -1249,6 +1239,27 @@ export class CopilotAdapter extends AgentAdapter {
     this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
   }
 
+  /** Query the SDK to determine whether auth is healthy. */
+  private async isAuthError(): Promise<boolean> {
+    try {
+      if (!this.client) return false;
+      const status = await this.client.getAuthStatus();
+      return !status.isAuthenticated;
+    } catch {
+      // If we can't reach the CLI server, don't assume auth is the issue.
+      return false;
+    }
+  }
+
+  /** Fire onError with a clear, actionable auth-error message. */
+  private fireAuthError(sessionId: string, err: unknown): void {
+    const raw = getErrorMessage(err);
+    logger.error({ sessionId, err }, 'Authentication error detected');
+    this.onError?.(sessionId, {
+      message: `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``,
+    });
+  }
+
   // ── SDK → callback wiring ─────────────────────────
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
@@ -1440,14 +1451,18 @@ export class CopilotAdapter extends AgentAdapter {
       }
     });
 
-    session.on('session.error', (event) => {
+    session.on('session.error', async (event) => {
       const data = event.data as unknown as Record<string, unknown>;
       const message = (data.message as string) ?? 'Unknown session error';
       const errorType = data.errorType as string | undefined;
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
-        this.onError?.(sessionId, { message });
+        if (await this.isAuthError()) {
+          this.fireAuthError(sessionId, message);
+        } else {
+          this.onError?.(sessionId, { message });
+        }
       }
     });
 
@@ -1497,14 +1512,17 @@ export class CopilotAdapter extends AgentAdapter {
       logger.warn(`[warning:${category}] ${data.message}`);
     });
 
-    session.on('assistant.turn_end', (event) => {
+    session.on('assistant.turn_end', async (event) => {
       const data = event.data as unknown as Record<string, unknown>;
       const reason = data?.reason;
       if (reason === 'error') {
+        const errorMsg = (data?.error as string) ?? 'Unknown agent error';
         this.turnErrorReported.set(sessionId, true);
-        this.onError?.(sessionId, {
-          message: (data?.error as string) ?? 'Unknown agent error',
-        });
+        if (await this.isAuthError()) {
+          this.fireAuthError(sessionId, errorMsg);
+        } else {
+          this.onError?.(sessionId, { message: errorMsg });
+        }
       }
 
       // Empty-cycle detection moved to session.idle — see handler above.
