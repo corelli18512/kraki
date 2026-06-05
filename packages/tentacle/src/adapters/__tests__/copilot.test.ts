@@ -83,6 +83,7 @@ let capturedResumeConfigs: Record<string, unknown>[];
 let capturedClientOptions: Record<string, unknown>[];
 let mockListSessions: Mock;
 let mockResumeSessionError: Error | null;
+let mockGetAuthStatus: Mock;
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
@@ -112,6 +113,7 @@ vi.mock('@github/copilot-sdk', () => {
           return session;
         }),
         listSessions: mockListSessions,
+        getAuthStatus: mockGetAuthStatus,
       };
     }),
   };
@@ -172,6 +174,7 @@ describe('CopilotAdapter', () => {
     capturedClientOptions = [];
     mockListSessions = vi.fn().mockResolvedValue([]);
     mockResumeSessionError = null;
+    mockGetAuthStatus = vi.fn().mockResolvedValue({ isAuthenticated: true });
     mockRegisterHooks = vi.fn();
     mockRegister = vi.fn();
     mockExistsSync.mockImplementation(
@@ -217,16 +220,17 @@ describe('CopilotAdapter', () => {
       // No error = success (CopilotClient constructor + start were called)
     });
 
-    it('start() passes the resolved Copilot CLI path to the SDK', async () => {
+    it('start() passes useLoggedInUser: true and the resolved Copilot CLI path to the SDK', async () => {
       await adapter.start();
 
       expect(capturedClientOptions[0]).toEqual(
         expect.objectContaining({
-          useLoggedInUser: false,
-          gitHubToken: 'fake-gh-token',
+          useLoggedInUser: true,
           cliPath: fakeCopilotPath,
         }),
       );
+      // Static gitHubToken should NOT be injected — copilot server owns auth refresh
+      expect(capturedClientOptions[0]).not.toHaveProperty('gitHubToken');
     });
 
     it('patches the SDK import when the installed session file is incompatible', () => {
@@ -548,6 +552,21 @@ describe('CopilotAdapter', () => {
       });
       expect(endedSpy).toHaveBeenCalledWith(sessionId, { reason: 'session unavailable' });
     });
+
+    it('fires onError with descriptive auth message for auth errors on send', async () => {
+      const errorSpy = vi.fn();
+      adapter.onError = errorSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockSessions[0].send.mockRejectedValueOnce(new Error('Authorization error, you may need to run /login'));
+      mockGetAuthStatus.mockResolvedValueOnce({ isAuthenticated: false });
+
+      await expect(adapter.sendMessage(sessionId, 'hello')).rejects.toThrow('Authorization error');
+
+      expect(errorSpy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+        message: expect.stringContaining('GitHub credential expired'),
+      }));
+    });
   });
 
   // ── Event wiring ────────────────────────────────────
@@ -610,7 +629,9 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('assistant.turn_end', {
         data: { reason: 'error', error: 'Model rate limited' },
       });
-      expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model rate limited' });
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model rate limited' });
+      });
     });
 
     it('wires assistant.turn_end error with no error message', async () => {
@@ -621,7 +642,9 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('assistant.turn_end', {
         data: { reason: 'error' },
       });
-      expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Unknown agent error' });
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Unknown agent error' });
+      });
     });
 
     it('does not fire onError for non-error turn_end with output', async () => {
@@ -784,7 +807,25 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('session.error', {
         data: { errorType: 'query', message: 'Model "opus" is not available.', statusCode: 400 },
       });
-      expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model "opus" is not available.' });
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledWith(sessionId, { message: 'Model "opus" is not available.' });
+      });
+    });
+
+    it('fires onError with descriptive auth message for auth-related session.error events', async () => {
+      const errorSpy = vi.fn();
+      adapter.onError = errorSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      mockGetAuthStatus.mockResolvedValueOnce({ isAuthenticated: false });
+      mockSessions[0]._emit('session.error', {
+        data: { errorType: 'auth', message: 'Authorization error, you may need to run /login', statusCode: 401 },
+      });
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+          message: expect.stringContaining('GitHub credential expired'),
+        }));
+      });
     });
 
     it('disconnects and errors on model mismatch in tools_updated', async () => {
@@ -856,12 +897,16 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('session.error', {
         data: { errorType: 'query', message: 'First error' },
       });
-      expect(spy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
       mockSessions[0]._emit('session.error', {
         data: { errorType: 'query', message: 'Duplicate error' },
       });
-      // Second session.error should be suppressed
-      expect(spy).toHaveBeenCalledTimes(1);
+      // Second session.error should be suppressed (turnErrorReported is already true, sync check)
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('does not fire empty-turn error when session.error already reported', async () => {
@@ -872,6 +917,9 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
       mockSessions[0]._emit('session.error', {
         data: { errorType: 'query', message: 'API error' },
+      });
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledTimes(1);
       });
       spy.mockClear();
       mockSessions[0]._emit('assistant.turn_end', { data: {} });
@@ -888,7 +936,9 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('session.error', {
         data: { errorType: 'query', message: 'Model not available' },
       });
-      expect(spy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
       spy.mockClear();
       // turn_start should NOT reset the error flag
       mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
