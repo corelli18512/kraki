@@ -121,6 +121,16 @@ vi.mock('node:child_process', () => ({
     if (mockExecSyncThrow) throw new Error('gh not found');
     return mockExecSyncReturn;
   }),
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
+    setTimeout(() => cb(null), 0);
+    const { EventEmitter } = require('node:events');
+    return new EventEmitter();
+  }),
+}));
+
+vi.mock('../checks.js', () => ({
+  ensureWindowsSystemPath: vi.fn().mockReturnValue([]),
+  probeFda: vi.fn().mockResolvedValue('granted'),
 }));
 
 // Prevent process.exit from killing the test runner

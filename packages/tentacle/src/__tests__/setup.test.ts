@@ -77,7 +77,8 @@ vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   checkCopilotCli: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
-  warmupTccPermissions: vi.fn().mockResolvedValue([]),
+  probeFda: vi.fn().mockResolvedValue('granted'),
+  pollFda: vi.fn().mockResolvedValue('granted'),
 }));
 
 // Mock pair module to avoid real WebSocket connection

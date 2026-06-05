@@ -5,9 +5,8 @@
  * Provides a retry mechanism for interactive setup flows.
  */
 
-import { execSync, execFile } from 'node:child_process';
-import { existsSync, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { execSync } from 'node:child_process';
+import { existsSync, constants as fsConstants, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -176,181 +175,64 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
   }
 }
 
-// ── macOS TCC warm-up ───────────────────────────────────
+// ── macOS Full Disk Access ───────────────────────────────
+//
+// FDA (kTCCServiceSystemPolicyAllFiles) is a superset of all per-folder
+// and AppData TCC categories. Granting it eliminates every recurring
+// macOS permission dialog that the Copilot agent would otherwise trigger.
+// Instead of probing individual folders, we simply require FDA.
 
-export type TccProbeStatus = 'granted' | 'denied' | 'missing';
-
-export interface TccProbeResult {
-  /** Short label suitable for display, e.g. "~/Documents". */
-  label: string;
-  /** Absolute path that was probed. */
-  path: string;
-  status: TccProbeStatus;
-}
+export type FdaStatus = 'granted' | 'denied' | 'missing';
 
 /**
- * Folders that macOS protects via TCC (Transparency, Consent, Control).
- * Touching any of these for the first time triggers a system permission
- * prompt attributed to the calling binary.
+ * Probe macOS Full Disk Access by attempting to read the user-level TCC
+ * database. This file is only readable when FDA has been granted.
  *
- * Order matters — prompts appear in this order during setup.
+ * Never triggers a system dialog — it only checks the current state.
  */
-const TCC_PROTECTED_FOLDERS: Array<{ label: string; relPath: string }> = [
-  { label: '~/Documents', relPath: 'Documents' },
-  { label: '~/Desktop', relPath: 'Desktop' },
-  { label: '~/Downloads', relPath: 'Downloads' },
-  { label: '~/iCloud Drive', relPath: 'Library/Mobile Documents/com~apple~CloudDocs' },
-  { label: '~/Pictures', relPath: 'Pictures' },
-  { label: '~/Movies', relPath: 'Movies' },
-  { label: '~/Music', relPath: 'Music' },
-];
-
-/**
- * Probe a single TCC-protected folder by attempting a tiny readdir.
- * Resolves with the access status. Never throws.
- */
-async function probeFolder(absPath: string): Promise<TccProbeStatus> {
-  if (!existsSync(absPath)) return 'missing';
+export async function probeFda(): Promise<FdaStatus> {
+  if (platform() !== 'darwin') return 'granted'; // non-macOS: not applicable
+  const target = join(homedir(), 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
+  if (!existsSync(target)) return 'missing';
   try {
-    // Reading the directory is enough to trigger TCC. We don't need the
-    // entries themselves — the system call is what flips the permission bit.
-    await fsp.readdir(absPath);
+    await fsp.access(target, fsConstants.R_OK);
     return 'granted';
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    // EPERM / EACCES → user denied (or hasn't decided yet and dismissed).
     if (code === 'EPERM' || code === 'EACCES') return 'denied';
-    // ENOENT shouldn't happen since we existsSync'd, but treat as missing.
     if (code === 'ENOENT') return 'missing';
-    // Anything else — treat as denied so we don't lie about access.
     return 'denied';
   }
 }
 
 /**
- * Probe macOS "App Data" TCC (kTCCServiceSystemPolicyAppData) by spawning
- * /usr/bin/find against the iCloud Drive FileProvider path.
+ * Poll Full Disk Access at regular intervals until granted or the signal
+ * is aborted. Never triggers a system dialog — uses the same read-only
+ * TCC.db probe as `probeFda()`.
  *
- * A Node readdir from the parent process triggers per-folder TCC, but the
- * separate AppData category is only triggered when a *child process*
- * accesses a FileProvider-managed path. The Copilot agent regularly runs
- * `find` / `glob` which hits this code path — so we pre-trigger it here
- * during setup to avoid a surprise prompt mid-session.
- *
- * We use `-maxdepth 0` so find only stats the root directory without
- * actually traversing it.
+ * Returns the final observed status ('granted' once the user toggles FDA
+ * in System Settings, or the last polled status if aborted early).
  */
-async function probeAppData(): Promise<TccProbeStatus> {
-  const target = join(homedir(), 'Library/Mobile Documents/com~apple~CloudDocs');
-  if (!existsSync(target)) return 'missing';
+export async function pollFda(
+  intervalMs = 2000,
+  signal?: AbortSignal,
+): Promise<FdaStatus> {
+  const initial = await probeFda();
+  if (initial === 'granted') return 'granted';
 
-  return new Promise((resolve) => {
-    const child = execFile(
-      '/usr/bin/find',
-      [target, '-maxdepth', '0'],
-      { timeout: 30_000 },
-      (err) => {
-        if (!err) { resolve('granted'); return; }
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === 'EPERM' || code === 'EACCES') { resolve('denied'); return; }
-        // Exit code 1 from find usually means permission denied on the path
-        if (err.code === null && (err as { status?: number }).status === 1) { resolve('denied'); return; }
-        resolve('denied');
-      },
-    );
-    // Safety: if the child somehow hangs beyond the timeout, kill it
-    child.on('error', () => resolve('denied'));
-  });
-}
-
-/**
- * Probe macOS Local Network TCC by making a brief TCP connection to a
- * LAN-routable address. macOS surfaces the "Local Network" permission
- * prompt when a signed binary first attempts a local-network operation.
- *
- * We connect to 224.0.0.1:0 (the all-hosts multicast group) which is
- * guaranteed to be unroutable but still triggers the TCC check in the
- * kernel's network stack before the connection attempt fails. The
- * socket is destroyed immediately after the TCC decision.
- */
-async function probeLocalNetwork(): Promise<TccProbeStatus> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      // Timed out waiting for the TCC dialog — treat as granted (the
-      // dialog blocks the kernel call, so a timeout means it wasn't shown).
-      resolve('granted');
-    }, 10_000);
-
-    const socket = createConnection({ host: '224.0.0.1', port: 9 });
-
-    socket.on('connect', () => {
-      clearTimeout(timeout);
-      socket.destroy();
-      resolve('granted');
-    });
-
-    socket.on('error', (err) => {
-      clearTimeout(timeout);
-      socket.destroy();
-      const code = (err as NodeJS.ErrnoException).code;
-      // ENETUNREACH / ECONNREFUSED / EHOSTUNREACH are normal — they mean
-      // macOS allowed the network call but the destination is unreachable.
-      // EPERM means the user denied the Local Network prompt.
-      if (code === 'EPERM' || code === 'EACCES') {
-        resolve('denied');
-      } else {
-        resolve('granted');
+  while (!signal?.aborted) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, intervalMs);
+      if (signal) {
+        const onAbort = () => { clearTimeout(timer); resolve(); };
+        signal.addEventListener('abort', onAbort, { once: true });
       }
     });
-  });
-}
-
-/**
- * Probe each macOS TCC-protected resource in turn, triggering the system
- * permission prompt on first run. Probes folders first, then Local
- * Network. Calls `onStart` before each probe so a UI can render the
- * status line before the modal blocks, then `onResult` after the probe
- * resolves so the UI can show the outcome.
- *
- * Returns one result per resource. On non-macOS platforms returns [].
- */
-export async function warmupTccPermissions(
-  onStart?: (label: string) => void,
-  onResult?: (result: TccProbeResult) => void,
-): Promise<TccProbeResult[]> {
-  if (platform() !== 'darwin') return [];
-
-  const home = homedir();
-  const results: TccProbeResult[] = [];
-
-  for (const { label, relPath } of TCC_PROTECTED_FOLDERS) {
-    const absPath = join(home, relPath);
-    onStart?.(label);
-    const status = await probeFolder(absPath);
-    const result: TccProbeResult = { label, path: absPath, status };
-    results.push(result);
-    onResult?.(result);
+    if (signal?.aborted) break;
+    const status = await probeFda();
+    if (status === 'granted') return 'granted';
   }
 
-  // App Data (FileProvider) — child-process access to iCloud Drive triggers
-  // kTCCServiceSystemPolicyAppData, a separate TCC category from folder access.
-  // Probe after folders since it's file-related but uses a different mechanism.
-  const appDataLabel = 'App Data';
-  onStart?.(appDataLabel);
-  const appDataStatus = await probeAppData();
-  const appDataResult: TccProbeResult = { label: appDataLabel, path: '(file provider)', status: appDataStatus };
-  results.push(appDataResult);
-  onResult?.(appDataResult);
-
-  // Local Network — probe after folders so the network dialog doesn't
-  // interleave with folder dialogs.
-  const netLabel = 'Local Network';
-  onStart?.(netLabel);
-  const netStatus = await probeLocalNetwork();
-  const netResult: TccProbeResult = { label: netLabel, path: '(network)', status: netStatus };
-  results.push(netResult);
-  onResult?.(netResult);
-
-  return results;
+  // Final check after abort — the user may have granted just before skip
+  return probeFda();
 }

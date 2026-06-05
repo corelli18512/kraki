@@ -11,7 +11,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
 import { pipeline } from 'node:stream/promises';
@@ -20,6 +20,7 @@ import { isSea } from 'node:sea';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getKrakiHome } from './config.js';
+import { probeFda, pollFda } from './checks.js';
 
 const GITHUB_REPO = 'corelli18512/kraki';
 const NPM_PACKAGE = '@kraki/tentacle';
@@ -399,6 +400,39 @@ export async function performUpdate(currentVersion: string): Promise<void> {
 
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
     writeCache(latest);
+
+    // On macOS, check FDA status and guide the user if not yet granted.
+    // FDA eliminates the recurring "data from other apps" TCC dialog.
+    if (platform() === 'darwin') {
+      const fdaStatus = await probeFda();
+      if (fdaStatus === 'denied') {
+        console.log('');
+        console.log(chalk.dim('  💡 Grant Full Disk Access to eliminate the "data from other apps" dialog.'));
+        console.log(chalk.dim('  Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+        console.log('');
+
+        const fdaSpinner = ora({
+          indent: 2,
+          text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
+        }).start();
+
+        const ac = new AbortController();
+        const { input } = await import('@inquirer/prompts');
+
+        const granted = await Promise.race([
+          pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
+          input({ message: '' }, { signal: ac.signal })
+            .then(() => { ac.abort(); return false; })
+            .catch(() => false),
+        ]);
+
+        if (granted) {
+          fdaSpinner.succeed('Full Disk Access granted');
+        } else {
+          fdaSpinner.warn('Skipped — grant Full Disk Access later in System Settings');
+        }
+      }
+    }
 
     // Restart daemon if it was running before the update
     if (daemonWasRunning) {
