@@ -601,7 +601,10 @@ export class RelayClient {
           });
           this.sessionManager.markActive(sessionId);
           this.send({ type: 'active', sessionId, payload: {} });
-          this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments)
+          // Lazy resume: if session is still disconnected from a prior daemon
+          // run, resume it into the runtime before sending the first message.
+          this.ensureSessionResumed(sessionId)
+            .then(() => this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments))
             .catch((err) => {
               logger.error({ err, sessionId }, 'sendMessage failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
@@ -1332,37 +1335,50 @@ export class RelayClient {
 
   // ── Session resume on reconnect ─────────────────────
 
+  /**
+   * On startup, sessions remain `disconnected` on disk — they are NOT eagerly
+   * loaded into the runtime. Instead, each session is lazily resumed on first
+   * user interaction via {@link ensureSessionResumed}. This avoids the O(N)
+   * memory cost of loading every historical session into the runtime process.
+   */
   private async resumeDisconnectedSessions(): Promise<void> {
     const resumable = this.sessionManager.getResumableSessions();
-    for (const meta of resumable) {
-      const originalState = meta.state;
-      const result = this.sessionManager.resumeSession(meta.id);
-      if (result) {
-        try {
-          await this.adapter.resumeSession(meta.id, result.context);
-          // Restore permission mode from persisted meta
-          if (meta.mode) {
-            this.adapter.setSessionMode(meta.id, meta.mode);
-          }
-          // Restore persisted usage totals so accumulation continues
-          if (meta.usage) {
-            this.adapter.setSessionUsage(meta.id, meta.usage);
-          }
-          // Restore idle state — resumeSession sets active, but SDK won't
-          // fire session.idle for an already-idle session
-          if (originalState === 'idle') {
-            this.sessionManager.markIdle(meta.id);
-          }
-        } catch (err) {
-          // Leave state as 'disconnected' so the next daemon restart will
-          // retry the resume. Flipping to 'ended' here turns a transient
-          // resume failure (e.g. corrupted events.jsonl from a known Copilot
-          // CLI writer-side bug, a rogue colliding daemon, a temporary SDK
-          // issue) into permanent session loss with no automatic recovery.
-          logger.warn({ err, sessionId: meta.id }, 'Session resume failed; leaving as disconnected for retry on next restart');
-          this.sessionManager.markDisconnected(meta.id);
-        }
+    if (resumable.length > 0) {
+      logger.info({ count: resumable.length }, 'Sessions available for lazy resume on first interaction');
+    }
+  }
+
+  /**
+   * Ensure a session is loaded into the adapter runtime, resuming it from
+   * disk if it is still in `disconnected` state. This is the lazy-resume
+   * counterpart to the old eager `resumeDisconnectedSessions` flow.
+   *
+   * Returns true if the session was freshly resumed, false if it was already
+   * active/idle (or the resume failed).
+   */
+  private async ensureSessionResumed(sessionId: string): Promise<boolean> {
+    const meta = this.sessionManager.getMeta(sessionId);
+    if (!meta || meta.state !== 'disconnected') return false;
+
+    const result = this.sessionManager.resumeSession(sessionId);
+    if (!result) return false;
+
+    try {
+      await this.adapter.resumeSession(sessionId, result.context);
+      // Restore permission mode from persisted meta
+      if (meta.mode) {
+        this.adapter.setSessionMode(sessionId, meta.mode);
       }
+      // Restore persisted usage totals so accumulation continues
+      if (meta.usage) {
+        this.adapter.setSessionUsage(sessionId, meta.usage);
+      }
+      logger.info({ sessionId }, 'Session lazily resumed on first interaction');
+      return true;
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'Lazy session resume failed; leaving as disconnected');
+      this.sessionManager.markDisconnected(sessionId);
+      return false;
     }
   }
 

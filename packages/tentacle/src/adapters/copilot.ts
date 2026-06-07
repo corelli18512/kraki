@@ -144,16 +144,6 @@ export function resolveCopilotCliPath(): string | undefined {
   return resolveExecutableFromPath('copilot');
 }
 
-function isRecoverableSessionError(err: unknown): boolean {
-  const message = getErrorMessage(err);
-  return message.includes('Session not found:') || message.includes('Connection is disposed');
-}
-
-/** Errors indicating the underlying copilot CLI runtime process has died. */
-function isRuntimeDeadError(err: unknown): boolean {
-  const message = getErrorMessage(err);
-  return message.includes('Connection is closed') || message.includes('connection is closed');
-}
 
 
 /**
@@ -956,13 +946,16 @@ export class CopilotAdapter extends AgentAdapter {
       await entry.session.send(opts);
       return;
     } catch (err) {
-      if (await this.isAuthError()) {
+      // Probe runtime to structurally determine error category
+      const health = await this.probeRuntime();
+
+      if (health === 'auth_error') {
         this.fireAuthError(sessionId, err);
         throw err;
       }
 
-      // Runtime process died — rebuild the client and retry once
-      if (isRuntimeDeadError(err)) {
+      if (health === 'dead') {
+        // Runtime process died — rebuild the client and retry once
         logger.warn({ err, sessionId }, 'Runtime died mid-send; rebuilding client');
         try {
           await this.rebuildClient();
@@ -975,11 +968,7 @@ export class CopilotAdapter extends AgentAdapter {
         }
       }
 
-      if (!isRecoverableSessionError(err)) {
-        this.onError?.(sessionId, { message: getErrorMessage(err) });
-        throw err;
-      }
-
+      // Runtime alive — session-level error; try resume + retry
       logger.warn({ err, sessionId }, 'Session send failed; attempting resume');
 
       try {
@@ -992,12 +981,12 @@ export class CopilotAdapter extends AgentAdapter {
       try {
         await entry.session.send(opts);
       } catch (retryErr) {
-        if (await this.isAuthError()) {
+        // On retry failure, re-probe to give a meaningful diagnosis
+        const retryHealth = await this.probeRuntime();
+        if (retryHealth === 'auth_error') {
           this.fireAuthError(sessionId, retryErr);
-        } else if (isRecoverableSessionError(retryErr)) {
-          this.handleUnavailableSession(sessionId, retryErr);
         } else {
-          this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
+          this.handleUnavailableSession(sessionId, retryErr);
         }
         throw retryErr;
       }
@@ -1360,15 +1349,25 @@ export class CopilotAdapter extends AgentAdapter {
     this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
   }
 
-  /** Query the SDK to determine whether auth is healthy. */
-  private async isAuthError(): Promise<boolean> {
+  /**
+   * Probe the runtime to determine its health after an error.
+   *
+   * Uses `getAuthStatus()` as a lightweight RPC to structurally detect
+   * whether the runtime process is alive, eliminating hardcoded error
+   * string matching.
+   *
+   * Returns:
+   *  - `'alive'`      — runtime is up, auth is good → session-level error
+   *  - `'auth_error'`  — runtime is up but auth failed
+   *  - `'dead'`        — runtime process is gone (RPC throws)
+   */
+  private async probeRuntime(): Promise<'alive' | 'auth_error' | 'dead'> {
     try {
-      if (!this.client) return false;
+      if (!this.client) return 'dead';
       const status = await this.client.getAuthStatus();
-      return !status.isAuthenticated;
+      return status.isAuthenticated ? 'alive' : 'auth_error';
     } catch {
-      // If we can't reach the CLI server, don't assume auth is the issue.
-      return false;
+      return 'dead';
     }
   }
 
@@ -1579,7 +1578,7 @@ export class CopilotAdapter extends AgentAdapter {
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
-        if (await this.isAuthError()) {
+        if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, message);
         } else {
           this.onError?.(sessionId, { message });
@@ -1639,7 +1638,7 @@ export class CopilotAdapter extends AgentAdapter {
       if (reason === 'error') {
         const errorMsg = (data?.error as string) ?? 'Unknown agent error';
         this.turnErrorReported.set(sessionId, true);
-        if (await this.isAuthError()) {
+        if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, errorMsg);
         } else {
           this.onError?.(sessionId, { message: errorMsg });
