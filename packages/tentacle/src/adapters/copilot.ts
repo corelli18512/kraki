@@ -438,28 +438,10 @@ export class CopilotAdapter extends AgentAdapter {
    *  any cleanly-aborted sessions still benefit. */
   private static readonly STOP_ABORT_TIMEOUT_MS = 2_000;
 
-  /** Max concurrent turns (send calls) across all sessions. Prevents OOM from
-   *  many sessions compacting simultaneously when the runtime is already heavy. */
-  private static readonly MAX_CONCURRENT_TURNS = 4;
-  /** Currently in-flight send() calls. */
-  private activeTurns = 0;
-  /** Queue of waiters blocked on the turn semaphore. */
-  private turnQueue: Array<() => void> = [];
-
-  private async acquireTurnSlot(): Promise<void> {
-    if (this.activeTurns < CopilotAdapter.MAX_CONCURRENT_TURNS) {
-      this.activeTurns++;
-      return;
-    }
-    await new Promise<void>((resolve) => this.turnQueue.push(resolve));
-    this.activeTurns++;
-  }
-
-  private releaseTurnSlot(): void {
-    this.activeTurns--;
-    const next = this.turnQueue.shift();
-    if (next) next();
-  }
+  /** Max time to wait for getAuthStatus during probeRuntime before assuming the
+   *  runtime is wedged/dead. Picked so a transient slow RPC is still tolerated
+   *  but a hung runtime doesn't stall every recovery attempt. */
+  private static readonly PROBE_RUNTIME_TIMEOUT_MS = 5_000;
 
   private static readonly CONTEXT_WINDOWS: Record<string, number> = {
     'claude-sonnet-4.6': 200_000,
@@ -580,46 +562,14 @@ export class CopilotAdapter extends AgentAdapter {
 
   // ── Lifecycle ───────────────────────────────────────
 
-  /**
-   * Kill orphaned copilot CLI runtime processes from previous daemon instances.
-   * These survive daemon crashes and leak ~200+ MB each.
-   */
-  private static reapOrphanedRuntimes(): void {
-    if (process.platform === 'win32') return; // pgrep not available
-    try {
-      // Find copilot CLI server processes not parented by this daemon
-      const output = execSync(
-        'pgrep -af "copilot.*--stdio" 2>/dev/null || true',
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
-      ).trim();
-      if (!output) return;
-      const myPid = process.pid;
-      for (const line of output.split('\n')) {
-        const match = line.match(/^(\d+)/);
-        if (!match) continue;
-        const pid = parseInt(match[1], 10);
-        if (pid === myPid) continue;
-        try {
-          // Check if parent is still a kraki daemon — if not, it's orphaned
-          const ppidOut = execSync(`ps -o ppid= -p ${pid} 2>/dev/null || true`, {
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-          }).trim();
-          const ppid = parseInt(ppidOut, 10);
-          // ppid=1 means parent died (adopted by init/launchd) — orphaned
-          if (ppid === 1) {
-            process.kill(pid, 'SIGTERM');
-            logger.info({ pid }, 'Reaped orphaned copilot runtime');
-          }
-        } catch { /* process may have exited between pgrep and kill */ }
-      }
-    } catch { /* best effort */ }
-  }
-
   async start(): Promise<void> {
-    // Kill orphaned runtime processes from previous daemon crashes
-    CopilotAdapter.reapOrphanedRuntimes();
-
+    // Note: orphaned runtime processes from un-gracefully killed daemons
+    // (SIGKILL / OS OOM-kill) are not auto-reaped here. The pgrep+ppid
+    // heuristics we previously tried either matched nothing or risked
+    // killing the user's independent `copilot` CLI. Graceful shutdown
+    // (daemon-worker.ts) prevents the common case; if the daemon dies
+    // un-gracefully, the user can `kill` the stray runtime by hand.
+    //
     // Always prefer useLoggedInUser: true — the copilot CLI server manages
     // its own credential store (keychain) and silently refreshes the ~8h
     // access token for the lifetime of the daemon. Injecting a static gh
@@ -722,14 +672,24 @@ export class CopilotAdapter extends AgentAdapter {
    * All existing SDK sessions are invalidated (they referenced the old
    * runtime process). The caller must re-resume individual sessions after
    * this returns. Concurrent callers share a single rebuild.
+   *
+   * Any pending permission/question requests across all sessions are
+   * cancelled first so the arm UI doesn't get stuck waiting for an answer
+   * the dead runtime will never deliver.
    */
   async rebuildClient(): Promise<void> {
     if (this.rebuildingClient) return this.rebuildingClient;
     this.rebuildingClient = (async () => {
       logger.warn('Rebuilding CopilotClient after runtime death');
       try {
+        // Resolve all pending permissions/questions across every session
+        // BEFORE clearing the entries — otherwise the arm UI stays stuck on
+        // a request that will never be answered (the old runtime is dead).
+        for (const sessionId of this.sessions.keys()) {
+          this.broadcastPendingResolutions(sessionId);
+        }
         if (this.client) {
-          await this.client.stop().catch(() => {});
+          try { await this.client.stop(); } catch { /* old client may already be dead */ }
           this.client = null;
         }
         // All SDK session handles are now invalid
@@ -927,12 +887,9 @@ export class CopilotAdapter extends AgentAdapter {
       if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
 
-    // Limit concurrent turns to prevent OOM from simultaneous compactions
-    await this.acquireTurnSlot();
     try {
       await this.sendMessageInner(sessionId, opts);
     } finally {
-      this.releaseTurnSlot();
       for (const f of tempFiles) {
         try { unlinkSync(f); } catch { /* best effort */ }
       }
@@ -1354,20 +1311,32 @@ export class CopilotAdapter extends AgentAdapter {
    *
    * Uses `getAuthStatus()` as a lightweight RPC to structurally detect
    * whether the runtime process is alive, eliminating hardcoded error
-   * string matching.
+   * string matching. Bounded by {@link PROBE_RUNTIME_TIMEOUT_MS} so a
+   * wedged runtime is treated as dead instead of hanging the caller.
    *
    * Returns:
    *  - `'alive'`      — runtime is up, auth is good → session-level error
    *  - `'auth_error'`  — runtime is up but auth failed
-   *  - `'dead'`        — runtime process is gone (RPC throws)
+   *  - `'dead'`        — runtime process is gone, wedged, or timed out
    */
   private async probeRuntime(): Promise<'alive' | 'auth_error' | 'dead'> {
+    if (!this.client) return 'dead';
+    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      if (!this.client) return 'dead';
-      const status = await this.client.getAuthStatus();
+      const status = await Promise.race([
+        this.client.getAuthStatus(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('probeRuntime timeout')),
+            CopilotAdapter.PROBE_RUNTIME_TIMEOUT_MS,
+          );
+        }),
+      ]);
       return status.isAuthenticated ? 'alive' : 'auth_error';
     } catch {
       return 'dead';
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

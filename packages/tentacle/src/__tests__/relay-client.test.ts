@@ -409,7 +409,7 @@ describe('RelayClient set_session_model', () => {
     return { adapter, sm, client };
   }
 
-  it('calls adapter.setSessionModel and sessionManager.setModel on set_session_model', () => {
+  it('calls adapter.setSessionModel and sessionManager.setModel on set_session_model', async () => {
     const { adapter, sm } = buildConnectedClient();
     const ws = sockets[0];
 
@@ -422,8 +422,13 @@ describe('RelayClient set_session_model', () => {
       payload: { model: 'claude-opus-4' },
     })));
 
-    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined);
+    // sessionManager.setModel is called synchronously (persist + ack first)
     expect(sm.setModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4');
+    // adapter.setSessionModel is chained behind ensureSessionResumed (which
+    // resolves synchronously here because getMeta returns a non-disconnected
+    // session, so the .then fires after a microtask).
+    await vi.runAllTimersAsync();
+    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined);
   });
 
   it('broadcasts session_model_set after handling set_session_model', () => {
@@ -447,6 +452,139 @@ describe('RelayClient set_session_model', () => {
     expect(modelSet.payload.model).toBe('gpt-5');
     expect(modelSet.payload.reasoningEffort).toBe('high');
     expect(modelSet.sessionId).toBe('sess_1');
+  });
+
+  it('lazily resumes a disconnected session before delivering set_session_model', async () => {
+    // Drive ensureSessionResumed through the disconnected → resumed path.
+    const adapter = {
+      onSessionEnded: undefined,
+      sendMessage: vi.fn(() => Promise.resolve()),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      resumeSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      createSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      forkSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+      setSessionModel: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+      setSessionUsage: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_d', state: 'disconnected', model: 'old', mode: 'execute', usage: { contextTokens: 100 } })),
+      resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
+      setModel: vi.fn(),
+      markDisconnected: vi.fn(),
+      markIdle: vi.fn(),
+      markActive: vi.fn(),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model',
+      sessionId: 'sess_d',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { model: 'claude-opus-4' },
+    })));
+
+    // Persist + ack are synchronous.
+    expect(sm.setModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4');
+    // The adapter call is chained behind ensureSessionResumed.
+    await vi.runAllTimersAsync();
+    expect(adapter.resumeSession).toHaveBeenCalledWith('sess_d', expect.anything());
+    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4', undefined);
+  });
+
+  it('de-duplicates concurrent lazy resumes for the same session (resume once, not twice)', async () => {
+    // Two near-simultaneous send_input messages for the same disconnected
+    // session must not trigger two SDK resumeSession calls.
+    let inflight: ((v: { sessionId: string }) => void) | null = null;
+    const resumePromise = new Promise<{ sessionId: string }>((resolve) => { inflight = resolve; });
+    const adapter = {
+      onSessionEnded: undefined,
+      sendMessage: vi.fn(() => Promise.resolve()),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      resumeSession: vi.fn(() => resumePromise),
+      createSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      forkSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+      setSessionUsage: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_d', state: 'disconnected' })),
+      resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
+      markActive: vi.fn(),
+      markIdle: vi.fn(),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+
+    // Fire two send_inputs back-to-back for the same disconnected session
+    for (let i = 0; i < 2; i++) {
+      sockets[0].emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input',
+        sessionId: 'sess_d',
+        deviceId: 'dev_1',
+        seq: i + 1,
+        timestamp: new Date().toISOString(),
+        payload: { text: `msg ${i}` },
+      })));
+    }
+
+    // Let microtasks drain so both calls reach ensureSessionResumed.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Even though we fired two send_inputs, only ONE SDK resumeSession was made.
+    expect(adapter.resumeSession).toHaveBeenCalledTimes(1);
+
+    // Resolve the in-flight resume so subsequent test cleanup proceeds.
+    inflight!({ sessionId: 'sess_d' });
+    await vi.runAllTimersAsync();
   });
 
   it('persists and broadcasts session_pinned on pin_session', () => {

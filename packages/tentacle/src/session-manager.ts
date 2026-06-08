@@ -545,36 +545,26 @@ export class SessionManager {
     this.writeMeta(sessionId, meta);
   }
 
-  /** Maximum number of sessions to resume on startup (most-recently-updated first). */
-  static readonly MAX_RESUMABLE_SESSIONS = 20;
-  /** Sessions older than this (ms) are not auto-resumed. (7 days) */
-  static readonly MAX_RESUMABLE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
   /**
-   * Get sessions that should be resumed on startup.
+   * Get sessions that need resume after a daemon restart (active, idle, or
+   * disconnected). Returned in no particular order.
    *
-   * Only returns sessions updated within the last 7 days, capped at 20,
-   * sorted by most-recently-updated first. Older or excess sessions stay
-   * on disk as 'disconnected' and can be resumed on-demand.
+   * Note: resume is lazy — `resumeDisconnectedSessions` in `RelayClient` only
+   * logs this list on startup; actual SDK resume happens per-session in
+   * `ensureSessionResumed` when the user first interacts with each one. So
+   * there is no cap here — eligibility is just "isn't ended/removed".
    */
   getResumableSessions(): SessionMeta[] {
     const sessions: SessionMeta[] = [];
     if (!existsSync(this.sessionsDir)) return sessions;
 
-    const now = Date.now();
     for (const dir of readdirSync(this.sessionsDir)) {
       const meta = this.readMeta(dir);
       if (meta && (meta.state === 'active' || meta.state === 'idle' || meta.state === 'disconnected')) {
-        // Skip sessions that haven't been touched in over 7 days
-        const age = now - new Date(meta.updatedAt).getTime();
-        if (age > SessionManager.MAX_RESUMABLE_AGE_MS) continue;
         sessions.push(meta);
       }
     }
-
-    // Most recently updated first, then cap
-    sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    return sessions.slice(0, SessionManager.MAX_RESUMABLE_SESSIONS);
+    return sessions;
   }
 
   /**

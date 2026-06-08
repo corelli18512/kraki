@@ -95,6 +95,11 @@ export class RelayClient {
   /** Sessions currently generating a title (prevent concurrent generation) */
   private titleGenerationInFlight = new Set<string>();
 
+  // ── Lazy resume state ──────────────────────────────
+  /** In-flight `ensureSessionResumed` promises keyed by sessionId, so two
+   *  concurrent callers don't double-resume the same SDK session. */
+  private resumeInFlight = new Map<string, Promise<boolean>>();
+
   // ── Push preview state ─────────────────────────────
   /** Last agent message content per session (for idle push preview) */
   private lastAgentContent = new Map<string, string>();
@@ -723,17 +728,23 @@ export class RelayClient {
         }
         case 'set_session_model': {
           const { model, reasoningEffort } = msg.payload;
-          this.adapter.setSessionModel(sessionId, model, reasoningEffort)
-            .catch((err) => {
-              logger.error({ err, sessionId }, 'setSessionModel failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
-            });
+          // Persist + ack immediately so the choice survives even if the
+          // session is currently disconnected and lazy-resume fails.
           this.sessionManager.setModel(sessionId, model);
           this.send({
             type: 'session_model_set',
             sessionId,
             payload: { model, reasoningEffort },
           });
+          // Lazy resume: ensure the SDK session is live before pushing the
+          // new model into it; otherwise the adapter would silently drop it
+          // (and the user's selection would be lost on next interaction).
+          this.ensureSessionResumed(sessionId)
+            .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort))
+            .catch((err) => {
+              logger.error({ err, sessionId }, 'setSessionModel failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
+            });
           break;
         }
         case 'pin_session': {
@@ -1353,33 +1364,44 @@ export class RelayClient {
    * disk if it is still in `disconnected` state. This is the lazy-resume
    * counterpart to the old eager `resumeDisconnectedSessions` flow.
    *
+   * Concurrent calls for the same sessionId share a single in-flight resume
+   * so we don't double-resume into the SDK and corrupt the session entry.
+   *
    * Returns true if the session was freshly resumed, false if it was already
    * active/idle (or the resume failed).
    */
   private async ensureSessionResumed(sessionId: string): Promise<boolean> {
+    const existing = this.resumeInFlight.get(sessionId);
+    if (existing) return existing;
+
     const meta = this.sessionManager.getMeta(sessionId);
     if (!meta || meta.state !== 'disconnected') return false;
 
-    const result = this.sessionManager.resumeSession(sessionId);
-    if (!result) return false;
-
-    try {
-      await this.adapter.resumeSession(sessionId, result.context);
-      // Restore permission mode from persisted meta
-      if (meta.mode) {
-        this.adapter.setSessionMode(sessionId, meta.mode);
+    const promise = (async () => {
+      try {
+        const result = this.sessionManager.resumeSession(sessionId);
+        if (!result) return false;
+        await this.adapter.resumeSession(sessionId, result.context);
+        // Restore permission mode from persisted meta
+        if (meta.mode) {
+          this.adapter.setSessionMode(sessionId, meta.mode);
+        }
+        // Restore persisted usage totals so accumulation continues
+        if (meta.usage) {
+          this.adapter.setSessionUsage(sessionId, meta.usage);
+        }
+        logger.info({ sessionId }, 'Session lazily resumed on first interaction');
+        return true;
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'Lazy session resume failed; leaving as disconnected');
+        this.sessionManager.markDisconnected(sessionId);
+        return false;
+      } finally {
+        this.resumeInFlight.delete(sessionId);
       }
-      // Restore persisted usage totals so accumulation continues
-      if (meta.usage) {
-        this.adapter.setSessionUsage(sessionId, meta.usage);
-      }
-      logger.info({ sessionId }, 'Session lazily resumed on first interaction');
-      return true;
-    } catch (err) {
-      logger.warn({ err, sessionId }, 'Lazy session resume failed; leaving as disconnected');
-      this.sessionManager.markDisconnected(sessionId);
-      return false;
-    }
+    })();
+    this.resumeInFlight.set(sessionId, promise);
+    return promise;
   }
 
   // ── Session sync & replay ───────────────────────────
