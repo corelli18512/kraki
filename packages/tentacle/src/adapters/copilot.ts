@@ -149,6 +149,12 @@ function isRecoverableSessionError(err: unknown): boolean {
   return message.includes('Session not found:') || message.includes('Connection is disposed');
 }
 
+/** Errors indicating the underlying copilot CLI runtime process has died. */
+function isRuntimeDeadError(err: unknown): boolean {
+  const message = getErrorMessage(err);
+  return message.includes('Connection is closed') || message.includes('connection is closed');
+}
+
 
 /**
  * Repair known Copilot CLI writer-side schema violations in an events.jsonl
@@ -379,6 +385,8 @@ async function loadCopilotClient(): Promise<CopilotClientCtor> {
 
 export class CopilotAdapter extends AgentAdapter {
   private client: CopilotClientType | null = null;
+  /** Serialises rebuildClient() so concurrent callers don't spawn multiple runtimes. */
+  private rebuildingClient: Promise<void> | null = null;
   private sessions = new Map<string, SessionEntry>();
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
@@ -439,6 +447,29 @@ export class CopilotAdapter extends AgentAdapter {
    *  At worst we get the legacy orphaned tool_use behavior for that session;
    *  any cleanly-aborted sessions still benefit. */
   private static readonly STOP_ABORT_TIMEOUT_MS = 2_000;
+
+  /** Max concurrent turns (send calls) across all sessions. Prevents OOM from
+   *  many sessions compacting simultaneously when the runtime is already heavy. */
+  private static readonly MAX_CONCURRENT_TURNS = 4;
+  /** Currently in-flight send() calls. */
+  private activeTurns = 0;
+  /** Queue of waiters blocked on the turn semaphore. */
+  private turnQueue: Array<() => void> = [];
+
+  private async acquireTurnSlot(): Promise<void> {
+    if (this.activeTurns < CopilotAdapter.MAX_CONCURRENT_TURNS) {
+      this.activeTurns++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.turnQueue.push(resolve));
+    this.activeTurns++;
+  }
+
+  private releaseTurnSlot(): void {
+    this.activeTurns--;
+    const next = this.turnQueue.shift();
+    if (next) next();
+  }
 
   private static readonly CONTEXT_WINDOWS: Record<string, number> = {
     'claude-sonnet-4.6': 200_000,
@@ -559,7 +590,46 @@ export class CopilotAdapter extends AgentAdapter {
 
   // ── Lifecycle ───────────────────────────────────────
 
+  /**
+   * Kill orphaned copilot CLI runtime processes from previous daemon instances.
+   * These survive daemon crashes and leak ~200+ MB each.
+   */
+  private static reapOrphanedRuntimes(): void {
+    if (process.platform === 'win32') return; // pgrep not available
+    try {
+      // Find copilot CLI server processes not parented by this daemon
+      const output = execSync(
+        'pgrep -af "copilot.*--stdio" 2>/dev/null || true',
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+      ).trim();
+      if (!output) return;
+      const myPid = process.pid;
+      for (const line of output.split('\n')) {
+        const match = line.match(/^(\d+)/);
+        if (!match) continue;
+        const pid = parseInt(match[1], 10);
+        if (pid === myPid) continue;
+        try {
+          // Check if parent is still a kraki daemon — if not, it's orphaned
+          const ppidOut = execSync(`ps -o ppid= -p ${pid} 2>/dev/null || true`, {
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+          const ppid = parseInt(ppidOut, 10);
+          // ppid=1 means parent died (adopted by init/launchd) — orphaned
+          if (ppid === 1) {
+            process.kill(pid, 'SIGTERM');
+            logger.info({ pid }, 'Reaped orphaned copilot runtime');
+          }
+        } catch { /* process may have exited between pgrep and kill */ }
+      }
+    } catch { /* best effort */ }
+  }
+
   async start(): Promise<void> {
+    // Kill orphaned runtime processes from previous daemon crashes
+    CopilotAdapter.reapOrphanedRuntimes();
+
     // Always prefer useLoggedInUser: true — the copilot CLI server manages
     // its own credential store (keychain) and silently refreshes the ~8h
     // access token for the lifetime of the daemon. Injecting a static gh
@@ -654,6 +724,33 @@ export class CopilotAdapter extends AgentAdapter {
     }
     this.sessions.clear();
     logger.debug('stopped');
+  }
+
+  /**
+   * Tear down the dead runtime and spawn a fresh one.
+   *
+   * All existing SDK sessions are invalidated (they referenced the old
+   * runtime process). The caller must re-resume individual sessions after
+   * this returns. Concurrent callers share a single rebuild.
+   */
+  async rebuildClient(): Promise<void> {
+    if (this.rebuildingClient) return this.rebuildingClient;
+    this.rebuildingClient = (async () => {
+      logger.warn('Rebuilding CopilotClient after runtime death');
+      try {
+        if (this.client) {
+          await this.client.stop().catch(() => {});
+          this.client = null;
+        }
+        // All SDK session handles are now invalid
+        this.sessions.clear();
+        await this.start();
+        logger.info('CopilotClient rebuilt successfully');
+      } finally {
+        this.rebuildingClient = null;
+      }
+    })();
+    return this.rebuildingClient;
   }
 
   // ── Session management ──────────────────────────────
@@ -840,6 +937,19 @@ export class CopilotAdapter extends AgentAdapter {
       if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
 
+    // Limit concurrent turns to prevent OOM from simultaneous compactions
+    await this.acquireTurnSlot();
+    try {
+      await this.sendMessageInner(sessionId, opts);
+    } finally {
+      this.releaseTurnSlot();
+      for (const f of tempFiles) {
+        try { unlinkSync(f); } catch { /* best effort */ }
+      }
+    }
+  }
+
+  private async sendMessageInner(sessionId: string, opts: MessageOptions): Promise<void> {
     let entry = this.getSession(sessionId);
 
     try {
@@ -850,6 +960,21 @@ export class CopilotAdapter extends AgentAdapter {
         this.fireAuthError(sessionId, err);
         throw err;
       }
+
+      // Runtime process died — rebuild the client and retry once
+      if (isRuntimeDeadError(err)) {
+        logger.warn({ err, sessionId }, 'Runtime died mid-send; rebuilding client');
+        try {
+          await this.rebuildClient();
+          entry = await this.resumeTrackedSession(sessionId);
+          await entry.session.send(opts);
+          return;
+        } catch (rebuildErr) {
+          this.handleUnavailableSession(sessionId, rebuildErr);
+          throw rebuildErr;
+        }
+      }
+
       if (!isRecoverableSessionError(err)) {
         this.onError?.(sessionId, { message: getErrorMessage(err) });
         throw err;
@@ -875,10 +1000,6 @@ export class CopilotAdapter extends AgentAdapter {
           this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
         }
         throw retryErr;
-      }
-    } finally {
-      for (const f of tempFiles) {
-        try { unlinkSync(f); } catch { /* best effort */ }
       }
     }
   }

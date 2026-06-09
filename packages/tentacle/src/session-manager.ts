@@ -545,20 +545,36 @@ export class SessionManager {
     this.writeMeta(sessionId, meta);
   }
 
+  /** Maximum number of sessions to resume on startup (most-recently-updated first). */
+  static readonly MAX_RESUMABLE_SESSIONS = 20;
+  /** Sessions older than this (ms) are not auto-resumed. (7 days) */
+  static readonly MAX_RESUMABLE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
   /**
-   * Get all sessions that need resume on restart (active, idle, or disconnected).
+   * Get sessions that should be resumed on startup.
+   *
+   * Only returns sessions updated within the last 7 days, capped at 20,
+   * sorted by most-recently-updated first. Older or excess sessions stay
+   * on disk as 'disconnected' and can be resumed on-demand.
    */
   getResumableSessions(): SessionMeta[] {
     const sessions: SessionMeta[] = [];
     if (!existsSync(this.sessionsDir)) return sessions;
 
+    const now = Date.now();
     for (const dir of readdirSync(this.sessionsDir)) {
       const meta = this.readMeta(dir);
       if (meta && (meta.state === 'active' || meta.state === 'idle' || meta.state === 'disconnected')) {
+        // Skip sessions that haven't been touched in over 7 days
+        const age = now - new Date(meta.updatedAt).getTime();
+        if (age > SessionManager.MAX_RESUMABLE_AGE_MS) continue;
         sessions.push(meta);
       }
     }
-    return sessions;
+
+    // Most recently updated first, then cap
+    sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return sessions.slice(0, SessionManager.MAX_RESUMABLE_SESSIONS);
   }
 
   /**
