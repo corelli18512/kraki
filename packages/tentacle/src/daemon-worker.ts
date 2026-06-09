@@ -47,14 +47,11 @@ import type { AgentAdapter } from './adapters/base.js';
 
 const logger = createLogger('daemon');
 
-// ── Uncaught exception / rejection handlers ─────────────
-
-process.on('uncaughtException', (err) => {
-  logger.fatal({ err }, 'Uncaught exception');
-  process.exit(1);
-});
-
-// unhandledRejection is handled at the top of this file (line ~19)
+// Note: `uncaughtException` is installed inside `startWorker` so it has
+// access to the `shutdown` closure and can run a best-effort graceful
+// cleanup (kill the Copilot SDK runtime, close the relay) before exiting.
+// A hard module-level handler would just `process.exit(1)` and leak the
+// runtime child process every time.
 
 // ── Main ────────────────────────────────────────────────
 
@@ -241,7 +238,10 @@ export async function startWorker(): Promise<WorkerResult> {
   initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
 
   // 6. Graceful shutdown
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info('Shutting down…');
     clearStatusFile();
     relay.disconnect();
@@ -253,6 +253,13 @@ export async function startWorker(): Promise<WorkerResult> {
 
   process.on('SIGTERM', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
   process.on('SIGINT', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
+  // On an uncaught exception, attempt the same graceful shutdown so the
+  // Copilot SDK runtime child is stopped instead of being orphaned. exit(1)
+  // to signal the abnormal termination to the launcher / launchctl.
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, 'Uncaught exception — attempting graceful shutdown');
+    shutdown().catch(() => {}).finally(() => process.exit(1));
+  });
 
   return { adapter, relay, sessionManager, shutdown };
 }

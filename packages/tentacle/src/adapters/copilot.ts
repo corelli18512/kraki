@@ -144,10 +144,6 @@ export function resolveCopilotCliPath(): string | undefined {
   return resolveExecutableFromPath('copilot');
 }
 
-function isRecoverableSessionError(err: unknown): boolean {
-  const message = getErrorMessage(err);
-  return message.includes('Session not found:') || message.includes('Connection is disposed');
-}
 
 
 /**
@@ -379,6 +375,8 @@ async function loadCopilotClient(): Promise<CopilotClientCtor> {
 
 export class CopilotAdapter extends AgentAdapter {
   private client: CopilotClientType | null = null;
+  /** Serialises rebuildClient() so concurrent callers don't spawn multiple runtimes. */
+  private rebuildingClient: Promise<void> | null = null;
   private sessions = new Map<string, SessionEntry>();
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
@@ -439,6 +437,11 @@ export class CopilotAdapter extends AgentAdapter {
    *  At worst we get the legacy orphaned tool_use behavior for that session;
    *  any cleanly-aborted sessions still benefit. */
   private static readonly STOP_ABORT_TIMEOUT_MS = 2_000;
+
+  /** Max time to wait for getAuthStatus during probeRuntime before assuming the
+   *  runtime is wedged/dead. Picked so a transient slow RPC is still tolerated
+   *  but a hung runtime doesn't stall every recovery attempt. */
+  private static readonly PROBE_RUNTIME_TIMEOUT_MS = 5_000;
 
   private static readonly CONTEXT_WINDOWS: Record<string, number> = {
     'claude-sonnet-4.6': 200_000,
@@ -560,6 +563,13 @@ export class CopilotAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
+    // Note: orphaned runtime processes from un-gracefully killed daemons
+    // (SIGKILL / OS OOM-kill) are not auto-reaped here. The pgrep+ppid
+    // heuristics we previously tried either matched nothing or risked
+    // killing the user's independent `copilot` CLI. Graceful shutdown
+    // (daemon-worker.ts) prevents the common case; if the daemon dies
+    // un-gracefully, the user can `kill` the stray runtime by hand.
+    //
     // Always prefer useLoggedInUser: true — the copilot CLI server manages
     // its own credential store (keychain) and silently refreshes the ~8h
     // access token for the lifetime of the daemon. Injecting a static gh
@@ -654,6 +664,43 @@ export class CopilotAdapter extends AgentAdapter {
     }
     this.sessions.clear();
     logger.debug('stopped');
+  }
+
+  /**
+   * Tear down the dead runtime and spawn a fresh one.
+   *
+   * All existing SDK sessions are invalidated (they referenced the old
+   * runtime process). The caller must re-resume individual sessions after
+   * this returns. Concurrent callers share a single rebuild.
+   *
+   * Any pending permission/question requests across all sessions are
+   * cancelled first so the arm UI doesn't get stuck waiting for an answer
+   * the dead runtime will never deliver.
+   */
+  async rebuildClient(): Promise<void> {
+    if (this.rebuildingClient) return this.rebuildingClient;
+    this.rebuildingClient = (async () => {
+      logger.warn('Rebuilding CopilotClient after runtime death');
+      try {
+        // Resolve all pending permissions/questions across every session
+        // BEFORE clearing the entries — otherwise the arm UI stays stuck on
+        // a request that will never be answered (the old runtime is dead).
+        for (const sessionId of this.sessions.keys()) {
+          this.broadcastPendingResolutions(sessionId);
+        }
+        if (this.client) {
+          try { await this.client.stop(); } catch { /* old client may already be dead */ }
+          this.client = null;
+        }
+        // All SDK session handles are now invalid
+        this.sessions.clear();
+        await this.start();
+        logger.info('CopilotClient rebuilt successfully');
+      } finally {
+        this.rebuildingClient = null;
+      }
+    })();
+    return this.rebuildingClient;
   }
 
   // ── Session management ──────────────────────────────
@@ -840,21 +887,45 @@ export class CopilotAdapter extends AgentAdapter {
       if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
 
+    try {
+      await this.sendMessageInner(sessionId, opts);
+    } finally {
+      for (const f of tempFiles) {
+        try { unlinkSync(f); } catch { /* best effort */ }
+      }
+    }
+  }
+
+  private async sendMessageInner(sessionId: string, opts: MessageOptions): Promise<void> {
     let entry = this.getSession(sessionId);
 
     try {
       await entry.session.send(opts);
       return;
     } catch (err) {
-      if (await this.isAuthError()) {
+      // Probe runtime to structurally determine error category
+      const health = await this.probeRuntime();
+
+      if (health === 'auth_error') {
         this.fireAuthError(sessionId, err);
         throw err;
       }
-      if (!isRecoverableSessionError(err)) {
-        this.onError?.(sessionId, { message: getErrorMessage(err) });
-        throw err;
+
+      if (health === 'dead') {
+        // Runtime process died — rebuild the client and retry once
+        logger.warn({ err, sessionId }, 'Runtime died mid-send; rebuilding client');
+        try {
+          await this.rebuildClient();
+          entry = await this.resumeTrackedSession(sessionId);
+          await entry.session.send(opts);
+          return;
+        } catch (rebuildErr) {
+          this.handleUnavailableSession(sessionId, rebuildErr);
+          throw rebuildErr;
+        }
       }
 
+      // Runtime alive — session-level error; try resume + retry
       logger.warn({ err, sessionId }, 'Session send failed; attempting resume');
 
       try {
@@ -867,18 +938,14 @@ export class CopilotAdapter extends AgentAdapter {
       try {
         await entry.session.send(opts);
       } catch (retryErr) {
-        if (await this.isAuthError()) {
+        // On retry failure, re-probe to give a meaningful diagnosis
+        const retryHealth = await this.probeRuntime();
+        if (retryHealth === 'auth_error') {
           this.fireAuthError(sessionId, retryErr);
-        } else if (isRecoverableSessionError(retryErr)) {
-          this.handleUnavailableSession(sessionId, retryErr);
         } else {
-          this.onError?.(sessionId, { message: getErrorMessage(retryErr) });
+          this.handleUnavailableSession(sessionId, retryErr);
         }
         throw retryErr;
-      }
-    } finally {
-      for (const f of tempFiles) {
-        try { unlinkSync(f); } catch { /* best effort */ }
       }
     }
   }
@@ -1239,15 +1306,37 @@ export class CopilotAdapter extends AgentAdapter {
     this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
   }
 
-  /** Query the SDK to determine whether auth is healthy. */
-  private async isAuthError(): Promise<boolean> {
+  /**
+   * Probe the runtime to determine its health after an error.
+   *
+   * Uses `getAuthStatus()` as a lightweight RPC to structurally detect
+   * whether the runtime process is alive, eliminating hardcoded error
+   * string matching. Bounded by {@link PROBE_RUNTIME_TIMEOUT_MS} so a
+   * wedged runtime is treated as dead instead of hanging the caller.
+   *
+   * Returns:
+   *  - `'alive'`      — runtime is up, auth is good → session-level error
+   *  - `'auth_error'`  — runtime is up but auth failed
+   *  - `'dead'`        — runtime process is gone, wedged, or timed out
+   */
+  private async probeRuntime(): Promise<'alive' | 'auth_error' | 'dead'> {
+    if (!this.client) return 'dead';
+    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
-      if (!this.client) return false;
-      const status = await this.client.getAuthStatus();
-      return !status.isAuthenticated;
+      const status = await Promise.race([
+        this.client.getAuthStatus(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('probeRuntime timeout')),
+            CopilotAdapter.PROBE_RUNTIME_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      return status.isAuthenticated ? 'alive' : 'auth_error';
     } catch {
-      // If we can't reach the CLI server, don't assume auth is the issue.
-      return false;
+      return 'dead';
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1458,7 +1547,7 @@ export class CopilotAdapter extends AgentAdapter {
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
-        if (await this.isAuthError()) {
+        if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, message);
         } else {
           this.onError?.(sessionId, { message });
@@ -1518,7 +1607,7 @@ export class CopilotAdapter extends AgentAdapter {
       if (reason === 'error') {
         const errorMsg = (data?.error as string) ?? 'Unknown agent error';
         this.turnErrorReported.set(sessionId, true);
-        if (await this.isAuthError()) {
+        if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, errorMsg);
         } else {
           this.onError?.(sessionId, { message: errorMsg });

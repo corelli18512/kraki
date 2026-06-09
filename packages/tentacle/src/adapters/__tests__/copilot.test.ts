@@ -1735,4 +1735,122 @@ describe('CopilotAdapter', () => {
       // Should not throw
     });
   });
+
+  // ── Runtime death recovery (probeRuntime + rebuildClient) ──
+
+  describe('runtime death recovery', () => {
+    it('rebuildClient tears down the dead client and spawns a fresh one', async () => {
+      await adapter.start();
+      const firstClientCount = capturedClientOptions.length;
+      await adapter.createSession({});
+      expect((adapter as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(1);
+
+      await adapter.rebuildClient();
+
+      // A new CopilotClient was constructed and start() ran again.
+      expect(capturedClientOptions.length).toBe(firstClientCount + 1);
+      // All previous SDK session handles are invalidated — caller is
+      // responsible for re-resuming individual sessions on demand.
+      expect((adapter as unknown as { sessions: Map<string, unknown> }).sessions.size).toBe(0);
+    });
+
+    it('rebuildClient resolves pending permission requests across all sessions before tearing them down', async () => {
+      const autoResolveSpy = vi.fn();
+      adapter.onPermissionAutoResolved = autoResolveSpy;
+
+      await adapter.start();
+      const { sessionId: a } = await adapter.createSession({});
+      const { sessionId: b } = await adapter.createSession({});
+
+      // Capture the SDK's onPermissionRequest handler for both sessions and
+      // start a request on each. The handler returns a Promise we expect to
+      // resolve with a reject decision when rebuildClient runs cleanup.
+      const sessionAEntry = (adapter as unknown as { sessions: Map<string, { pendingPermissions: Map<string, { resolve: (v: { kind: string }) => void }> }> }).sessions.get(a)!;
+      const sessionBEntry = (adapter as unknown as { sessions: Map<string, { pendingPermissions: Map<string, { resolve: (v: { kind: string }) => void }> }> }).sessions.get(b)!;
+      let resolveA = false;
+      let resolveB = false;
+      sessionAEntry.pendingPermissions.set('perm-a', { resolve: () => { resolveA = true; } } as unknown as { resolve: (v: { kind: string }) => void });
+      sessionBEntry.pendingPermissions.set('perm-b', { resolve: () => { resolveB = true; } } as unknown as { resolve: (v: { kind: string }) => void });
+
+      await adapter.rebuildClient();
+
+      expect(resolveA).toBe(true);
+      expect(resolveB).toBe(true);
+      expect(autoResolveSpy).toHaveBeenCalledWith(a, 'perm-a', 'cancelled');
+      expect(autoResolveSpy).toHaveBeenCalledWith(b, 'perm-b', 'cancelled');
+    });
+
+    it('rebuildClient serialises concurrent callers (single rebuild even when called twice)', async () => {
+      await adapter.start();
+      const before = capturedClientOptions.length;
+
+      const [r1, r2] = await Promise.all([adapter.rebuildClient(), adapter.rebuildClient()]);
+
+      expect(r1).toBeUndefined();
+      expect(r2).toBeUndefined();
+      // Exactly ONE additional client was built, even though we asked twice.
+      expect(capturedClientOptions.length).toBe(before + 1);
+    });
+
+    it('sendMessage rebuilds the client and retries when the runtime is dead (probe throws)', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      const clientsBeforeSend = capturedClientOptions.length;
+
+      // Simulate: send fails because the runtime process exited, AND
+      // getAuthStatus throws because the JSON-RPC channel is gone. The
+      // adapter must classify this as 'dead' → rebuild → re-resume → retry.
+      mockSessions[0].send.mockRejectedValueOnce(new Error('Connection is closed.'));
+      mockGetAuthStatus.mockRejectedValueOnce(new Error('Connection is closed.'));
+
+      await adapter.sendMessage(sessionId, 'hello after crash');
+
+      // A new client was built (rebuild) AND the session was resumed onto it.
+      expect(capturedClientOptions.length).toBe(clientsBeforeSend + 1);
+      expect(capturedResumeConfigs).toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+      // The send was retried on the new session handle.
+      expect(mockSessions[mockSessions.length - 1].send).toHaveBeenCalledWith({ prompt: 'hello after crash' });
+    });
+
+    it('sendMessage does not rebuild when probe says runtime is alive (session-level error path)', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      const clientsBeforeSend = capturedClientOptions.length;
+
+      // Send fails, but probe still succeeds → session-level error,
+      // resume on the existing client (no rebuild).
+      mockSessions[0].send.mockRejectedValueOnce(new Error(`Session not found: ${sessionId}`));
+
+      await adapter.sendMessage(sessionId, 'retry on same runtime');
+
+      // No new client was built (no rebuild).
+      expect(capturedClientOptions.length).toBe(clientsBeforeSend);
+      expect(capturedResumeConfigs).toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+    });
+
+    it('probeRuntime times out and reports the runtime as dead when getAuthStatus hangs', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      const clientsBeforeSend = capturedClientOptions.length;
+
+      // getAuthStatus never resolves → exceeds PROBE_RUNTIME_TIMEOUT_MS → treated as dead.
+      mockSessions[0].send.mockRejectedValueOnce(new Error('something blew up'));
+      mockGetAuthStatus.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }));
+
+      vi.useFakeTimers();
+      const sendPromise = adapter.sendMessage(sessionId, 'wedged probe');
+      // Advance past the 5s probe timeout
+      await vi.advanceTimersByTimeAsync(5_001);
+      await sendPromise;
+      vi.useRealTimers();
+
+      // Treated as dead → rebuilt + re-resumed + retried.
+      expect(capturedClientOptions.length).toBe(clientsBeforeSend + 1);
+      expect(mockSessions[mockSessions.length - 1].send).toHaveBeenCalledWith({ prompt: 'wedged probe' });
+    });
+  });
 });

@@ -546,7 +546,13 @@ export class SessionManager {
   }
 
   /**
-   * Get all sessions that need resume on restart (active, idle, or disconnected).
+   * Get sessions that need resume after a daemon restart (active, idle, or
+   * disconnected). Returned in no particular order.
+   *
+   * Note: resume is lazy — `resumeDisconnectedSessions` in `RelayClient` only
+   * logs this list on startup; actual SDK resume happens per-session in
+   * `ensureSessionResumed` when the user first interacts with each one. So
+   * there is no cap here — eligibility is just "isn't ended/removed".
    */
   getResumableSessions(): SessionMeta[] {
     const sessions: SessionMeta[] = [];
