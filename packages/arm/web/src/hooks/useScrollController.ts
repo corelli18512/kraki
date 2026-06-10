@@ -291,6 +291,9 @@ export function useScrollController(
       c.entryRepositioned = false;
     } else if (newBubbleAtEnd && !isFromUser && !c.sticky) {
       setUnreadCount((n) => n + 1);
+    }
+
+    if (!c.sticky) {
       setShowScrollBtn(true);
     }
 
@@ -332,6 +335,8 @@ export function useScrollController(
     if (ctx.current.sticky) {
       setShowScrollBtn(false);
       setUnreadCount(0);
+    } else {
+      setShowScrollBtn(true);
     }
 
     // Gap loading: when user scrolls near the top, load older messages.

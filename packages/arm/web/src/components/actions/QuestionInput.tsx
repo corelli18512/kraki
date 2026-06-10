@@ -46,7 +46,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
             value={freeform}
             onChange={(e) => setFreeform(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && freeform.trim()) {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && freeform.trim()) {
                 e.preventDefault();
                 handleAnswer(freeform.trim());
               }
