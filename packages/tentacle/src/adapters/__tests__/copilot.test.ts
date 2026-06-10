@@ -1888,7 +1888,11 @@ describe('CopilotAdapter', () => {
 
   // ── Idle-session eviction ─────────────────────────────────────
 
-  describe('idle-session eviction', () => {
+  // Eviction is intentionally a no-op on Windows (no pgrep for descendant
+  // RSS walk). Skip the test suite there — semantics are platform-aware.
+  const describeEviction = process.platform === 'win32' ? describe.skip : describe;
+
+  describeEviction('idle-session eviction', () => {
     type AdapterInternals = {
       sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
       lastActivityAt: Map<string, number>;
