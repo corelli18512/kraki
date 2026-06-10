@@ -604,12 +604,16 @@ export class RelayClient {
               ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
             },
           });
-          this.sessionManager.markActive(sessionId);
           this.send({ type: 'active', sessionId, payload: {} });
-          // Lazy resume: if session is still disconnected from a prior daemon
-          // run, resume it into the runtime before sending the first message.
+          // Lazy resume must run BEFORE markActive — otherwise the meta flip
+          // from disconnected → active defeats ensureSessionResumed's state
+          // gate, sessions never get loaded, and every send fails with
+          // "Session not found". (Regression discovered post-v0.21.1.)
           this.ensureSessionResumed(sessionId)
-            .then(() => this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments))
+            .then(() => {
+              this.sessionManager.markActive(sessionId);
+              return this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'sendMessage failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
@@ -1351,11 +1355,28 @@ export class RelayClient {
    * loaded into the runtime. Instead, each session is lazily resumed on first
    * user interaction via {@link ensureSessionResumed}. This avoids the O(N)
    * memory cost of loading every historical session into the runtime process.
+   *
+   * We force-normalise any sessions still in `active`/`idle` state from a
+   * previous (possibly un-graceful) daemon exit to `disconnected`, restoring
+   * the invariant "active/idle == loaded in the runtime". Without this, a
+   * leftover `active` state from a crash would make ensureSessionResumed
+   * skip resume (because state ≠ 'disconnected') even though the runtime
+   * has no handle for the session.
    */
   private async resumeDisconnectedSessions(): Promise<void> {
     const resumable = this.sessionManager.getResumableSessions();
+    let normalised = 0;
+    for (const meta of resumable) {
+      if (meta.state === 'active' || meta.state === 'idle') {
+        this.sessionManager.markDisconnected(meta.id);
+        normalised++;
+      }
+    }
     if (resumable.length > 0) {
-      logger.info({ count: resumable.length }, 'Sessions available for lazy resume on first interaction');
+      logger.info(
+        { count: resumable.length, normalised },
+        'Sessions available for lazy resume on first interaction',
+      );
     }
   }
 
