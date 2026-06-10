@@ -897,9 +897,14 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   private async sendMessageInner(sessionId: string, opts: MessageOptions): Promise<void> {
-    let entry = this.getSession(sessionId);
-
+    // getSession() is inside the try so that a "Session not found" throw —
+    // which happens when meta says active/idle but the SDK runtime never
+    // loaded the session (state-drift after a crash, or a missed
+    // ensureSessionResumed gate) — flows into the recovery path that calls
+    // resumeTrackedSession instead of escaping all the way to the arm.
+    let entry: SessionEntry;
     try {
+      entry = this.getSession(sessionId);
       await entry.session.send(opts);
       return;
     } catch (err) {

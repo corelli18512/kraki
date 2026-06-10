@@ -383,9 +383,20 @@ describe('CopilotAdapter', () => {
       await expect(adapter.createSession({})).rejects.toThrow('not started');
     });
 
-    it('sendMessage throws for unknown session', async () => {
+    it('sendMessage on unknown session attempts to resume and reports session_ended if resume fails', async () => {
+      // Previously: sendMessage threw "Session not found" as a guard.
+      // After v0.21.1+ fix: sendMessage tries to resume from disk (self-heal
+      // for state-drift cases). If the SDK has no record either, we fall
+      // through to handleUnavailableSession → arm sees session_ended.
+      const endedSpy = vi.fn();
+      const errorSpy = vi.fn();
+      adapter.onSessionEnded = endedSpy;
+      adapter.onError = errorSpy;
       await adapter.start();
-      await expect(adapter.sendMessage('nonexistent', 'hi')).rejects.toThrow('not found');
+      mockResumeSessionError = new Error('Session file is missing');
+
+      await expect(adapter.sendMessage('nonexistent', 'hi')).rejects.toThrow();
+      expect(endedSpy).toHaveBeenCalledWith('nonexistent', { reason: 'session unavailable' });
     });
 
     it('respondToPermission returns silently for unknown session', async () => {
@@ -566,6 +577,27 @@ describe('CopilotAdapter', () => {
       expect(errorSpy).toHaveBeenCalledWith(sessionId, expect.objectContaining({
         message: expect.stringContaining('GitHub credential expired'),
       }));
+    });
+
+    it('self-heals when the SDK session is not loaded (resumes from disk + retries)', async () => {
+      // Regression for v0.21.1: meta state could drift such that the relay-
+      // client did not lazy-resume before calling sendMessage. The adapter's
+      // getSession() would throw "Session not found" and escape the recovery
+      // path, leaving the user with a permanent "Failed to deliver message"
+      // until restart.
+      await adapter.start();
+      // Pretend the session exists on disk (resume will succeed) but is not
+      // tracked in the adapter's in-memory map.
+      const sessionId = 'sess-not-loaded';
+
+      await adapter.sendMessage(sessionId, 'first message after crash');
+
+      // The adapter resumed the session from disk and successfully delivered.
+      expect(capturedResumeConfigs).toEqual([
+        expect.objectContaining({ sessionId }),
+      ]);
+      // The freshly-resumed session received the prompt.
+      expect(mockSessions[mockSessions.length - 1].send).toHaveBeenCalledWith({ prompt: 'first message after crash' });
     });
   });
 

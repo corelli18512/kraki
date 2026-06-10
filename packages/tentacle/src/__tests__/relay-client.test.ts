@@ -587,6 +587,69 @@ describe('RelayClient set_session_model', () => {
     await vi.runAllTimersAsync();
   });
 
+  it('send_input on disconnected session: ensureSessionResumed runs BEFORE markActive (regression for v0.21.1 state-race)', async () => {
+    // Before the fix, markActive was called before ensureSessionResumed.
+    // That flipped meta state from `disconnected` → `active`, defeating the
+    // lazy-resume gate, so the session was never loaded and the very next
+    // sendMessage call hit "Session not found" forever.
+    const callOrder: string[] = [];
+    const adapter = {
+      onSessionEnded: undefined,
+      sendMessage: vi.fn(() => { callOrder.push('sendMessage'); return Promise.resolve(); }),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      resumeSession: vi.fn(() => { callOrder.push('resumeSession'); return Promise.resolve({ sessionId: 'sess_d' }); }),
+      createSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      forkSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_d' })),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+      setSessionUsage: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_d', state: 'disconnected' })),
+      resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
+      markActive: vi.fn(() => { callOrder.push('markActive'); }),
+      markIdle: vi.fn(),
+      appendMessage: vi.fn(() => 1),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input',
+      sessionId: 'sess_d',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { text: 'hi' },
+    })));
+
+    await vi.runAllTimersAsync();
+    // resumeSession MUST come before markActive, and markActive before
+    // sendMessage — otherwise the state-race bug returns.
+    expect(callOrder).toEqual(['resumeSession', 'markActive', 'sendMessage']);
+  });
+
   it('persists and broadcasts session_pinned on pin_session', () => {
     const { sm } = buildConnectedClient();
     const ws = sockets[0];
