@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionManager } from '../session-manager.js';
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -871,6 +871,75 @@ describe('SessionManager', () => {
 
       const start = sm.findTurnAlignedStart(sessionId, 3);
       expect(start).toBe(1);
+    });
+  });
+
+  // ── markRead clamp + migration ─────────────────────────
+
+  describe('markRead', () => {
+    it('clamps incoming seq to lastSeq', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      // lastSeq is now 2; arm sends a runaway seq from a stale store
+      sm.markRead(sessionId, 999_999);
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.lastSeq).toBe(2);
+      expect(meta.readSeq).toBe(2);
+    });
+
+    it('still advances readSeq when seq is within range', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.markRead(sessionId, 2);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(2);
+      sm.markRead(sessionId, 3);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(3);
+    });
+
+    it('does not roll readSeq backwards', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.markRead(sessionId, 3);
+      sm.markRead(sessionId, 1);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(3);
+    });
+  });
+
+  describe('clampOverflowReadSeq migration', () => {
+    it('repairs sessions where readSeq exceeds lastSeq on startup', () => {
+      // Hand-write a meta.json that simulates the legacy corruption
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      const metaPath = join(dir, sessionId, 'meta.json');
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+      meta.readSeq = 99_999;
+      writeFileSync(metaPath, JSON.stringify(meta), 'utf8');
+
+      // Re-construct triggers the migration
+      const sm2 = new SessionManager(dir);
+      expect(sm2.getMeta(sessionId)!.readSeq).toBe(2);
+      expect(sm2.getMeta(sessionId)!.lastSeq).toBe(2);
+    });
+
+    it('leaves healthy meta untouched (idempotent)', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.markRead(sessionId, 1);
+      const before = readFileSync(join(dir, sessionId, 'meta.json'), 'utf8');
+
+      // Second construct over the same dir should be a no-op
+      const _sm2 = new SessionManager(dir);
+      const after = readFileSync(join(dir, sessionId, 'meta.json'), 'utf8');
+      expect(JSON.parse(after).readSeq).toBe(1);
+      // updatedAt is the only field we may bump, and we don't bump it
+      // when readSeq doesn't need clamping
+      expect(JSON.parse(before).updatedAt).toBe(JSON.parse(after).updatedAt);
     });
   });
 });
