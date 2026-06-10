@@ -61,8 +61,7 @@ const initialState = {
   githubClientId: null,
   vapidPublicKey: null,
   relayVersion: null,
-  deviceModels: new Map<string, string[]>(),
-  deviceModelDetails: new Map<string, import('@kraki/protocol').ModelDetail[]>(),
+  deviceAgents: new Map<string, import('@kraki/protocol').AgentCapabilities>(),
   deviceVersions: new Map<string, string>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
@@ -373,26 +372,18 @@ export const useStore = create<Store>()(persist((set) => ({
   setVapidPublicKey: (key) => set({ vapidPublicKey: key }),
   setRelayVersion: (version) => set({ relayVersion: version }),
 
-  setDeviceModels: (deviceId, models) =>
+  setDeviceAgent: (deviceId, agent) =>
     set((state) => {
-      const next = new Map(state.deviceModels);
-      if (models.length > 0) {
-        next.set(deviceId, models);
-      } else {
-        next.delete(deviceId);
-      }
-      return { deviceModels: next };
+      const next = new Map(state.deviceAgents);
+      next.set(deviceId, agent);
+      return { deviceAgents: next };
     }),
 
-  setDeviceModelDetails: (deviceId, details) =>
+  clearDeviceAgent: (deviceId) =>
     set((state) => {
-      const next = new Map(state.deviceModelDetails);
-      if (details.length > 0) {
-        next.set(deviceId, details);
-      } else {
-        next.delete(deviceId);
-      }
-      return { deviceModelDetails: next };
+      const next = new Map(state.deviceAgents);
+      next.delete(deviceId);
+      return { deviceAgents: next };
     }),
 
   setDeviceVersion: (deviceId, version) =>
@@ -501,8 +492,7 @@ export const useStore = create<Store>()(persist((set) => ({
     githubClientId: null,
     vapidPublicKey: null,
   relayVersion: null,
-    deviceModels: new Map(),
-    deviceModelDetails: new Map(),
+    deviceAgents: new Map(),
     deviceVersions: new Map(),
     sessionUsage: new Map(),
     sessionPreviews: new Map(),

@@ -323,9 +323,7 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   payload: {
     name: string;
     kind?: string;
-    models?: string[];
-    /** Rich model metadata including reasoning effort support */
-    modelDetails?: import('./devices.js').ModelDetail[];
+    agent?: import('./devices.js').AgentCapabilities;
     version?: string;
   };
 }

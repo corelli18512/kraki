@@ -147,9 +147,9 @@ export async function startWorker(): Promise<WorkerResult> {
   }
 
   // 3c. Select agent adapter based on KRAKI_AGENT env var
-  const agentType = (process.env.KRAKI_AGENT ?? 'copilot').toLowerCase();
+  const agentId = (process.env.KRAKI_AGENT ?? 'copilot').toLowerCase() as import('@kraki/protocol').AgentId;
   let adapter: AgentAdapter;
-  if (agentType === 'claude') {
+  if (agentId === 'claude') {
     adapter = new ClaudeAdapter({
       attachmentStore,
       ...(mcpInfo && { krakiMcp: mcpInfo }),
@@ -173,9 +173,9 @@ export async function startWorker(): Promise<WorkerResult> {
   try {
     await adapter.start();
     adapterReady = true;
-    logger.info(`${agentType} adapter started`);
+    logger.info(`${agentId} adapter started`);
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, `${agentType} adapter failed to start`);
+    logger.warn({ err: (err as Error).message }, `${agentId} adapter failed to start`);
     try { await adapter.stop(); } catch { /* already dead */ }
   }
 
@@ -214,7 +214,7 @@ export async function startWorker(): Promise<WorkerResult> {
         role: 'tentacle',
         kind: 'desktop',
         deviceId,
-        capabilities: models.length > 0 ? { models, modelDetails } : undefined,
+        capabilities: models.length > 0 ? { agent: { type: 'code' as const, id: agentId, models, modelDetails } } : undefined,
       },
       authMethod: config.authMethod,
       token,

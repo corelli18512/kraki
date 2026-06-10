@@ -2098,8 +2098,7 @@ export class RelayClient {
       payload: {
         name: this.options.device.name,
         kind: this.options.device.kind,
-        models: this.options.device.capabilities?.models,
-        modelDetails: this.options.device.capabilities?.modelDetails,
+        agent: this.options.device.capabilities?.agent,
         version: this.options.version,
       },
     } as ProducerMessage);
@@ -2117,8 +2116,7 @@ export class RelayClient {
       payload: {
         name: this.options.device.name,
         kind: this.options.device.kind,
-        models: this.options.device.capabilities?.models,
-        modelDetails: this.options.device.capabilities?.modelDetails,
+        agent: this.options.device.capabilities?.agent,
         version: this.options.version,
       },
     };

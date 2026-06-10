@@ -41,8 +41,7 @@ function saveEffortPref(modelId: string, effort: ReasoningEffort) {
 
 export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
-  const deviceModels = useStore((s) => s.deviceModels);
-  const deviceModelDetails = useStore((s) => s.deviceModelDetails);
+  const deviceAgents = useStore((s) => s.deviceAgents);
 
   const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
   const [selectedDevice, setSelectedDevice] = useState('');
@@ -63,8 +62,9 @@ export function NewSessionDialog({ open, onClose }: Props) {
   }, [open, tentacles.length]);
 
   // Get models from tentacle greeting
-  const models = deviceModels.get(selectedDevice) ?? [];
-  const modelDetails = deviceModelDetails.get(selectedDevice) ?? [];
+  const agentCaps = deviceAgents.get(selectedDevice);
+  const models = agentCaps?.models ?? [];
+  const modelDetails = agentCaps?.modelDetails ?? [];
 
   // Get reasoning effort info for selected model
   const selectedModelDetail = useMemo(

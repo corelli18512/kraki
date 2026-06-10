@@ -3,6 +3,7 @@ import type {
   DeviceSummary,
   ProducerMessage,
   ConsumerMessage,
+  AgentCapabilities,
   ModelDetail,
   SessionUsage,
   LocalSession,
@@ -112,8 +113,7 @@ export interface AppState {
   relayVersion: string | null;
 
   // Live capabilities from tentacle greetings
-  deviceModels: Map<string, string[]>;
-  deviceModelDetails: Map<string, ModelDetail[]>;
+  deviceAgents: Map<string, AgentCapabilities>;
   deviceVersions: Map<string, string>;
 
   // Per-session cumulative token usage
@@ -176,8 +176,8 @@ export interface AppActions {
   setGithubClientId: (clientId: string | null) => void;
   setVapidPublicKey: (key: string | null) => void;
   setRelayVersion: (version: string | null) => void;
-  setDeviceModels: (deviceId: string, models: string[]) => void;
-  setDeviceModelDetails: (deviceId: string, details: ModelDetail[]) => void;
+  setDeviceAgent: (deviceId: string, agent: AgentCapabilities) => void;
+  clearDeviceAgent: (deviceId: string) => void;
   setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;

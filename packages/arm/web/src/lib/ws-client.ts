@@ -565,7 +565,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
-          getStore().setDeviceModels(left.deviceId, []);
+          getStore().clearDeviceAgent(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
         break;
@@ -574,7 +574,7 @@ export class KrakiWSClient {
       case 'device_removed': {
         const removed = msg as { deviceId: string };
         if (removed.deviceId) {
-          getStore().setDeviceModels(removed.deviceId, []);
+          getStore().clearDeviceAgent(removed.deviceId);
           getStore().removeDevice(removed.deviceId);
         }
         break;

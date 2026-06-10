@@ -30,8 +30,9 @@ export function SessionPage() {
   const navigate = useNavigate();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
-  const deviceModels = useStore((s) => session ? s.deviceModels.get(session.deviceId) : undefined);
-  const deviceModelDetails = useStore((s) => session ? s.deviceModelDetails.get(session.deviceId) : undefined);
+  const deviceAgent = useStore((s) => session ? s.deviceAgents.get(session.deviceId) : undefined);
+  const deviceModels = deviceAgent?.models;
+  const deviceModelDetails = deviceAgent?.modelDetails;
 
   const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
 
