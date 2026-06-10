@@ -188,8 +188,16 @@ export class KrakiWSClient {
 
   markRead(sessionId: string, seq?: number): void {
     markSessionRead(sessionId);
-    // Send to tentacle so it persists readSeq and broadcasts to other arms
-    const resolvedSeq = seq ?? this.getLastSeq(sessionId);
+    // Send to tentacle so it persists readSeq and broadcasts to other arms.
+    // When no explicit seq is supplied, fall back to the authoritative
+    // `lastSeq` carried on the session digest from session_list. The
+    // previous fallback walked `store.messages.get(sessionId)` and picked
+    // the last element's `seq`, which could be polluted by transient
+    // entries (envelope-level seq, replay residue, etc.) and produced
+    // wildly inflated values (~35 % of sessions on disk ended up with
+    // readSeq > lastSeq, one sample 57× overshoot).
+    const session = getStore().sessions.get(sessionId);
+    const resolvedSeq = seq ?? session?.lastSeq ?? 0;
     if (resolvedSeq > 0) {
       this.sendEncrypted({
         type: 'mark_read',
@@ -211,17 +219,6 @@ export class KrakiWSClient {
   /** Send a preferences update to the relay (unencrypted control message). */
   updatePreferences(prefs: Record<string, unknown>): void {
     this.transport.send({ type: 'update_preferences', preferences: prefs });
-  }
-
-  private getLastSeq(sessionId: string): number {
-    const msgs = getStore().messages.get(sessionId);
-    if (!msgs || msgs.length === 0) return 0;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-      if (typeof seq === 'number' && seq > 0) return seq;
-    }
-    return 0;
   }
 
   /**
