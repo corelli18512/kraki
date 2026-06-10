@@ -443,6 +443,26 @@ export class CopilotAdapter extends AgentAdapter {
    *  but a hung runtime doesn't stall every recovery attempt. */
   private static readonly PROBE_RUNTIME_TIMEOUT_MS = 5_000;
 
+  // ── Idle-session eviction ────────────────────────────
+  // Long-lived daemon → working set grows over time as more sessions get
+  // lazy-resumed and then sit idle. To bound runtime memory we periodically
+  // sweep the loaded set:
+  //   - skip if total runtime RSS is below the threshold (do nothing when
+  //     memory is fine — eviction is adaptive, not eager)
+  //   - skip any session that's mid-turn or has a pending permission/question
+  //     (would be rude to drop while the user is waiting)
+  //   - evict sessions that have been quiet longer than IDLE_TTL_MS
+  // The evicted session's on-disk state is intact; next user interaction
+  // triggers the existing lazy-resume path (relay-client ensureSessionResumed).
+  private static readonly EVICTION_SCAN_INTERVAL_MS = 5 * 60_000;
+  private static readonly EVICTION_RSS_THRESHOLD_MB = 2048;
+  private static readonly EVICTION_IDLE_TTL_MS = 30 * 60_000;
+  /** Per-session "last time anything happened" timestamp (ms epoch). Used
+   *  by the eviction sweep to identify candidates. Updated by sendMessage,
+   *  every SDK event handler, and permission/question responses. */
+  private lastActivityAt = new Map<string, number>();
+  private evictionTimer: ReturnType<typeof setInterval> | null = null;
+
   private static readonly CONTEXT_WINDOWS: Record<string, number> = {
     'claude-sonnet-4.6': 200_000,
     'claude-sonnet-4.5': 200_000,
@@ -626,10 +646,12 @@ export class CopilotAdapter extends AgentAdapter {
     this.client = new CopilotClient(opts);
     await this.client.start();
     if (restoreExecPath) restoreExecPath();
+    this.startEvictionSweep();
     logger.debug('started');
   }
 
   async stop(): Promise<void> {
+    this.stopEvictionSweep();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
 
@@ -663,6 +685,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.client = null;
     }
     this.sessions.clear();
+    this.lastActivityAt.clear();
     logger.debug('stopped');
   }
 
@@ -694,6 +717,7 @@ export class CopilotAdapter extends AgentAdapter {
         }
         // All SDK session handles are now invalid
         this.sessions.clear();
+        this.lastActivityAt.clear();
         await this.start();
         logger.info('CopilotClient rebuilt successfully');
       } finally {
@@ -701,6 +725,133 @@ export class CopilotAdapter extends AgentAdapter {
       }
     })();
     return this.rebuildingClient;
+  }
+
+  // ── Idle-session eviction ────────────────────────────
+
+  /**
+   * Sum RSS (MB) of this process plus every descendant. The real memory
+   * consumer is the native `copilot-darwin-arm64` grandchild, not the
+   * daemon's Node heap — so we walk the whole tree and report the total.
+   *
+   * Returns null on Windows (no pgrep) or when the descendant walk fails;
+   * callers treat null as "skip eviction this cycle" (fail-safe).
+   */
+  private getRuntimeRssMB(): number | null {
+    if (process.platform === 'win32') return null;
+    const descendants: number[] = [];
+    const queue: number[] = [process.pid];
+    while (queue.length) {
+      const pid = queue.shift()!;
+      try {
+        const out = execSync(`pgrep -P ${pid}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        if (!out) continue;
+        for (const line of out.split('\n')) {
+          const child = parseInt(line, 10);
+          if (!isNaN(child)) {
+            descendants.push(child);
+            queue.push(child);
+          }
+        }
+      } catch { /* pgrep exits non-zero when no children — normal */ }
+    }
+    if (descendants.length === 0) return 0;
+    try {
+      const out = execSync(`ps -o rss= -p ${descendants.join(',')}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      const kb = out.split('\n')
+        .map((s) => parseInt(s.trim(), 10))
+        .reduce((acc, v) => acc + (isNaN(v) ? 0 : v), 0);
+      return Math.round(kb / 1024);
+    } catch {
+      return null;
+    }
+  }
+
+  private startEvictionSweep(): void {
+    if (this.evictionTimer) return;
+    this.evictionTimer = setInterval(() => {
+      this.evictIdleSessions().catch((err) => {
+        logger.warn({ err }, 'eviction sweep threw');
+      });
+    }, CopilotAdapter.EVICTION_SCAN_INTERVAL_MS);
+    // Don't block process exit on the timer
+    this.evictionTimer.unref?.();
+  }
+
+  private stopEvictionSweep(): void {
+    if (this.evictionTimer) {
+      clearInterval(this.evictionTimer);
+      this.evictionTimer = null;
+    }
+  }
+
+  /**
+   * Periodic sweep: if total runtime RSS is over threshold, evict any
+   * loaded session that has been quiet > IDLE_TTL_MS and is safe to drop
+   * (not mid-turn, no pending permission/question).
+   *
+   * Eviction is purely a memory hygiene operation; the user-visible session
+   * is unaffected because the next interaction triggers lazy resume.
+   */
+  private async evictIdleSessions(): Promise<void> {
+    if (this.sessions.size === 0) return;
+    const rssMB = this.getRuntimeRssMB();
+    if (rssMB === null || rssMB < CopilotAdapter.EVICTION_RSS_THRESHOLD_MB) {
+      // Under the threshold (or measurement unavailable) — do nothing.
+      // This is deliberately adaptive: when memory is fine, never evict.
+      return;
+    }
+
+    const now = Date.now();
+    const ttl = CopilotAdapter.EVICTION_IDLE_TTL_MS;
+    const candidates: string[] = [];
+    for (const [sessionId, entry] of this.sessions) {
+      if (entry.pendingPermissions.size > 0 || entry.pendingQuestions.size > 0) continue;
+      // turnHasOutput.get(sessionId) === true => a turn is currently in flight
+      if (this.turnHasOutput.get(sessionId)) continue;
+      const lastAt = this.lastActivityAt.get(sessionId) ?? 0;
+      if (now - lastAt < ttl) continue;
+      candidates.push(sessionId);
+    }
+    if (candidates.length === 0) {
+      logger.info({ rssMB, loaded: this.sessions.size }, 'eviction: over threshold but no eligible candidates');
+      return;
+    }
+    logger.info(
+      { rssMB, threshold: CopilotAdapter.EVICTION_RSS_THRESHOLD_MB, candidates: candidates.length, loaded: this.sessions.size },
+      'eviction: sweeping idle sessions',
+    );
+    for (const sessionId of candidates) {
+      await this.evictSession(sessionId);
+    }
+  }
+
+  /**
+   * Release an idle SDK session handle so the runtime can reclaim its
+   * memory. The on-disk session is intact; lazy resume picks it up on
+   * next interaction. Fires {@link onSessionEvicted} so the relay-client
+   * can mark the meta state `disconnected` for invariant consistency.
+   */
+  private async evictSession(sessionId: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    try {
+      await entry.session.disconnect();
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'evictSession: disconnect failed, removing entry anyway');
+    }
+    this.sessions.delete(sessionId);
+    this.lastActivityAt.delete(sessionId);
+    this.clearIdleTimer(sessionId);
+    // Note: we intentionally do NOT clear sessionModes / sessionUsage /
+    // expectedModels — those represent persistent per-session preferences
+    // that should survive the unload/reload cycle.
+    logger.info({ sessionId }, 'session evicted from runtime (idle, over RSS threshold)');
+    this.onSessionEvicted?.(sessionId);
+  }
+
+  private touchSession(sessionId: string): void {
+    this.lastActivityAt.set(sessionId, Date.now());
   }
 
   // ── Session management ──────────────────────────────
@@ -789,6 +940,7 @@ export class CopilotAdapter extends AgentAdapter {
     const sid = session.sessionId;
 
     this.sessions.set(sid, { session, pendingPermissions, pendingQuestions });
+    this.touchSession(sid);
     this.wireEvents(sid, session);
 
     logger.info(`session created: ${sid} (model: ${config.model ?? 'default'})`);
@@ -855,6 +1007,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.cycleHasOutput.set(sessionId, false);
     this.turnErrorReported.set(sessionId, false);
     this.cycleUserAborted.delete(sessionId);
+    this.touchSession(sessionId);
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -998,6 +1151,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     pending.resolve(kindMap[decision] ?? { kind: 'reject' });
     entry.pendingPermissions.delete(permissionId);
+    this.touchSession(sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
   }
 
@@ -1020,6 +1174,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     pending.resolve({ answer, wasFreeform });
     entry.pendingQuestions.delete(questionId);
+    this.touchSession(sessionId);
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -1270,6 +1425,7 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = { session, pendingPermissions, pendingQuestions };
 
     this.sessions.set(sessionId, entry);
+    this.touchSession(sessionId);
     this.wireEvents(sessionId, session);
     logger.debug({ sessionId }, 'session resumed');
 
@@ -1376,6 +1532,7 @@ export class CopilotAdapter extends AgentAdapter {
       if (event.data.content) {
         this.turnHasOutput.set(sessionId, true);
         this.cycleHasOutput.set(sessionId, true);
+        this.touchSession(sessionId);
         this.onMessage?.(sessionId, { content: event.data.content });
       }
     });
@@ -1386,6 +1543,7 @@ export class CopilotAdapter extends AgentAdapter {
       if (data.toolName === 'report_intent') return;
       this.turnHasOutput.set(sessionId, true);
       this.cycleHasOutput.set(sessionId, true);
+      this.touchSession(sessionId);
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
       }

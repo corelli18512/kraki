@@ -120,6 +120,12 @@ export abstract class AgentAdapter {
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
+  /** Called when a session is evicted from the in-memory adapter map to free
+   *  runtime memory. The session is NOT ended — its on-disk state is intact
+   *  and the next interaction will lazy-resume it. The relay-client uses
+   *  this to mark the session `disconnected` in SessionManager so the meta
+   *  state matches reality. No arm broadcast: load-state is internal. */
+  onSessionEvicted: ((sessionId: string) => void) | null = null;
   /** Called when the agent produces a title for a session (e.g. via SDK event). */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
   /** Called with updated cumulative token usage for a session */

@@ -1885,4 +1885,128 @@ describe('CopilotAdapter', () => {
       expect(mockSessions[mockSessions.length - 1].send).toHaveBeenCalledWith({ prompt: 'wedged probe' });
     });
   });
+
+  // ── Idle-session eviction ─────────────────────────────────────
+
+  describe('idle-session eviction', () => {
+    type AdapterInternals = {
+      sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
+      lastActivityAt: Map<string, number>;
+      turnHasOutput: Map<string, boolean>;
+      evictIdleSessions: () => Promise<void>;
+    };
+
+    // Helper: configure execSync to report the given total RSS (MB).
+    function mockRuntimeRssMB(mb: number, sessionCount: number) {
+      // pgrep returns child pids; ps returns rss in KB. Simulate `sessionCount`
+      // child processes each contributing equally so the sum hits `mb`.
+      const pids = Array.from({ length: sessionCount }, (_, i) => 90000 + i);
+      const rssKb = Math.round((mb * 1024) / Math.max(sessionCount, 1));
+      mockedExecSync.mockImplementation((command: string) => {
+        if (command.includes('gh auth token')) return 'fake-gh-token\n';
+        if (command.includes('command -v copilot') || command.includes('where.exe copilot')) return `${fakeCopilotPath}\n`;
+        if (command.startsWith('pgrep -P ')) {
+          // Single hop: report `sessionCount` direct children, no grandchildren.
+          if (command.includes(`-P ${process.pid}`)) return pids.join('\n');
+          return '';
+        }
+        if (command.startsWith('ps -o rss=')) {
+          return pids.map(() => String(rssKb)).join('\n');
+        }
+        return '';
+      });
+    }
+
+    it('does NOT evict when total runtime RSS is below the 2GB threshold', async () => {
+      await adapter.start();
+      const a = await adapter.createSession({});
+      const b = await adapter.createSession({});
+
+      // Force "ancient" activity so the only thing protecting these sessions
+      // is the RSS threshold.
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(a.sessionId, 0);
+      internals.lastActivityAt.set(b.sessionId, 0);
+
+      // Report RSS = 500 MB — well under threshold.
+      mockRuntimeRssMB(500, 2);
+
+      await internals.evictIdleSessions();
+
+      expect(internals.sessions.size).toBe(2);
+      expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
+      expect(mockSessions[1].disconnect).not.toHaveBeenCalled();
+    });
+
+    it('evicts only sessions idle longer than 30min when RSS is over threshold', async () => {
+      await adapter.start();
+      const stale = await adapter.createSession({});
+      const recent = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      // stale: idle 1 hour ago → eligible
+      internals.lastActivityAt.set(stale.sessionId, Date.now() - 60 * 60_000);
+      // recent: idle 1 minute ago → safe
+      internals.lastActivityAt.set(recent.sessionId, Date.now() - 60_000);
+
+      mockRuntimeRssMB(3000, 2); // 3 GB > 2 GB threshold
+
+      await internals.evictIdleSessions();
+
+      expect(mockSessions[0].disconnect).toHaveBeenCalled();
+      expect(mockSessions[1].disconnect).not.toHaveBeenCalled();
+      expect(internals.sessions.has(stale.sessionId)).toBe(false);
+      expect(internals.sessions.has(recent.sessionId)).toBe(true);
+    });
+
+    it('does NOT evict a session with a pending permission, even if idle and over threshold', async () => {
+      await adapter.start();
+      const blocked = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(blocked.sessionId, 0); // ancient
+      // Simulate a pending permission so the session is mid-prompt
+      internals.sessions.get(blocked.sessionId)!.pendingPermissions.set('perm-1', { resolve: () => {} });
+
+      mockRuntimeRssMB(3000, 1);
+
+      await internals.evictIdleSessions();
+
+      expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
+      expect(internals.sessions.has(blocked.sessionId)).toBe(true);
+    });
+
+    it('does NOT evict a session currently mid-turn (turnHasOutput=true)', async () => {
+      await adapter.start();
+      const turning = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(turning.sessionId, 0);
+      internals.turnHasOutput.set(turning.sessionId, true);
+
+      mockRuntimeRssMB(3000, 1);
+
+      await internals.evictIdleSessions();
+
+      expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
+      expect(internals.sessions.has(turning.sessionId)).toBe(true);
+    });
+
+    it('fires onSessionEvicted so relay-client can mark the session disconnected', async () => {
+      const evictedSpy = vi.fn();
+      adapter.onSessionEvicted = evictedSpy;
+
+      await adapter.start();
+      const s = await adapter.createSession({});
+
+      const internals = adapter as unknown as AdapterInternals;
+      internals.lastActivityAt.set(s.sessionId, 0);
+
+      mockRuntimeRssMB(3000, 1);
+
+      await internals.evictIdleSessions();
+
+      expect(evictedSpy).toHaveBeenCalledWith(s.sessionId);
+    });
+  });
 });

@@ -1334,6 +1334,14 @@ export class RelayClient {
       });
     };
 
+    // Idle-session eviction: keep meta state consistent with runtime load-
+    // state by marking the session `disconnected` on eviction. No arm
+    // broadcast — load-state is internal; the next user interaction goes
+    // through ensureSessionResumed and lazy-loads transparently.
+    this.adapter.onSessionEvicted = (sessionId) => {
+      this.sessionManager.markDisconnected(sessionId);
+    };
+
     // SDK title fallback — use as fast placeholder while LLM generation runs
     this.adapter.onTitleChanged = (sessionId, title) => {
       const meta = this.sessionManager.getMeta(sessionId);
