@@ -103,6 +103,46 @@ export class SessionManager {
     mkdirSync(this.sessionsDir, { recursive: true });
     this.migrateGlobalLog();
     this.stripAllLegacyInlineImages();
+    this.clampOverflowReadSeq();
+  }
+
+  /**
+   * One-shot migration: clamp every session's `readSeq` to at most
+   * its `lastSeq`. Pre-fix, arms could send `mark_read` with an
+   * arbitrary seq (web's `getLastSeq` fallback walked the in-memory
+   * message store and sometimes returned a value that wasn't really
+   * a session-message seq) — and `markRead` here trusted it
+   * blindly. This left ~35 % of sessions with readSeq > lastSeq (one
+   * sample: lastSeq=472, readSeq=27,265 — 57× overshoot), which
+   * broke unread badges and triggered noisy `session_read` echoes
+   * across all peer arms.
+   *
+   * Idempotent: only rewrites meta files where readSeq actually
+   * exceeds lastSeq.
+   */
+  private clampOverflowReadSeq(): void {
+    if (!existsSync(this.sessionsDir)) return;
+    let dirs: string[];
+    try {
+      dirs = readdirSync(this.sessionsDir);
+    } catch {
+      return;
+    }
+    for (const dir of dirs) {
+      const meta = this.readMeta(dir);
+      if (!meta) continue;
+      const ls = meta.lastSeq ?? 0;
+      const rs = meta.readSeq ?? 0;
+      if (rs > ls) {
+        meta.readSeq = ls;
+        meta.updatedAt = new Date().toISOString();
+        try {
+          this.writeMeta(dir, meta);
+        } catch {
+          // Best-effort — failures never crash startup
+        }
+      }
+    }
   }
 
   /**
@@ -721,8 +761,13 @@ export class SessionManager {
   markRead(sessionId: string, seq: number): void {
     const meta = this.readMeta(sessionId);
     if (!meta) return;
-    if (seq > (meta.readSeq ?? 0)) {
-      meta.readSeq = seq;
+    // Clamp to lastSeq — readSeq must never exceed it. Pre-fix, arms
+    // sometimes sent garbage seq values (web's stale `getLastSeq`
+    // fallback), and a stuck readSeq > lastSeq broke unread badges
+    // and triggered noisy session_read echoes across all peers.
+    const clamped = Math.min(seq, meta.lastSeq ?? 0);
+    if (clamped > (meta.readSeq ?? 0)) {
+      meta.readSeq = clamped;
       meta.updatedAt = new Date().toISOString();
       this.writeMeta(sessionId, meta);
     }
