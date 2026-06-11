@@ -296,7 +296,10 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
 ${envXml}

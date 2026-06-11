@@ -597,7 +597,17 @@ export class CopilotAdapter extends AgentAdapter {
 
     let cliPath = this.cliPath ?? resolveCopilotCliPath();
     if (!cliPath && isSea()) {
-      throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
+      // At boot, PATH tools (nvm, copilot) may not be ready yet.
+      // Retry for up to 30s before giving up.
+      const deadline = Date.now() + 30_000;
+      while (!cliPath && Date.now() < deadline) {
+        logger.debug('Copilot CLI not found yet, retrying...');
+        await new Promise(r => setTimeout(r, 2_000));
+        cliPath = resolveCopilotCliPath();
+      }
+      if (!cliPath) {
+        throw new Error('Copilot CLI not found on PATH. Install GitHub Copilot CLI so `copilot` is available.');
+      }
     }
 
     // On Windows, resolve the actual .js entry point from the .cmd wrapper.
