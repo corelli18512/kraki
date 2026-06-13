@@ -15,7 +15,6 @@ import type {
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
   BroadcastEnvelope, UnicastEnvelope,
 } from '@kraki/protocol';
-import { SESSION_MESSAGES_RANGE_MAX_COUNT } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
@@ -1598,6 +1597,14 @@ export class RelayClient {
   }
 
   /**
+   * Server-side hard cap on messages returned by a single
+   * `request_session_messages_range` reply. Defensive backstop —
+   * clients should chunk their own requests well below this. When
+   * the cap triggers, the reply's `truncated` flag is set.
+   */
+  private static readonly RANGE_MAX_COUNT = 500;
+
+  /**
    * Handle an exact seq-range messages request.
    *
    * Used for gap recovery (push delivered a seq jump and the arm wants
@@ -1610,8 +1617,8 @@ export class RelayClient {
    *  - `fromSeq < 1`     → clamped to 1
    *  - `toSeq > headSeq` → clamped to headSeq (informational, not lossy)
    *  - `fromSeq > toSeq` (post-clamp) → empty batch, truncated=false
-   *  - range > SESSION_MESSAGES_RANGE_MAX_COUNT → keep newer end,
-   *    `truncated: true` so caller can iterate for older seqs
+   *  - range > `RANGE_MAX_COUNT` → keep newer end, `truncated: true`
+   *    so caller can iterate for older seqs
    *  - session not found → empty batch, truncated=false
    */
   private handleSessionMessagesRange(
@@ -1657,8 +1664,8 @@ export class RelayClient {
 
     // Server-side hard cap — keep newer end so client can iterate older.
     let truncated = false;
-    if (hi - lo + 1 > SESSION_MESSAGES_RANGE_MAX_COUNT) {
-      lo = hi - SESSION_MESSAGES_RANGE_MAX_COUNT + 1;
+    if (hi - lo + 1 > RelayClient.RANGE_MAX_COUNT) {
+      lo = hi - RelayClient.RANGE_MAX_COUNT + 1;
       truncated = true;
     }
 
