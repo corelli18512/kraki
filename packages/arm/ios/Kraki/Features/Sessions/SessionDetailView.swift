@@ -45,6 +45,7 @@ struct SessionDetailView: View {
         // before the real session arrives.
         .hidesTabBar()
         .onAppear {
+            KLog.chat("👆 [2/history TAP] session=\(sessionId.prefix(12)) — entering ChatView")
             sessionStore.activeSessionId = sessionId
             // Bootstrap the in-memory window from the DB so ChatView
             // has something to render before the (possibly delayed)
@@ -53,7 +54,7 @@ struct SessionDetailView: View {
             // Ensure tentacle's view of the latest turn(s) is loaded —
             // no-op if warm-up already covered this session or if the
             // disk cache already reaches head.
-            appState.messageProvider?.ensureLoaded(sessionId: sessionId)
+            appState.messageProvider?.ensureLoaded(sessionId: sessionId, reason: "openSession")
             // Snapshot unread state SYNCHRONOUSLY (before scheduling any
             // Task) so ChatView's R3 entry-scroll sees the original value
             // even though markRead's Task may run before ChatView's .task

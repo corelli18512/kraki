@@ -60,29 +60,41 @@ final class AppState {
     /// `wrong_region` redirect so we can skip the redirect dance on cold launch.
     private static let relayURLKey = "kraki.relayURL"
 
-    #if DEBUG
-    private static let defaultRelayURL = "ws://localhost:4400"
-    #else
     private static let defaultRelayURL = "wss://relay.kraki.chat"
-    #endif
 
     /// The relay URL the app will connect to.
     ///
     /// Priority order:
     ///   1. Persisted URL in shared defaults (set after a successful
-    ///      auth or `wrong_region` redirect).
-    ///   2. `KRAKI_RELAY_URL` env var (debug-build convenience for
-    ///      pointing a development build at prod — set in the Xcode
-    ///      scheme's Run > Environment Variables when capturing
-    ///      device logs against a real-data session).
-    ///   3. `defaultRelayURL` for the current build configuration.
+    ///      auth or `wrong_region` redirect). Must be `wss://` — any
+    ///      other scheme (notably `ws://localhost` from a previous
+    ///      `devConnect()`) is discarded so a stale dev value doesn't
+    ///      strand us on a non-existent local relay, especially on a
+    ///      physical device.
+    ///   2. `KRAKI_RELAY_URL` env var (DEBUG only; escape hatch for
+    ///      pointing a debug build at a non-default relay, e.g. a
+    ///      local dev relay — set in the Xcode scheme's Run >
+    ///      Environment Variables). Ignored in release.
+    ///   3. `defaultRelayURL` (prod relay).
     private static func resolveDefaultRelayURL() -> String {
         if let persisted = AppState.sharedDefaults.string(forKey: AppState.relayURLKey) {
-            return persisted
+            // Only honour persisted URLs that look like a real prod
+            // region (`wss://…`). A `ws://localhost` value can only
+            // come from `devConnect()` on the simulator and is
+            // meaningless on a physical device — if such a value
+            // somehow survives a Debug→install cycle on a real phone
+            // we want to fall back to the prod default, not silently
+            // keep dialling localhost forever.
+            if persisted.hasPrefix("wss://") {
+                return persisted
+            }
+            AppState.sharedDefaults.removeObject(forKey: AppState.relayURLKey)
         }
+        #if DEBUG
         if let env = ProcessInfo.processInfo.environment["KRAKI_RELAY_URL"], !env.isEmpty {
             return env
         }
+        #endif
         return defaultRelayURL
     }
 
@@ -178,10 +190,37 @@ final class AppState {
 
     /// Connect to local relay with open auth — DEBUG only.
     /// Bypasses pairing and OAuth for fast dev iteration.
+    ///
+    /// The default `relayURL` is `wss://relay.kraki.chat` (prod) for
+    /// all build configurations, so this dev path explicitly forces
+    /// the URL to the local `pnpm dev` relay (`ws://localhost:4000`,
+    /// matches `scripts/dev-local.ts:RELAY_PORT`). On the iOS
+    /// Simulator `localhost` resolves to the host Mac, so this just
+    /// works when the dev daemon is up.
     func devConnect() {
         #if DEBUG
-        // Clear any stored credentials so we get a fresh open auth
+        // Wipe pairing token AND any stored device identity so the next
+        // auth handshake falls through to `method: "open"` — the local
+        // `pnpm dev` head relay (`packages/head` with the `open` provider
+        // configured) accepts that and skips pairing entirely. Without
+        // clearing the deviceId we'd send `method: "challenge"` for a
+        // device the local relay has never seen, and auth would fail.
         authManager?.pairingToken = nil
+        authManager?.clearStoredCredentials()
+        // Tell AuthManager to skip the `auth_info` round-trip and send
+        // `method: "open"` straight away on the next WS open — `auth_info`
+        // would otherwise leave the UI parked on `.awaitingLogin`.
+        authManager?.forceOpenAuthOnce = true
+        // `KRAKI_LOCAL_RELAY_PORT` env override matches `scripts/dev-local.ts`.
+        let port = ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4000"
+        let devURL = "ws://localhost:\(port)"
+        relayURL = devURL
+        // Intentionally NOT persisting to App Group — the dev URL is
+        // ephemeral; cold launch should always default back to prod.
+        // Otherwise a debug install can leave `ws://localhost:4000`
+        // baked into shared defaults on a physical phone where it
+        // can never resolve.
+        wsClient?.setRelayURL(devURL)
         connectionStatus = .connecting
         wsClient?.connect()
         #endif

@@ -20,6 +20,7 @@ struct ChatView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Per-cell expand state for thinking history. Cells use the
     /// turn id as the key; the SwiftUI shell holds the source of
@@ -69,6 +70,18 @@ struct ChatView: View {
                 centerLoadingView
             } else {
                 uikitMessages
+                    // Let the chat collection view extend behind BOTH
+                    // the top navbar and the bottom input area so
+                    // message cells visibly blur THROUGH the navbar's
+                    // glass band and the input's glass capsule.
+                    // UIScrollView's automatic content-inset
+                    // adjustment still reads the safe areas (the navbar
+                    // contributes a top inset via setContentScrollView,
+                    // the safeAreaInset below adds a bottom inset), so
+                    // the first / last cell aren't hidden under the
+                    // chrome — they just scroll under when the user
+                    // pushes the list.
+                    .ignoresSafeArea(.container, edges: [.top, .bottom])
                     .overlay(alignment: .bottomTrailing) {
                         uikitJumpToLatestButton
                     }
@@ -89,13 +102,29 @@ struct ChatView: View {
                     }
             }
         }
+        // Page background: the bottom-most fill behind the chat list
+        // AND behind both glass strips (top nav + bottom input). Glass
+        // material is a *blur* — without an underlying color it just
+        // shows through to the window's default white, so the navbar
+        // and input capsule look like they have no chrome at all.
+        // Painting `surfacePrimary` here restores the soft surface
+        // that the glass strips visibly tint and blur.
         .background(Color.surfacePrimary)
+        // iOS 26's default navbar is fully transparent at the scroll-
+        // edge; the wrapping UICollectionView buries the scroll view
+        // from auto-detect, so the system can't switch to the
+        // materialised state on scroll either. Force the navbar to
+        // always render its glass material so the chat cells blur
+        // underneath instead of revealing RootView's solid bg.
+        .toolbarBackground(.visible, for: .navigationBar)
         .task(id: sessionId) {
+            KLog.chat("🎬 [3/render] ChatView.task started session=\(sessionId.prefix(12))")
             // (Re)bind the view model on session entry / switch. New
             // session ⇒ new instance so the cached groupings don't
             // bleed across sessions.
             if viewModel == nil || viewModel?.sessionId != sessionId {
                 viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
+                KLog.chat("🎬 [3/render] ChatView.task viewModel created session=\(sessionId.prefix(12)) filteredCount=\(viewModel?.filteredMessages.count ?? -1)")
             }
             // Capture-and-clear the unread snapshot SessionDetailView
             // stashed for us before its markRead Task fired. If no
@@ -224,9 +253,11 @@ struct ChatView: View {
         }
     }
 
-    /// Floating circular button (bottom-trailing) that jumps to the
-    /// latest content. Visible only when the user has scrolled away
-    /// from the bottom; tapping snaps to the last cell.
+    /// Floating jump-to-latest pill (bottom-trailing). Visible only
+    /// when the user has scrolled away from the bottom; tapping snaps
+    /// to the last cell. Flat liquid-glass capsule tinted by the
+    /// current session's agent hue so it sits quietly above the chat
+    /// without the heavy saturated disc the previous version used.
     @ViewBuilder
     private var uikitJumpToLatestButton: some View {
         if !uikitScrollCoordinator.isAtBottom {
@@ -234,16 +265,43 @@ struct ChatView: View {
                 uikitScrollCoordinator.scrollToBottom(animated: true)
             } label: {
                 Image(systemName: "chevron.down")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(Color.krakiPrimary))
-                    .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(agentTintColor)
+                    .frame(width: 52, height: 30)
+                    .background {
+                        ZStack {
+                            if #available(iOS 26.0, *) {
+                                Color.clear
+                                    .glassEffect(.regular, in: Capsule())
+                            } else {
+                                Capsule().fill(.ultraThinMaterial)
+                            }
+                            Capsule()
+                                .fill(agentTintColor.opacity(colorScheme == .dark ? 0.22 : 0.16))
+                            Capsule()
+                                .strokeBorder(agentTintColor.opacity(0.25), lineWidth: 0.5)
+                        }
+                    }
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.25 : 0.08), radius: 4, y: 2)
             }
+            .buttonStyle(.plain)
             .padding(.trailing, 16)
             .padding(.bottom, 12)
             .transition(.scale.combined(with: .opacity))
         }
+    }
+
+    /// Agent-derived accent for the jump-to-latest pill. Mirrors
+    /// `MessageBubbleView.agentAccentColor` so the chevron / tint
+    /// match the message bubble accent for the same session.
+    private var agentTintColor: Color {
+        let hue = stringToHue(sessionId) / 360
+        let (h, s, b) = hslToHSB(
+            h: hue,
+            s: colorScheme == .dark ? 0.75 : 0.70,
+            l: colorScheme == .dark ? 0.65 : 0.45
+        )
+        return Color(hue: h, saturation: s, brightness: b)
     }
 
     // MARK: - State-A center loading
@@ -266,6 +324,13 @@ struct ChatView: View {
 
     @ViewBuilder
     private var bottomInputArea: some View {
+        // Pure floating liquid-glass capsule. The capsule itself owns
+        // its glass background (see `inputBoxGlassBackground` in
+        // MessageInputView); we deliberately do NOT add a band of
+        // material under the home-indicator strip — the chat
+        // collection view scrolls behind the input so messages blur
+        // through the capsule and the home-indicator area shows the
+        // underlying content directly, matching the web composer.
         MessageInputView(
             sessionId: sessionId,
             pendingPermission: permissions.first,

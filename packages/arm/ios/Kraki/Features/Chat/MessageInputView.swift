@@ -189,7 +189,13 @@ struct MessageInputView: View {
 
     /// Voice toggle is hidden in permission flows (responses are structured,
     /// not freeform speech).
-    private var canShowVoiceToggle: Bool { pendingPermission == nil }
+    ///
+    /// Currently disabled across the board — the voice input flow doesn't
+    /// function reliably enough to ship, so we hide the toggle (and the
+    /// hold-to-talk surface) until it's reworked. The underlying
+    /// `SpeechRecognizer` plumbing is left in place so we can re-enable
+    /// by flipping this back to `pendingPermission == nil`.
+    private var canShowVoiceToggle: Bool { false }
 
     var body: some View {
         composeCard
@@ -325,11 +331,10 @@ struct MessageInputView: View {
             if canShowVoiceToggle {
                 voiceToggleButton
             }
-            if voiceMode {
-                holdToTalkPrompt
-            } else {
-                textFieldForMode
-            }
+            // Voice mode is currently disabled (see `canShowVoiceToggle`),
+            // so we always render the text field even if a stale
+            // `voiceMode = true` is sitting in AppStorage from a prior build.
+            textFieldForMode
             sendIconButton
         }
         .frame(maxWidth: .infinity)
@@ -343,12 +348,9 @@ struct MessageInputView: View {
         .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
         .contentShape(Capsule())
-        // In text mode the whole input box is swipeable for mode
-        // changes. In voice mode the hold-to-talk gesture owns the
-        // prompt area and handles its own pivot to a mode swipe via
-        // the 200ms dwell rule, so we don't attach the parent swipe
-        // (it would race with the hold-to-talk).
-        .simultaneousGesture(voiceMode ? nil : inputBoxModeSwipeGesture)
+        // Voice mode is gone for now, so the whole input box is always
+        // swipeable for mode changes (no hold-to-talk gesture to race with).
+        .simultaneousGesture(inputBoxModeSwipeGesture)
         .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
     }
 
@@ -825,7 +827,11 @@ struct MessageInputView: View {
         .lineLimit(1...3)
         .textFieldStyle(.plain)
         .font(.system(size: 16))
-        .padding(.horizontal, 6)
+        // Leading inset clears the capsule's rounded end now that the
+        // voice toggle is gone; trailing stays tight against the send
+        // icon which provides its own breathing room.
+        .padding(.leading, 18)
+        .padding(.trailing, 6)
         .padding(.vertical, 6)
         .focused($isFocused)
         .disabled(!isEnabled)

@@ -83,6 +83,12 @@ final class AuthManager {
     /// A one-time pairing token (e.g. from a QR code scan or deep link).
     var pairingToken: String?
 
+    /// One-shot flag set by `AppState.devConnect()` to force the next
+    /// `bootstrapAuth()` to send `method: "open"` instead of falling
+    /// through to the auth_info → awaitingLogin dance. Cleared the
+    /// moment `authenticate()` consumes it. DEBUG-only relay path.
+    var forceOpenAuthOnce: Bool = false
+
     #if os(iOS)
     /// Live ASWebAuthenticationSession + its presentation provider. Held
     /// strongly while the OAuth sheet is up — the system retains them
@@ -123,7 +129,15 @@ final class AuthManager {
     ///   first launch; the response unlocks the GitHub button on
     ///   LoginView via `appState.githubClientId`.
     func bootstrapAuth() {
-        if pairingToken != nil || storedDeviceId != nil {
+        // `activeDeviceId` includes `pendingRegionDeviceId` — the id the
+        // previous relay just minted for us as part of a wrong_region
+        // redirect. Without this branch we'd reconnect to the new relay
+        // (cn / us / etc.), see no storedDeviceId, and fall through to
+        // `requestAuthInfo()` — silently dropping the in-flight OAuth /
+        // pairing handoff. User experience: tap GitHub → auth sheet
+        // completes → app sits on login screen forever.
+        let hasActiveDeviceId = activeDeviceId != nil
+        if pairingToken != nil || hasActiveDeviceId || forceOpenAuthOnce {
             authenticate()
         } else {
             requestAuthInfo()
@@ -212,6 +226,7 @@ final class AuthManager {
                 "auth": ["method": "open"],
                 "device": cleanDevice,
             ]
+            forceOpenAuthOnce = false
         }
 
         sendRaw(message)
@@ -445,22 +460,52 @@ final class AuthManager {
     func startGitHubOAuth(clientId: String) {
         // Defeat double-tap — if a session is already in flight, bail.
         guard oauthSession == nil else {
-            KLog.d("🎫 OAuth session already in flight; ignoring start")
             return
         }
         // Flip the spinner state FIRST and yield to the runloop so
         // SwiftUI gets a render pass before we kick off the heavy
-        // ASWebAuthenticationSession setup. Without this, session
-        // creation + presentationContextProvider lookup + AASA
-        // validation all run synchronously before SwiftUI can repaint,
-        // leaving the button looking dead for ~100–300 ms.
+        // ASWebAuthenticationSession setup. The LoginView swaps its
+        // actionArea (which hosts the GitHub button) for a status
+        // panel as soon as `isOAuthInFlight` flips — if we then call
+        // `session.start()` synchronously in the same tick, the
+        // system tries to present `SFAuthenticationViewController`
+        // from a view-hierarchy that SwiftUI is in the middle of
+        // rebuilding, and silently cancels the session with
+        // `canceledLogin` (the VC literally deallocates mid-load).
+        // The async hop defers presentation to the next runloop tick,
+        // by which time SwiftUI has committed the re-render and the
+        // anchor is stable.
         appState?.isOAuthInFlight = true
         DispatchQueue.main.async { [weak self] in
-            self?.startGitHubOAuthImpl(clientId: clientId)
+            guard let self else { return }
+            let anchor = self.resolvePresentationAnchor()
+            if anchor == nil {
+                self.appState?.isOAuthInFlight = false
+                return
+            }
+            self.startGitHubOAuthImpl(clientId: clientId, anchor: anchor)
         }
     }
 
-    private func startGitHubOAuthImpl(clientId: String) {
+    /// Pick the foreground-active UIWindowScene rather than grabbing
+    /// the first connected scene blindly — on iPad multi-window setups
+    /// `connectedScenes.first` may resolve to a backgrounded scene
+    /// whose `windows.first` is no longer visible, and
+    /// ASWebAuthenticationSession would then fail with
+    /// `presentationContextNotProvided`. We also prefer the scene's
+    /// `keyWindow` over the deprecated `windows.first`.
+    private func resolvePresentationAnchor() -> UIWindow? {
+        let activeScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first
+        guard let scene = activeScene else { return nil }
+        return scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+    }
+
+    private func startGitHubOAuthImpl(clientId: String, anchor: UIWindow?) {
         let csrfState = UUID().uuidString
         let verifier = PKCE.generateCodeVerifier()
         let challenge = PKCE.deriveChallenge(verifier: verifier)
@@ -476,7 +521,6 @@ final class AuthManager {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
         ]
         guard let authURL = components.url else {
-            KLog.d("🎫 Failed to build authorize URL")
             appState?.isOAuthInFlight = false
             return
         }
@@ -501,15 +545,12 @@ final class AuthManager {
 
             if let asError = error as? ASWebAuthenticationSessionError {
                 if asError.code == .canceledLogin {
-                    KLog.d("🎫 OAuth cancelled by user")
                     return
                 }
-                KLog.d("🎫 OAuth failed: \(asError.localizedDescription)")
                 self.appState?.onAuthFailed(error: asError.localizedDescription)
                 return
             }
             if let error {
-                KLog.d("🎫 OAuth failed: \(error.localizedDescription)")
                 self.appState?.onAuthFailed(error: error.localizedDescription)
                 return
             }
@@ -519,7 +560,6 @@ final class AuthManager {
                   let code = cb.queryItems?.first(where: { $0.name == "code" })?.value,
                   let returned = cb.queryItems?.first(where: { $0.name == "state" })?.value,
                   returned == csrfState else {
-                KLog.d("🎫 Invalid OAuth callback")
                 self.appState?.onAuthFailed(error: "Invalid callback from GitHub")
                 return
             }
@@ -527,28 +567,22 @@ final class AuthManager {
             self.authenticateWithGitHubCode(code, codeVerifier: verifier, redirectUri: redirectURL)
         }
 
-        // Pick the foreground-active UIWindowScene rather than
-        // grabbing the first connected scene blindly — on iPad
-        // multi-window setups `connectedScenes.first` may resolve to
-        // a backgrounded scene whose `windows.first` is no longer
-        // visible, and ASWebAuthenticationSession would then fail
-        // with `presentationContextNotProvided`. We also prefer the
-        // scene's `keyWindow` over the deprecated `windows.first`.
-        let activeScene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first(where: { $0.activationState == .foregroundActive })
-            ?? UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first
-        if let scene = activeScene,
-           let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
-            let provider = OAuthPresentationContextProvider(anchor: window)
+        if let anchor {
+            let provider = OAuthPresentationContextProvider(anchor: anchor)
             self.oauthContextProvider = provider
             session.presentationContextProvider = provider
         }
         session.prefersEphemeralWebBrowserSession = false
         self.oauthSession = session
-        session.start()
+        let started = session.start()
+        if !started {
+            // System refused to present the sheet. Roll back state so
+            // the user can re-tap rather than be stuck on the spinner.
+            self.oauthSession = nil
+            self.oauthContextProvider = nil
+            self.appState?.isOAuthInFlight = false
+            self.appState?.onAuthFailed(error: "Couldn't open the GitHub sign-in window. Please try again.")
+        }
     }
 
     /// Callback URL pieces — kept in lockstep with the AASA file at

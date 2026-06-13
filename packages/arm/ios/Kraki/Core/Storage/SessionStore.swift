@@ -192,6 +192,12 @@ final class SessionStore {
     private static let saveDebounce: TimeInterval = 1.0
     private var saveTask: DispatchWorkItem?
     private var pendingSnapshot: Snapshot?
+    /// SHA-equivalent stable hash of the bytes last written to disk.
+    /// Used by `flushCache` to skip rewrites of identical content
+    /// (common when a non-card-visible field churns: active session
+    /// toggles, transient streaming state, etc. — see KLog dump in
+    /// PID 52588: 3 flushes of identical 69550 bytes within 9s).
+    private var lastFlushedHash: Int?
 
     private static let snapshotURL: URL = {
         let fm = FileManager.default
@@ -204,16 +210,28 @@ final class SessionStore {
     }()
 
     init() {
-        guard FileManager.default.fileExists(atPath: Self.snapshotURL.path),
-              let data = try? Data(contentsOf: Self.snapshotURL),
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        self.sessions = snapshot.sessions
-        self.sessionPreviews = snapshot.previews
-        // Rebuild derived state from the restored sessions.
-        for (id, s) in snapshot.sessions {
-            sessionModes[id] = s.mode
-            if let u = s.usage { sessionUsage[id] = u }
-            if s.pinned { pinnedSessions.insert(id) }
+        let path = Self.snapshotURL.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            KLog.chat("📂 [snapshot] init: no file at \(path) — starting empty")
+            return
+        }
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1
+        guard let data = try? Data(contentsOf: Self.snapshotURL) else {
+            KLog.chat("📂 [snapshot] init: read FAILED size=\(fileSize) path=\(path)")
+            return
+        }
+        do {
+            let snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
+            self.sessions = snapshot.sessions
+            self.sessionPreviews = snapshot.previews
+            for (id, s) in snapshot.sessions {
+                sessionModes[id] = s.mode
+                if let u = s.usage { sessionUsage[id] = u }
+                if s.pinned { pinnedSessions.insert(id) }
+            }
+            KLog.chat("📂 [snapshot] init: hydrated sessions=\(snapshot.sessions.count) previews=\(snapshot.previews.count) bytes=\(data.count)")
+        } catch {
+            KLog.chat("📂 [snapshot] init: DECODE FAILED bytes=\(data.count) error=\(error)")
         }
     }
 
@@ -237,8 +255,22 @@ final class SessionStore {
         saveTask = nil
         guard let snapshot = pendingSnapshot else { return }
         pendingSnapshot = nil
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: Self.snapshotURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            KLog.chat("📂 [snapshot] flush: encode FAILED sessions=\(snapshot.sessions.count)")
+            return
+        }
+        let hash = data.hashValue
+        if hash == lastFlushedHash {
+            KLog.chat("📂 [snapshot] flush: skip identical sessions=\(snapshot.sessions.count) bytes=\(data.count)")
+            return
+        }
+        do {
+            try data.write(to: Self.snapshotURL, options: .atomic)
+            lastFlushedHash = hash
+            KLog.chat("📂 [snapshot] flush: wrote sessions=\(snapshot.sessions.count) bytes=\(data.count)")
+        } catch {
+            KLog.chat("📂 [snapshot] flush: write FAILED error=\(error)")
+        }
     }
 
     /// Wipe the persisted snapshot file (called by logout / reset).
@@ -248,7 +280,9 @@ final class SessionStore {
         saveTask?.cancel()
         saveTask = nil
         pendingSnapshot = nil
+        lastFlushedHash = nil
         try? FileManager.default.removeItem(at: Self.snapshotURL)
+        KLog.chat("📂 [snapshot] clearPersistentSnapshot: file removed")
     }
 
     /// Sessions for which a `create_session` / `fork_session` /
@@ -728,6 +762,7 @@ final class SessionStore {
     }
 
     func reset() {
+        KLog.chat("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
         cancelAllDeltaTasks()
         sessions.removeAll()
         activeSessionId = nil
