@@ -6,6 +6,7 @@ packages:
   - packages/arm/*
   - packages/toolbar
   - packages/tests
+  - packages/voice-broker
 
 ignoredBuiltDependencies:
   - better-sqlite3
