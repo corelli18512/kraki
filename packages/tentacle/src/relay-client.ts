@@ -549,6 +549,12 @@ export class RelayClient {
       return;
     }
 
+    // request_session_messages_range — exact seq-range fetch (gap recovery, range queries)
+    if (msg.type === 'request_session_messages_range') {
+      this.handleSessionMessagesRange(msg.deviceId, msg.payload.sessionId, msg.payload.fromSeq, msg.payload.toSeq);
+      return;
+    }
+
     // request_replay — replay buffered messages to the requesting device
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
@@ -1586,6 +1592,117 @@ export class RelayClient {
     logger.info(
       { requesterDeviceId, sessionId, beforeSeq, startSeq, endSeqInclusive, count: parsed.length },
       'Replied to turn-aware session messages request',
+    );
+    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  }
+
+  /**
+   * Server-side hard cap on messages returned by a single
+   * `request_session_messages_range` reply. Defensive backstop —
+   * clients should chunk their own requests well below this. When
+   * the cap triggers, the reply's `truncated` flag is set.
+   */
+  private static readonly RANGE_MAX_COUNT = 500;
+
+  /**
+   * Handle an exact seq-range messages request.
+   *
+   * Used for gap recovery (push delivered a seq jump and the arm wants
+   * to fill the missing seqs) and for range queries (web's IndexedDB
+   * cache filling holes). Distinct from `handleSessionMessages` —
+   * range queries are NOT turn-aligned and return exactly the seqs
+   * requested, subject to defensive clamping.
+   *
+   * Robustness contract:
+   *  - `fromSeq < 1`     → clamped to 1
+   *  - `toSeq > headSeq` → clamped to headSeq (informational, not lossy)
+   *  - `fromSeq > toSeq` (post-clamp) → empty batch, truncated=false
+   *  - range > `RANGE_MAX_COUNT` → keep newer end, `truncated: true`
+   *    so caller can iterate for older seqs
+   *  - session not found → empty batch, truncated=false
+   */
+  private handleSessionMessagesRange(
+    requesterDeviceId: string,
+    sessionId: string,
+    fromSeq: number,
+    toSeq: number,
+  ): void {
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Session messages range requested but no encryption key for requester');
+      return;
+    }
+
+    const sendEmpty = (): void => {
+      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+        type: 'session_messages_range_batch',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: { sessionId, messages: [], firstSeq: 0, lastSeq: 0, truncated: false },
+      });
+    };
+
+    const meta = this.sessionManager.getMeta(sessionId);
+    if (!meta) {
+      logger.info({ requesterDeviceId, sessionId, fromSeq, toSeq }, 'Range request for unknown session — empty reply');
+      sendEmpty();
+      return;
+    }
+
+    const headSeq = meta.lastSeq ?? 0;
+
+    // Sanitize bounds — never trust client input.
+    let lo = Math.max(1, Math.floor(fromSeq));
+    let hi = Math.min(headSeq, Math.floor(toSeq));
+
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) {
+      logger.info({ requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq }, 'Range request empty after clamping');
+      sendEmpty();
+      return;
+    }
+
+    // Server-side hard cap — keep newer end so client can iterate older.
+    let truncated = false;
+    if (hi - lo + 1 > RelayClient.RANGE_MAX_COUNT) {
+      lo = hi - RelayClient.RANGE_MAX_COUNT + 1;
+      truncated = true;
+    }
+
+    const logged = this.sessionManager
+      .getMessagesAfterSeq(sessionId, lo - 1)
+      .filter(e => e.seq <= hi);
+
+    const parsed: Array<Record<string, unknown>> = [];
+    for (const entry of logged) {
+      // Defensive: only PERSISTENT_TYPES ever get a seq, but older logs
+      // may contain stragglers. Keep parity with handleSessionMessages.
+      if (!RelayClient.PERSISTENT_TYPES.has(entry.type)) continue;
+      try {
+        const m = JSON.parse(entry.payload);
+        m.seq = entry.seq;
+        parsed.push(m);
+      } catch {
+        logger.warn({ seq: entry.seq, sessionId }, 'Failed to parse session message for range batch');
+      }
+    }
+
+    const batchMsg = {
+      type: 'session_messages_range_batch',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: {
+        sessionId,
+        messages: parsed,
+        firstSeq: parsed.length > 0 ? (parsed[0].seq as number) : 0,
+        lastSeq: parsed.length > 0 ? ((parsed.at(-1) as Record<string, unknown>).seq as number) : 0,
+        truncated,
+      },
+    };
+    logger.info(
+      { requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq, count: parsed.length, truncated },
+      'Replied to range session messages request',
     );
     this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }

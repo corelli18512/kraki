@@ -62,12 +62,15 @@ vi.mock('../logger.js', () => ({
 
 // Mock crypto so tests can hand-craft "encrypted" envelopes without real keys.
 // decryptFromBlob simply returns the blob string itself — tests treat the
-// blob field as the raw plaintext JSON to inject.
+// blob field as the raw plaintext JSON to inject. encryptToBlob mirrors it
+// so outbound unicasts can be JSON.parsed straight out of `envelope.blob`.
 vi.mock('@kraki/crypto', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@kraki/crypto');
   return {
     ...actual,
     decryptFromBlob: vi.fn((payload: { blob: string }) => payload.blob),
+    encryptToBlob: vi.fn((plaintext: string) => ({ blob: plaintext, keys: {} })),
+    importPublicKey: vi.fn(() => ({})),
   };
 });
 
@@ -1323,5 +1326,303 @@ describe('RelayClient delta debounce', () => {
       .map(s => JSON.parse(s))
       .filter(m => m.type === 'agent_message_delta');
     expect(deltasAfter).toHaveLength(0);
+  });
+});
+
+describe('RelayClient handleSessionMessagesRange', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  type RangeBatch = {
+    type: 'session_messages_range_batch';
+    payload: {
+      sessionId: string;
+      messages: Array<Record<string, unknown>>;
+      firstSeq: number;
+      lastSeq: number;
+      truncated: boolean;
+    };
+  };
+
+  /** Build a `LoggedMessage`-shaped entry from a partial. */
+  function entry(seq: number, type = 'agent_message', payload: Record<string, unknown> = {}): {
+    seq: number;
+    type: string;
+    payload: string;
+    ts: string;
+  } {
+    return {
+      seq,
+      type,
+      payload: JSON.stringify({ type, payload, ...payload }),
+      ts: '2026-01-01T00:00:00Z',
+    };
+  }
+
+  /**
+   * Stand up a connected RelayClient with the consumer device already
+   * registered (so `consumerKeys` is populated and outbound unicasts succeed).
+   * Returns helpers to inject a range request and read back the resulting batch.
+   */
+  function connectWithConsumer() {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const keyManager = {
+      getCompactPublicKey: vi.fn(() => 'tentacle-pub'),
+      getKeyPair: vi.fn(() => ({ privateKey: 'tentacle-priv', publicKey: 'tentacle-pub' })),
+    };
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle', deviceId: 'tentacle-dev' },
+        reconnectDelay: 10,
+      },
+      keyManager,
+    );
+    client.connect();
+    const ws = sockets[0];
+    ws.emit('open');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'tentacle-dev',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [],
+    })));
+    // Register a consumer device — this is what populates `consumerKeys`.
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+    })));
+
+    /** Inject a `request_session_messages_range` from the consumer. */
+    function sendRangeRequest(sessionId: string, fromSeq: number, toSeq: number): void {
+      ws.sent.length = 0;
+      const inner = JSON.stringify({
+        type: 'request_session_messages_range',
+        deviceId: 'consumer-dev',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { sessionId, fromSeq, toSeq },
+      });
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'unicast',
+        to: 'tentacle-dev',
+        blob: inner,
+        keys: {},
+      })));
+    }
+
+    /** Find the single range-batch reply produced by the last request. */
+    function lastRangeBatch(): RangeBatch | undefined {
+      for (const raw of ws.sent) {
+        const env = JSON.parse(raw);
+        if (env.type !== 'unicast' || env.to !== 'consumer-dev') continue;
+        const inner = JSON.parse(env.blob as string);
+        if (inner.type === 'session_messages_range_batch') return inner as RangeBatch;
+      }
+      return undefined;
+    }
+
+    return { adapter, sm, client, ws, sendRangeRequest, lastRangeBatch };
+  }
+
+  it('returns the requested inclusive seq range', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    // getMessagesAfterSeq is called with `lo - 1`; return seqs 5..10 so the
+    // hi-side filter `e.seq <= 10` keeps all of them.
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      entry(5), entry(6), entry(7), entry(8), entry(9), entry(10),
+    ]);
+
+    sendRangeRequest('s1', 5, 10);
+    const batch = lastRangeBatch();
+
+    expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 4);
+    expect(batch).toBeDefined();
+    expect(batch!.payload.sessionId).toBe('s1');
+    expect(batch!.payload.messages.map(m => m.seq)).toEqual([5, 6, 7, 8, 9, 10]);
+    expect(batch!.payload.firstSeq).toBe(5);
+    expect(batch!.payload.lastSeq).toBe(10);
+    expect(batch!.payload.truncated).toBe(false);
+  });
+
+  it('drops entries past the requested toSeq', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      entry(5), entry(6), entry(7), entry(8), entry(9), entry(10),
+    ]);
+
+    sendRangeRequest('s1', 5, 7);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 6, 7]);
+    expect(batch.payload.lastSeq).toBe(7);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('clamps fromSeq below 1 up to 1', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    smMock.getMessagesAfterSeq.mockReturnValue([entry(1), entry(2), entry(3)]);
+
+    sendRangeRequest('s1', -5, 3);
+
+    expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 0);
+    const batch = lastRangeBatch()!;
+    expect(batch.payload.firstSeq).toBe(1);
+    expect(batch.payload.lastSeq).toBe(3);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('clamps toSeq above headSeq down to headSeq', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 7 });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      entry(5), entry(6), entry(7),
+    ]);
+
+    sendRangeRequest('s1', 5, 9999);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 6, 7]);
+    expect(batch.payload.lastSeq).toBe(7);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('returns empty batch when session is unknown', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue(null);
+
+    sendRangeRequest('missing', 1, 10);
+    const batch = lastRangeBatch()!;
+
+    expect(smMock.getMessagesAfterSeq).not.toHaveBeenCalled();
+    expect(batch.payload.messages).toHaveLength(0);
+    expect(batch.payload.firstSeq).toBe(0);
+    expect(batch.payload.lastSeq).toBe(0);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('returns empty batch when fromSeq exceeds headSeq', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 10 });
+
+    sendRangeRequest('s1', 50, 100);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages).toHaveLength(0);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('returns empty batch when fromSeq > toSeq after clamping', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+
+    sendRangeRequest('s1', 30, 20);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages).toHaveLength(0);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('returns empty batch for NaN / non-finite inputs', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+
+    sendRangeRequest('s1', Number.NaN, 10);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages).toHaveLength(0);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('truncates at the cap, keeping the newer end', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 5000 });
+
+    // Request 1..1000 (range = 1000 > cap 500). Handler should bump lo to
+    // hi - 500 + 1 = 501. We assert getMessagesAfterSeq was called with 500.
+    // Provide returned entries to span the kept range so the batch shape is
+    // verifiable: 501..1000 (500 entries).
+    const kept = Array.from({ length: 500 }, (_, i) => entry(501 + i));
+    smMock.getMessagesAfterSeq.mockReturnValue(kept);
+
+    sendRangeRequest('s1', 1, 1000);
+
+    expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 500);
+    const batch = lastRangeBatch()!;
+    expect(batch.payload.firstSeq).toBe(501);
+    expect(batch.payload.lastSeq).toBe(1000);
+    expect(batch.payload.messages).toHaveLength(500);
+    expect(batch.payload.truncated).toBe(true);
+  });
+
+  it('does not truncate when range exactly equals the cap', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 5000 });
+
+    // Range = 500 exactly (1..500) — boundary case.
+    const kept = Array.from({ length: 500 }, (_, i) => entry(1 + i));
+    smMock.getMessagesAfterSeq.mockReturnValue(kept);
+
+    sendRangeRequest('s1', 1, 500);
+
+    expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 0);
+    const batch = lastRangeBatch()!;
+    expect(batch.payload.messages).toHaveLength(500);
+    expect(batch.payload.truncated).toBe(false);
+  });
+
+  it('filters out non-persistent types defensively', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    // Pretend an older log accidentally has a transient type with a seq —
+    // the handler should skip it (parity with handleSessionMessages).
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      entry(5, 'agent_message'),
+      entry(6, 'agent_message_delta'), // transient — should be dropped
+      entry(7, 'agent_message'),
+    ]);
+
+    sendRangeRequest('s1', 5, 7);
+    const batch = lastRangeBatch()!;
+
+    expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 7]);
+    // firstSeq / lastSeq reflect what's actually returned post-filter.
+    expect(batch.payload.firstSeq).toBe(5);
+    expect(batch.payload.lastSeq).toBe(7);
+  });
+
+  it('floors fractional seq inputs', () => {
+    const { sm, sendRangeRequest, lastRangeBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    smMock.getMessagesAfterSeq.mockReturnValue([entry(5), entry(6), entry(7)]);
+
+    sendRangeRequest('s1', 5.9, 7.9);
+
+    // 5.9 → 5 (lo - 1 = 4), 7.9 → 7
+    expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 4);
+    const batch = lastRangeBatch()!;
+    expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 6, 7]);
   });
 });
