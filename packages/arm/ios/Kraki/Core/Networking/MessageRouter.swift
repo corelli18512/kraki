@@ -323,6 +323,11 @@ final class MessageRouter {
            Self.persistentTypes.contains(type) {
             let isNotify = Self.notifyWorthyTypes.contains(type)
             appState.sessionStore.bumpLastSeq(sessionId, seq: seq)
+            // Keep `tentacleLastSeq` in sync with what push has
+            // actually delivered so `requestLatest`/`ensureLoaded`'s
+            // at-head check is based on reality, not on the lagging
+            // value from the last `session_list`.
+            appState.messageProvider?.observeLiveMessageSeq(sessionId, seq: seq, kind: type)
             let isActive = appState.sessionStore.activeSessionId == sessionId
             if isActive || !isNotify {
                 appState.sessionStore.markRead(sessionId, seq: seq)
@@ -602,7 +607,28 @@ final class MessageRouter {
         let deviceName = device?.name ?? tentacleDeviceId
 
         let parsed = sessions.compactMap { SessionDigest(json: $0) }
-        KLog.d("📋 session_list: \(parsed.count) sessions from \(deviceName)")
+        let maxSeq = parsed.map(\.lastSeq).max() ?? 0
+        KLog.chat("📋 [1/sessions] session_list device=\(deviceName) count=\(parsed.count) maxLastSeq=\(maxSeq)")
+        for (i, d) in parsed.enumerated() {
+            let pin = (d.pinned == true) ? "📌" : "  "
+            let prev: String
+            if let p = d.preview {
+                let snippet = p.text
+                    .replacingOccurrences(of: "\n", with: "⏎")
+                    .prefix(40)
+                prev = "preview{type=\(p.type) ts=\(p.timestamp) text=\"\(snippet)\"}"
+            } else {
+                prev = "preview=nil"
+            }
+            let usage: String
+            if let u = d.usage {
+                usage = "usage{ctx=\(u.contextTokens ?? -1)}"
+            } else {
+                usage = "usage=nil"
+            }
+            let title = d.title.map { "title=\"\($0.prefix(30))\"" } ?? "title=nil"
+            KLog.chat("    [\(i)] \(pin) id=\(d.id) lastSeq=\(d.lastSeq) readSeq=\(d.readSeq) mode=\(d.mode.rawValue) agent=\(d.agent) model=\(d.model ?? "nil") state=\(d.state.rawValue) msgCount=\(d.messageCount) \(title) \(prev) \(usage)")
+        }
 
         // Remove sessions from this tentacle that are no longer in the list
         let tentacleIds = Set(parsed.map(\.id))
@@ -672,22 +698,20 @@ final class MessageRouter {
             )
         }
 
-        // Budget warm-up — instead of blindly issuing one replay
-        // request per session, classify by recency + state and stay
-        // within a 500-message bandwidth budget. See
-        // `MessageProvider.runWarmup` for the algorithm.
+        // Warm-up: request latest for the top-N most recent sessions.
+        // See `MessageProvider.runWarmup` for the algorithm.
         appState.messageProvider?.runWarmup(digests: parsed)
 
-        // Self-heal the currently-open chat. Warm-up only covers
-        // active+pinned+top-5/24h, so if the user is viewing a
-        // session outside that set when a reconnect lands, the chat
-        // view would otherwise stay frozen at whatever was in the
-        // store before the disconnect. ensureLoaded is idempotent —
-        // no-op when storeLastSeq already ≥ tentacleLastSeq, and
-        // no-op when another tentacle owns the active session (the
-        // owning tentacle's session_list arrival will trigger it).
+        // Self-heal the currently-open chat. Warm-up only covers the
+        // top-N by recency, so if the user is viewing a session
+        // outside that set when a reconnect lands, the chat view
+        // would otherwise stay frozen at whatever was in the store
+        // before the disconnect. ensureLoaded is idempotent — no-op
+        // when storeLastSeq already ≥ tentacleLastSeq, and no-op
+        // when another tentacle owns the active session (the owning
+        // tentacle's session_list arrival will trigger it).
         if let active = appState.sessionStore.activeSessionId {
-            appState.messageProvider?.ensureLoaded(sessionId: active)
+            appState.messageProvider?.ensureLoaded(sessionId: active, reason: "sessionListSelfHeal")
         }
     }
 
@@ -746,7 +770,7 @@ final class MessageRouter {
         )
 
         if lastSeq > 0 {
-            appState.messageProvider?.requestLatest(sessionId: sessionId)
+            appState.messageProvider?.requestLatest(sessionId: sessionId, reason: "newSession")
         }
 
         // Correlate requestId — auto-navigate if we created this session
@@ -799,8 +823,10 @@ final class MessageRouter {
         let messagesArray = payload["messages"] as? [[String: Any]] ?? []
         let lastSeq = payload["lastSeq"] as? Int ?? 0
         let totalLastSeq = payload["totalLastSeq"] as? Int ?? lastSeq
-        KLog.d("📦 replay_batch: \(messagesArray.count) messages for session \(sessionId.prefix(12)), lastSeq: \(lastSeq)")
         let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
+        let firstSeq = parsed.first?.seq ?? 0
+        let types = Set(parsed.map(\.type)).sorted().joined(separator: ",")
+        KLog.chat("📦 [2/history←WS replay_batch] session=\(sessionId.prefix(12)) count=\(parsed.count) seq=[\(firstSeq)…\(lastSeq)] totalLastSeq=\(totalLastSeq) types=[\(types)]")
         appState.messageProvider?.handleBatch(
             sessionId: sessionId,
             messages: parsed,
@@ -821,8 +847,9 @@ final class MessageRouter {
         let messagesArray = payload["messages"] as? [[String: Any]] ?? []
         let firstSeq = payload["firstSeq"] as? Int ?? 0
         let lastSeq = payload["lastSeq"] as? Int ?? 0
-        KLog.d("📦 messages_batch: \(messagesArray.count) for \(sessionId.prefix(12)), firstSeq=\(firstSeq) lastSeq=\(lastSeq)")
         let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
+        let types = Set(parsed.map(\.type)).sorted().joined(separator: ",")
+        KLog.chat("📦 [2/history←WS messages_batch] session=\(sessionId.prefix(12)) count=\(parsed.count) seq=[\(firstSeq)…\(lastSeq)] types=[\(types)]")
         appState.messageProvider?.handleBatch(
             sessionId: sessionId,
             messages: parsed,

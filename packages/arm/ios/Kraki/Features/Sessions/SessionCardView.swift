@@ -92,7 +92,7 @@ private struct SessionCardBody: View {
     // MARK: - Body
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             avatarView
                 .padding(.top, 3)
             centerContent
@@ -112,7 +112,7 @@ private struct SessionCardBody: View {
         AgentAvatar(
             agent: session.agent,
             sessionId: session.id,
-            size: .md,
+            size: .lg,
             status: session.state,
             pendingPermission: hasPendingPermission,
             pendingQuestion: hasPendingQuestion
@@ -130,13 +130,13 @@ private struct SessionCardBody: View {
     // MARK: - Center Content
 
     private var centerContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 5) {
             // Title row: title, optional offline pill, then timestamp
             // right-aligned. Timestamp lives here so it's anchored to
             // the headline that the user scans first.
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(session.displayTitle)
-                    .font(.headline)
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Color.textTitle)
                     .lineLimit(1)
 
@@ -206,7 +206,7 @@ private struct SessionCardBody: View {
             // row sits visually centered between the device-tag row
             // above and the next session's divider below.
             activityOrPreview
-                .frame(height: 20, alignment: .center)
+                .frame(height: 22, alignment: .center)
                 .padding(.top, 2)
         }
     }
@@ -254,11 +254,11 @@ private struct SessionCardBody: View {
         if let draft, !isActiveSession {
             HStack(spacing: 2) {
                 Text("[draft]")
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.red)
                     .fontWeight(.medium)
                 Text(draft)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -268,7 +268,7 @@ private struct SessionCardBody: View {
                 // Banner-style placeholder for fresh sessions with no
                 // user activity yet. Italic + tertiary tone.
                 Text(preview.text)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .italic()
             } else {
@@ -277,7 +277,7 @@ private struct SessionCardBody: View {
                         LucideIcon(icon.glyph, size: icon.size, strokeWidth: 2, color: icon.color)
                     }
                     Text(preview.text.collapseWhitespace())
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(previewTextColor(for: preview.type))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -287,7 +287,7 @@ private struct SessionCardBody: View {
             // Defensive fallback (no preview record at all): match the
             // banner style so empty-state height matches other cards.
             Text("Session created")
-                .font(.caption)
+                .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .italic()
         }

@@ -142,7 +142,9 @@ final class WebSocketClient: NSObject {
     }
 
     func setRelayURL(_ newURL: String) {
-        guard newURL != relayURL else { return }
+        guard newURL != relayURL else {
+            return
+        }
         relayURL = newURL
         intentionalClose = true
         cleanup()
@@ -391,6 +393,8 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
+        let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
+        KLog.d("🔒 WebSocket closed code=\(closeCode.rawValue) reason=\(reasonStr) intentional=\(intentionalClose) url=\(relayURL)")
         cleanup()
         if !intentionalClose {
             state = .disconnected
@@ -403,7 +407,8 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
-        guard error != nil else { return }
+        guard let error else { return }
+        KLog.d("⚠️ WebSocket didCompleteWithError \(error.localizedDescription) intentional=\(intentionalClose) url=\(relayURL)")
         cleanup()
         if !intentionalClose {
             state = .disconnected

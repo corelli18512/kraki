@@ -40,6 +40,12 @@ struct SessionListView: View {
         }
         .navigationBarHidden(true)
         .background(Color.surfacePrimary)
+        .onAppear {
+            KLog.chat("📂 [snapshot] SessionListView.onAppear render: store=\(sessionStore.sessions.count) sorted=\(sorted.count) filtered=\(filteredSessions.count)")
+        }
+        .onChange(of: filteredSessions.count) { old, new in
+            KLog.chat("📂 [snapshot] SessionListView count change: \(old) → \(new)")
+        }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 0) {
                 brandHeader
@@ -113,7 +119,7 @@ struct SessionListView: View {
         .padding(.leading, 20)
         .padding(.trailing, 16)
         .padding(.vertical, 10)
-        .background(Color.surfacePrimary)
+        .background(Color.surfaceSecondary)
     }
 
     // MARK: - Device Filter Row (toggleable, floating glass pills)
@@ -140,7 +146,7 @@ struct SessionListView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
-        .background(Color.surfacePrimary.opacity(0.85))
+        .background(Color.surfaceSecondary.opacity(0.85))
     }
 
     @ViewBuilder
@@ -183,6 +189,7 @@ struct SessionListView: View {
         SessionTable(appState: appState, deviceFilter: selectedDeviceFilter) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
+        .equatable()
         .background(Color.surfacePrimary)
         .ignoresSafeArea(.container, edges: .bottom)
     }

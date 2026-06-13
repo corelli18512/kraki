@@ -107,6 +107,11 @@ final class ChatListViewController: UIViewController {
     /// `makeUIViewController` calls `apply(turns:)` before UIKit
     /// has loaded the view, so we stash and replay.
     private var pendingTurns: [TurnItem]?
+    /// Set to true on the first successful `apply(turns:)` after
+    /// `viewDidLoad`. Used purely to emit a one-shot
+    /// `🎬 ChatListVC.apply FIRST` KLog so we can correlate the
+    /// SwiftUI render path with cell-paint time in the timeline.
+    private var didFirstApply = false
 
     /// Scroll coordinator that owns this controller's UICollectionView
     /// delegate callbacks and republishes derived state (isAtBottom,
@@ -147,9 +152,38 @@ final class ChatListViewController: UIViewController {
         view.backgroundColor = .clear
         configureCollectionView()
         configureDataSource()
+        KLog.chat("🎬 [3/render] ChatListVC.viewDidLoad session=\(sessionId.prefix(12)) pendingTurns=\(pendingTurns?.count ?? -1)")
         if let pending = pendingTurns {
             pendingTurns = nil
             apply(turns: pending)
+        }
+    }
+
+    /// Tell the enclosing UINavigationController which scroll view
+    /// drives the bar's scroll-edge appearance. iOS 26's default nav
+    /// bar uses glass + scroll-edge tracking to render as
+    /// transparent at the top edge and pick up the liquid blur once
+    /// content scrolls under it. UIKit auto-detects this when the
+    /// scroll view is a direct child of the topViewController, but
+    /// here the collection view is buried inside a
+    /// `UIViewControllerRepresentable` host, so detection fails and
+    /// the bar gets stuck in a single state.
+    ///
+    /// Setting the content scroll view on every ancestor up to the
+    /// nav stack's topViewController is the documented escape hatch
+    /// (`UIViewController.setContentScrollView(_:for:)`, iOS 15+).
+    /// Idempotent — safe to call on every appearance.
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        propagateContentScrollView()
+    }
+
+    private func propagateContentScrollView() {
+        setContentScrollView(collectionView)
+        var ancestor: UIViewController? = parent
+        while let vc = ancestor {
+            vc.setContentScrollView(collectionView)
+            ancestor = vc.parent
         }
     }
 
@@ -266,7 +300,13 @@ final class ChatListViewController: UIViewController {
         // Pre-viewDidLoad: stash and replay later.
         guard dataSource != nil else {
             pendingTurns = turns
+            KLog.chat("🎬 [3/render] ChatListVC.apply DEFERRED (pre-viewDidLoad) session=\(sessionId.prefix(12)) turns=\(turns.count)")
             return
+        }
+        let isFirstApply = !didFirstApply
+        if isFirstApply {
+            didFirstApply = true
+            KLog.chat("🎬 [3/render] ChatListVC.apply FIRST session=\(sessionId.prefix(12)) turns=\(turns.count)")
         }
         // Rebuild the id → TurnItem map. Cell configuration uses
         // this; without it, dequeuing a cell after a reorder would
@@ -299,6 +339,9 @@ final class ChatListViewController: UIViewController {
         snapshot.appendItems(turns.map { Item(id: $0.id) }, toSection: .messages)
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
+            if isFirstApply {
+                KLog.chat("🎬 [3/render] ChatListVC.apply FIRST completed session=\(self.sessionId.prefix(12)) items=\(self.dataSource.snapshot().numberOfItems)")
+            }
 
             // Priority order for offset adjustment:
             //   1. Entry scroll (one-shot, takes over the offset).
@@ -318,17 +361,35 @@ final class ChatListViewController: UIViewController {
             //
             // After the offset is settled, `recomputeIsAtBottom`
             // re-publishes the proximity flag so overlays catch up.
-            let entryFired = self.attemptEntryScroll()
-            if !entryFired {
-                if wasAtBottom {
-                    self.scrollCoordinator.scrollToBottom(animated: false)
-                } else if self.enforceIdleAnchor() {
-                    // Idle anchor handled — skip top-visible.
-                } else if let anchor {
-                    self.restoreScrollAnchor(anchor)
+            //
+            // The entire body is hopped to the next runloop because
+            // every branch ultimately calls into UIScrollView APIs
+            // (`scrollToItem`, `setContentOffset`) which synchronously
+            // fire `scrollViewDidScroll` → `publishIsAtBottom`, mutating
+            // the coordinator's `@Published isAtBottom`. When
+            // `dataSource.apply(_, animatingDifferences: false, completion:)`
+            // is invoked from inside `updateUIViewController(_:context:)`,
+            // the completion fires synchronously on the same runloop —
+            // so without this hop we'd publish DURING SwiftUI's view
+            // update phase, producing the "Publishing changes from
+            // within view updates is not allowed" runtime warning and
+            // a cascade of extra renders that visibly lag chat entry.
+            // One-frame delay is invisible (still pre-commit) and
+            // doesn't compromise the scroll positioning semantics.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let entryFired = self.attemptEntryScroll()
+                if !entryFired {
+                    if wasAtBottom {
+                        self.scrollCoordinator.scrollToBottom(animated: false)
+                    } else if self.enforceIdleAnchor() {
+                        // Idle anchor handled — skip top-visible.
+                    } else if let anchor {
+                        self.restoreScrollAnchor(anchor)
+                    }
                 }
+                self.scrollCoordinator.recomputeIsAtBottom()
             }
-            self.scrollCoordinator.recomputeIsAtBottom()
         }
     }
 
@@ -722,6 +783,7 @@ struct ChatListView: UIViewControllerRepresentable {
     let turns: [TurnItem]
 
     func makeUIViewController(context: Context) -> ChatListViewController {
+        KLog.chat("🎬 [3/render] ChatListView.makeUIViewController session=\(sessionId.prefix(12)) turns=\(turns.count) entryTarget=\(entryScrollTargetId ?? "nil")")
         let vc = ChatListViewController(
             sessionId: sessionId,
             viewModel: viewModel,
@@ -782,7 +844,22 @@ struct ChatListView: UIViewControllerRepresentable {
         // Forward idle-anchor target last — `apply` may have just
         // rebuilt the snapshot, and `updateIdleAnchorTarget`
         // depends on `dataSource.snapshot()` to find the cell.
-        vc.updateIdleAnchorTarget(idleAnchorTargetId)
+        //
+        // Deferred to the next runloop tick: `updateIdleAnchorTarget`
+        // ultimately calls `scrollCoordinator.setIdleAnchor` /
+        // `clearIdleAnchor`, which mutate `@Published` properties
+        // observed by `ChatView` via `@StateObject`. Doing that
+        // synchronously here would publish during SwiftUI's view
+        // update phase, producing the "Publishing changes from
+        // within view updates is not allowed" warning and a cascade
+        // of redundant re-renders that visibly stutter chat entry.
+        // `updateIdleAnchorTarget` itself is idempotent for an
+        // unchanged target id, so a one-frame delay is invisible and
+        // doesn't risk anchor drift.
+        let targetId = idleAnchorTargetId
+        DispatchQueue.main.async { [weak vc] in
+            vc?.updateIdleAnchorTarget(targetId)
+        }
     }
 }
 #endif

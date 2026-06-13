@@ -18,12 +18,14 @@ enum AvatarSize {
     case xs  // 18pt, rounded-sm (4pt)
     case sm  // 28pt, rounded-md (6pt)
     case md  // 36pt, rounded-lg (8pt)
+    case lg  // 44pt, rounded-lg (10pt)
 
     var dimension: CGFloat {
         switch self {
         case .xs: return 18
         case .sm: return 28
         case .md: return 36
+        case .lg: return 44
         }
     }
 
@@ -32,6 +34,7 @@ enum AvatarSize {
         case .xs: return 4
         case .sm: return 6
         case .md: return 8
+        case .lg: return 10
         }
     }
 
@@ -40,6 +43,7 @@ enum AvatarSize {
         case .xs: return 10
         case .sm: return 16
         case .md: return 20
+        case .lg: return 24
         }
     }
 
@@ -51,6 +55,7 @@ enum AvatarSize {
         case .xs: return 8
         case .sm: return 12
         case .md: return 14
+        case .lg: return 16
         }
     }
 
@@ -59,6 +64,7 @@ enum AvatarSize {
         case .xs: return 7
         case .sm: return 10
         case .md: return 10
+        case .lg: return 12
         }
     }
 }

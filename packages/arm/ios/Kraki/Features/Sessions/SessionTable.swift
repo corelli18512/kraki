@@ -16,10 +16,23 @@ import Observation
 
 // MARK: - SwiftUI bridge
 
-struct SessionTable: UIViewControllerRepresentable {
+struct SessionTable: UIViewControllerRepresentable, Equatable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
     let onCellTapped: (String) -> Void
+
+    /// SwiftUI re-creates this struct on every parent body re-eval
+    /// (e.g. SessionStore @Published mutations bubble up through
+    /// SessionListView even when the user has pushed into ChatView).
+    /// Closures never compare equal, so we deliberately exclude
+    /// `onCellTapped` from equality — its body is functionally
+    /// stable ("append tapped sessionId to the nav path") even when
+    /// the closure identity differs. Combined with `.equatable()`
+    /// modifier at the callsite, this skips ~90% of the spurious
+    /// `updateUIViewController` calls.
+    static func == (lhs: SessionTable, rhs: SessionTable) -> Bool {
+        lhs.appState === rhs.appState && lhs.deviceFilter == rhs.deviceFilter
+    }
 
     func makeUIViewController(context: Context) -> SessionTableController {
         let vc = SessionTableController()
@@ -33,6 +46,7 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
+        KLog.chat("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
     }
 }
@@ -47,16 +61,54 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     private var tableView: UITableView!
     private var dataSource: UITableViewDiffableDataSource<Int, String>!
     private var didApplyInitialSnapshot = false
+    /// Set to `true` when `applySnapshot` is invoked while the table
+    /// is off-screen (e.g. SwiftUI still drives the wrapping
+    /// `UIViewControllerRepresentable` while the user has pushed
+    /// into a chat detail). Re-applied on `viewWillAppear` so the
+    /// list catches up to whatever the store moved to in the
+    /// meantime, without forcing layout on a detached view (which
+    /// fires the "UITableView was told to layout its visible cells
+    /// ... without being in the view hierarchy" runtime warning and
+    /// wastes CPU on cells that are about to be re-laid-out anyway
+    /// when the user returns).
+    private var needsApplyOnAppear = false
     /// Fingerprint per session id (state that affects the cell
     /// rendering: pinned, lastSeq, readSeq, title hash). Used to
     /// decide which cells genuinely need a reconfigure so we don't
     /// reconfigure all 100+ cells on every websocket event.
     private var sessionFingerprints: [String: Int] = [:]
+    /// Last id-order applied to the data source. Used to early-out
+    /// when SwiftUI calls `updateUIViewController` (which it does
+    /// frequently, because the closure prop captured by the
+    /// representable struct is never `==` to itself across body
+    /// re-evaluations) but neither the row set nor any cell content
+    /// has actually changed.
+    private var lastAppliedIds: [String] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
         setupTableView()
         setupDataSource()
+        // Apply initial snapshot synchronously so the table is never
+        // visually empty between viewDidLoad and the first SwiftUI
+        // updateUIViewController call. Without this, on cold launch
+        // the user sees the (dark) table background but no rows for
+        // ~2s — the time it takes for some downstream observable
+        // change (typically WS connection state) to make SwiftUI
+        // re-evaluate and re-apply.
+        applySnapshot(animated: false)
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Re-apply any snapshot we dropped while detached. Animation
+        // is suppressed because the user just got here — we want the
+        // table to already be settled by the time the push transition
+        // completes, not animate moves underfoot.
+        if needsApplyOnAppear {
+            needsApplyOnAppear = false
+            applySnapshot(animated: false)
+        }
     }
 
     private func setupTableView() {
@@ -101,7 +153,26 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
 
     func applySnapshot(animated: Bool) {
-        guard isViewLoaded, let appState else { return }
+        guard isViewLoaded, let appState else {
+            return
+        }
+        // Skip while loaded but detached from the window AFTER the
+        // first apply (e.g. user pushed into a chat detail). Diffable
+        // data sources force a layout pass on apply, and UIKit
+        // complains (and wastes work) if the table is detached. Stash
+        // a "dirty" flag so `viewWillAppear` re-runs with current
+        // store state when the user returns.
+        //
+        // The FIRST apply is exempt from this guard: at viewDidLoad
+        // (and even viewWillAppear) the view is not yet attached to a
+        // window, but we *must* populate the data source then or the
+        // user sees an empty table until some downstream observable
+        // change triggers SwiftUI to re-evaluate and re-apply (which
+        // on cold launch can take 2+ seconds).
+        if didApplyInitialSnapshot && view.window == nil {
+            needsApplyOnAppear = true
+            return
+        }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         let allSessions = appState.sessionStore.sortedSessions
@@ -130,6 +201,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             }
         }
         sessionFingerprints = nextFingerprints
+
+        // Early-out if nothing visible changed. SwiftUI calls
+        // `updateUIViewController` on every body re-evaluation (and
+        // the closure prop captured by the representable struct
+        // forces SwiftUI to consider props "changed" on every
+        // re-eval), but the underlying store state usually hasn't
+        // moved. Skipping the no-op `dataSource.apply` here saves
+        // both diff work and an avoidable layout pass — without
+        // changing what the user sees.
+        if didApplyInitialSnapshot && changedIds.isEmpty && ids == lastAppliedIds {
+            return
+        }
+
         if !changedIds.isEmpty {
             snapshot.reconfigureItems(changedIds)
         }
@@ -137,6 +221,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         // First snapshot is non-animated; subsequent ones animate moves.
         let shouldAnimate = animated && didApplyInitialSnapshot
         dataSource.apply(snapshot, animatingDifferences: shouldAnimate)
+        lastAppliedIds = ids
+        KLog.chat("📂 [snapshot] SessionTable.applySnapshot APPLIED: rows=\(ids.count) reconfigured=\(changedIds.count) animated=\(shouldAnimate) initial=\(!didApplyInitialSnapshot) inWindow=\(view.window != nil)")
         didApplyInitialSnapshot = true
     }
 
@@ -227,12 +313,13 @@ struct SessionRowContent: View {
         VStack(spacing: 0) {
             SessionCardView(sessionId: sessionId)
                 .padding(.vertical, 6)
-                .padding(.horizontal, 16)
+                .padding(.leading, 8)
+                .padding(.trailing, 16)
 
             if !isLast {
                 Color.borderPrimary
                     .frame(height: 1.0 / UIScreen.main.scale)
-                    .padding(.leading, 62) // leading(16) + avatar(36) + gap(10)
+                    .padding(.leading, 64) // leading(8) + avatar(44) + gap(12)
             }
         }
     }

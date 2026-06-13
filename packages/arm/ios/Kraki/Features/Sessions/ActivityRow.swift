@@ -30,7 +30,7 @@ struct ActivityRow: View {
             case .agentText(let text):
                 LucideIcon(.keyboard, size: Self.leadingIconSize, color: .secondary)
                 Text(text.collapseWhitespace())
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -38,7 +38,7 @@ struct ActivityRow: View {
                 LucideIcon(.circleUser, size: Self.leadingIconSize, color: .krakiPrimary.opacity(0.55))
                 if let user = lastUserMessage, !user.isEmpty {
                     Text(user.collapseWhitespace())
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(Color.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
