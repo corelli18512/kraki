@@ -378,6 +378,68 @@ export interface SessionMessagesBatchMessage extends BaseEnvelope {
   };
 }
 
+// ── Range-based message fetch ───────────────────────
+
+/** Server-side hard cap on the number of messages returned by a single
+ *  `request_session_messages_range` reply. Defensive backstop — clients
+ *  should chunk their own requests well below this. When the server
+ *  truncates, the response's `truncated` flag is set. */
+export const SESSION_MESSAGES_RANGE_MAX_COUNT = 500;
+
+/**
+ * Sent by app to tentacle to fetch an EXACT seq range from a session.
+ *
+ * Distinct from `request_session_messages` which is turn-aligned and
+ * always anchored at the upper end. This endpoint exists for clients
+ * that know precisely which seqs they want — e.g. gap recovery when a
+ * push delivers a seq jump, or web's IndexedDB cache filling holes.
+ *
+ * Pagination is caller-driven: chunk `[fromSeq..toSeq]` yourself before
+ * sending. The server has a hard cap (`SESSION_MESSAGES_RANGE_MAX_COUNT`)
+ * as a defensive backstop — if the request exceeds it, the server keeps
+ * the newer end and sets `truncated: true` so the caller can iterate to
+ * fill the older remainder.
+ */
+export interface RequestSessionMessagesRangeMessage extends BaseEnvelope {
+  type: 'request_session_messages_range';
+  payload: {
+    /** Session to fetch from. */
+    sessionId: string;
+    /** Inclusive lower bound. Server clamps to ≥ 1. */
+    fromSeq: number;
+    /** Inclusive upper bound. Server clamps to ≤ session head seq. */
+    toSeq: number;
+  };
+}
+
+/**
+ * Sent by tentacle in response to `request_session_messages_range`.
+ *
+ * Per-session seqs are strictly monotonic and only assigned to
+ * persistent message types, so `messages` is contiguous within
+ * `[firstSeq..lastSeq]` — no holes possible. Empty `messages`
+ * means the requested range had no overlap with `[1..headSeq]`
+ * (or the session doesn't exist).
+ */
+export interface SessionMessagesRangeBatchMessage extends BaseEnvelope {
+  type: 'session_messages_range_batch';
+  payload: {
+    /** The session these messages belong to. */
+    sessionId: string;
+    /** Messages in ascending seq order. Contiguous: every seq in
+     *  `[firstSeq..lastSeq]` is present. */
+    messages: ProducerMessage[];
+    /** `messages[0].seq`, or `0` if `messages` is empty. */
+    firstSeq: number;
+    /** `messages.at(-1).seq`, or `0` if `messages` is empty. */
+    lastSeq: number;
+    /** True iff the server's hard cap reduced the range from the
+     *  older end. Caller may iterate by requesting another page
+     *  ending at `firstSeq - 1`. */
+    truncated: boolean;
+  };
+}
+
 /** Sent by tentacle to app with metadata for all active sessions. */
 export interface SessionListMessage extends BaseEnvelope {
   type: 'session_list';
@@ -482,6 +544,7 @@ export type ProducerMessage =
   | DeviceGreetingMessage
   | SessionReplayBatchMessage
   | SessionMessagesBatchMessage
+  | SessionMessagesRangeBatchMessage
   | SessionListMessage
   | PermissionResolvedMessage
   | QuestionResolvedMessage
@@ -710,6 +773,7 @@ export type ConsumerMessage =
   | MarkUnreadMessage
   | RequestSessionReplayMessage
   | RequestSessionMessagesMessage
+  | RequestSessionMessagesRangeMessage
   | RenameSessionMessage
   | PinSessionMessage
   | RequestLocalSessionsMessage
