@@ -44,33 +44,24 @@ function cliExists(name: string): boolean {
   }
 }
 
-function hasGhAuth(): boolean {
-  try {
-    const token = execSync('gh auth token', { stdio: 'pipe', timeout: 5000 }).toString().trim();
-    return token.length > 0;
-  } catch {
-    return false;
-  }
-}
-
 /** Detect which agents can be started on this machine. */
 export async function detectAvailableAgents(): Promise<AgentId[]> {
   const agents: AgentId[] = [];
 
-  // Copilot: SDK importable + GitHub CLI authenticated
-  if (await canImport('@github/copilot-sdk') && hasGhAuth()) {
+  // Copilot: SDK importable + `copilot` CLI on PATH
+  if (await canImport('@github/copilot-sdk') && cliExists('copilot')) {
     agents.push('copilot');
-    logger.info('Detected Copilot: SDK + gh auth OK');
+    logger.info('Detected Copilot: SDK + copilot CLI OK');
   } else {
-    logger.debug('Copilot not available (SDK or gh auth missing)');
+    logger.debug('Copilot not available (SDK or copilot CLI missing)');
   }
 
-  // Claude: SDK importable + claude CLI on PATH
+  // Claude: SDK importable + `claude` CLI on PATH
   if (await canImport('@anthropic-ai/claude-agent-sdk') && cliExists('claude')) {
     agents.push('claude');
-    logger.info('Detected Claude Code: SDK + CLI OK');
+    logger.info('Detected Claude Code: SDK + claude CLI OK');
   } else {
-    logger.debug('Claude Code not available (SDK or CLI missing)');
+    logger.debug('Claude Code not available (SDK or claude CLI missing)');
   }
 
   return agents;
