@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, ContentRef } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, ContentRef } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -34,8 +34,6 @@ export interface RouterContext {
   sendEncrypted?: (msg: Record<string, unknown>) => void;
   /** Called when tentacle sends session_list for sync. */
   onSessionList?: (msg: SessionListMessage) => void;
-  /** Called when tentacle sends a legacy replay batch. */
-  onSessionReplayBatch?: (msg: SessionReplayBatchMessage) => void;
   /** Called when tentacle sends a range-fetch batch. */
   onSessionMessagesRangeBatch?: (msg: SessionMessagesRangeBatchMessage) => void;
 }
@@ -67,12 +65,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // Handle session_list — tentacle's authoritative session metadata
   if (msg.type === 'session_list') {
     ctx.onSessionList?.(msg);
-    return;
-  }
-
-  // Handle session_replay_batch — legacy path (deprecated server endpoint)
-  if (msg.type === 'session_replay_batch') {
-    ctx.onSessionReplayBatch?.(msg as SessionReplayBatchMessage);
     return;
   }
 

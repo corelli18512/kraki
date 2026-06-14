@@ -439,16 +439,6 @@ export class KrakiWSClient {
   }
 
   /**
-   * Handle a legacy replay batch — delegate to message provider.
-   * Kept for defensive routing; web no longer sends `request_session_replay`.
-   */
-  private handleReplayBatch(msg: import('@kraki/protocol').SessionReplayBatchMessage): void {
-    const { sessionId, messages, lastSeq, totalLastSeq } = msg.payload;
-    if (!sessionId) return;
-    messageProvider.handleBatch(sessionId, messages, lastSeq, totalLastSeq);
-  }
-
-  /**
    * Handle a range-fetch batch — delegate to message provider.
    */
   private handleRangeBatch(msg: import('@kraki/protocol').SessionMessagesRangeBatchMessage): void {
@@ -495,7 +485,6 @@ export class KrakiWSClient {
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
         onSessionList: (m) => this.handleSessionList(m),
-        onSessionReplayBatch: (m) => this.handleReplayBatch(m),
         onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
       }),
       getHandlers: () => this.handlers,
@@ -623,7 +612,6 @@ export class KrakiWSClient {
             cmdState: this.cmdState,
             sendEncrypted: (m) => this.sendEncrypted(m),
             onSessionList: (m) => this.handleSessionList(m),
-            onSessionReplayBatch: (m) => this.handleReplayBatch(m),
             onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
           });
         }

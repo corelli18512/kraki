@@ -187,7 +187,7 @@ class MessageProvider {
   private tentacleDeviceMap = new Map<string, string>();
   /** send function injected from ws-client */
   private sendFn: ((msg: Record<string, unknown>) => void) | null = null;
-  /** Pending tentacle requests awaiting handleBatch */
+  /** Pending tentacle range-fetch requests awaiting handleRangeBatch */
   private pendingRequests = new Map<string, PendingRequest>();
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
@@ -313,19 +313,7 @@ class MessageProvider {
   }
 
   /**
-   * Handle a replay batch (legacy `session_replay_batch` path).
-   *
-   * Kept for defensive routing — web no longer sends `request_session_replay`
-   * (migrated to `request_session_messages_range`), but in-flight batches
-   * may still arrive during deploy races or if other clients trigger it.
-   */
-  handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
-    logger.info('handleBatch (legacy replay) received', { sessionId, count: (messages ?? []).length });
-    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[]);
-  }
-
-  /**
-   * Handle the new range-batch response (`session_messages_range_batch`).
+   * Handle the range-batch response (`session_messages_range_batch`).
    * Resolves the pending range request and feeds the messages into the
    * normal delivery pipeline.
    */
@@ -347,9 +335,9 @@ class MessageProvider {
   }
 
   /**
-   * Shared delivery path for both legacy replay batches and new range batches.
-   * Resolves any pending in-flight request; otherwise falls back to a direct
-   * store write so messages aren't lost on unsolicited batches.
+   * Shared delivery path for range batches. Resolves any pending in-flight
+   * request; otherwise falls back to a direct store write so messages aren't
+   * lost on unsolicited batches.
    */
   private deliverPending(sessionId: string, messages: ChatMessage[]): void {
     const pending = this.pendingRequests.get(sessionId);
