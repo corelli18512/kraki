@@ -6,7 +6,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, constants as fsConstants, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
+import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -184,31 +184,50 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
 
 export type FdaStatus = 'granted' | 'denied' | 'missing';
 
+// Paths that macOS gates behind FDA (kTCCServiceSystemPolicyAllFiles).
+// A process without FDA receives EPERM when accessing any of these.
+// Multiple targets guard against Apple removing protection from any single
+// path in a future macOS release.
+const FDA_PROBE_TARGETS = [
+  'Library/Mail',
+  'Library/Safari/Databases',
+  'Library/Application Support/com.apple.TCC/TCC.db',
+];
+
 /**
- * Probe macOS Full Disk Access by attempting to read the user-level TCC
- * database. This file is only readable when FDA has been granted.
+ * Probe macOS Full Disk Access by attempting to read known TCC-protected
+ * paths. Tries multiple targets so the check stays reliable across macOS
+ * versions even if Apple changes protection on individual paths.
  *
  * Never triggers a system dialog — it only checks the current state.
  */
 export async function probeFda(): Promise<FdaStatus> {
   if (platform() !== 'darwin') return 'granted'; // non-macOS: not applicable
-  const target = join(homedir(), 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
-  if (!existsSync(target)) return 'missing';
-  try {
-    await fsp.access(target, fsConstants.R_OK);
-    return 'granted';
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'EACCES') return 'denied';
-    if (code === 'ENOENT') return 'missing';
-    return 'denied';
+
+  const home = homedir();
+  let sawBlocked = false;
+
+  for (const rel of FDA_PROBE_TARGETS) {
+    const target = join(home, rel);
+    try {
+      await fsp.access(target, fsConstants.R_OK);
+      return 'granted';
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') {
+        sawBlocked = true;
+      }
+      // ENOENT → path doesn't exist on this machine, try next
+    }
   }
+
+  return sawBlocked ? 'denied' : 'missing';
 }
 
 /**
  * Poll Full Disk Access at regular intervals until granted or the signal
- * is aborted. Never triggers a system dialog — uses the same read-only
- * TCC.db probe as `probeFda()`.
+ * is aborted. Never triggers a system dialog — uses the same multi-path
+ * probe as `probeFda()`.
  *
  * Returns the final observed status ('granted' once the user toggles FDA
  * in System Settings, or the last polled status if aborted early).
