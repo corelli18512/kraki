@@ -439,12 +439,12 @@ export class KrakiWSClient {
   }
 
   /**
-   * Handle a replay batch — delegate to message provider.
+   * Handle a range-fetch batch — delegate to message provider.
    */
-  private handleReplayBatch(msg: import('@kraki/protocol').SessionReplayBatchMessage): void {
-    const { sessionId, messages, lastSeq, totalLastSeq } = msg.payload;
+  private handleRangeBatch(msg: import('@kraki/protocol').SessionMessagesRangeBatchMessage): void {
+    const { sessionId, messages, firstSeq, lastSeq, truncated } = msg.payload;
     if (!sessionId) return;
-    messageProvider.handleBatch(sessionId, messages, lastSeq, totalLastSeq);
+    messageProvider.handleRangeBatch(sessionId, messages, firstSeq, lastSeq, truncated);
   }
 
   // --- Internal ---
@@ -485,7 +485,7 @@ export class KrakiWSClient {
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
         onSessionList: (m) => this.handleSessionList(m),
-        onSessionReplayBatch: (m) => this.handleReplayBatch(m),
+        onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
       }),
       getHandlers: () => this.handlers,
     };
@@ -612,7 +612,7 @@ export class KrakiWSClient {
             cmdState: this.cmdState,
             sendEncrypted: (m) => this.sendEncrypted(m),
             onSessionList: (m) => this.handleSessionList(m),
-            onSessionReplayBatch: (m) => this.handleReplayBatch(m),
+            onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
           });
         }
         break;

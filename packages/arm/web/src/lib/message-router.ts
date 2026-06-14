@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionReplayBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, ContentRef } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, PermissionResolvedMessage, ProducerMessage, QuestionResolvedMessage, ContentRef } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -34,8 +34,8 @@ export interface RouterContext {
   sendEncrypted?: (msg: Record<string, unknown>) => void;
   /** Called when tentacle sends session_list for sync. */
   onSessionList?: (msg: SessionListMessage) => void;
-  /** Called when tentacle sends a replay batch. */
-  onSessionReplayBatch?: (msg: SessionReplayBatchMessage) => void;
+  /** Called when tentacle sends a range-fetch batch. */
+  onSessionMessagesRangeBatch?: (msg: SessionMessagesRangeBatchMessage) => void;
 }
 
 /** Build the request_attachment fallback callback used by markAwaitingPush. */
@@ -68,9 +68,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
-  // Handle session_replay_batch — tentacle sent a batch of replayed messages
-  if (msg.type === 'session_replay_batch') {
-    ctx.onSessionReplayBatch?.(msg as SessionReplayBatchMessage);
+  // Handle session_messages_range_batch — response to request_session_messages_range
+  if (msg.type === 'session_messages_range_batch') {
+    ctx.onSessionMessagesRangeBatch?.(msg as SessionMessagesRangeBatchMessage);
     return;
   }
   // attachment_data — chunk of bytes for an attachment ref. Has a sessionId
