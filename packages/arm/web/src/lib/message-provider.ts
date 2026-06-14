@@ -313,26 +313,59 @@ class MessageProvider {
   }
 
   /**
-   * Handle a replay batch from tentacle — resolves the pending request.
+   * Handle a replay batch (legacy `session_replay_batch` path).
+   *
+   * Kept for defensive routing — web no longer sends `request_session_replay`
+   * (migrated to `request_session_messages_range`), but in-flight batches
+   * may still arrive during deploy races or if other clients trigger it.
    */
   handleBatch(sessionId: string, messages: unknown[], _lastSeq: number, _totalLastSeq: number): void {
-    logger.info('handleBatch received', { sessionId, count: (messages ?? []).length });
-    const typed = (messages ?? []) as ChatMessage[];
+    logger.info('handleBatch (legacy replay) received', { sessionId, count: (messages ?? []).length });
+    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[]);
+  }
+
+  /**
+   * Handle the new range-batch response (`session_messages_range_batch`).
+   * Resolves the pending range request and feeds the messages into the
+   * normal delivery pipeline.
+   */
+  handleRangeBatch(
+    sessionId: string,
+    messages: unknown[],
+    firstSeq: number,
+    lastSeq: number,
+    truncated: boolean,
+  ): void {
+    const count = (messages ?? []).length;
+    logger.info('handleRangeBatch received', { sessionId, count, firstSeq, lastSeq, truncated });
+    if (truncated) {
+      logger.warn('range batch was truncated by tentacle — caller may need to paginate', {
+        sessionId, firstSeq, lastSeq, count,
+      });
+    }
+    this.deliverPending(sessionId, (messages ?? []) as ChatMessage[]);
+  }
+
+  /**
+   * Shared delivery path for both legacy replay batches and new range batches.
+   * Resolves any pending in-flight request; otherwise falls back to a direct
+   * store write so messages aren't lost on unsolicited batches.
+   */
+  private deliverPending(sessionId: string, messages: ChatMessage[]): void {
     const pending = this.pendingRequests.get(sessionId);
     if (pending) {
       this.pendingRequests.delete(sessionId);
-      pending.resolve(typed);
-    } else {
-      // No pending request — direct batch (e.g. from a concurrent path)
-      // Put directly in store as fallback
-      if (typed.length > 0) {
-        getStore().prependMessages(sessionId, typed);
-        processReplayedActions(sessionId, typed);
-        rebuildPreview(sessionId);
-      }
-      this.loadingSessions.delete(sessionId);
-      getStore().setSessionLoading(sessionId, false);
+      pending.resolve(messages);
+      return;
     }
+    // No pending request — direct batch (e.g. from a concurrent path)
+    if (messages.length > 0) {
+      getStore().prependMessages(sessionId, messages);
+      processReplayedActions(sessionId, messages);
+      rebuildPreview(sessionId);
+    }
+    this.loadingSessions.delete(sessionId);
+    getStore().setSessionLoading(sessionId, false);
   }
 
   /** Clear all tracking (on disconnect). */
@@ -348,7 +381,10 @@ class MessageProvider {
   }
 
   /**
-   * Request messages from tentacle and await the batch response.
+   * Request messages from tentacle for an exact seq range and await the response.
+   * `afterSeq` is the EXCLUSIVE lower bound (matches the existing fetchRange
+   * semantics where `idbMessages` already cover up to and including `afterSeq`).
+   * `limit` is the number of messages we want past `afterSeq`.
    */
   private requestFromTentacle(sessionId: string, afterSeq: number, limit: number): Promise<ChatMessage[]> {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
@@ -357,22 +393,26 @@ class MessageProvider {
       return Promise.resolve([]);
     }
 
+    const fromSeq = afterSeq + 1;
+    const toSeq = afterSeq + limit;
+    if (toSeq < fromSeq) return Promise.resolve([]);
+
     return new Promise<ChatMessage[]>((resolve) => {
       this.pendingRequests.set(sessionId, { sessionId, resolve });
 
       const store = getStore();
       this.sendFn!({
-        type: 'request_session_replay',
+        type: 'request_session_messages_range',
         deviceId: store.deviceId ?? '',
-        payload: { sessionId, afterSeq, limit, targetDeviceId: tentacleDeviceId },
+        payload: { sessionId, fromSeq, toSeq, targetDeviceId: tentacleDeviceId },
       });
 
-      logger.info('requested from tentacle', { sessionId, afterSeq, limit });
+      logger.info('requested from tentacle (range)', { sessionId, fromSeq, toSeq });
 
       // Safety timeout — resolve with empty if tentacle never responds
       setTimeout(() => {
         if (this.pendingRequests.has(sessionId)) {
-          logger.warn('tentacle request timed out', { sessionId, afterSeq });
+          logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
           this.pendingRequests.delete(sessionId);
           resolve([]);
         }

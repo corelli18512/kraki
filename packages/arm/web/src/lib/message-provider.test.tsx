@@ -32,6 +32,7 @@ function setupSession() {
 
 beforeEach(() => {
   useStore.getState().reset();
+  messageProvider.clear();
 });
 
 describe('message-provider: replayed permissions', () => {
@@ -173,5 +174,106 @@ describe('message-provider: ensureLoaded', () => {
 
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe('message-provider: range-fetch protocol', () => {
+  it('sends request_session_messages_range with inclusive fromSeq/toSeq', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    // fetchRange(s1, 51, 100) → afterSeq=50, limit=50
+    // → fromSeq=51, toSeq=100 inclusive
+    void messageProvider.fetchRange('s1', 51, 100, { initial: true });
+
+    // fetchRange awaits dynamic imports (./message-db); poll until the send fires.
+    await vi.waitFor(() => {
+      expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
+    });
+
+    const rangeReq = sent.find(m => m.type === 'request_session_messages_range');
+    const payload = rangeReq!.payload as Record<string, unknown>;
+    expect(payload.sessionId).toBe('s1');
+    expect(payload.fromSeq).toBe(51);
+    expect(payload.toSeq).toBe(100);
+    expect(payload.targetDeviceId).toBe('d1');
+
+    // No legacy replay request should have been sent
+    expect(sent.find(m => m.type === 'request_session_replay')).toBeUndefined();
+
+    // Resolve the pending request so fetchRange completes its finally clause
+    messageProvider.handleRangeBatch('s1', [], 0, 0, false);
+    await vi.waitFor(() => {
+      expect(messageProvider.isLoading('s1')).toBe(false);
+    });
+  });
+
+  it('handleRangeBatch resolves the pending request and persists messages', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 10, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    const pending = messageProvider.fetchRange('s1', 1, 10, { initial: true });
+    await vi.waitFor(() => {
+      expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
+    });
+
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 1, timestamp: '',
+        payload: { content: 'first' } },
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 2, timestamp: '',
+        payload: { content: 'second' } },
+    ], 1, 2, false);
+
+    await pending;
+
+    const msgs = useStore.getState().messages.get('s1');
+    expect(msgs).toBeDefined();
+    expect(msgs!.length).toBe(2);
+    expect(messageProvider.isLoading('s1')).toBe(false);
+  });
+
+  it('handleRangeBatch warns but still delivers when truncated=true', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 1000, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    const pending = messageProvider.fetchRange('s1', 1, 1000, { initial: true });
+    await vi.waitFor(() => {
+      expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
+    });
+
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 501, timestamp: '',
+        payload: { content: 'newer end' } },
+    ], 501, 501, true);
+
+    await pending;
+
+    expect(useStore.getState().messages.get('s1')?.length).toBe(1);
+  });
+
+  it('legacy handleBatch still resolves the pending request for in-flight replay batches', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 5, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    const pending = messageProvider.fetchRange('s1', 1, 5, { initial: true });
+    await vi.waitFor(() => {
+      expect(sent.find(m => m.type === 'request_session_messages_range')).toBeDefined();
+    });
+
+    messageProvider.handleBatch('s1', [
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 1, timestamp: '',
+        payload: { content: 'legacy' } },
+    ], 1, 1);
+
+    await pending;
+    expect(useStore.getState().messages.get('s1')?.length).toBe(1);
   });
 });
