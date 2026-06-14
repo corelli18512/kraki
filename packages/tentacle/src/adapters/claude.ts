@@ -351,15 +351,43 @@ export class ClaudeAdapter extends AgentAdapter {
     }
 
     // Verify the SDK can be imported
-    try {
-      await import('@anthropic-ai/claude-agent-sdk');
-    } catch {
+    const sdk = await import('@anthropic-ai/claude-agent-sdk').catch(() => null);
+    if (!sdk) {
       throw new Error(
         'Claude Agent SDK not found. Install it with: npm install @anthropic-ai/claude-agent-sdk'
       );
     }
 
-    logger.info('Claude adapter started');
+    // Fetch available models via a throwaway query. The SDK requires a
+    // prompt to create a query, but we can call supportedModels() on it
+    // and then immediately abort — no actual API call is made for models.
+    try {
+      const ac = new AbortController();
+      const noop = (async function* () { /* never yields — query blocks waiting for input */ })();
+      const q = sdk.query({
+        prompt: noop,
+        options: { abortController: ac, permissionMode: 'default' as PermissionMode },
+      });
+      const models = await q.supportedModels();
+      ac.abort();
+      if (models.length > 0) {
+        this.cachedModels = models.map(m => ({
+          id: m.value,
+          name: m.displayName ?? m.value,
+          supportsReasoningEffort: !!m.supportsEffort,
+          ...(m.supportedEffortLevels && {
+            supportedReasoningEfforts: m.supportedEffortLevels.filter(
+              (e): e is 'low' | 'medium' | 'high' | 'xhigh' => e !== 'max',
+            ),
+          }),
+        }));
+        logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
+      }
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
+    }
+
+    logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
   }
 
   async stop(): Promise<void> {
