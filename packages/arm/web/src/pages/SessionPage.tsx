@@ -30,7 +30,9 @@ export function SessionPage() {
   const navigate = useNavigate();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
-  const deviceAgent = useStore((s) => session ? s.deviceAgents.get(session.deviceId) : undefined);
+  const deviceAgentsList = useStore((s) => session ? s.deviceAgents.get(session.deviceId) : undefined);
+  // Find the agent matching this session, or flatten all agents' models
+  const deviceAgent = deviceAgentsList?.find(a => a.id === session?.agent) ?? deviceAgentsList?.[0];
   const deviceModels = deviceAgent?.models;
   const deviceModelDetails = deviceAgent?.modelDetails;
 

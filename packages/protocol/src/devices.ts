@@ -63,8 +63,8 @@ export interface DeviceInfo {
 }
 
 export interface DeviceCapabilities {
-  /** Agent running on this device */
-  agent?: AgentCapabilities;
+  /** Agents available on this device (a tentacle can run multiple) */
+  agents?: AgentCapabilities[];
 }
 
 // ── Push notification providers ──────────────────────────

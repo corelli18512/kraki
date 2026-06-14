@@ -233,7 +233,7 @@ describe('NewSessionDialog', () => {
     useStore.getState().setDevices([
       { id: 'd-offline', name: 'Offline Mac', role: 'tentacle', online: false },
     ]);
-    useStore.getState().setDeviceAgent('d-offline', { type: 'code', id: 'copilot', models: ['gpt-5'] });
+    useStore.getState().setDeviceAgents('d-offline', [{ type: 'code', id: 'copilot', models: ['gpt-5'] }]);
 
     renderWithRouter(<NewSessionDialog open onClose={() => {}} />);
 

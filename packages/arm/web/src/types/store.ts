@@ -113,7 +113,7 @@ export interface AppState {
   relayVersion: string | null;
 
   // Live capabilities from tentacle greetings
-  deviceAgents: Map<string, AgentCapabilities>;
+  deviceAgents: Map<string, AgentCapabilities[]>;
   deviceVersions: Map<string, string>;
 
   // Per-session cumulative token usage
@@ -176,8 +176,8 @@ export interface AppActions {
   setGithubClientId: (clientId: string | null) => void;
   setVapidPublicKey: (key: string | null) => void;
   setRelayVersion: (version: string | null) => void;
-  setDeviceAgent: (deviceId: string, agent: AgentCapabilities) => void;
-  clearDeviceAgent: (deviceId: string) => void;
+  setDeviceAgents: (deviceId: string, agents: AgentCapabilities[]) => void;
+  clearDeviceAgents: (deviceId: string) => void;
   setDeviceVersion: (deviceId: string, version: string) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;

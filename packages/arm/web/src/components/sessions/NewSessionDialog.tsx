@@ -61,10 +61,19 @@ export function NewSessionDialog({ open, onClose }: Props) {
     }
   }, [open, tentacles.length]);
 
-  // Get models from tentacle greeting
-  const agentCaps = deviceAgents.get(selectedDevice);
-  const models = agentCaps?.models ?? [];
-  const modelDetails = agentCaps?.modelDetails ?? [];
+  // Get models from tentacle greeting — flatten all agents
+  const agentsList = deviceAgents.get(selectedDevice) ?? [];
+  const allModels: { model: string; agentId: string; detail?: import('@kraki/protocol').ModelDetail }[] = [];
+  for (const agent of agentsList) {
+    for (const m of agent.models ?? []) {
+      const detail = agent.modelDetails?.find(d => d.id === m);
+      allModels.push({ model: m, agentId: agent.id, detail });
+    }
+  }
+  const models = allModels.map(m => m.model);
+  const modelDetails = allModels.map(m => m.detail).filter((d): d is import('@kraki/protocol').ModelDetail => !!d);
+  // Track which agent owns the selected model
+  const selectedAgentId = allModels.find(m => m.model === model)?.agentId;
 
   // Get reasoning effort info for selected model
   const selectedModelDetail = useMemo(
@@ -130,6 +139,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
       targetDeviceId: selectedDevice,
       model,
       reasoningEffort,
+      agentId: selectedAgentId,
     });
     onClose();
   };

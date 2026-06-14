@@ -57,8 +57,8 @@ export function DeviceGrid() {
     : isDesktop && deviceSessions.length > 0 ? deviceSessions[0].id : null;
   const selectedSession = effectiveSessionId ? sessions.get(effectiveSessionId) : undefined;
 
-  const agentCaps = selectedDevice ? deviceAgents.get(selectedDevice.id) : undefined;
-  const models = agentCaps?.models;
+  const agentsList = selectedDevice ? deviceAgents.get(selectedDevice.id) : undefined;
+  const models = agentsList?.flatMap(a => a.models ?? []);
   const version = selectedDevice ? deviceVersions.get(selectedDevice.id) : undefined;
 
   const handleSelectDevice = useCallback((id: string) => {

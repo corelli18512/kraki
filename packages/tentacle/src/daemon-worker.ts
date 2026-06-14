@@ -9,16 +9,15 @@
  * SessionManager handles durable session state and crash recovery.
  * KeyManager handles E2E encryption keys.
  *
- * Agent selection: set KRAKI_AGENT=claude to use the Claude Code adapter
- * instead of the default Copilot adapter.
+ * Agent detection: automatically detects available coding agents
+ * (Copilot CLI, Claude Code CLI) and starts all that are found.
  */
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
 import { ensureWindowsSystemPath, probeFda } from './checks.js';
-import { CopilotAdapter } from './adapters/copilot.js';
-import { ClaudeAdapter } from './adapters/claude.js';
+import { MultiAgentAdapter } from './adapters/multi.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -146,26 +145,15 @@ export async function startWorker(): Promise<WorkerResult> {
     mcpServer = null;
   }
 
-  // 3c. Select agent adapter based on KRAKI_AGENT env var
-  const agentId = (process.env.KRAKI_AGENT ?? 'copilot').toLowerCase() as import('@kraki/protocol').AgentId;
-  let adapter: AgentAdapter;
-  if (agentId === 'claude') {
-    adapter = new ClaudeAdapter({
-      attachmentStore,
-      ...(mcpInfo && { krakiMcp: mcpInfo }),
-    });
-    logger.info('Using Claude Code adapter');
-  } else {
-    adapter = new CopilotAdapter({
-      attachmentStore,
-      ...(mcpInfo && { krakiMcp: mcpInfo }),
-    });
-    logger.info('Using Copilot adapter');
-  }
+  // 3c. Create multi-agent adapter (auto-detects available agents)
+  const adapter = new MultiAgentAdapter({
+    attachmentStore,
+    ...(mcpInfo && { krakiMcp: mcpInfo }),
+  });
   const keyManager = new KeyManager();
   const deviceId = getOrCreateDeviceId();
 
-  // 4. Start Copilot adapter
+  // 4. Start agent adapters (auto-detection + startup)
   if (token) {
     process.env.GITHUB_TOKEN = token;
   }
@@ -173,34 +161,31 @@ export async function startWorker(): Promise<WorkerResult> {
   try {
     await adapter.start();
     adapterReady = true;
-    logger.info(`${agentId} adapter started`);
+    logger.info('Multi-agent adapter started');
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, `${agentId} adapter failed to start`);
+    logger.warn({ err: (err as Error).message }, 'Multi-agent adapter failed to start');
     try { await adapter.stop(); } catch { /* already dead */ }
   }
 
-  // 5. Fetch available models for device capabilities (retry once after delay
-  //    in case the SDK connection isn't fully ready immediately after start)
-  let models: string[] = [];
-  let modelDetails: import('@kraki/protocol').ModelDetail[] = [];
+  // 5. Build per-agent capabilities for device greeting
+  let agentCapabilities: import('@kraki/protocol').AgentCapabilities[] | undefined;
   if (adapterReady) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        modelDetails = await adapter.listModelDetails();
-        models = modelDetails.map(m => m.id);
-        if (models.length > 0) break;
+        agentCapabilities = await adapter.getAgentCapabilities();
+        if (agentCapabilities.length > 0) break;
         if (attempt === 0) {
-          logger.debug('Model list empty, retrying after delay…');
+          logger.debug('Agent capabilities empty, retrying after delay…');
           await new Promise(r => setTimeout(r, 2000));
         }
       } catch {
-        logger.warn('Could not fetch available models');
+        logger.warn('Could not fetch agent capabilities');
         if (attempt === 0) {
           await new Promise(r => setTimeout(r, 2000));
         }
       }
     }
-    logger.debug({ count: models.length }, 'Fetched available models');
+    logger.debug({ agents: agentCapabilities?.map(a => a.id) }, 'Built agent capabilities');
   }
 
   // 6. Connect to relay via RelayClient
@@ -214,7 +199,7 @@ export async function startWorker(): Promise<WorkerResult> {
         role: 'tentacle',
         kind: 'desktop',
         deviceId,
-        capabilities: models.length > 0 ? { agent: { type: 'code' as const, id: agentId, models, modelDetails } } : undefined,
+        capabilities: agentCapabilities?.length ? { agents: agentCapabilities } : undefined,
       },
       authMethod: config.authMethod,
       token,
