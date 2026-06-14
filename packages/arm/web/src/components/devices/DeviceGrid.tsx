@@ -114,6 +114,7 @@ export function DeviceGrid() {
           <DevicePanel
             device={selectedDevice}
             models={models}
+            agents={agentsList}
             version={version}
             isCurrentDevice={selectedDevice.id === myDeviceId}
             selectedSessionId={effectiveSessionId}
@@ -134,7 +135,7 @@ export function DeviceGrid() {
             session={selectedSession}
             usage={sessionUsage.get(selectedSession.id)}
             models={models}
-            modelDetails={agentCaps?.modelDetails}
+            modelDetails={agentsList?.flatMap(a => a.modelDetails ?? [])}
             onClose={() => setSelectedSessionId(null)}
           />
         </div>

@@ -24,6 +24,23 @@ function CopilotIcon({ className }: { className?: string }) {
   );
 }
 
+function ClaudeIcon({ className }: { className?: string }) {
+  // Simple "C" monogram to distinguish from Copilot — clean and recognizable
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm3.5 14.5c-.97.63-2.15 1-3.5 1-3.58 0-6.5-2.92-6.5-6.5S8.42 4.5 12 4.5c1.35 0 2.53.37 3.5 1v2.6A4.49 4.49 0 0 0 12 6.5 4.51 4.51 0 0 0 7.5 11c0 2.49 2.01 4.5 4.5 4.5 1.3 0 2.48-.56 3.5-1.6v2.6Z" />
+    </svg>
+  );
+}
+
+function AgentIcon({ agent, className }: { agent: string; className?: string }) {
+  switch (agent) {
+    case 'claude': return <ClaudeIcon className={className} />;
+    case 'copilot':
+    default: return <CopilotIcon className={className} />;
+  }
+}
+
 export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinned }: AgentAvatarProps) {
   const s = sizeMap[size];
   const hue = stringToHue(sessionId ?? agent);
@@ -41,7 +58,7 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinn
         className={`flex items-center justify-center ${s.container}`}
         style={{ backgroundColor: `hsl(${hue}, 50%, 90%)`, color: `hsl(${hue}, 60%, 40%)` }}
       >
-        <CopilotIcon className={s.icon} />
+        <AgentIcon agent={agent} className={s.icon} />
       </div>
       {BadgeIcon && (
         <span className="absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] text-kraki-500">

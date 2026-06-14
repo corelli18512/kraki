@@ -195,26 +195,53 @@ export function NewSessionDialog({ open, onClose }: Props) {
               </div>
             </div>
 
-            {/* Model picker — scrollable list */}
+            {/* Model picker — grouped by agent when multiple agents */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-text-secondary">Model</label>
               {models.length > 0 ? (
-                <div ref={listRef} className="max-h-40 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
-                  {models.map((m) => (
-                    <button
-                      key={m}
-                      data-selected={model === m}
-                      onClick={() => handleSelectModel(m)}
-                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                        model === m
-                          ? 'bg-ocean-500/15 text-ocean-400'
-                          : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
-                      {m}
-                    </button>
-                  ))}
+                <div ref={listRef} className="max-h-48 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
+                  {agentsList.length > 1 ? (
+                    // Multiple agents: group models under agent headers
+                    agentsList.map((agent) => (
+                      <div key={agent.id}>
+                        <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border-primary bg-surface-tertiary/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted backdrop-blur-sm">
+                          <span className="capitalize">{agent.id}</span>
+                        </div>
+                        {(agent.models ?? []).map((m) => (
+                          <button
+                            key={`${agent.id}:${m}`}
+                            data-selected={model === m}
+                            onClick={() => handleSelectModel(m)}
+                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                              model === m
+                                ? 'bg-ocean-500/15 text-ocean-400'
+                                : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                            }`}
+                          >
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    ))
+                  ) : (
+                    // Single agent: flat list (no headers)
+                    models.map((m) => (
+                      <button
+                        key={m}
+                        data-selected={model === m}
+                        onClick={() => handleSelectModel(m)}
+                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                          model === m
+                            ? 'bg-ocean-500/15 text-ocean-400'
+                            : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
+                        {m}
+                      </button>
+                    ))
+                  )}
                 </div>
               ) : (
                 <input
