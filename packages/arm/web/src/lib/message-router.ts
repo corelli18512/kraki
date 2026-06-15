@@ -94,11 +94,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'device_greeting') {
     const greeting = (msg as DeviceGreetingMessage).payload;
     store.setDeviceOnline(msg.deviceId, true);
-    if (greeting?.models) {
-      store.setDeviceModels(msg.deviceId, greeting.models);
-    }
-    if (greeting?.modelDetails) {
-      store.setDeviceModelDetails(msg.deviceId, greeting.modelDetails);
+    if (greeting?.agents?.length) {
+      store.setDeviceAgents(msg.deviceId, greeting.agents);
     }
     if (greeting?.version) {
       store.setDeviceVersion(msg.deviceId, greeting.version);

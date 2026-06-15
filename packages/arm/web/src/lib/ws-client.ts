@@ -162,7 +162,7 @@ export class KrakiWSClient {
     getStore().removeSession(sessionId);
   }
 
-  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string }) {
+  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string; agentId?: string }) {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
@@ -565,7 +565,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
-          getStore().setDeviceModels(left.deviceId, []);
+          getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
         break;
@@ -574,7 +574,7 @@ export class KrakiWSClient {
       case 'device_removed': {
         const removed = msg as { deviceId: string };
         if (removed.deviceId) {
-          getStore().setDeviceModels(removed.deviceId, []);
+          getStore().clearDeviceAgents(removed.deviceId);
           getStore().removeDevice(removed.deviceId);
         }
         break;

@@ -23,7 +23,7 @@ export interface SessionSummary {
   id: string;
   deviceId: string;
   deviceName: string;
-  agent: string;
+  agent: import('./devices.js').AgentId;
   model?: string;
   title?: string;
   autoTitle?: string;
@@ -46,7 +46,7 @@ export interface SessionPreviewDigest {
 /** Compact session metadata sent in session_list for sync. */
 export interface SessionDigest {
   id: string;
-  agent: string;
+  agent: import('./devices.js').AgentId;
   model?: string;
   title?: string;
   autoTitle?: string;
@@ -69,7 +69,7 @@ export interface SessionDigest {
 // ------------------------------------------------------------
 
 /** Where a local session originated. */
-export type LocalSessionSource = 'copilot-cli' | 'vscode' | 'unknown';
+export type LocalSessionSource = 'copilot-cli' | 'claude-code' | 'vscode' | 'unknown';
 
 /**
  * A Copilot session discovered on the local filesystem.

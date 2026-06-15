@@ -24,6 +24,23 @@ function CopilotIcon({ className }: { className?: string }) {
   );
 }
 
+function ClaudeIcon({ className }: { className?: string }) {
+  // Claude Code pixel art icon, moderately stretched to look balanced in a square avatar
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 1.5 26 20.5" preserveAspectRatio="none" fill="currentColor" className={className}>
+      <path d="M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z"/>
+    </svg>
+  );
+}
+
+function AgentIcon({ agent, className }: { agent: string; className?: string }) {
+  switch (agent) {
+    case 'claude': return <ClaudeIcon className={className} />;
+    case 'copilot':
+    default: return <CopilotIcon className={className} />;
+  }
+}
+
 export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinned }: AgentAvatarProps) {
   const s = sizeMap[size];
   const hue = stringToHue(sessionId ?? agent);
@@ -41,7 +58,7 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinn
         className={`flex items-center justify-center ${s.container}`}
         style={{ backgroundColor: `hsl(${hue}, 50%, 90%)`, color: `hsl(${hue}, 60%, 40%)` }}
       >
-        <CopilotIcon className={s.icon} />
+        <AgentIcon agent={agent} className={s.icon} />
       </div>
       {BadgeIcon && (
         <span className="absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] text-kraki-500">

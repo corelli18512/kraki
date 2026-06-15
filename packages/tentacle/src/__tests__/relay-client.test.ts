@@ -100,6 +100,7 @@ function createAdapter(): Record<string, unknown> {
     setSessionMode: vi.fn(),
     getSessionUsage: vi.fn(() => null),
     setSessionUsage: vi.fn(),
+    registerSessionAgent: vi.fn(),
   };
 }
 
@@ -477,6 +478,7 @@ describe('RelayClient set_session_model', () => {
       setSessionModel: vi.fn(() => Promise.resolve()),
       setSessionMode: vi.fn(),
       setSessionUsage: vi.fn(),
+      registerSessionAgent: vi.fn(),
     };
     const sm = {
       ...createSessionManager(),
@@ -542,6 +544,7 @@ describe('RelayClient set_session_model', () => {
       stop: vi.fn(() => Promise.resolve()),
       setSessionMode: vi.fn(),
       setSessionUsage: vi.fn(),
+      registerSessionAgent: vi.fn(),
     };
     const sm = {
       ...createSessionManager(),
@@ -613,6 +616,7 @@ describe('RelayClient set_session_model', () => {
       stop: vi.fn(() => Promise.resolve()),
       setSessionMode: vi.fn(),
       setSessionUsage: vi.fn(),
+      registerSessionAgent: vi.fn(),
     };
     const sm = {
       ...createSessionManager(),
