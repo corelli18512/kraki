@@ -65,6 +65,7 @@
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
+		08F75939E73B7BAB338C6A3A /* InputBoxModeSwipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA2752F88C836C136B0AECFE /* InputBoxModeSwipe.swift */; };
 		CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */; };
 		CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
 		D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */; };
@@ -123,6 +124,7 @@
 		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
 		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
 		102ABECDD210B084B5B19319 /* MessageInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInputView.swift; sourceTree = "<group>"; };
+		BA2752F88C836C136B0AECFE /* InputBoxModeSwipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBoxModeSwipe.swift; sourceTree = "<group>"; };
 		11B2053230A2F15EC2518979 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionSummary.swift; sourceTree = "<group>"; };
 		1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
@@ -453,6 +455,7 @@
 				7A84BF94261411BEF2B51101 /* LazyImageView.swift */,
 				88354093F25E3F24C8F27311 /* MessageBubbleView.swift */,
 				102ABECDD210B084B5B19319 /* MessageInputView.swift */,
+				BA2752F88C836C136B0AECFE /* InputBoxModeSwipe.swift */,
 				E6783BD1527A13261E67330A /* ModePickerView.swift */,
 				61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */,
 				F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */,
@@ -625,6 +628,7 @@
 				1E626FDE917F77BEBF2D58B1 /* MessageBubbleView.swift in Sources */,
 				CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */,
 				CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */,
+				08F75939E73B7BAB338C6A3A /* InputBoxModeSwipe.swift in Sources */,
 				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
 				0D84FEFC83BB1552A71A855F /* MessageRouter.swift in Sources */,
 				0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */,
