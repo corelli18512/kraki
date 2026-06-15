@@ -47,6 +47,26 @@ final class AppState {
             ])
         }
         setupNetworking()
+
+        // App-termination flush. SwiftUI's `scenePhase` already drives
+        // `handleBackground` (which flushes both stores) when the user
+        // sends the app to background — that's the common case. But if
+        // the system terminates a backgrounded app while WebSocket
+        // background-execution mutations are still happening (e.g. a
+        // push that lands in the brief window after scenePhase fires
+        // but before suspension completes), `applicationWillTerminate`
+        // gives us one last chance to land those mutations on disk.
+        // Cheap insurance; KrakiApp's UIApplicationDelegateAdaptor
+        // ensures the notification is delivered on the main thread.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            KLog.chat("📂 [snapshot] willTerminate: flushing both stores")
+            self?.sessionStore.flushCache()
+            self?.deviceStore.flushCache()
+        }
     }
 
     // MARK: - Connection

@@ -82,6 +82,21 @@ final class ChatListViewController: UIViewController {
     /// content. Nil between turns.
     var streamingText: String?
 
+    /// Bottom content inset for the collection view — set by the
+    /// SwiftUI shell to reserve space for the floating input
+    /// capsule. Pure `contentInset.bottom` (NOT a safe-area inset)
+    /// so it survives the `.ignoresSafeArea(.container, edges: .bottom)`
+    /// applied to the wrapping representable. UIKit folds this into
+    /// `adjustedContentInset.bottom`, so `scrollToItem(.bottom)`,
+    /// `isAtBottom` proximity checks, and anchor restoration all
+    /// land the last cell above the input rather than under it.
+    var bottomContentInset: CGFloat = 0 {
+        didSet {
+            guard bottomContentInset != oldValue, isViewLoaded, collectionView != nil else { return }
+            applyBottomContentInset()
+        }
+    }
+
     /// Closure invoked when the user toggles a turn's expanded
     /// state. The SwiftUI shell owns the source of truth; this
     /// bubbles the event up.
@@ -152,6 +167,8 @@ final class ChatListViewController: UIViewController {
         view.backgroundColor = .clear
         configureCollectionView()
         configureDataSource()
+        installSpinnerHooks()
+        applyBottomContentInset()
         KLog.chat("🎬 [3/render] ChatListVC.viewDidLoad session=\(sessionId.prefix(12)) pendingTurns=\(pendingTurns?.count ?? -1)")
         if let pending = pendingTurns {
             pendingTurns = nil
@@ -214,6 +231,14 @@ final class ChatListViewController: UIViewController {
         var listConfig = UICollectionLayoutListConfiguration(appearance: .plain)
         listConfig.showsSeparators = false
         listConfig.backgroundColor = .clear
+        // Sentinel cells for "load more" triggers. Their visibility
+        // IS the load trigger (see `installSpinnerHooks`), so we get
+        // a single source of truth that doesn't need scroll-math
+        // heuristics. SwiftUI content inside the supplementary auto-
+        // sizes to zero when there's nothing to show (reachedTail /
+        // reachedHead), so they don't add empty space at the edges.
+        listConfig.headerMode = .supplementary
+        listConfig.footerMode = .supplementary
         let layout = UICollectionViewCompositionalLayout.list(using: listConfig)
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
@@ -242,6 +267,35 @@ final class ChatListViewController: UIViewController {
         ])
     }
 
+    /// Push the latest `bottomContentInset` value into the collection
+    /// view. Idempotent. Updates both `contentInset.bottom` (so
+    /// scrollable content can land above the input capsule) and
+    /// `verticalScrollIndicatorInsets.bottom` (so the indicator
+    /// matches when we ever turn it back on).
+    private func applyBottomContentInset() {
+        guard let cv = collectionView else { return }
+        if cv.contentInset.bottom != bottomContentInset {
+            cv.contentInset.bottom = bottomContentInset
+        }
+        if cv.verticalScrollIndicatorInsets.bottom != bottomContentInset {
+            cv.verticalScrollIndicatorInsets.bottom = bottomContentInset
+        }
+    }
+
+    /// Install the load-more hooks on the scroll coordinator. The
+    /// coordinator routes the corresponding `willDisplaySupplementaryView`
+    /// callbacks here; we delegate to the view model, which talks to
+    /// the message provider and is the right place for the dedup /
+    /// edge-state checks.
+    private func installSpinnerHooks() {
+        scrollCoordinator.onHeaderSpinnerWillDisplay = { [weak self] in
+            self?.viewModel?.loadOlderIfPossible()
+        }
+        scrollCoordinator.onFooterSpinnerWillDisplay = { [weak self] in
+            self?.viewModel?.ensureTailLoaded()
+        }
+    }
+
     private func configureDataSource() {
         // Cell registration: every cell uses a SwiftUI hosting
         // configuration that renders the `MessageRow` for the turn
@@ -263,6 +317,7 @@ final class ChatListViewController: UIViewController {
             cell.contentConfiguration = UIHostingConfiguration {
                 MessageRow(
                     item: turnItem,
+                    sessionId: self.sessionId,
                     agent: self.agentName,
                     streamingText: self.streamingForItem(turnItem),
                     expanded: self.binding(forTurnId: turnItem.id)
@@ -285,6 +340,54 @@ final class ChatListViewController: UIViewController {
                 for: indexPath,
                 item: item
             )
+        }
+
+        // Supplementary header (top spinner) and footer (bottom
+        // spinner). Both host a SwiftUI subview that reads from the
+        // (Observable) view model — when `isLoadingOlder` /
+        // `reachedTail` / `isFillingTail` / `reachedHead` change,
+        // SwiftUI re-renders the spinner in place without needing
+        // the controller to re-apply a snapshot. The supplementaries
+        // self-size to zero when their content is `EmptyView` (e.g.
+        // reachedTail) so they don't reserve dead space at the edges.
+        let headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
+            elementKind: UICollectionView.elementKindSectionHeader
+        ) { [weak self] cell, _, _ in
+            guard let self, let vm = self.viewModel else {
+                cell.contentConfiguration = nil
+                return
+            }
+            cell.backgroundConfiguration = .clear()
+            cell.contentConfiguration = UIHostingConfiguration {
+                ChatLoadOlderSpinner(viewModel: vm)
+            }.margins(.all, 0)
+        }
+        let footerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
+            elementKind: UICollectionView.elementKindSectionFooter
+        ) { [weak self] cell, _, _ in
+            guard let self, let vm = self.viewModel else {
+                cell.contentConfiguration = nil
+                return
+            }
+            cell.backgroundConfiguration = .clear()
+            cell.contentConfiguration = UIHostingConfiguration {
+                ChatFillTailSpinner(viewModel: vm)
+            }.margins(.all, 0)
+        }
+
+        dataSource.supplementaryViewProvider = { collectionView, kind, indexPath in
+            switch kind {
+            case UICollectionView.elementKindSectionHeader:
+                return collectionView.dequeueConfiguredReusableSupplementary(
+                    using: headerRegistration, for: indexPath
+                )
+            case UICollectionView.elementKindSectionFooter:
+                return collectionView.dequeueConfiguredReusableSupplementary(
+                    using: footerRegistration, for: indexPath
+                )
+            default:
+                return nil
+            }
         }
     }
 
@@ -424,7 +527,32 @@ final class ChatListViewController: UIViewController {
                 return false
             }
             let path = IndexPath(item: targetIndex, section: 0)
-            cv.scrollToItem(at: path, at: .top, animated: false)
+            // Force a layout pass so self-sizing cells around the
+            // target have measured frames — without this the
+            // attributes lookup would return nil and the animation
+            // target Y would be wrong.
+            cv.layoutIfNeeded()
+            guard let attrs = cv.layoutAttributesForItem(at: path) else {
+                return false
+            }
+            // Compute the same clamped offset `scrollToItem(.top)`
+            // would land on, then animate to it manually instead of
+            // jumping. UICollectionView's built-in animated scroll
+            // composes poorly with self-sizing cells (mid-animation
+            // height settling produces visible stutter); a manual
+            // `UIView.animate` over `setContentOffset` is steady
+            // because the target Y is pinned at frame zero.
+            let inset = cv.adjustedContentInset
+            let minOffsetY = -inset.top
+            let maxOffsetY = max(minOffsetY, cv.contentSize.height - cv.bounds.height + inset.bottom)
+            let clamped = min(maxOffsetY, max(minOffsetY, attrs.frame.minY))
+            UIView.animate(
+                withDuration: 0.28,
+                delay: 0,
+                options: [.curveEaseInOut, .beginFromCurrentState]
+            ) {
+                cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: clamped), animated: false)
+            }
         } else {
             // Read: scroll to the last cell. UICollectionView
             // resolves the bottom position even when above-fold
@@ -657,6 +785,11 @@ final class ChatListViewController: UIViewController {
 /// entry (`.user` initiator).
 private struct MessageRow: View {
     let item: TurnItem
+    /// Active session id — used as the stable seed for hue derivation
+    /// in `MessageBubbleView`. Forwarded from the controller so even
+    /// synthetic messages with `sessionId == nil` (streaming agent_message,
+    /// the fallback synthetic below) tint with the surrounding session.
+    let sessionId: String
     let agent: String
     let streamingText: String?
     @Binding var expanded: Bool
@@ -666,6 +799,7 @@ private struct MessageRow: View {
         case .standalone(let msg):
             MessageBubbleView(
                 message: msg,
+                sessionId: sessionId,
                 agent: agent,
                 historyExpanded: .constant(false)
             )
@@ -678,6 +812,7 @@ private struct MessageRow: View {
                     // Completed block.
                     MessageBubbleView(
                         message: final,
+                        sessionId: sessionId,
                         agent: agent,
                         turnImages: collectTurnImages(block.thinkingMessages),
                         thinkingHistory: block.thinkingMessages,
@@ -699,6 +834,7 @@ private struct MessageRow: View {
                                 timestamp: nil,
                                 payload: [:]
                             ),
+                            sessionId: sessionId,
                             agent: agent,
                             thinkingHistory: block.thinkingMessages,
                             historyExpanded: $expanded,
@@ -722,6 +858,7 @@ private struct MessageRow: View {
         case .user(let msg):
             MessageBubbleView(
                 message: msg,
+                sessionId: sessionId,
                 agent: agent,
                 historyExpanded: .constant(false)
             )
@@ -746,6 +883,55 @@ private struct MessageRow: View {
             }
         }
         return images
+    }
+}
+
+// MARK: - Spinner supplementary content
+
+/// Top supplementary content — a small spinner that shows while
+/// we're (or could be) fetching older history. The supplementary
+/// view's `willDisplay` IS the load trigger (installed on the
+/// scroll coordinator in `ChatListViewController.installSpinnerHooks`),
+/// so this view's only job is to render the visual.
+///
+/// Self-sizes to `EmptyView` (zero height) once `reachedTail` is
+/// true, so we don't reserve dead space at the top of fully-loaded
+/// sessions.
+private struct ChatLoadOlderSpinner: View {
+    let viewModel: ChatViewModel
+
+    var body: some View {
+        Group {
+            if viewModel.reachedTail {
+                EmptyView()
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+        }
+    }
+}
+
+/// Bottom supplementary content — spinner shown while a tail
+/// backfill is in flight (push-gap recovery or pending range
+/// fetch). Hidden otherwise — for a chat sitting at head with no
+/// gap, we don't show a permanent spinner at the bottom.
+private struct ChatFillTailSpinner: View {
+    let viewModel: ChatViewModel
+
+    var body: some View {
+        Group {
+            if viewModel.isFillingTail {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            } else {
+                EmptyView()
+            }
+        }
     }
 }
 
@@ -781,6 +967,14 @@ struct ChatListView: UIViewControllerRepresentable {
     /// UICollectionView handles all virtualisation, so no windowing
     /// is applied here.
     let turns: [TurnItem]
+    /// Bottom inset (points) to apply to the collection view's
+    /// `contentInset.bottom` so the last cell isn't covered by the
+    /// floating input capsule. Measured from the SwiftUI shell via
+    /// `onGeometryChange` on the input area. Pure `contentInset` —
+    /// independent of safe area — so it survives the
+    /// `.ignoresSafeArea(.container, edges: .bottom)` applied at
+    /// the SwiftUI layer.
+    let bottomContentInset: CGFloat
 
     func makeUIViewController(context: Context) -> ChatListViewController {
         KLog.chat("🎬 [3/render] ChatListView.makeUIViewController session=\(sessionId.prefix(12)) turns=\(turns.count) entryTarget=\(entryScrollTargetId ?? "nil")")
@@ -793,6 +987,7 @@ struct ChatListView: UIViewControllerRepresentable {
         vc.expandedTurnIds = expandedTurns
         vc.streamingText = streamingText
         vc.entryScrollTargetId = entryScrollTargetId
+        vc.bottomContentInset = bottomContentInset
         vc.onExpandedTurnsChange = { newSet in
             // Hop back to the SwiftUI binding via the main actor.
             Task { @MainActor in
@@ -833,6 +1028,12 @@ struct ChatListView: UIViewControllerRepresentable {
         // scroll, but a first apply that races with the binding
         // settling could otherwise see a stale nil.
         vc.entryScrollTargetId = entryScrollTargetId
+
+        // Bottom input height changes as the composer grows (multi-
+        // line text, permission row appearing, etc.) — push through
+        // every update; the controller's didSet diffs against the
+        // current value so a stable height is a no-op.
+        vc.bottomContentInset = bottomContentInset
 
         // Snapshot diff — applies in O(diff) when ids match. Even
         // for streaming text changes, the same Item id is reused so

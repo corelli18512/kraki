@@ -43,8 +43,7 @@ enum KLog {
             print(line)
         }
         if mirrorToOSLog {
-            os_log("%{public}s", log: krakiOSLog, type: .info, line)
-            NSLog("%@", line)
+            os_log("%{public}s", log: krakiOSLog, type: .default, line)
         }
         #endif
     }
@@ -64,8 +63,11 @@ enum KLog {
     static func diag(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
         let filename = (file as NSString).lastPathComponent
         let line = "🩺 [\(filename):\(line)] \(message())"
-        os_log("%{public}s", log: krakiOSLog, type: .info, line)
-        NSLog("%@", line)
+        // .default (not .info) so it's forwarded through syslog
+        // relay (idevicesyslog / pymobiledevice3 syslog live).
+        // .info would only land in the in-memory ring buffer and
+        // be invisible to off-device tooling.
+        os_log("%{public}s", log: krakiOSLog, type: .default, line)
     }
 
     /// Always-on chat data-flow log. Same delivery as `diag` (NSLog
@@ -80,7 +82,11 @@ enum KLog {
     static func chat(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
         let filename = (file as NSString).lastPathComponent
         let line = "🪢 [\(filename):\(line)] \(message())"
-        os_log("%{public}s", log: krakiOSLog, type: .info, line)
-        NSLog("%@", line)
+        // .default (not .info) so syslog relay forwards it to
+        // idevicesyslog / pymobiledevice3 / Console.app. `%{public}s`
+        // prevents redaction. NSLog dropped — NSLog routes through
+        // os_log with `%@` which marks the argument private, so the
+        // content shows up as `<private>` in the syslog stream.
+        os_log("%{public}s", log: krakiOSLog, type: .default, line)
     }
 }

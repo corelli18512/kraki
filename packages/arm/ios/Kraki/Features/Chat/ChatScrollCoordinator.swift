@@ -94,28 +94,20 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
     /// `.defaultScrollAnchor(.bottom)`.
     private let bottomThreshold: CGFloat = 40
 
-    /// Distance from the top edge (in points) within which we should
-    /// dispatch a load-older request. Set generously enough that the
-    /// fetch starts before the user sees an empty top, but not so
-    /// generous that it fires on first paint while the list is still
-    /// laying out from offset 0.
-    private let topLoadOlderThreshold: CGFloat = 200
+    // MARK: - Load-trigger hooks (driven by supplementary visibility)
 
-    // MARK: - Load-older handshake
+    /// Fires every time the top supplementary spinner enters the
+    /// viewport. The controller installs this to call into the view
+    /// model's `loadOlderIfPossible()`. Dedup is delegated to
+    /// MessageProvider (in-flight set + `reachedTail` short-circuit)
+    /// so repeated fires during a steady dwell are harmless.
+    var onHeaderSpinnerWillDisplay: (() -> Void)?
 
-    /// SwiftUI-side hook for "the user has scrolled near the top —
-    /// please ensure older messages are loaded". Invoked at most
-    /// once per "approach to top" — we de-bounce by latching on
-    /// `isNearTop` so a steady dwell at offset=0 doesn't spam
-    /// `ensureOlderLoaded`. Reset to "may fire again" once the user
-    /// scrolls back past the threshold.
-    var onNearTopReached: (() -> Void)?
-
-    /// True between the moment the user crosses below
-    /// `topLoadOlderThreshold` and the moment they scroll back above
-    /// it. Used to debounce `onNearTopReached`. Public read for
-    /// diagnostics; mutated only inside `publishIsAtBottom`.
-    private(set) var isNearTop: Bool = false
+    /// Fires every time the bottom supplementary spinner enters the
+    /// viewport. The controller installs this to call into the view
+    /// model's `ensureTailLoaded()`. Same dedup story as the header
+    /// hook — provider-level guards make repeat fires safe.
+    var onFooterSpinnerWillDisplay: (() -> Void)?
 
     // MARK: - Collection view reference
 
@@ -191,7 +183,6 @@ extension ChatScrollCoordinator: UICollectionViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard let cv = scrollView as? UICollectionView else { return }
         publishIsAtBottom(for: cv)
-        checkNearTop(for: cv)
     }
 
     /// User has started a drag — release the idle anchor so the
@@ -200,6 +191,23 @@ extension ChatScrollCoordinator: UICollectionViewDelegate {
     /// back to the captured Y, fighting the user's gesture.
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         clearIdleAnchor()
+    }
+
+    /// Forward supplementary-view display events to the controller
+    /// via closure hooks. Supplementary visibility ≡ "please load
+    /// more in this direction" — provider-level dedup keeps repeat
+    /// fires harmless.
+    func collectionView(
+        _ collectionView: UICollectionView,
+        willDisplaySupplementaryView view: UICollectionReusableView,
+        forElementKind elementKind: String,
+        at indexPath: IndexPath
+    ) {
+        if elementKind == UICollectionView.elementKindSectionHeader {
+            onHeaderSpinnerWillDisplay?()
+        } else if elementKind == UICollectionView.elementKindSectionFooter {
+            onFooterSpinnerWillDisplay?()
+        }
     }
 }
 
@@ -220,30 +228,6 @@ private extension ChatScrollCoordinator {
         let near = distanceFromBottom <= bottomThreshold
         if isAtBottom != near {
             isAtBottom = near
-        }
-    }
-
-    /// Edge-triggered near-top detection. Fires `onNearTopReached`
-    /// once on the transition from "above threshold" → "below
-    /// threshold". Resets when the user scrolls back above the
-    /// threshold so a subsequent re-approach can dispatch another
-    /// load. Ignores the trivial case where the content is shorter
-    /// than the viewport (no scrolling possible, no older content
-    /// implicitly worth fetching from a scroll trigger).
-    func checkNearTop(for scrollView: UIScrollView) {
-        let contentHeight = scrollView.contentSize.height
-        let viewportHeight = scrollView.bounds.height - scrollView.adjustedContentInset.top - scrollView.adjustedContentInset.bottom
-        guard contentHeight > viewportHeight else {
-            if isNearTop { isNearTop = false }
-            return
-        }
-        let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
-        let nearTopNow = offset < topLoadOlderThreshold
-        if nearTopNow && !isNearTop {
-            isNearTop = true
-            onNearTopReached?()
-        } else if !nearTopNow && isNearTop {
-            isNearTop = false
         }
     }
 }

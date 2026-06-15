@@ -45,7 +45,7 @@ final class DeviceStore {
         var deviceVersions: [String: String]
     }
 
-    private static let saveDebounce: TimeInterval = 1.0
+    private static let saveDebounce: TimeInterval = 10.0
     private var saveTask: DispatchWorkItem?
     private var pendingSnapshot: Snapshot?
 

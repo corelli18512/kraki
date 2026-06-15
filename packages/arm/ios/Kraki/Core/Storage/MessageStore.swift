@@ -93,7 +93,7 @@ final class MessageStore {
         "always_allow",
     ]
 
-    private static func isPersistent(_ msg: ChatMessage) -> Bool {
+    static func isPersistent(_ msg: ChatMessage) -> Bool {
         msg.seq > 0 && persistentTypes.contains(msg.type)
     }
 
@@ -144,8 +144,17 @@ final class MessageStore {
             updated.bottomSeq = message.seq
             windows[sessionId] = updated
         } else if message.seq > state.bottomSeq + 1 {
-            // Gap — leave window contiguous; mark "not at head" so
-            // the UI knows there's more to fetch.
+            // Gap — under the post-PendingTailBuffer contract this
+            // should not happen: MessageRouter funnels every live
+            // push through MessageProvider.ingestTailCandidate, which
+            // holds gap-creating pushes in `pendingTail` and only
+            // commits a contiguous prefix back to us via `ingestBatch`.
+            // A direct `append` with a gap means a code path bypassed
+            // the buffer. Flag loudly in DEBUG; preserve the
+            // pre-existing "leave window contiguous, mark not-at-head"
+            // behavior in release as a safety net so a missed callsite
+            // doesn't crash production.
+            assertionFailure("MessageStore.append: gap detected (msg.seq=\(message.seq), expected=\(state.bottomSeq + 1)). All live pushes must route through MessageProvider.ingestTailCandidate.")
             var updated = state
             updated.reachedHead = false
             windows[sessionId] = updated

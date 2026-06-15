@@ -23,6 +23,22 @@ final class MessageProvider {
     /// Per-session tentacle device ID.
     private var tentacleDeviceMap: [String: String] = [:]
 
+    /// Per-session push-gap recovery buffer. Pure data — all the
+    /// network I/O and timeout machinery lives in this provider; the
+    /// buffer just decides what to commit and what to fetch next.
+    /// See `PendingTailBuffer` for the algorithm.
+    private var pendingTail: [String: PendingTailBuffer] = [:]
+
+    /// Per-session in-flight range request, or nil. At most one
+    /// outstanding `request_session_messages_range` per session keeps
+    /// the wire traffic predictable and lets the drain loop assume
+    /// linear progress.
+    private var inflightRange: [String: ClosedRange<Int>] = [:]
+
+    /// Safety timeout handles for the in-flight range requests. Keyed
+    /// by sessionId — there's at most one per session by construction.
+    private var rangeTimeoutTasks: [String: DispatchWorkItem] = [:]
+
     /// Sessions whose latest in-flight request asked for the head
     /// (beforeSeq=nil). Used by `handleBatch` to identify which
     /// in-flight key to clear (head responses land on "sessionId:head"
@@ -64,6 +80,23 @@ final class MessageProvider {
             KLog.chat("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=\(oldLastSeq)→\(lastSeq) device=\(deviceId.prefix(12))")
         } else if oldLastSeq == nil {
             KLog.chat("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=nil→\(lastSeq) device=\(deviceId.prefix(12))")
+        }
+
+        // Reset in-flight range tracking on every session_list. Reasons:
+        //   1. After a WS reconnect, any previously-pending range
+        //      request will never get a response — we must clear
+        //      `inflightRange` so the drain loop can re-trigger.
+        //   2. The tentacle deviceId may have changed (rare but
+        //      possible if the tentacle restarted under a new
+        //      identity). Anything already in flight was addressed
+        //      to a stale device.
+        // Then re-drain in case pendingTail has content that's
+        // waiting on a fresh fetch.
+        inflightRange.removeValue(forKey: sessionId)
+        rangeTimeoutTasks[sessionId]?.cancel()
+        rangeTimeoutTasks.removeValue(forKey: sessionId)
+        if !(pendingTail[sessionId]?.isEmpty ?? true) {
+            drainPendingTail(sessionId)
         }
     }
 
@@ -206,16 +239,16 @@ final class MessageProvider {
 
     /// Active warm-up rule: take the top N sessions by recency, **per
     /// tentacle**. With M tentacles online the worst-case fan-out is
-    /// `M × warmupCap` requests. Kept small (5) so a multi-device
-    /// setup (Mac + Windows + iPad tentacle, etc.) still stays under
-    /// ~15 cold-start fetches.
+    /// `M × warmupCap` requests. Sized so a typical multi-device setup
+    /// (1-2 tentacles online) covers the user's recent working set
+    /// without hammering tentacle on session_list.
     ///
     /// We deliberately ignore pinned/active state here — a state bug
     /// (e.g. every session reported as `active`) could otherwise fan
     /// out unbounded `requestLatest` calls and overwhelm tentacle.
     /// The currently-open session is covered separately by
     /// `ensureLoaded(active)` in MessageRouter.handleSessionList.
-    private static let warmupCap = 5
+    private static let warmupCap = 10
 
     func runWarmup(digests: [SessionDigest]) {
         var recencyById: [String: Date] = [:]
@@ -411,6 +444,179 @@ final class MessageProvider {
             KLog.d("🪡 detected gap below \(batchMinSeq) in \(sessionId.prefix(12)); bridging via requestBefore(beforeSeq=\(batchMinSeq))")
             requestBefore(sessionId: sessionId, beforeSeq: batchMinSeq)
         }
+
+        // Tail-side recovery: a turn-aligned batch can advance dbLast
+        // past seqs we were holding in `pendingTail`, making them
+        // committable now. Even if it doesn't, drain is cheap (no I/O
+        // for the no-op path) and idempotent.
+        drainPendingTail(sessionId)
+    }
+
+    // MARK: - Push-Gap Recovery
+
+    /// Single funnel for every live persistent push that
+    /// `MessageRouter` previously sent straight to
+    /// `messageStore.append`. Buffers the message and runs the drain
+    /// loop — anything contiguous with the store's tail commits
+    /// immediately; anything that opens a gap waits in the buffer
+    /// while we fetch the missing range from tentacle.
+    ///
+    /// Replaces 13 call sites in `MessageRouter`. The store's
+    /// `append` contract changes accordingly: the gap branch is now
+    /// a DEBUG assertion (see `MessageStore.append`).
+    func ingestTailCandidate(_ sessionId: String, json: Data) {
+        guard let msg = ProducerMessageDecoder.decode(json) else { return }
+        ingestTailCandidate(sessionId, [msg])
+    }
+
+    /// Multi-message overload used by `handleRangeBatch`.
+    func ingestTailCandidate(_ sessionId: String, _ messages: [ChatMessage]) {
+        guard !messages.isEmpty else { return }
+
+        // Filter to persistent types — non-persistent pushes never
+        // belonged in the store anyway and would just clog the buffer.
+        let persistent = messages.filter(MessageStore.isPersistent)
+        guard !persistent.isEmpty else { return }
+
+        var buf = pendingTail[sessionId] ?? PendingTailBuffer()
+        let didOverflow = buf.insertAll(persistent)
+        pendingTail[sessionId] = buf
+        if didOverflow {
+            KLog.d("⚠️ pendingTail[\(sessionId.prefix(12))] exceeded cap=\(PendingTailBuffer.cap) — dropping oldest")
+        }
+        drainPendingTail(sessionId)
+    }
+
+    /// Drain whatever contiguous prefix the buffer can commit now.
+    /// Schedules a follow-up `request_session_messages_range` if a
+    /// gap remains and no request is already in flight. Idempotent —
+    /// safe to call at any time.
+    func drainPendingTail(_ sessionId: String) {
+        guard let appState else { return }
+        guard var buf = pendingTail[sessionId], !buf.isEmpty else { return }
+
+        let dbLast = appState.messageStore.dbLastSeq(sessionId)
+        let hasInflight = inflightRange[sessionId] != nil
+        let bufferedBefore = buf.messages.count
+        let tombstonesBefore = buf.tombstones.count
+        let action = buf.drain(dbLast: dbLast, hasInflight: hasInflight)
+        pendingTail[sessionId] = buf
+
+        if !action.toCommit.isEmpty {
+            KLog.chat("📥 [2/history←pendingTail commit] session=\(sessionId.prefix(12)) count=\(action.toCommit.count) seq=[\(action.toCommit.first!.seq)…\(action.toCommit.last!.seq)] buffered=\(buf.messages.count)")
+            appState.messageStore.ingestBatch(sessionId, action.toCommit)
+            rebuildPreview(sessionId: sessionId)
+        } else if let head = buf.minSeq {
+            // No commit but buffer non-empty → gap detected. Single
+            // line that explains why the next `📤 request_range` (if
+            // any) is firing, OR why we're stuck waiting on an
+            // existing inflight.
+            let nextStr = action.nextFetch.map { "[\($0.lowerBound)…\($0.upperBound)]" } ?? "waitingInflight"
+            KLog.chat("🕳️ [2/history pendingTail gap] session=\(sessionId.prefix(12)) dbLast=\(dbLast) head=\(head) buffered=\(bufferedBefore) tombstones=\(tombstonesBefore) → \(nextStr)")
+        }
+
+        if let range = action.nextFetch {
+            triggerRangeFetch(sessionId: sessionId, range: range)
+        }
+
+        // Buffer fully drained — clean up the dict entry so
+        // `isFillingTail` flips false.
+        if buf.isEmpty && inflightRange[sessionId] == nil {
+            pendingTail.removeValue(forKey: sessionId)
+        }
+    }
+
+    /// Fire a `request_session_messages_range` for the given gap.
+    /// Records the inflight range, arms a timeout so a silently
+    /// dropped response can never strand the session.
+    private func triggerRangeFetch(sessionId: String, range: ClosedRange<Int>) {
+        guard let appState else { return }
+        guard let deviceId = tentacleDeviceMap[sessionId] else {
+            // No device yet — we'll get another chance the next time
+            // setTentacleInfo fires (which also re-drains).
+            KLog.d("⏭️ rangeFetch \(sessionId.prefix(12)) skip=noDevice range=\(range.lowerBound)..\(range.upperBound)")
+            return
+        }
+        // Defensive: by construction the upper bound is `buffer.first.seq - 1`
+        // which is always >= dbLast + 1, so the range is non-empty.
+        guard range.lowerBound <= range.upperBound else { return }
+
+        KLog.chat("📤 [2/history→WS request_range] session=\(sessionId.prefix(12)) range=[\(range.lowerBound)…\(range.upperBound)] device=\(deviceId.prefix(12))")
+        inflightRange[sessionId] = range
+        appState.commandSender?.requestSessionMessagesRange(
+            sessionId: sessionId,
+            fromSeq: range.lowerBound,
+            toSeq: range.upperBound
+        )
+
+        // Safety timeout — if no batch arrives within 10s, clear the
+        // inflight slot and let drain re-trigger.
+        let task = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            KLog.d("⏰ range fetch [\(range.lowerBound)…\(range.upperBound)] for \(sessionId.prefix(12)) timed out, retrying")
+            self.inflightRange.removeValue(forKey: sessionId)
+            self.rangeTimeoutTasks.removeValue(forKey: sessionId)
+            self.drainPendingTail(sessionId)
+        }
+        rangeTimeoutTasks[sessionId] = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: task)
+    }
+
+    /// Process a `session_messages_range_batch` envelope from
+    /// tentacle. Records what the server told us about the requested
+    /// range (tombstoning confirmed-empty seqs), inserts the returned
+    /// messages, then re-drains.
+    func handleRangeBatch(
+        sessionId: String,
+        messages: [ChatMessage],
+        firstSeq: Int,
+        lastSeq: Int,
+        truncated: Bool
+    ) {
+        let types = Set(messages.map(\.type)).sorted().joined(separator: ",")
+
+        // Clear the inflight tracking and timeout for this session
+        // (at most one outstanding request by construction).
+        guard let requested = inflightRange.removeValue(forKey: sessionId) else {
+            // No matching request — most likely a stale response after
+            // a tentacle reconnect. Drop it; the next drain will
+            // re-trigger if needed.
+            KLog.d("🤷 range_batch for \(sessionId.prefix(12)) with no matching inflight — ignoring count=\(messages.count) seq=[\(firstSeq)…\(lastSeq)]")
+            return
+        }
+        rangeTimeoutTasks[sessionId]?.cancel()
+        rangeTimeoutTasks.removeValue(forKey: sessionId)
+
+        var buf = pendingTail[sessionId] ?? PendingTailBuffer()
+        let tombstonesBefore = buf.tombstones.count
+        let didOverflow = buf.ingestRangeResponse(
+            messages: messages.filter(MessageStore.isPersistent),
+            requestedFrom: requested.lowerBound,
+            requestedTo: requested.upperBound,
+            responseFirstSeq: firstSeq,
+            responseLastSeq: lastSeq,
+            truncated: truncated
+        )
+        let tombstonesAdded = buf.tombstones.count - tombstonesBefore
+        pendingTail[sessionId] = buf
+
+        KLog.chat("📦 [2/history←WS range_batch] session=\(sessionId.prefix(12)) requested=[\(requested.lowerBound)…\(requested.upperBound)] response=[\(firstSeq)…\(lastSeq)] count=\(messages.count) tombstonesAdded=\(tombstonesAdded) truncated=\(truncated) types=[\(types)]")
+
+        if didOverflow {
+            KLog.d("⚠️ pendingTail[\(sessionId.prefix(12))] exceeded cap on range_batch")
+        }
+
+        drainPendingTail(sessionId)
+    }
+
+    /// Whether the chat tail is currently being filled in the
+    /// background. UI binds a bottom spinner to this. True iff the
+    /// buffer has unresolved entries (waiting on a range fetch) or
+    /// a request is in flight.
+    func isFillingTail(_ sessionId: String) -> Bool {
+        if inflightRange[sessionId] != nil { return true }
+        if let buf = pendingTail[sessionId], !buf.isEmpty { return true }
+        return false
     }
 
     // MARK: - Preview
@@ -527,6 +733,10 @@ final class MessageProvider {
         tentacleDeviceMap.removeAll()
         for (_, work) in timeoutTasks { work.cancel() }
         timeoutTasks.removeAll()
+        pendingTail.removeAll()
+        inflightRange.removeAll()
+        for (_, work) in rangeTimeoutTasks { work.cancel() }
+        rangeTimeoutTasks.removeAll()
         appState?.sessionStore.loadingSessions.removeAll()
     }
 }

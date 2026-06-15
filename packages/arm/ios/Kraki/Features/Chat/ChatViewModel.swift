@@ -260,6 +260,66 @@ final class ChatViewModel {
         return !latestTurnLoaded && appState.sessionStore.loadingSessions.contains(sessionId)
     }
 
+    // MARK: - Edge state for top/bottom spinners
+
+    /// True iff any request is in flight for this session — drives
+    /// the top spinner's spinning state. Conservatively broad: any
+    /// in-flight request (older page, head fetch, range backfill)
+    /// keeps the spinner alive. This matches the user-visible
+    /// promise "spinner = we're working on more content".
+    var isLoadingOlder: Bool {
+        appState?.messageProvider?.isLoading(sessionId) ?? false
+    }
+
+    /// True when the chat tail is being filled in the background
+    /// (range backfill for a push-gap or a pending range fetch).
+    /// Drives the bottom spinner.
+    var isFillingTail: Bool {
+        appState?.messageProvider?.isFillingTail(sessionId) ?? false
+    }
+
+    /// True once we've walked the loaded window all the way back to
+    /// seq 1 — the top spinner becomes "Beginning of conversation"
+    /// instead of spinning, and the load-older trigger no-ops.
+    var reachedTail: Bool {
+        appState?.messageStore.windowState(sessionId)?.reachedTail ?? false
+    }
+
+    /// True when the loaded window's `bottomSeq` equals the
+    /// session's true `lastSeq` per tentacle. Drives the bottom
+    /// spinner — when true, no fill is needed so the spinner hides.
+    var reachedHead: Bool {
+        appState?.messageStore.windowState(sessionId)?.reachedHead ?? false
+    }
+
+    // MARK: - Load triggers (driven by spinner visibility)
+
+    /// Ask the message provider for older history. Called when the
+    /// top spinner enters the viewport. Idempotent: messageProvider
+    /// dedupes in-flight requests internally, and short-circuits on
+    /// `reachedTail`.
+    func loadOlderIfPossible() {
+        guard let appState else { return }
+        guard !reachedTail else { return }
+        guard let firstSeq = appState.messageProvider?.windowTopSeq(sessionId),
+              firstSeq > 1 else { return }
+        _ = appState.messageProvider?.ensureOlderLoaded(
+            sessionId: sessionId,
+            beforeSeq: firstSeq
+        )
+    }
+
+    /// Ask the message provider to ensure the tail is up to date.
+    /// Called when the bottom spinner enters the viewport. No-op
+    /// when already at head; messageProvider dedupes in-flight
+    /// requests internally.
+    func ensureTailLoaded() {
+        appState?.messageProvider?.ensureLoaded(
+            sessionId: sessionId,
+            reason: "footer-visible"
+        )
+    }
+
     // MARK: - Init
 
     init(sessionId: String, appState: AppState) {

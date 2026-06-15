@@ -274,6 +274,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "session_messages_range_batch" {
+            handleSessionMessagesRangeBatch(dict)
+            return
+        }
+
         if type == "device_greeting" {
             handleDeviceGreeting(dict)
             return
@@ -347,7 +352,7 @@ final class MessageRouter {
         case "session_ended":
             appState.sessionStore.updateState(sessionId, state: "ended")
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
 
         case "session_deleted":
             appState.sessionStore.removeSession(sessionId)
@@ -363,7 +368,7 @@ final class MessageRouter {
             // pipeline — takes over.
             let clientId = payload?["clientId"] as? String
             let content = payload?["content"] as? String
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let clientId {
                 appState.commandSender?.clearPending(sessionId, clientId: clientId)
             }
@@ -373,7 +378,7 @@ final class MessageRouter {
 
         case "agent_message":
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
@@ -387,7 +392,7 @@ final class MessageRouter {
         // ── Permissions ──────────────────────────────────────────────────
 
         case "permission":
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let permId = payload?["id"] as? String {
                 let toolName = payload?["toolName"] as? String ?? ""
                 let description = payload?["description"] as? String ?? ""
@@ -419,7 +424,7 @@ final class MessageRouter {
         case "permission_resolved":
             // Grouper folds the resolution into the originating
             // permission row (backpatchPermission). Just persist.
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
 
         case "approve", "deny", "always_allow":
             // Defensive: these are inbound commands from arm; tentacle
@@ -432,7 +437,7 @@ final class MessageRouter {
         // ── Questions ────────────────────────────────────────────────────
 
         case "question":
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let qId = payload?["id"] as? String,
                let question = payload?["question"] as? String {
                 // Same as permission: we no longer hold a derived
@@ -449,10 +454,10 @@ final class MessageRouter {
                 updatePreview(sessionId, text: answer, type: "answer",
                               timestamp: timestamp)
             }
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
 
         case "answer":
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let answer = payload?["answer"] as? String, !answer.isEmpty {
                 updatePreview(sessionId, text: answer, type: "answer",
                               timestamp: timestamp)
@@ -461,7 +466,7 @@ final class MessageRouter {
         // ── Tool events ──────────────────────────────────────────────────
 
         case "tool_start":
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let name = payload?["toolName"] as? String {
                 let headline = payload?["headline"] as? String
                 appState.sessionStore.setCurrentTool(sessionId, toolName: name, headline: headline)
@@ -472,7 +477,7 @@ final class MessageRouter {
             registerContentRefs(in: payload, sessionId: sessionId)
 
         case "tool_complete":
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let name = payload?["toolName"] as? String
             let success = payload?["success"] as? Bool
             appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name, success: success)
@@ -499,7 +504,7 @@ final class MessageRouter {
         case "idle":
             appState.sessionStore.updateState(sessionId, state: "idle")
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let usage = payload?["usage"] as? [String: Any] {
                 appState.sessionStore.setSessionUsage(sessionId, usage: usage)
             }
@@ -525,7 +530,7 @@ final class MessageRouter {
 
         case "error":
             appState.sessionStore.flushDelta(sessionId)
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
             // If this error correlates to a pending create/fork/import
             // by requestId, fail the placeholder so the optimistic
@@ -742,7 +747,7 @@ final class MessageRouter {
 
         // Store the raw message
         if let json = try? JSONSerialization.data(withJSONObject: dict) {
-            appState.messageStore.append(sessionId, json: json)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
         }
 
         // Seed an initial preview so the new card has a timestamp and
@@ -853,6 +858,30 @@ final class MessageRouter {
             // tentacleLastSeq is kept fresh via session_list and the
             // store's own ingestion ceiling.
             totalLastSeq: lastSeq
+        )
+    }
+
+    /// `session_messages_range_batch` — response to
+    /// `request_session_messages_range` (push-gap recovery). Routed
+    /// to MessageProvider's pendingTail machinery; do NOT call
+    /// `handleBatch` here because this batch is not turn-aligned
+    /// (caller asked for an exact `[fromSeq..toSeq]` slice) and may
+    /// contain a sparse subset of that range.
+    private func handleSessionMessagesRangeBatch(_ dict: [String: Any]) {
+        guard let appState else { return }
+        let payload = dict["payload"] as? [String: Any] ?? dict
+        let sessionId = payload["sessionId"] as? String ?? dict["sessionId"] as? String ?? ""
+        let messagesArray = payload["messages"] as? [[String: Any]] ?? []
+        let firstSeq = payload["firstSeq"] as? Int ?? 0
+        let lastSeq = payload["lastSeq"] as? Int ?? 0
+        let truncated = payload["truncated"] as? Bool ?? false
+        let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
+        appState.messageProvider?.handleRangeBatch(
+            sessionId: sessionId,
+            messages: parsed,
+            firstSeq: firstSeq,
+            lastSeq: lastSeq,
+            truncated: truncated
         )
     }
 

@@ -188,8 +188,12 @@ final class SessionStore {
 
     /// Debounce window for save coalescing. Many small mutations in
     /// one burst (bumpLastSeq, setPreview, setMode, …) should result
-    /// in one write, not N.
-    private static let saveDebounce: TimeInterval = 1.0
+    /// in one write, not N. The snapshot is a cold-launch optimisation
+    /// — `session_list` re-authoritatively overwrites it within seconds
+    /// of WS connect — so we can afford a long debounce and lean on the
+    /// `handleBackground` / `applicationWillTerminate` flush hooks to
+    /// guarantee the latest state hits disk before the process dies.
+    private static let saveDebounce: TimeInterval = 10.0
     private var saveTask: DispatchWorkItem?
     private var pendingSnapshot: Snapshot?
     /// SHA-equivalent stable hash of the bytes last written to disk.
@@ -240,10 +244,17 @@ final class SessionStore {
     /// Safe to call frequently — the cache coalesces.
     fileprivate func scheduleSave() {
         pendingSnapshot = Snapshot(sessions: sessions, previews: sessionPreviews)
+        let wasScheduled = saveTask != nil
         saveTask?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.flushCache() }
         saveTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDebounce, execute: task)
+        if !wasScheduled {
+            // Only log when a *new* debounce window opens — not every
+            // coalesced call. With debounce=10s we'd otherwise emit a
+            // log on every mutation in a burst.
+            KLog.chat("📂 [snapshot] scheduleSave: debounce=\(Self.saveDebounce)s pending=\(pendingSnapshot?.sessions.count ?? 0)")
+        }
     }
 
     /// Force-flush the pending snapshot to disk immediately. Called

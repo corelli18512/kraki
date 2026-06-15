@@ -530,6 +530,20 @@ final class CommandSender {
         send(["type": "request_session_messages", "payload": payload], sessionId: sessionId)
     }
 
+    /// Ask the tentacle for messages with seq in the exact inclusive
+    /// range `[fromSeq, toSeq]`. Reply arrives as a
+    /// `session_messages_range_batch` envelope. Used by
+    /// `MessageProvider`'s push-gap recovery — turn-aligned fetches
+    /// can't address arbitrary seqs.
+    func requestSessionMessagesRange(sessionId: String, fromSeq: Int, toSeq: Int) {
+        let payload: [String: Any] = [
+            "sessionId": sessionId,
+            "fromSeq": fromSeq,
+            "toSeq": toSeq,
+        ]
+        send(["type": "request_session_messages_range", "payload": payload], sessionId: sessionId)
+    }
+
     // MARK: - Cleanup
 
     /// Clean up a failed create request.

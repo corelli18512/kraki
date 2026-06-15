@@ -52,6 +52,17 @@ struct ChatView: View {
     /// `readSeq` directly here would race against markRead.
     @State private var entryUnreadSeqBoundary: Int? = nil
 
+    /// Measured height of the floating input capsule (incl. its own
+    /// vertical padding and any pending-permission row). Drives the
+    /// collection view's `contentInset.bottom` so the last cell sits
+    /// above the capsule instead of behind it. We use
+    /// `onGeometryChange` on the `safeAreaInset` content, NOT a
+    /// fixed `safeAreaInset` height, because the surrounding
+    /// `.ignoresSafeArea(.container, edges: .bottom)` swallows the
+    /// safe-area path; routing via `contentInset` instead bypasses
+    /// that entirely.
+    @State private var bottomInputHeight: CGFloat = 0
+
     // MARK: - View-model passthroughs
 
     private var session: SessionInfo? { viewModel?.session }
@@ -98,6 +109,19 @@ struct ChatView: View {
                         // hundred ms.
                         if isDeviceOnline {
                             bottomInputArea
+                                // Measure the rendered height so we
+                                // can mirror it into the collection
+                                // view's contentInset.bottom (next
+                                // update). Updates whenever the
+                                // capsule grows (multi-line text,
+                                // pending permission row, etc.).
+                                .onGeometryChange(for: CGFloat.self) { proxy in
+                                    proxy.size.height
+                                } action: { newHeight in
+                                    if abs(newHeight - bottomInputHeight) > 0.5 {
+                                        bottomInputHeight = newHeight
+                                    }
+                                }
                         }
                     }
             }
@@ -138,24 +162,12 @@ struct ChatView: View {
             entryUnreadSeqBoundary = wasUnread ? (session?.readSeq ?? 0) : nil
 
             refreshGroupingCache()
-            // Install the load-older handler on the coordinator.
-            // sessionId is captured by value (pinnedSessionId) so a
-            // stale in-flight closure can't dispatch a fetch for the
-            // previous session if the user has since switched.
-            let pinnedSessionId = sessionId
-            uikitScrollCoordinator.onNearTopReached = { [weak appState = appState] in
-                guard let appState else { return }
-                // windowTopSeq returns the seq of the topmost loaded
-                // message — that's the boundary we want to fetch
-                // older than. nil ⇒ window not yet loaded; nothing
-                // to do.
-                guard let firstSeq = appState.messageProvider?.windowTopSeq(pinnedSessionId),
-                      firstSeq > 1 else { return }
-                _ = appState.messageProvider?.ensureOlderLoaded(
-                    sessionId: pinnedSessionId,
-                    beforeSeq: firstSeq
-                )
-            }
+            // Top/bottom load triggers are now driven by supplementary
+            // spinner visibility inside the UICollectionView (see
+            // `ChatListViewController.installSpinnerHooks`). The old
+            // scroll-math `onNearTopReached` path was removed once
+            // the sentinel cells took over — spinner visibility IS
+            // the load trigger, single source of truth.
         }
         .onChange(of: filteredMessagesCount) { _, _ in
             // New / removed messages → re-group. The view model
@@ -194,17 +206,31 @@ struct ChatView: View {
     /// Recomputed on each body evaluation — the controller's
     /// one-shot guard means a transient nil/non-nil flip before the
     /// first apply lands has no behavioural cost.
+    ///
+    /// Scanned in REVERSE: the common case is a long read history
+    /// followed by a short unread tail, so walking from the tail
+    /// inward and stopping at the boundary touches only the unread
+    /// region. We keep the most-recently-seen "> boundary" block as
+    /// a candidate; once we cross back into seq ≤ boundary the
+    /// candidate is by construction the EARLIEST unread block.
     private var entryScrollTargetId: String? {
         guard let boundary = entryUnreadSeqBoundary,
               let viewModel else { return nil }
-        for item in viewModel.cachedRawTurns {
-            if case .block(let block) = item,
-               let userMsg = block.initiator.userMessage,
-               userMsg.seq > boundary {
-                return item.id
+        var candidate: String? = nil
+        for item in viewModel.cachedRawTurns.reversed() {
+            guard case .block(let block) = item,
+                  let userMsg = block.initiator.userMessage else { continue }
+            if userMsg.seq > boundary {
+                candidate = item.id
+            } else {
+                // Crossed back into already-read history — candidate
+                // (if any) is the earliest unread block.
+                return candidate
             }
         }
-        return nil
+        // Entire window is unread (rare but legal — e.g. a fresh
+        // session opened before any read marker landed).
+        return candidate
     }
 
     /// TurnItem id for the idle anchor target — the block containing
@@ -246,7 +272,8 @@ struct ChatView: View {
                 streamingText: streaming,
                 entryScrollTargetId: entryScrollTargetId,
                 idleAnchorTargetId: idleAnchorTargetId,
-                turns: viewModel.displayTurns
+                turns: viewModel.displayTurns,
+                bottomContentInset: bottomInputHeight
             )
         } else {
             Color.clear

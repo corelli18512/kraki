@@ -121,6 +121,14 @@ private func headingFont(for line: Substring) -> Font? {
 
 struct MessageBubbleView: View {
     let message: ChatMessage
+    /// Active session id used as the stable seed for hue derivation.
+    /// Forwarded by the container view so that synthetic messages
+    /// (streaming agent_message with sessionId=nil, fallback synthetics)
+    /// still pick up the surrounding session's color rather than
+    /// falling back to the agent name. Defaults to "" so unrelated
+    /// previews/callers still compile; the legacy
+    /// `message.sessionId ?? agent` fallback remains as a safety net.
+    var sessionId: String = ""
     var agent: String = ""
     var turnImages: [ImageAttachment]?
     var thinkingHistory: [ChatMessage] = []
@@ -190,8 +198,17 @@ struct MessageBubbleView: View {
         !hasMessageContent && !postMessageActivity.isEmpty
     }
 
+    /// Stable seed for all per-bubble hue derivation. Prefers the
+    /// injected `sessionId` (provided by the container that knows the
+    /// active session); only falls back to the legacy
+    /// `message.sessionId ?? agent` chain when no seed was injected
+    /// (so older callers / previews still get *some* color).
+    private var hueSeed: String {
+        sessionId.isEmpty ? (message.sessionId ?? agent) : sessionId
+    }
+
     private var agentBubbleColor: Color {
-        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let hue = stringToHue(hueSeed) / 360
         let (h, s, b) = hslToHSB(
             h: hue,
             s: colorScheme == .dark ? 0.35 : 0.40,
@@ -201,7 +218,7 @@ struct MessageBubbleView: View {
     }
 
     private var sectionTintColor: Color {
-        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let hue = stringToHue(hueSeed) / 360
         let (h, s, b) = hslToHSB(
             h: hue,
             s: colorScheme == .dark ? 0.40 : 0.30,
@@ -214,7 +231,7 @@ struct MessageBubbleView: View {
     /// The bubble itself uses a soft wash that's nearly invisible against
     /// menu blur material; this version is saturated/lifted enough to read.
     private var agentAccentColor: Color {
-        let hue = stringToHue(message.sessionId ?? agent) / 360
+        let hue = stringToHue(hueSeed) / 360
         let (h, s, b) = hslToHSB(
             h: hue,
             s: colorScheme == .dark ? 0.75 : 0.70,
@@ -459,7 +476,7 @@ struct MessageBubbleView: View {
                 messageBody(content, foreground: .primary.opacity(0.7))
             }
         case "tool_start", "tool_complete":
-            ToolLineView(message: item)
+            ToolLineView(message: item, sessionId: sessionId)
         case "error":
             ErrorLineView(message: item)
         case "question":
@@ -575,7 +592,9 @@ struct MessageBubbleView: View {
     // MARK: - Agent Avatar
 
     private var agentAvatar: some View {
-        AgentAvatar(agent: agent, sessionId: message.sessionId, size: .sm)
+        AgentAvatar(agent: agent,
+                    sessionId: sessionId.isEmpty ? message.sessionId : sessionId,
+                    size: .sm)
     }
 
     // MARK: - Session Created
@@ -586,7 +605,9 @@ struct MessageBubbleView: View {
         let model = message.payload["model"]?.stringValue
         return HStack(spacing: 4) {
             Spacer()
-            AgentAvatar(agent: agentName, sessionId: message.sessionId, size: .xs)
+            AgentAvatar(agent: agentName,
+                        sessionId: sessionId.isEmpty ? message.sessionId : sessionId,
+                        size: .xs)
             Text("\(agentLabel(agentName)) session \(forked ? "forked" : "started")")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -993,6 +1014,11 @@ private struct ToolLineView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let message: ChatMessage
+    /// Active session id used as the stable seed for hue derivation
+    /// (mirrors `MessageBubbleView.sessionId`). Forwarded by the
+    /// container so synthetic tool entries always pick up the
+    /// surrounding session's color rather than the tool name.
+    var sessionId: String = ""
     var showPill: Bool = false
 
     @State private var expanded = false
@@ -1023,7 +1049,8 @@ private struct ToolLineView: View {
     /// section's own tint (small lightness delta) so the pill reads
     /// as a soft chip rather than a high-contrast badge.
     private var pillTintColor: Color {
-        let hue = stringToHue(message.sessionId ?? toolName) / 360
+        let seed = sessionId.isEmpty ? (message.sessionId ?? toolName) : sessionId
+        let hue = stringToHue(seed) / 360
         let (h, s, b) = hslToHSB(
             h: hue,
             s: colorScheme == .dark ? 0.45 : 0.32,
@@ -1038,7 +1065,8 @@ private struct ToolLineView: View {
     /// to blend with the section rather than stand out. Delta against
     /// the section's lightness is intentionally tiny (~0.01).
     private var expandedDialogBackground: Color {
-        let hue = stringToHue(message.sessionId ?? toolName) / 360
+        let seed = sessionId.isEmpty ? (message.sessionId ?? toolName) : sessionId
+        let hue = stringToHue(seed) / 360
         let (h, s, b) = hslToHSB(
             h: hue,
             s: colorScheme == .dark ? 0.40 : 0.30,
