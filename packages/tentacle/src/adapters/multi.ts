@@ -12,6 +12,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { platform } from 'node:os';
 import type { ModelDetail, SessionUsage, AgentId, AgentCapabilities, Attachment } from '@kraki/protocol';
 import {
   AgentAdapter,
@@ -37,7 +38,8 @@ async function canImport(specifier: string): Promise<boolean> {
 
 function cliExists(name: string): boolean {
   try {
-    execSync(`which ${name}`, { stdio: 'pipe' });
+    const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
+    execSync(cmd, { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -285,7 +287,8 @@ export class MultiAgentAdapter extends AgentAdapter {
       const adapter = this.adapters.get(agentId);
       if (adapter) return adapter;
     }
-    // Fallback: try all adapters (session might have been created before multi-adapter)
+    // Fallback: try first adapter (session might have been created before multi-adapter)
+    logger.warn({ sessionId }, 'No agent mapping for session, falling back to first adapter');
     for (const adapter of this.adapters.values()) {
       return adapter;
     }

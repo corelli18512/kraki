@@ -597,7 +597,7 @@ export class ClaudeAdapter extends AgentAdapter {
       systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
       ...(mcpServers && { mcpServers }),
       includePartialMessages: true,
-      canUseTool: this.makeCanUseToolHandler(entry.pendingPermissions, entry.pendingQuestions),
+      canUseTool: this.makeCanUseToolHandler(sessionId, entry.pendingPermissions, entry.pendingQuestions),
       ...(config?.reasoningEffort && {
         effort: config.reasoningEffort as Options['effort'],
       }),
@@ -1101,6 +1101,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * Implements Kraki's 4-mode permission system.
    */
   private makeCanUseToolHandler(
+    sessionId: string,
     pendingPermissions: Map<string, PendingPermission>,
     pendingQuestions: Map<string, PendingQuestion>,
   ) {
@@ -1117,11 +1118,6 @@ export class ClaudeAdapter extends AgentAdapter {
         agentID?: string;
       },
     ): Promise<PermissionResult> => {
-      const sessionId = this.findSessionForToolCall();
-      if (!sessionId) {
-        logger.warn({ toolName }, 'canUseTool: no active session found');
-        return { behavior: 'deny', message: 'No active session' };
-      }
 
       // Handle AskUserQuestion tool → bridge to onQuestionRequest
       if (toolName === 'AskUserQuestion') {
@@ -1235,13 +1231,6 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   // ── Helpers ───────────────────────────────────────
-
-  private findSessionForToolCall(): string | undefined {
-    for (const [sessionId] of this.sessions) {
-      return sessionId;
-    }
-    return undefined;
-  }
 
   private cleanupSessionState(sessionId: string): void {
     this.sessionAllowSets.delete(sessionId);
