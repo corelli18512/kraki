@@ -250,6 +250,8 @@ export class ClaudeAdapter extends AgentAdapter {
   private sessionUsage = new Map<string, SessionUsage>();
   /** Cached model list from last session init */
   private cachedModels: ModelDetail[] = [];
+  /** Map resolved display name → SDK alias for env-overridden models */
+  private modelAliasMap = new Map<string, string>();
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown> }>>();
   /** Map Kraki session ID → SDK session UUID (for getSessionInfo polling) */
@@ -371,16 +373,42 @@ export class ClaudeAdapter extends AgentAdapter {
       const models = await q.supportedModels();
       ac.abort();
       if (models.length > 0) {
-        this.cachedModels = models.map(m => ({
-          id: m.value,
-          name: m.displayName ?? m.value,
-          supportsReasoningEffort: !!m.supportsEffort,
-          ...(m.supportedEffortLevels && {
-            supportedReasoningEfforts: m.supportedEffortLevels.filter(
-              (e): e is 'low' | 'medium' | 'high' | 'xhigh' => e !== 'max',
-            ),
-          }),
-        }));
+        // Resolve SDK aliases to actual backend model names via env vars,
+        // then deduplicate so the UI shows real models (e.g. "deepseek-v4-pro[1m]")
+        // instead of generic aliases ("opus", "sonnet") that all map to the same backend.
+        const ALIAS_ENV: Record<string, string> = {
+          default: 'ANTHROPIC_MODEL',
+          opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+          sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+          haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+        };
+
+        this.modelAliasMap.clear();
+        const seen = new Set<string>();
+        const resolved: ModelDetail[] = [];
+
+        for (const m of models) {
+          const alias = m.value;
+          const envKey = ALIAS_ENV[alias];
+          const displayId = envKey ? (process.env[envKey] || alias) : alias;
+
+          if (!seen.has(displayId)) {
+            seen.add(displayId);
+            this.modelAliasMap.set(displayId, alias);
+            resolved.push({
+              id: displayId,
+              name: m.displayName ?? displayId,
+              supportsReasoningEffort: !!m.supportsEffort,
+              ...(m.supportedEffortLevels && {
+                supportedReasoningEfforts: m.supportedEffortLevels.filter(
+                  (e): e is 'low' | 'medium' | 'high' | 'xhigh' => e !== 'max',
+                ),
+              }),
+            });
+          }
+        }
+
+        this.cachedModels = resolved;
         logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
       }
     } catch (err) {
@@ -560,7 +588,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
     const options: Options = {
       abortController: entry.abortController,
-      ...(config?.model && { model: config.model }),
+      ...(config?.model && { model: this.modelAliasMap.get(config.model) ?? config.model }),
       ...(config?.cwd && { cwd: config.cwd }),
       ...(config?.resume && { resume: config.resume }),
       ...(config?.fork && { forkSession: true }),
