@@ -69,10 +69,17 @@ struct MessageInputView: View {
         case modeSwipe
     }
 
-    // Mode swipe — drag the input box horizontally to cycle SessionMode.
-    // All algorithm + state lives in InputBoxModeSwipeController; the
-    // view just measures its own width and feeds the gesture in.
-    @State private var swipeController = InputBoxModeSwipeController()
+    // Mode swipe — the send icon doubles as the mode selector.
+    // Swiping it horizontally cycles SessionMode (looping). The input
+    // box's glass tint blends between adjacent mode colors live during
+    // the swipe; on release a tap = send, a flick or 40% drag = mode
+    // commit. Visual swipe travel is clamped to ±`modeStepWidth`.
+    //
+    // `rawDragX` is the live horizontal drag translation (clamped).
+    // `dragStartMode` snapshots the mode at gesture start so tint
+    // math is stable across the drag.
+    @State private var rawDragX: CGFloat = 0
+    @State private var dragStartMode: SessionMode? = nil
     @State private var measuredInputBoxWidth: CGFloat = 0
 
     // Mode-change toast (liquid-glass capsule above the send icon).
@@ -84,6 +91,9 @@ struct MessageInputView: View {
 
     private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
     private static let inputBoxHeight: CGFloat = 42
+    private static let commitDistanceFraction: CGFloat = 0.4
+    private static let momentumVelocity: CGFloat = 500   // pt/s
+
     /// Width of one "step" — clamped to the measured input box width
     /// so a full-distance swipe can fully replace the visible mode
     /// color with the adjacent one. Falls back to a sane default
@@ -96,6 +106,50 @@ struct MessageInputView: View {
         appState.sessionStore.sessionModes[sessionId]
             ?? session?.mode
             ?? .discuss
+    }
+
+    /// The mode whose color tint is centered. We snapshot the start
+    /// mode at gesture start so tint math stays stable across the drag
+    /// (in-drag commits would otherwise re-anchor the interpolation).
+    private var tintBaseMode: SessionMode {
+        dragStartMode ?? currentSessionMode
+    }
+
+    /// Live tint color for the input box: blends linearly between the
+    /// base mode's color and the adjacent mode's color based on the
+    /// drag progress (rawDragX / modeStepWidth, clamped to ±1). At
+    /// rest this is just the current mode's color.
+    private var inputBoxModeTint: Color {
+        let modes = Self.allModes
+        let count = modes.count
+        let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
+        let progress = max(-1, min(1, rawDragX / modeStepWidth))
+        if progress == 0 { return Color.modeColor(modes[baseIdx]) }
+        // Drag RIGHT (positive dx) → previous mode tint enters.
+        let neighborIdx: Int = progress > 0
+            ? ((baseIdx - 1) % count + count) % count
+            : ((baseIdx + 1) % count + count) % count
+        return Self.blendColors(
+            Color.modeColor(modes[baseIdx]),
+            Color.modeColor(modes[neighborIdx]),
+            t: abs(progress)
+        )
+    }
+
+    private static func blendColors(_ a: Color, _ b: Color, t: CGFloat) -> Color {
+        let ua = UIColor(a)
+        let ub = UIColor(b)
+        var (r1, g1, b1, a1): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        var (r2, g2, b2, a2): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        let tt = max(0, min(1, t))
+        return Color(
+            red: Double(r1 + (r2 - r1) * tt),
+            green: Double(g1 + (g2 - g1) * tt),
+            blue: Double(b1 + (b2 - b1) * tt),
+            opacity: Double(a1 + (a2 - a1) * tt)
+        )
     }
 
     private var sessionStore: SessionStore { appState.sessionStore }
@@ -292,41 +346,65 @@ struct MessageInputView: View {
         // HStack grows symmetrically — close enough to iMessage that
         // the icons appear to stay attached to the box.
         .frame(minHeight: Self.inputBoxHeight)
-        .background {
-            InputBoxModeSwipeBackground(
-                controller: swipeController,
-                currentMode: currentSessionMode,
-                width: measuredInputBoxWidth
-            )
-        }
-        // Single, flat width measurement (not nested inside the strip's
-        // body). Width changes don't happen during a drag, so re-render
-        // cost is limited to actual layout changes (rotation, etc).
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: InputBoxWidthPreferenceKey.self,
-                    value: proxy.size.width
-                )
-            }
-        )
-        .onPreferenceChange(InputBoxWidthPreferenceKey.self) { new in
-            measuredInputBoxWidth = new
-        }
+        .background { inputBoxGlassBackground }
         .contentShape(Capsule())
         // Voice mode is gone for now, so the whole input box is always
         // swipeable for mode changes (no hold-to-talk gesture to race with).
         .simultaneousGesture(inputBoxModeSwipeGesture)
-        // NOTE: previously this view carried
-        //   .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
-        // for non-swipe mode changes (e.g. via the picker sheet). That
-        // implicit animation now also fires during a swipe-commit and
-        // races the post-release spring, producing the "two-stage" feel.
-        // The send-icon glyph's own `.animation(easeInOut, value:
-        // currentSessionMode)` modifier still handles the picker case;
-        // for swipe commits, the gesture's `withAnimation(spring) { … }`
-        // wraps `setSessionMode`, so any view that reads currentSessionMode
-        // (the icon tint included) rides the same spring curve.
+        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+    }
+
+    @ViewBuilder
+    private var inputBoxGlassBackground: some View {
+        let shape = Capsule()
+        ZStack(alignment: .bottom) {
+            // Plain iOS 26 liquid glass capsule — no full-box tint;
+            // the mode color lives only in the thin strip below.
+            if #available(iOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: shape)
+            } else {
+                shape.fill(.ultraThinMaterial)
+            }
+
+            // Thin mode-color strip pinned to the bottom edge of the
+            // capsule. Renders 3 horizontal blocks (prev / base /
+            // next mode) wider than the box; offset by `rawDragX` so
+            // it slides with the finger, peeking the adjacent
+            // colors in from the swipe direction. Clipped to the
+            // capsule so the colors hug the bottom curvature.
+            swipeBottomStrip
+                .clipShape(shape)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var swipeBottomStrip: some View {
+        GeometryReader { proxy in
+            let modes = Self.allModes
+            let count = modes.count
+            let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
+            let prevIdx = ((baseIdx - 1) % count + count) % count
+            let nextIdx = ((baseIdx + 1) % count + count) % count
+            let w = proxy.size.width
+            let stripHeight: CGFloat = 1.5
+            let opacity: Double = 0.95
+            HStack(spacing: 0) {
+                Color.modeColor(modes[prevIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+                Color.modeColor(modes[baseIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+                Color.modeColor(modes[nextIdx]).opacity(opacity)
+                    .frame(width: w, height: stripHeight)
+            }
+            // The 3-block strip is anchored so the BASE block fully
+            // covers the visible window at rest (`rawDragX == 0`).
+            // `rawDragX` then slides the strip with the finger up to
+            // ±w, peeking the adjacent block fully into view.
+            .offset(x: -w + rawDragX)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .onAppear { measuredInputBoxWidth = w }
+            .onChange(of: w) { _, newW in measuredInputBoxWidth = newW }
+        }
     }
 
     /// Horizontal swipe gesture that cycles SessionMode, attached to
@@ -334,28 +412,25 @@ struct MessageInputView: View {
     /// swipe anywhere on the box. Uses `simultaneousGesture` so taps
     /// on the inner TextField, voice toggle, and send icon still
     /// reach their own gesture handlers. `minimumDistance: 10`
-    /// prevents an incidental finger jiggle from triggering a swipe;
-    /// the controller subtracts that 10pt threshold from the first
-    /// reported translation so the strip starts at exactly 0 instead
-    /// of jumping.
+    /// prevents an incidental finger jiggle from triggering a swipe.
+    /// The horizontal-vs-vertical guard runs only at the FIRST motion
+    /// event so once we've committed to a horizontal swipe, vertical
+    /// drift doesn't cancel it.
     private var inputBoxModeSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
-                swipeController.handleChanged(
-                    translation: value.translation,
-                    currentMode: currentSessionMode,
-                    stepWidth: modeStepWidth
-                )
+                if dragStartMode == nil {
+                    // Lock in: only start a swipe if the first
+                    // motion is more horizontal than vertical.
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > abs(dy) else { return }
+                }
+                handleModeSwipeChanged(value.translation.width)
             }
             .onEnded { value in
-                swipeController.handleEnded(
-                    velocity: value.velocity.width,
-                    currentMode: currentSessionMode,
-                    stepWidth: modeStepWidth
-                ) { newMode in
-                    appState.commandSender?.setSessionMode(sessionId: sessionId, mode: newMode)
-                    presentModeToast(newMode)
-                }
+                guard dragStartMode != nil else { return }
+                handleModeSwipeEnded(value.velocity.width)
             }
     }
 
@@ -529,9 +604,9 @@ struct MessageInputView: View {
     //   ├── 200ms passes with no significant horizontal motion →
     //   │     pivot RECORD: start speech, drag-up arms cancel.
     //   ├── |dx| ≥ 10pt AND |dx| > |dy| BEFORE 200ms elapses →
-    //   │     pivot MODE_SWIPE: cancel dwell, forward to the
-    //   │     swipeController; release commits the mode change
-    //   │     (predict-and-snap with spring momentum).
+    //   │     pivot MODE_SWIPE: cancel dwell, forward to
+    //   │     handleModeSwipeChanged; release calls
+    //   │     handleModeSwipeEnded (momentum + spring + commit).
     //   └── Release before 200ms with sub-threshold motion →
     //         quick tap on the prompt area, no-op.
     //
@@ -547,11 +622,7 @@ struct MessageInputView: View {
                     case .record:
                         cancelArmed = value.translation.height < -60
                     case .modeSwipe:
-                        swipeController.handleChanged(
-                            translation: value.translation,
-                            currentMode: currentSessionMode,
-                            stepWidth: modeStepWidth
-                        )
+                        handleModeSwipeChanged(value.translation.width)
                     }
                     return
                 }
@@ -580,11 +651,7 @@ struct MessageInputView: View {
                     holdDwellTask?.cancel()
                     holdDwellTask = nil
                     holdPivot = .modeSwipe
-                    swipeController.handleChanged(
-                        translation: value.translation,
-                        currentMode: currentSessionMode,
-                        stepWidth: modeStepWidth
-                    )
+                    handleModeSwipeChanged(dx)
                 }
             }
             .onEnded { value in
@@ -628,14 +695,7 @@ struct MessageInputView: View {
                         cancelArmed = false
                     }
                 case .modeSwipe:
-                    swipeController.handleEnded(
-                        velocity: value.velocity.width,
-                        currentMode: currentSessionMode,
-                        stepWidth: modeStepWidth
-                    ) { newMode in
-                        appState.commandSender?.setSessionMode(sessionId: sessionId, mode: newMode)
-                        presentModeToast(newMode)
-                    }
+                    handleModeSwipeEnded(value.velocity.width)
                 case .none:
                     // Tap or sub-threshold motion before pivot →
                     // nothing to do.
@@ -880,6 +940,94 @@ struct MessageInputView: View {
             handleSend()
         } else {
             appState.commandSender?.abortSession(sessionId: sessionId)
+        }
+    }
+
+    private func handleModeSwipeChanged(_ dx: CGFloat) {
+        if dragStartMode == nil { dragStartMode = currentSessionMode }
+        // Rubber-band beyond ±modeStepWidth so the strip can over-
+        // travel slightly with momentum (then snap back via spring),
+        // but the "useful" range still tops out at one full step.
+        let limit = modeStepWidth
+        if abs(dx) <= limit {
+            rawDragX = dx
+        } else {
+            let excess = abs(dx) - limit
+            let rubber = excess / (1 + excess / 80) * 0.4
+            rawDragX = (dx > 0 ? 1 : -1) * (limit + rubber)
+        }
+    }
+
+    private func handleModeSwipeEnded(_ velocity: CGFloat) {
+        let modes = Self.allModes
+        let count = modes.count
+        let baseMode = dragStartMode ?? currentSessionMode
+        let baseIdx = modes.firstIndex(of: baseMode) ?? 1
+
+        let dx = rawDragX
+        let distanceCommit = abs(dx) >= Self.commitDistanceFraction * modeStepWidth
+        // Momentum commit: a fast flick in the same direction as the
+        // drag wins even if the finger only moved a short distance.
+        let velocityCommit = abs(velocity) >= Self.momentumVelocity
+            && dx != 0
+            && (velocity > 0) == (dx > 0)
+        let shouldCommit = distanceCommit || velocityCommit
+
+        // Resolve commit direction & visual target offset.
+        //   Drag RIGHT (dx > 0) → previous mode peeked in from left
+        //   → commit step −1, strip ends at +stepWidth (prev block
+        //   fully covers the window).
+        //   Drag LEFT  (dx < 0) → next mode → step +1, strip ends at
+        //   −stepWidth.
+        let commitStep: Int = shouldCommit ? (dx > 0 ? -1 : 1) : 0
+        let targetOffset: CGFloat = commitStep == 0
+            ? 0
+            : -CGFloat(commitStep) * modeStepWidth
+
+        // Fire commit + haptic at release start (not after the spring
+        // settles) so the send arrow color begins its own cross-fade
+        // animation immediately as the strip springs into place. The
+        // strip itself stays anchored to `dragStartMode` for the
+        // duration of the spring (so its visual content is stable),
+        // and the silent rebase in the completion handler swaps it
+        // over to the new mode at offset 0 — by which time the
+        // currentSessionMode color matches the visible block, so the
+        // swap is invisible.
+        if commitStep != 0 {
+            let targetIdx = ((baseIdx + commitStep) % count + count) % count
+            let newMode = modes[targetIdx]
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: newMode)
+            presentModeToast(newMode)
+        }
+
+        // Physical spring driven by the gesture's exit velocity:
+        // .interpolatingSpring with non-zero `initialVelocity` carries
+        // the swipe momentum into the rest position, so a hard fling
+        // overshoots+settles and a soft drop just eases home. The
+        // velocity is normalized by the remaining distance so units
+        // make sense to the spring.
+        let remaining = targetOffset - rawDragX
+        let normalizedVelocity = remaining == 0 ? 0 : Double(velocity / remaining)
+        let physicsSpring: Animation = .interpolatingSpring(
+            mass: 1,
+            stiffness: 180,
+            damping: 22,
+            initialVelocity: normalizedVelocity
+        )
+
+        withAnimation(physicsSpring) {
+            rawDragX = targetOffset
+        } completion: {
+            // Silent rebase: strip rebuilds with the new
+            // currentSessionMode at the center, rawDragX = 0 leaves
+            // it visually identical (same color is already centered).
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                dragStartMode = nil
+                rawDragX = 0
+            }
         }
     }
 
