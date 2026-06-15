@@ -228,18 +228,39 @@ final class ChatListViewController: UIViewController {
         // row spanning the available width, with self-sizing height
         // estimated by the host content. This is the closest UIKit
         // equivalent to a `VStack(spacing: 0)` of full-width cells.
-        var listConfig = UICollectionLayoutListConfiguration(appearance: .plain)
-        listConfig.showsSeparators = false
-        listConfig.backgroundColor = .clear
-        // Sentinel cells for "load more" triggers. Their visibility
-        // IS the load trigger (see `installSpinnerHooks`), so we get
-        // a single source of truth that doesn't need scroll-math
-        // heuristics. SwiftUI content inside the supplementary auto-
-        // sizes to zero when there's nothing to show (reachedTail /
-        // reachedHead), so they don't add empty space at the edges.
-        listConfig.headerMode = .supplementary
-        listConfig.footerMode = .supplementary
-        let layout = UICollectionViewCompositionalLayout.list(using: listConfig)
+        //
+        // We wrap `.list(using:)` in a section provider closure so we
+        // can strip `pinToVisibleBounds` off the boundary supplementary
+        // items that `headerMode = .supplementary` installs. The
+        // default for `.plain` list appearance pins section headers
+        // to the top of the viewport (mimicking UITableView plain
+        // style) — but for our use case the spinners are SENTINELS
+        // that should scroll with content, not chrome that floats
+        // over the bubbles. Without this fix the top spinner would
+        // appear glued to the top of the viewport on every scroll
+        // position, visually disconnected from the cell layer.
+        let layout = UICollectionViewCompositionalLayout { _, environment in
+            var listConfig = UICollectionLayoutListConfiguration(appearance: .plain)
+            listConfig.showsSeparators = false
+            listConfig.backgroundColor = .clear
+            // Sentinel cells for "load more" triggers. Their visibility
+            // IS the load trigger (see `installSpinnerHooks`), so we
+            // get a single source of truth that doesn't need scroll-
+            // math heuristics. SwiftUI content inside the supplementary
+            // auto-sizes to zero when there's nothing to show
+            // (reachedTail / !isFillingTail), so they don't add empty
+            // space at the edges.
+            listConfig.headerMode = .supplementary
+            listConfig.footerMode = .supplementary
+            let section = NSCollectionLayoutSection.list(
+                using: listConfig,
+                layoutEnvironment: environment
+            )
+            for supplementary in section.boundarySupplementaryItems {
+                supplementary.pinToVisibleBounds = false
+            }
+            return section
+        }
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
