@@ -25,10 +25,10 @@ function CopilotIcon({ className }: { className?: string }) {
 }
 
 function ClaudeIcon({ className }: { className?: string }) {
-  // Simple "C" monogram to distinguish from Copilot — clean and recognizable
+  // Claude Code pixel art icon, moderately stretched to look balanced in a square avatar
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm3.5 14.5c-.97.63-2.15 1-3.5 1-3.58 0-6.5-2.92-6.5-6.5S8.42 4.5 12 4.5c1.35 0 2.53.37 3.5 1v2.6A4.49 4.49 0 0 0 12 6.5 4.51 4.51 0 0 0 7.5 11c0 2.49 2.01 4.5 4.5 4.5 1.3 0 2.48-.56 3.5-1.6v2.6Z" />
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 1.5 26 20.5" preserveAspectRatio="none" fill="currentColor" className={className}>
+      <path d="M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z"/>
     </svg>
   );
 }
