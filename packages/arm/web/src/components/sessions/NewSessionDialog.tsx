@@ -9,6 +9,7 @@ interface Props {
 }
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
+const AGENT_PREF_KEY = 'kraki:last-agent';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
 
@@ -45,6 +46,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
 
   const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
   const [selectedDevice, setSelectedDevice] = useState('');
+  const [selectedAgent, setSelectedAgent] = useState('');
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
   const listRef = useRef<HTMLDivElement>(null);
@@ -61,19 +63,29 @@ export function NewSessionDialog({ open, onClose }: Props) {
     }
   }, [open, tentacles.length]);
 
-  // Get models from tentacle greeting — flatten all agents
+  // Get agents for the selected device
   const agentsList = deviceAgents.get(selectedDevice) ?? [];
-  const allModels: { model: string; agentId: string; detail?: import('@kraki/protocol').ModelDetail }[] = [];
-  for (const agent of agentsList) {
-    for (const m of agent.models ?? []) {
-      const detail = agent.modelDetails?.find(d => d.id === m);
-      allModels.push({ model: m, agentId: agent.id, detail });
+  const hasMultipleAgents = agentsList.length > 1;
+
+  // Auto-select agent when device changes
+  useEffect(() => {
+    if (agentsList.length === 0) { setSelectedAgent(''); return; }
+    // Single agent → auto-select it
+    if (agentsList.length === 1) { setSelectedAgent(agentsList[0].id); return; }
+    // Restore last agent pref, or pick first
+    const lastAgent = localStorage.getItem(AGENT_PREF_KEY);
+    if (lastAgent && agentsList.some(a => a.id === lastAgent)) {
+      setSelectedAgent(lastAgent);
+    } else {
+      setSelectedAgent(agentsList[0].id);
     }
-  }
-  const models = allModels.map(m => m.model);
-  const modelDetails = allModels.map(m => m.detail).filter((d): d is import('@kraki/protocol').ModelDetail => !!d);
-  // Track which agent owns the selected model
-  const selectedAgentId = allModels.find(m => m.model === model)?.agentId;
+  }, [selectedDevice, agentsList.length]);
+
+  // Filter models by selected agent
+  const activeAgent = agentsList.find(a => a.id === selectedAgent);
+  const models = activeAgent?.models ?? [];
+  const modelDetails = activeAgent?.modelDetails ?? [];
+  const selectedAgentId = selectedAgent || undefined;
 
   // Get reasoning effort info for selected model
   const selectedModelDetail = useMemo(
@@ -82,17 +94,18 @@ export function NewSessionDialog({ open, onClose }: Props) {
   );
   const supportedEfforts = selectedModelDetail?.supportedReasoningEfforts;
 
-  // Restore last model for this device, or auto-select first
+  // Restore last model for this device+agent, or auto-select first
   useEffect(() => {
-    if (!selectedDevice || models.length === 0) return;
+    if (!selectedDevice || !selectedAgent || models.length === 0) return;
     const prefs = getModelPrefs();
-    const lastModel = prefs[selectedDevice];
+    const prefKey = `${selectedDevice}:${selectedAgent}`;
+    const lastModel = prefs[prefKey] ?? prefs[selectedDevice];
     if (lastModel && models.includes(lastModel)) {
       setModel(lastModel);
     } else if (!model || !models.includes(model)) {
       setModel(models[0]);
     }
-  }, [models, selectedDevice]);
+  }, [models, selectedDevice, selectedAgent]);
 
   // Restore or default reasoning effort when model changes
   useEffect(() => {
@@ -123,9 +136,14 @@ export function NewSessionDialog({ open, onClose }: Props) {
     localStorage.setItem(LAST_DEVICE_KEY, id);
   };
 
+  const handleSelectAgent = (agentId: string) => {
+    setSelectedAgent(agentId);
+    localStorage.setItem(AGENT_PREF_KEY, agentId);
+  };
+
   const handleSelectModel = (m: string) => {
     setModel(m);
-    if (selectedDevice) saveModelPref(selectedDevice, m);
+    if (selectedDevice && selectedAgent) saveModelPref(`${selectedDevice}:${selectedAgent}`, m);
   };
 
   const handleSelectEffort = (effort: ReasoningEffort) => {
@@ -195,53 +213,48 @@ export function NewSessionDialog({ open, onClose }: Props) {
               </div>
             </div>
 
-            {/* Model picker — grouped by agent when multiple agents */}
+            {/* Agent picker — only shown when multiple agents */}
+            {hasMultipleAgents && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Agent</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {agentsList.map((agent) => (
+                    <button
+                      key={agent.id}
+                      onClick={() => handleSelectAgent(agent.id)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                        selectedAgent === agent.id
+                          ? 'bg-kraki-500 text-white'
+                          : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                      }`}
+                    >
+                      {agent.id}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Model picker — filtered by selected agent */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-text-secondary">Model</label>
               {models.length > 0 ? (
                 <div ref={listRef} className="max-h-48 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
-                  {agentsList.length > 1 ? (
-                    // Multiple agents: group models under agent headers
-                    agentsList.map((agent) => (
-                      <div key={agent.id}>
-                        <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border-primary bg-surface-tertiary/80 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted backdrop-blur-sm">
-                          <span className="capitalize">{agent.id}</span>
-                        </div>
-                        {(agent.models ?? []).map((m) => (
-                          <button
-                            key={`${agent.id}:${m}`}
-                            data-selected={model === m}
-                            onClick={() => handleSelectModel(m)}
-                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                              model === m
-                                ? 'bg-ocean-500/15 text-ocean-400'
-                                : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
-                            }`}
-                          >
-                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
-                            {m}
-                          </button>
-                        ))}
-                      </div>
-                    ))
-                  ) : (
-                    // Single agent: flat list (no headers)
-                    models.map((m) => (
-                      <button
-                        key={m}
-                        data-selected={model === m}
-                        onClick={() => handleSelectModel(m)}
-                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                          model === m
-                            ? 'bg-ocean-500/15 text-ocean-400'
-                            : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
-                        }`}
-                      >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
-                        {m}
-                      </button>
-                    ))
-                  )}
+                  {models.map((m) => (
+                    <button
+                      key={m}
+                      data-selected={model === m}
+                      onClick={() => handleSelectModel(m)}
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                        model === m
+                          ? 'bg-ocean-500/15 text-ocean-400'
+                          : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${model === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
+                      {m}
+                    </button>
+                  ))}
                 </div>
               ) : (
                 <input
