@@ -20,7 +20,7 @@ import { isSea } from 'node:sea';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getKrakiHome } from './config.js';
-import { probeFda, pollFda } from './checks.js';
+import { probeFda } from './checks.js';
 
 const GITHUB_REPO = 'corelli18512/kraki';
 const NPM_PACKAGE = '@kraki/tentacle';
@@ -363,6 +363,16 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
   const daemonWasRunning = isDaemonRunning();
 
+  // Probe FDA BEFORE the binary is replaced. After replacement the kernel
+  // detects cdhash mismatch between the running process and the new file on
+  // disk, causing TCC-protected reads to fail at vnode level even when FDA is
+  // granted — making the probe unreliable post-update.
+  let fdaNeedsPrompt = false;
+  if (platform() === 'darwin') {
+    const fdaStatus = await probeFda();
+    fdaNeedsPrompt = fdaStatus === 'denied';
+  }
+
   // Stop the daemon before the install. This serves two purposes:
   //  1. On Windows, a running .exe is locked by the OS and cannot be renamed
   //     or overwritten — without this, SEA updates fail with EBUSY and npm
@@ -401,37 +411,15 @@ export async function performUpdate(currentVersion: string): Promise<void> {
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
     writeCache(latest);
 
-    // On macOS, check FDA status and guide the user if not yet granted.
-    // FDA eliminates the recurring "data from other apps" TCC dialog.
-    if (platform() === 'darwin') {
-      const fdaStatus = await probeFda();
-      if (fdaStatus === 'denied') {
-        console.log('');
-        console.log(chalk.dim('  💡 Grant Full Disk Access to eliminate the "data from other apps" dialog.'));
-        console.log(chalk.dim('  Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
-        console.log('');
-
-        const fdaSpinner = ora({
-          indent: 2,
-          text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
-        }).start();
-
-        const ac = new AbortController();
-        const { input } = await import('@inquirer/prompts');
-
-        const granted = await Promise.race([
-          pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
-          input({ message: '' }, { signal: ac.signal })
-            .then(() => { ac.abort(); return false; })
-            .catch(() => false),
-        ]);
-
-        if (granted) {
-          fdaSpinner.succeed('Full Disk Access granted');
-        } else {
-          fdaSpinner.warn('Skipped — grant Full Disk Access later in System Settings');
-        }
-      }
+    // Show FDA guidance if it was denied before the update. We don't re-probe
+    // or poll here because the binary replacement invalidates the running
+    // process's TCC identity (kernel cdhash mismatch → vnode-level EPERM),
+    // so pollFda() would never detect the grant from this process.
+    if (fdaNeedsPrompt) {
+      console.log('');
+      console.log(chalk.dim('  💡 Grant Full Disk Access to eliminate the "data from other apps" dialog.'));
+      console.log(chalk.dim('  Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+      console.log('');
     }
 
     // Restart daemon if it was running before the update
