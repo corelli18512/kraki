@@ -3,132 +3,190 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <title>Kraki voice broker — mic test</title>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>🦑 Kraki mic test</title>
     <style>
       :root {
         color-scheme: light dark;
-        font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+        font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+        --accent: #d33;
+        --accent-ok: #2a7;
+        --border: color-mix(in srgb, currentColor 18%, transparent);
+        --soft: color-mix(in srgb, currentColor 5%, transparent);
       }
+      * { box-sizing: border-box; }
       body {
         max-width: 720px;
         margin: 0 auto;
-        padding: 1.5rem;
-        line-height: 1.5;
+        padding: 1.25rem 1rem 4rem;
+        line-height: 1.45;
       }
-      h1 {
-        font-size: 1.25rem;
-        margin: 0 0 0.25rem;
+      header { margin-bottom: 1rem; }
+      h1 { font-size: 1.2rem; margin: 0; }
+      .subtitle { opacity: 0.65; font-size: 0.85rem; margin: 0.25rem 0 0; }
+
+      /* settings row */
+      details.settings {
+        margin: 1rem 0;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--soft);
       }
-      .subtitle {
-        opacity: 0.6;
-        font-size: 0.85rem;
-        margin: 0 0 1.5rem;
+      details.settings summary {
+        cursor: pointer; font-size: 0.85rem; opacity: 0.75;
       }
       label {
-        display: block;
-        font-size: 0.85rem;
-        opacity: 0.8;
-        margin: 0.75rem 0 0.25rem;
+        display: block; font-size: 0.78rem; opacity: 0.7;
+        margin: 0.65rem 0 0.2rem; text-transform: uppercase; letter-spacing: 0.04em;
       }
-      input[type="text"] {
-        width: 100%;
-        padding: 0.5rem;
-        font: inherit;
-        font-size: 0.9rem;
-        border-radius: 6px;
-        border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-        background: transparent;
-        color: inherit;
+      input[type="text"], select {
+        width: 100%; padding: 0.5rem; font: inherit; font-size: 0.9rem;
+        border-radius: 6px; border: 1px solid var(--border);
+        background: transparent; color: inherit;
       }
-      .controls {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-        margin: 1.25rem 0;
+
+      /* big record button */
+      .record {
+        margin: 1.5rem 0 0.75rem; display: grid; place-items: center;
       }
-      button {
-        font: inherit;
-        padding: 0.6rem 1rem;
-        border-radius: 999px;
-        border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-        background: transparent;
-        color: inherit;
-        cursor: pointer;
-        touch-action: manipulation;
+      #recordBtn {
+        width: 9rem; height: 9rem; border-radius: 50%;
+        border: 4px solid var(--accent);
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+        color: var(--accent);
+        font: inherit; font-size: 1rem; font-weight: 600;
+        cursor: pointer; touch-action: manipulation;
+        transition: transform 80ms ease, background 120ms ease;
+        user-select: none; -webkit-user-select: none;
       }
-      button.primary {
-        background: #d33;
-        color: white;
-        border-color: #d33;
+      #recordBtn:active { transform: scale(0.96); }
+      #recordBtn.recording {
+        background: var(--accent); color: white;
+        animation: pulse 1.4s infinite;
       }
-      button:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-      }
-      #status {
-        font-size: 0.85rem;
-        opacity: 0.8;
+      @keyframes pulse {
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+        50%       { box-shadow: 0 0 0 18px transparent; }
       }
       .meter {
-        height: 6px;
-        background: color-mix(in srgb, currentColor 10%, transparent);
-        border-radius: 3px;
-        overflow: hidden;
-        margin: 0.5rem 0;
+        height: 10px; width: 100%; max-width: 18rem;
+        background: var(--soft); border-radius: 5px;
+        overflow: hidden; margin: 0.75rem auto 0;
       }
       .meter > div {
-        height: 100%;
-        width: 0%;
-        background: #d33;
+        height: 100%; width: 0%;
+        background: linear-gradient(90deg, var(--accent-ok), #fa3, var(--accent));
         transition: width 60ms linear;
       }
+
+      /* status strip */
+      .status-row {
+        display: flex; flex-wrap: wrap; gap: 0.5rem 1rem;
+        margin: 0.75rem 0; font-size: 0.8rem; opacity: 0.85;
+        justify-content: center;
+      }
+      .badge {
+        display: inline-flex; align-items: center; gap: 0.35rem;
+        padding: 0.25rem 0.6rem; border-radius: 999px;
+        background: var(--soft); border: 1px solid var(--border);
+      }
+      .badge.ok { color: var(--accent-ok); border-color: color-mix(in srgb, var(--accent-ok) 30%, transparent); }
+      .badge.err { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+      /* transcript */
       .transcript {
-        margin-top: 1.5rem;
-        padding: 1rem;
-        border-radius: 8px;
-        border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
-        background: color-mix(in srgb, currentColor 4%, transparent);
-        min-height: 4rem;
+        margin-top: 1.25rem; padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--soft);
+        min-height: 5.5rem;
         font-size: 1.05rem;
         white-space: pre-wrap;
+        word-break: break-word;
       }
-      .transcript .partial {
-        opacity: 0.55;
+      .transcript .partial { opacity: 0.55; }
+      .transcript:empty::before {
+        content: '(transcripts appear here)';
+        opacity: 0.4; font-style: italic;
       }
+
+      .action-row {
+        display: flex; gap: 0.5rem; flex-wrap: wrap;
+        margin-top: 0.75rem; justify-content: center;
+      }
+      button.action {
+        font: inherit; font-size: 0.85rem;
+        padding: 0.45rem 0.9rem; border-radius: 999px;
+        border: 1px solid var(--border);
+        background: transparent; color: inherit;
+        cursor: pointer; touch-action: manipulation;
+      }
+      button.action:disabled { opacity: 0.35; cursor: not-allowed; }
+
       .log {
         margin-top: 1.5rem;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 0.75rem;
-        opacity: 0.6;
-        max-height: 12rem;
-        overflow: auto;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.72rem; opacity: 0.55;
+        max-height: 11rem; overflow: auto;
         white-space: pre-wrap;
+        padding: 0.5rem; border-radius: 6px; background: var(--soft);
       }
+
+      footer { font-size: 0.72rem; opacity: 0.5; margin-top: 2rem; text-align: center; }
+      kbd { padding: 0.1rem 0.35rem; border-radius: 4px; border: 1px solid var(--border); font-size: 0.7em; }
     </style>
   </head>
   <body>
-    <h1>🦑 Kraki voice broker — mic test</h1>
-    <p class="subtitle">
-      Captures mic → downsamples to 16 kHz mono PCM → streams to the broker → renders transcripts.
-      Use this to validate the full local stack before wiring into <code>arm</code>.
-    </p>
+    <header>
+      <h1>🦑 Kraki mic test</h1>
+      <p class="subtitle">
+        Mic → 16 kHz mono PCM → broker → Doubao (or mock). Validates the full audio pipeline
+        before wiring into <code>arm</code> / iOS.
+      </p>
+    </header>
 
-    <label for="brokerUrl">Broker WSS URL</label>
-    <input id="brokerUrl" type="text" />
-
-    <div class="controls">
-      <button id="recordBtn" class="primary">🎙 Hold to speak</button>
-      <button id="testBtn">Send 1s silence</button>
-      <span id="status">idle</span>
+    <div class="record">
+      <button id="recordBtn">🎙<br/>tap to start</button>
+      <div class="meter"><div id="meter"></div></div>
+      <div class="status-row">
+        <span class="badge" id="wsBadge"><span class="dot"></span><span>WS idle</span></span>
+        <span class="badge" id="micBadge"><span class="dot"></span><span>mic idle</span></span>
+        <span class="badge" id="statsBadge"><span>0.0 s · 0 KB · 0 Hz</span></span>
+      </div>
     </div>
-    <div class="meter"><div id="meter"></div></div>
 
-    <div id="transcript" class="transcript"><span class="partial">(transcripts appear here)</span></div>
+    <div id="transcript" class="transcript"></div>
+
+    <div class="action-row">
+      <button class="action" id="downloadBtn" disabled>⬇ Download last capture (WAV)</button>
+      <button class="action" id="testBtn">🧪 Send 1s silence</button>
+      <button class="action" id="clearBtn">🧹 Clear</button>
+    </div>
+
+    <details class="settings">
+      <summary>settings</summary>
+      <label for="brokerUrl">Broker WSS URL</label>
+      <input id="brokerUrl" type="text" />
+      <label for="modeSel">Trigger</label>
+      <select id="modeSel">
+        <option value="toggle">Tap to start / tap to stop (recommended on phone)</option>
+        <option value="hold">Hold to talk (push-to-talk)</option>
+      </select>
+      <label for="uidInput">UID (sent to Doubao for billing tracking)</label>
+      <input id="uidInput" type="text" value="kraki-mic-test" />
+    </details>
 
     <details>
-      <summary style="cursor: pointer; opacity: 0.7; font-size: 0.85rem; margin-top: 1rem">log</summary>
+      <summary style="cursor: pointer; opacity: 0.6; font-size: 0.8rem; margin-top: 1rem">debug log</summary>
       <div id="log" class="log"></div>
     </details>
+
+    <footer>
+      Press <kbd>space</kbd> on desktop to start/stop. Mock Doubao returns a canned zh-en transcript;
+      real Doubao quality is unverified until credentials are wired in.
+    </footer>
 
     <script type="module" src="./mic.js"></script>
   </body>

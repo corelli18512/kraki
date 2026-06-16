@@ -88,11 +88,17 @@ export async function startMockDoubao(opts: MockDoubaoOptions = {}): Promise<Moc
     const connectId = (req.headers['x-api-connect-id'] as string) ?? 'unknown';
     const appKey = req.headers['x-api-app-key'] as string | undefined;
     const accessKey = req.headers['x-api-access-key'] as string | undefined;
+    const apiKey = req.headers['x-api-key'] as string | undefined;
     const resourceId = req.headers['x-api-resource-id'] as string | undefined;
 
-    logger.info('connection', { connectId, appKey: !!appKey, resourceId });
+    // Auth is satisfied by either the legacy dual headers OR the new single header.
+    const legacyAuthOk = !!appKey && !!accessKey;
+    const newAuthOk = !!apiKey;
+    const authOk = legacyAuthOk || newAuthOk;
 
-    if (requireAuthHeaders && (!appKey || !accessKey || !resourceId)) {
+    logger.info('connection', { connectId, mode: legacyAuthOk ? 'legacy' : newAuthOk ? 'new' : 'none', resourceId });
+
+    if (requireAuthHeaders && (!authOk || !resourceId)) {
       ws.send(buildServerErrorFrame(DOUBAO_ERROR_CODES.BAD_PARAM, 'missing auth headers'));
       ws.close(1008, 'auth');
       return;

@@ -70,8 +70,10 @@ function getDoubaoCreds(allowEmpty: boolean) {
   const appKey = process.env.DOUBAO_APP_KEY ?? '';
   const accessKey = process.env.DOUBAO_ACCESS_KEY ?? '';
   const resourceId = process.env.DOUBAO_RESOURCE_ID ?? 'volc.bigasr.sauc.duration';
-  if (!allowEmpty && (!appKey || !accessKey)) {
-    log.error('missing DOUBAO_APP_KEY / DOUBAO_ACCESS_KEY (set DOUBAO_MOCK=1 to bypass)');
+  // New-console scheme: only DOUBAO_ACCESS_KEY (the API Key) is required.
+  // Legacy: also need DOUBAO_APP_KEY.
+  if (!allowEmpty && !accessKey) {
+    log.error('missing DOUBAO_ACCESS_KEY (new-console API Key). Set DOUBAO_MOCK=1 to bypass.');
     process.exit(2);
   }
   return { appKey, accessKey, resourceId };
@@ -101,7 +103,7 @@ async function runBroker(): Promise<void> {
   const broker = await startBroker({
     port: envInt('BROKER_PORT', 7800),
     doubaoEndpoint: endpoint,
-    doubaoAppKey: creds.appKey || 'mock-app-key',
+    doubaoAppKey: creds.appKey, // empty for new-console scheme
     doubaoAccessKey: creds.accessKey || 'mock-access-key',
     doubaoResourceId: creds.resourceId,
   });
@@ -122,8 +124,9 @@ async function runWeb(): Promise<void> {
 }
 
 async function runAll(): Promise<void> {
-  // Force mock unless the user provided creds explicitly.
-  if (process.env.DOUBAO_MOCK !== '0' && (!process.env.DOUBAO_APP_KEY || !process.env.DOUBAO_ACCESS_KEY)) {
+  // Force mock unless the user provided creds explicitly. In the new-console
+  // scheme only DOUBAO_ACCESS_KEY is required.
+  if (process.env.DOUBAO_MOCK !== '0' && !process.env.DOUBAO_ACCESS_KEY) {
     process.env.DOUBAO_MOCK = '1';
     log.info('no real Doubao creds detected — using mock');
   }
@@ -140,7 +143,7 @@ async function runAll(): Promise<void> {
   const broker = await startBroker({
     port: envInt('BROKER_PORT', 7800),
     doubaoEndpoint: endpoint,
-    doubaoAppKey: creds.appKey || 'mock-app-key',
+    doubaoAppKey: creds.appKey, // empty for new-console scheme
     doubaoAccessKey: creds.accessKey || 'mock-access-key',
     doubaoResourceId: creds.resourceId,
   });

@@ -30,7 +30,17 @@ import type { Logger } from './logger.js';
 import { createLogger } from './logger.js';
 
 export interface DoubaoClientOptions {
-  appKey: string;
+  /**
+   * Legacy "old-console" App ID. If present we send both
+   * `X-Api-App-Key` and `X-Api-Access-Key` (Volcengine 旧版控制台 scheme).
+   * If empty / omitted we send only `X-Api-Key: <accessKey>` — that's the
+   * new-console scheme documented at https://www.volcengine.com/docs/6561/1354869
+   */
+  appKey?: string;
+  /**
+   * Either the new-console "API Key" value, or the old-console "Access Token"
+   * value. The header name we send is decided by whether `appKey` is set.
+   */
   accessKey: string;
   resourceId: string;
   endpoint: string;
@@ -85,27 +95,45 @@ export class DoubaoClient extends EventEmitter {
   connect(): Promise<void> {
     const connectId = this.opts.connectId ?? randomUUID();
     const headers: Record<string, string> = {
-      'X-Api-App-Key': this.opts.appKey,
-      'X-Api-Access-Key': this.opts.accessKey,
       'X-Api-Resource-Id': this.opts.resourceId,
       'X-Api-Connect-Id': connectId,
       ...(this.opts.extraHeaders ?? {}),
     };
+    if (this.opts.appKey) {
+      // Legacy old-console: dual header.
+      headers['X-Api-App-Key'] = this.opts.appKey;
+      headers['X-Api-Access-Key'] = this.opts.accessKey;
+    } else {
+      // New-console: single API key header.
+      headers['X-Api-Key'] = this.opts.accessKey;
+    }
 
-    this.logger.debug('connecting', { endpoint: this.opts.endpoint, connectId });
+    this.logger.debug('connecting', { endpoint: this.opts.endpoint, connectId, mode: this.opts.appKey ? 'legacy' : 'new' });
     const ws = new WebSocket(this.opts.endpoint, { headers });
     this.ws = ws;
 
     return new Promise<void>((resolve, reject) => {
+      let settled = false;
       const onOpen = () => {
+        if (settled) return;
+        settled = true;
         ws.off('error', onError);
         this.logger.info('connected', { connectId });
         this.emit('open');
         resolve();
       };
       const onError = (err: Error) => {
+        if (settled) return;
+        settled = true;
         ws.off('open', onOpen);
         this.logger.error('connect failed', { error: err.message });
+        // Detach the listeners that would otherwise re-throw as unhandled.
+        ws.removeAllListeners('error');
+        ws.removeAllListeners('message');
+        ws.removeAllListeners('close');
+        ws.on('error', () => {
+          /* swallow post-failure socket errors */
+        });
         reject(err);
       };
       ws.once('open', onOpen);
@@ -118,6 +146,7 @@ export class DoubaoClient extends EventEmitter {
         this.emit('close', code, reasonStr);
       });
       ws.on('error', (err) => {
+        if (!settled) return; // initial-connect errors handled above
         this.logger.error('socket error', { error: err.message });
         this.emit('error', err);
       });

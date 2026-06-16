@@ -126,8 +126,8 @@ async function main(): Promise<void> {
     });
     endpoint = mock.url;
     appKey = appKey || 'mock-app-key';
-  } else if (!appKey || !accessKey) {
-    log.error('missing credentials. Set DOUBAO_APP_KEY + DOUBAO_ACCESS_KEY in .env, or pass --mock');
+  } else if (!accessKey) {
+    log.error('missing credentials. Set DOUBAO_ACCESS_KEY (new console API Key) in .env, or pass --mock');
     process.exit(2);
   }
 
@@ -149,12 +149,25 @@ async function main(): Promise<void> {
     logger: log.child('doubao'),
   });
 
+  // Swallow post-connect socket errors so the process exits cleanly via main()'s
+  // try/catch instead of via the EventEmitter unhandled-error mechanism.
+  client.on('error', () => {
+    /* logged by the client itself */
+  });
+
   client.on('transcript', (u: TranscriptUpdate) => {
     const tag = u.sessionFinal ? '◆ FINAL' : u.finalSegment ? '◇ segment' : '… partial';
     log.info(`${tag} ${u.text}`);
   });
 
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (err) {
+    log.error('could not connect to Doubao', { error: (err as Error).message });
+    log.error('check DOUBAO_ACCESS_KEY (or legacy DOUBAO_APP_KEY+DOUBAO_ACCESS_KEY) and DOUBAO_RESOURCE_ID in .env');
+    await mock?.close();
+    process.exit(2);
+  }
   client.start();
 
   const bytesPerChunk = (args.rate * 2 * args.chunkMs) / 1000;

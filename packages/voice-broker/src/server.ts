@@ -30,7 +30,8 @@ export interface BrokerOptions {
   host?: string;
   /** Doubao endpoint (real or mock). */
   doubaoEndpoint: string;
-  doubaoAppKey: string;
+  /** Optional — only needed for the legacy "old console" auth scheme. */
+  doubaoAppKey?: string;
   doubaoAccessKey: string;
   doubaoResourceId: string;
   logger?: Logger;
@@ -79,7 +80,9 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
     clientLog.info('client connected');
 
     let doubao: DoubaoClient | null = null;
-    let started = false;
+    let started = false;          // arm client has sent {type:'start'}
+    let doubaoReady = false;      // doubao WS is open AND start frame sent
+    const audioBuffer: Buffer[] = []; // chunks that arrived before doubao was ready
     let closed = false;
 
     const sendJson = (obj: unknown) => {
@@ -110,12 +113,18 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
     ws.on('message', async (data: RawData, isBinary: boolean) => {
       if (closed) return;
       if (isBinary) {
-        if (!doubao || !started) {
+        if (!started) {
           sendJson({ type: 'error', message: 'audio sent before start' });
           return;
         }
+        const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        // Doubao might still be handshaking — buffer until ready, then flush.
+        if (!doubaoReady || !doubao) {
+          audioBuffer.push(chunk);
+          return;
+        }
         try {
-          doubao.sendAudio(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+          doubao.sendAudio(chunk);
         } catch (err) {
           sendJson({ type: 'error', message: (err as Error).message });
           closeAll(1011, 'doubao send failed');
@@ -139,7 +148,7 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
         }
         started = true;
         doubao = new DoubaoClient({
-          appKey: opts.doubaoAppKey,
+          appKey: opts.doubaoAppKey || undefined,
           accessKey: opts.doubaoAccessKey,
           resourceId: opts.doubaoResourceId,
           endpoint: opts.doubaoEndpoint,
@@ -166,6 +175,21 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
         try {
           await doubao.connect();
           doubao.start({ uid: msg.uid, ...msg.config });
+          doubaoReady = true;
+          // Flush any audio chunks that arrived during the handshake.
+          if (audioBuffer.length > 0) {
+            clientLog.debug('flushing buffered audio', { chunks: audioBuffer.length });
+            for (const chunk of audioBuffer) {
+              try {
+                doubao.sendAudio(chunk);
+              } catch (err) {
+                sendJson({ type: 'error', message: (err as Error).message });
+                closeAll(1011, 'doubao send failed');
+                return;
+              }
+            }
+            audioBuffer.length = 0;
+          }
           sendJson({ type: 'ready' });
         } catch (err) {
           sendJson({ type: 'error', message: `doubao connect failed: ${(err as Error).message}` });
@@ -175,10 +199,30 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
       }
 
       if (msg.type === 'finish') {
-        try {
-          doubao?.finish();
-        } catch (err) {
-          sendJson({ type: 'error', message: (err as Error).message });
+        // If we're mid-handshake, wait for it to complete (the buffered audio
+        // will be flushed first by the start handler) then finish.
+        const tryFinish = () => {
+          try {
+            doubao?.finish();
+          } catch (err) {
+            sendJson({ type: 'error', message: (err as Error).message });
+          }
+        };
+        if (doubaoReady) tryFinish();
+        else {
+          // Defer until ready; cheap poll because handshake completes in <1s.
+          const t = setInterval(() => {
+            if (closed) {
+              clearInterval(t);
+              return;
+            }
+            if (doubaoReady) {
+              clearInterval(t);
+              tryFinish();
+            }
+          }, 50);
+          // Safety timeout.
+          setTimeout(() => clearInterval(t), 10_000);
         }
         return;
       }
