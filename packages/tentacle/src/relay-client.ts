@@ -1423,6 +1423,22 @@ export class RelayClient {
         if (meta.mode) {
           this.adapter.setSessionMode(sessionId, meta.mode);
         }
+        // Restore the user-selected model on resume. The SDK's session
+        // state remembers the last model used for prior turns, but that
+        // model may be retired by the time we resume (e.g. after Copilot
+        // rotates its model lineup). Pushing kraki's persisted meta.model
+        // back into the SDK ensures the next turn uses the model the user
+        // intended, not whatever the SDK happened to write last.
+        if (meta.model) {
+          try {
+            await this.adapter.setSessionModel(sessionId, meta.model);
+          } catch (err) {
+            logger.warn(
+              { err, sessionId, model: meta.model },
+              'Failed to restore session model on resume — SDK will use its persisted model',
+            );
+          }
+        }
         // Restore persisted usage totals so accumulation continues
         if (meta.usage) {
           this.adapter.setSessionUsage(sessionId, meta.usage);
