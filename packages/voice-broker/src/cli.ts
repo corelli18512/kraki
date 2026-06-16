@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMockDoubao } from './mock-doubao.js';
-import { startBroker } from './server.js';
+import { startBroker, type BrokerOptions } from './server.js';
 import { startWebServer } from './web-server.js';
 import { createLogger, levelFromEnv } from './logger.js';
 
@@ -55,6 +55,11 @@ function usage(): void {
       '  MOCK_DOUBAO_PORT (def 7801) mock Doubao WS port',
       '  WEB_PORT (default 7802)     web test page port',
       '',
+      'Lease auth (production):',
+      '  BROKER_LEASE_PUBLIC_KEY_PEM   Pinned head pubkey PEM, inline (preferred for env-only deploys)',
+      '  BROKER_LEASE_PUBLIC_KEY_PATH  Path to a PEM file containing the head pubkey',
+      '  BROKER_DEV_NO_AUTH=1          (DEV ONLY) skip lease verification; broker logs a loud warning',
+      '',
     ].join('\n'),
   );
 }
@@ -64,6 +69,31 @@ function envInt(name: string, fallback: number): number {
   if (!v) return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function loadLeaseAuth(): Pick<BrokerOptions, 'leasePublicKeyPem' | 'devNoAuth'> {
+  const devNoAuth = process.env.BROKER_DEV_NO_AUTH === '1';
+  const inline = process.env.BROKER_LEASE_PUBLIC_KEY_PEM?.trim();
+  const path = process.env.BROKER_LEASE_PUBLIC_KEY_PATH?.trim();
+  let pem: string | undefined;
+  if (inline) {
+    pem = inline.replace(/\\n/g, '\n');
+  } else if (path) {
+    if (!existsSync(path)) {
+      log.error('BROKER_LEASE_PUBLIC_KEY_PATH does not exist', { path });
+      process.exit(2);
+    }
+    pem = readFileSync(path, 'utf-8');
+  }
+  if (devNoAuth && pem) {
+    log.error('BROKER_DEV_NO_AUTH=1 AND a lease pubkey are both set — refusing to start (pick one).');
+    process.exit(2);
+  }
+  if (!devNoAuth && !pem) {
+    log.error('voice-broker requires either BROKER_LEASE_PUBLIC_KEY_PEM/_PATH (production) or BROKER_DEV_NO_AUTH=1 (local dev).');
+    process.exit(2);
+  }
+  return { leasePublicKeyPem: pem, devNoAuth };
 }
 
 function getDoubaoCreds(allowEmpty: boolean) {
@@ -106,6 +136,7 @@ async function runBroker(): Promise<void> {
     doubaoAppKey: creds.appKey, // empty for new-console scheme
     doubaoAccessKey: creds.accessKey || 'mock-access-key',
     doubaoResourceId: creds.resourceId,
+    ...loadLeaseAuth(),
   });
   log.info('broker ready', { url: broker.url });
 
@@ -130,6 +161,12 @@ async function runAll(): Promise<void> {
     process.env.DOUBAO_MOCK = '1';
     log.info('no real Doubao creds detected — using mock');
   }
+  // `all` is local dev convenience — default to no-auth unless the operator
+  // has explicitly wired up a pubkey.
+  if (!process.env.BROKER_LEASE_PUBLIC_KEY_PEM && !process.env.BROKER_LEASE_PUBLIC_KEY_PATH && !process.env.BROKER_DEV_NO_AUTH) {
+    process.env.BROKER_DEV_NO_AUTH = '1';
+    log.info('no lease pubkey wired — defaulting to BROKER_DEV_NO_AUTH=1 (local dev)');
+  }
 
   const useMock = process.env.DOUBAO_MOCK === '1';
   let endpoint = process.env.DOUBAO_ENDPOINT ?? 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async';
@@ -146,6 +183,7 @@ async function runAll(): Promise<void> {
     doubaoAppKey: creds.appKey, // empty for new-console scheme
     doubaoAccessKey: creds.accessKey || 'mock-access-key',
     doubaoResourceId: creds.resourceId,
+    ...loadLeaseAuth(),
   });
   const web = await startWebServer({ port: envInt('WEB_PORT', 7802) });
 

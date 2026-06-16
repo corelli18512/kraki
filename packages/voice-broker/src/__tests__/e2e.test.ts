@@ -90,6 +90,7 @@ describe('broker WSS ↔ mock Doubao (full stack)', () => {
       doubaoAccessKey: 'k',
       doubaoResourceId: 'volc.bigasr.sauc.duration',
       logger: SILENT_LOGGER,
+      devNoAuth: true,
     });
   });
   afterEach(async () => {

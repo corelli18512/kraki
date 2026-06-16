@@ -261,3 +261,24 @@ export function verifyChallenge(nonce: string, signature: string, publicKeyPem: 
   verify.update(nonce);
   return verify.verify(publicKeyPem, signature, 'base64');
 }
+
+// ── Canonical JSON ──────────────────────────────────────
+
+/**
+ * Stable JSON serialization with sorted keys and no whitespace.
+ *
+ * Both signer and verifier MUST use this exact function — any divergence
+ * (insertion-order keys, trailing whitespace) breaks signature verification.
+ * Pure, allocation-free in the steady state, safe to use as input to
+ * `signChallenge` / `verifyChallenge`.
+ *
+ * Only top-level keys are sorted; nested objects are stringified as-is. The
+ * voice-lease payload is flat by design so this is sufficient.
+ */
+export function canonicalJson(value: Record<string, unknown>): string {
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    sorted[key] = value[key];
+  }
+  return JSON.stringify(sorted);
+}

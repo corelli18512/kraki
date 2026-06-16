@@ -4,8 +4,13 @@
   "description": "Kraki voice broker — holds the Doubao ASR key, relays audio from arm clients, mints transcripts. Runs as a sidecar to the head process.",
   "type": "module",
   "private": true,
-  "main": "dist/cli.js",
-  "types": "dist/cli.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./mock": "./dist/mock-doubao.js",
+    "./logger": "./dist/logger.js"
+  },
   "files": ["dist"],
   "bin": {
     "kraki-voice-broker": "dist/cli.js"
@@ -23,6 +28,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@kraki/crypto": "workspace:*",
+    "@kraki/protocol": "workspace:*",
     "dotenv": "^17.3.1",
     "ws": "^8.19.0"
   },

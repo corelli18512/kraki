@@ -35,6 +35,7 @@ import { Storage } from './storage.js';
 import { HeadServer } from './server.js';
 import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider, safeEqual } from './auth.js';
 import type { AuthProvider } from './auth.js';
+import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
@@ -49,6 +50,14 @@ const COMMAND = rawArgs[0] && !rawArgs[0].startsWith('-') ? rawArgs[0] : 'start'
 const args = COMMAND === 'start' ? rawArgs : rawArgs.slice(1);
 const ENV_PATH = resolve(__dirname, '..', '.env');
 
+// One-shot helper subcommands that need only an issuer ----------------------
+if (COMMAND === 'print-voice-pubkey') {
+  const dir = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
+  const issuer = LeaseIssuer.loadOrGenerate(dir);
+  process.stdout.write(issuer.getPublicKeyPem());
+  process.exit(0);
+}
+
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
   🦑 @kraki/head v${VERSION} — CLI entry point for the Kraki relay server.
@@ -58,6 +67,7 @@ if (args.includes('--help') || args.includes('-h')) {
     kraki-relay register-edge
     kraki-relay join --main <https-url> --token <token> --region <code> --relay-url <wss-url>
     kraki-relay list-regions [--db <path>]
+    kraki-relay print-voice-pubkey
 
   Options:
     --port <n>        Server port (default: 4000, env: PORT)
@@ -78,6 +88,17 @@ if (args.includes('--help') || args.includes('-h')) {
     --public-relay-url <url> Public relay URL for this head (env: PUBLIC_RELAY_URL)
     --region-urls <json>  Region → relay URL map, JSON (env: REGION_URLS, legacy fallback)
                            Example: '{"us":"wss://us.example.com","cn":"wss://cn.example.com"}'
+
+  Voice broker leases:
+    VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
+    VOICE_LEASE_DIR                Directory for the lease signing keypair
+                                   (default: $HOME/.kraki-head).
+    VOICE_LEASE_TTL_SEC            Per-lease TTL in seconds (default: 86400 = 24h).
+    VOICE_LEASE_QUOTA_SEC          Per-lease audio quota in seconds (default: 7200 = 2h).
+    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on issued lease quota
+                                   (default: 7200 = 2h).
+    kraki-relay print-voice-pubkey Prints the lease public key PEM to stdout
+                                   (for pinning into the voice-broker).
 
   GitHub OAuth (env only, for web login):
     GITHUB_CLIENT_ID      GitHub OAuth App client ID
@@ -420,6 +441,23 @@ if (IS_CONNECTED_MODE) {
   logger.info('Account API enabled', { adminKeyConfigured: !!SERVICE_KEY });
 }
 
+// --- Voice lease issuance (optional) ---
+const VOICE_LEASE_ENABLED = process.env.VOICE_LEASE_ENABLED === '1';
+const VOICE_LEASE_DIR = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
+const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '86400', 10) || 86400);
+const VOICE_LEASE_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_LEASE_QUOTA_SEC || '7200', 10) || 7200);
+const VOICE_DAILY_QUOTA_SEC = Math.max(VOICE_LEASE_QUOTA_SEC, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
+let voiceLeaseIssuer: LeaseIssuer | undefined;
+if (VOICE_LEASE_ENABLED) {
+  voiceLeaseIssuer = LeaseIssuer.loadOrGenerate(VOICE_LEASE_DIR);
+  logger.info('Voice lease issuance enabled', {
+    keyDir: VOICE_LEASE_DIR,
+    ttlSec: VOICE_LEASE_TTL_SEC,
+    quotaSec: VOICE_LEASE_QUOTA_SEC,
+    dailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
+  });
+}
+
 const head = new HeadServer(storage!, {
   authProviders: IS_CONNECTED_MODE ? undefined : directAuthProviders,
   pairingEnabled: PAIRING,
@@ -427,6 +465,10 @@ const head = new HeadServer(storage!, {
   pushManager,
   authBackend,
   region: REGION || undefined,
+  leaseIssuer: VOICE_LEASE_ENABLED ? voiceLeaseIssuer : undefined,
+  voiceLeaseTtlSec: VOICE_LEASE_TTL_SEC,
+  voiceLeaseQuotaSec: VOICE_LEASE_QUOTA_SEC,
+  voiceDailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
 });
 
 const startedAt = Date.now();

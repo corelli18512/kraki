@@ -96,7 +96,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 export class Storage {
   private db: Database.Database;
@@ -251,6 +251,26 @@ export class Storage {
       } catch {
         // Table may not exist yet on fresh DBs
       }
+    }
+
+    if (currentVersion < 8) {
+      // Voice-broker leases — audit trail + daily-quota source of truth.
+      // Rows are never deleted; cumulative seconds per (user, day) come from
+      // `SUM(quota_seconds) WHERE user_id=? AND DATE(issued_at)=DATE('now')`.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS voice_leases (
+          jti            TEXT PRIMARY KEY,
+          user_id        TEXT NOT NULL,
+          device_id      TEXT NOT NULL,
+          resource       TEXT NOT NULL,
+          quota_seconds  INTEGER NOT NULL,
+          issued_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at     TEXT NOT NULL,
+          revoked_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_voice_leases_user_day
+          ON voice_leases(user_id, issued_at);
+      `);
     }
 
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -657,6 +677,76 @@ export class Storage {
       userId: row.user_id, username: row.username, provider: row.provider,
       email: row.email ?? undefined, region: row.region ?? undefined, createdAt: row.created_at,
     }));
+  }
+
+  // --- Voice leases ---
+
+  /**
+   * Record a freshly-issued voice lease. The `jti` is unique; collisions
+   * raise — this surfaces UUID generation bugs immediately.
+   */
+  recordVoiceLease(input: {
+    jti: string;
+    userId: string;
+    deviceId: string;
+    resource: string;
+    quotaSeconds: number;
+    issuedAtUnixSec: number;
+    expiresAtUnixSec: number;
+  }): void {
+    const issuedIso = new Date(input.issuedAtUnixSec * 1000).toISOString();
+    const expiresIso = new Date(input.expiresAtUnixSec * 1000).toISOString();
+    this.db.prepare(`
+      INSERT INTO voice_leases (jti, user_id, device_id, resource, quota_seconds, issued_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(input.jti, input.userId, input.deviceId, input.resource, input.quotaSeconds, issuedIso, expiresIso);
+  }
+
+  /**
+   * Sum of `quota_seconds` for leases issued to this user on the same UTC day
+   * as `nowUnixSec`. Used by head to enforce per-user-per-day caps.
+   * Revoked leases still count — that's intentional: revocation doesn't
+   * refund quota in MVP.
+   */
+  sumVoiceLeaseQuotaIssuedToday(userId: string, nowUnixSec: number): number {
+    const day = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
+    const row = this.db.prepare(`
+      SELECT COALESCE(SUM(quota_seconds), 0) AS total
+      FROM voice_leases
+      WHERE user_id = ? AND substr(issued_at, 1, 10) = ?
+    `).get(userId, day) as { total: number };
+    return Number(row.total) || 0;
+  }
+
+  /** Fetch a single lease by jti (audit / debug). Returns undefined if unknown. */
+  getVoiceLease(jti: string): {
+    jti: string;
+    userId: string;
+    deviceId: string;
+    resource: string;
+    quotaSeconds: number;
+    issuedAt: string;
+    expiresAt: string;
+    revokedAt: string | null;
+  } | undefined {
+    const row = this.db.prepare(`
+      SELECT jti, user_id, device_id, resource, quota_seconds, issued_at, expires_at, revoked_at
+      FROM voice_leases WHERE jti = ?
+    `).get(jti) as {
+      jti: string; user_id: string; device_id: string; resource: string;
+      quota_seconds: number; issued_at: string; expires_at: string; revoked_at: string | null;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      jti: row.jti,
+      userId: row.user_id,
+      deviceId: row.device_id,
+      resource: row.resource,
+      quotaSeconds: row.quota_seconds,
+      issuedAt: row.issued_at,
+      expiresAt: row.expires_at,
+      revokedAt: row.revoked_at,
+    };
   }
 
   // --- Cleanup ---
