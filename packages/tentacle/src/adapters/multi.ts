@@ -62,6 +62,26 @@ function cliExists(name: string): boolean {
   }
 }
 
+/**
+ * Resolve the absolute path to a CLI on PATH, or undefined if not present.
+ * On `where` (Windows) and `which` (Unix), the first line of stdout is the
+ * resolved path. We strip whitespace and return that path so callers can
+ * pass it to SDKs that need the binary location (e.g. Claude SDK's
+ * pathToClaudeCodeExecutable, which is required when running inside SEA
+ * binaries because the SDK's own resolution via createRequire/import.meta
+ * cannot find a node_modules tree).
+ */
+function resolveCliPath(name: string): string | undefined {
+  try {
+    const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
+    const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    const first = out.split(/\r?\n/).find((line) => line.trim().length > 0);
+    return first?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Detect which agents can be started on this machine. */
 export async function detectAvailableAgents(): Promise<AgentId[]> {
   const agents: AgentId[] = [];
@@ -128,6 +148,13 @@ export class MultiAgentAdapter extends AgentAdapter {
       ...(this.opts.krakiMcp && { krakiMcp: this.opts.krakiMcp }),
     };
 
+    // Claude SDK uses createRequire(import.meta.url) and fileURLToPath to
+    // locate the bundled `claude` binary. Inside our SEA binary that path
+    // resolution fails (no node_modules next to the executable), so we
+    // resolve the system-installed `claude` path up-front and hand it to
+    // the adapter via pathToClaudeCodeExecutable.
+    const claudeExecutablePath = ids.includes('claude') ? resolveCliPath('claude') : undefined;
+
     for (const id of ids) {
       try {
         let adapter: AgentAdapter;
@@ -136,7 +163,7 @@ export class MultiAgentAdapter extends AgentAdapter {
           adapter = new CopilotAdapter(adapterOpts);
         } else if (id === 'claude') {
           const { ClaudeAdapter } = await import('./claude.js');
-          adapter = new ClaudeAdapter(adapterOpts);
+          adapter = new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;
