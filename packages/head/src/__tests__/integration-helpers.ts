@@ -45,6 +45,8 @@ export async function createTestEnv(options?: Partial<HeadServerOptions>): Promi
 export interface MockDevice {
   ws: WebSocket;
   deviceId: string;
+  /** The full auth_ok message returned by the server (post-handshake). */
+  authOk: Record<string, unknown>;
   /** All messages received (raw parsed JSON) */
   messages: Record<string, unknown>[];
   /** Wait for a message of a specific type */
@@ -132,6 +134,7 @@ export async function connectDevice(
   return {
     ws,
     deviceId: authOk.deviceId,
+    authOk,
     messages,
     waitFor,
     waitForN,

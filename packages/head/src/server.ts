@@ -6,7 +6,7 @@ import type { Server } from 'http';
 import type {
   AuthMessage, AuthErrorCode, AuthMethod,
   UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
-  VoiceResource,
+  VoiceResource, VoiceCapability,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { LeaseIssuer } from './lease-issuer.js';
@@ -110,6 +110,20 @@ export interface HeadServerOptions {
   voiceLeaseQuotaSec?: number;
   /** Per-user-per-day cap on total issued lease quota. Default 7200 (2h). */
   voiceDailyQuotaSec?: number;
+  /**
+   * Public WSS URL of the voice broker for this region (e.g.
+   * `wss://cn.stt.kraki.chat/voice`). When set, head advertises a
+   * `VoiceCapability` inside `auth_ok.voice` so arm can render the mic UI.
+   * When unset, the field is omitted entirely — arm hides the mic UI.
+   *
+   * Must be set together with `leaseIssuer`: cli-side interlock refuses to
+   * start in either-without-the-other configurations because:
+   *   - Advertising a broker URL but having no issuer would mean clients
+   *     show the mic UI then get `not_entitled` on every press.
+   *   - Having an issuer but no advertised URL means clients have no way
+   *     to actually use the leases they're being issued.
+   */
+  voiceBrokerUrl?: string;
 }
 
 const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
@@ -462,6 +476,22 @@ export class HeadServer {
 
   private getVapidPublicKey(): string | undefined {
     return this.options.pushManager?.getVapidPublicKey();
+  }
+
+  /**
+   * Build the voice capability advertisement for `auth_ok` from this head's
+   * config. Returns `undefined` (omit the field) when no broker URL is
+   * configured for this region.
+   *
+   * Note: the per-region nature falls out for free in edge mode — the edge's
+   * own `voiceBrokerUrl` config drives this, never main's. So Beijing edge
+   * advertises Beijing's broker, and US main advertises nothing, all from a
+   * single helper.
+   */
+  private getVoiceCapability(): VoiceCapability | undefined {
+    const url = this.options.voiceBrokerUrl;
+    if (!url) return undefined;
+    return { brokerUrl: url, resource: 'voice/doubao' };
   }
 
   private findGitHubProvider(): GitHubAuthProvider | undefined {
@@ -1312,6 +1342,7 @@ export class HeadServer {
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
       ...(pendingMessages.length > 0 && { pendingMessages }),
+      ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
     this.broadcastDeviceJoined(params.userId, params.deviceId);

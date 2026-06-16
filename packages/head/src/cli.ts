@@ -36,6 +36,7 @@ import { HeadServer } from './server.js';
 import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuthProvider, safeEqual } from './auth.js';
 import type { AuthProvider } from './auth.js';
 import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
+import { validateVoiceConfig } from './voice-config.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
@@ -97,6 +98,12 @@ if (args.includes('--help') || args.includes('-h')) {
     VOICE_LEASE_QUOTA_SEC          Per-lease audio quota in seconds (default: 7200 = 2h).
     VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on issued lease quota
                                    (default: 7200 = 2h).
+    VOICE_BROKER_URL               Public WSS URL of this region's voice broker
+                                   (e.g. wss://cn.stt.kraki.chat/voice).
+                                   Advertised in auth_ok so clients render the
+                                   mic UI. MUST be set together with
+                                   VOICE_LEASE_ENABLED=1 — head fails to start
+                                   otherwise.
     kraki-relay print-voice-pubkey Prints the lease public key PEM to stdout
                                    (for pinning into the voice-broker).
 
@@ -442,11 +449,24 @@ if (IS_CONNECTED_MODE) {
 }
 
 // --- Voice lease issuance (optional) ---
-const VOICE_LEASE_ENABLED = process.env.VOICE_LEASE_ENABLED === '1';
 const VOICE_LEASE_DIR = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
 const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '86400', 10) || 86400);
 const VOICE_LEASE_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_LEASE_QUOTA_SEC || '7200', 10) || 7200);
 const VOICE_DAILY_QUOTA_SEC = Math.max(VOICE_LEASE_QUOTA_SEC, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
+
+let voiceConfig;
+try {
+  voiceConfig = validateVoiceConfig({
+    voiceLeaseEnabled: process.env.VOICE_LEASE_ENABLED,
+    voiceBrokerUrl: process.env.VOICE_BROKER_URL,
+  });
+} catch (err) {
+  console.error(`[fatal] ${(err as Error).message}`);
+  process.exit(1);
+}
+const VOICE_LEASE_ENABLED = voiceConfig.enabled;
+const VOICE_BROKER_URL = voiceConfig.brokerUrl;
+
 let voiceLeaseIssuer: LeaseIssuer | undefined;
 if (VOICE_LEASE_ENABLED) {
   voiceLeaseIssuer = LeaseIssuer.loadOrGenerate(VOICE_LEASE_DIR);
@@ -455,6 +475,7 @@ if (VOICE_LEASE_ENABLED) {
     ttlSec: VOICE_LEASE_TTL_SEC,
     quotaSec: VOICE_LEASE_QUOTA_SEC,
     dailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
+    brokerUrl: VOICE_BROKER_URL,
   });
 }
 
@@ -469,6 +490,7 @@ const head = new HeadServer(storage!, {
   voiceLeaseTtlSec: VOICE_LEASE_TTL_SEC,
   voiceLeaseQuotaSec: VOICE_LEASE_QUOTA_SEC,
   voiceDailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
+  voiceBrokerUrl: VOICE_BROKER_URL,
 });
 
 const startedAt = Date.now();

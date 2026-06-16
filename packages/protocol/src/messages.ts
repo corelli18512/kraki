@@ -852,6 +852,12 @@ export interface AuthOkMessage {
   relayVersion?: string;
   /** Queued unicast envelopes received while this device was offline */
   pendingMessages?: UnicastEnvelope[];
+  /**
+   * Voice dictation capability for this region. Absent when the head has
+   * no voice broker configured — arm should hide the mic UI in that case.
+   * See `VoiceCapability` for the contract.
+   */
+  voice?: VoiceCapability;
 }
 
 export type AuthErrorCode =
@@ -1042,4 +1048,5 @@ export type Message = RelayEnvelope | ControlMessage;
 import type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, PushProviderType } from './devices.js';
 import type { SessionSummary, SessionDigest, SessionMode, SessionUsage } from './sessions.js';
 import type { ToolArgs } from './tools.js';
+import type { VoiceCapability } from './voice.js';
 export type { DeviceSummary, DeviceRole, DeviceInfo, DeviceCapabilities, PushProviderType, SessionSummary, SessionDigest, SessionMode, SessionUsage, ToolArgs };

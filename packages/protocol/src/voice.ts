@@ -56,6 +56,35 @@ export interface VoiceLease {
 }
 
 // ============================================================
+// Capability advertisement — handshake-time
+// ============================================================
+
+/**
+ * head → arm: voice dictation capability for this region. Sent inside
+ * `auth_ok.voice` when the head is configured with a broker URL.
+ *
+ * Absence of this field means voice is not available in this region — arm
+ * should hide the mic UI rather than probe with `request_voice_lease`.
+ *
+ * Why advertise at handshake (instead of letting arm discover via the
+ * reactive `voice_lease_denied: not_entitled` path):
+ *   1. UI can render the correct affordance from the first frame.
+ *   2. No "blind probe" — arm doesn't speculatively request a lease.
+ *   3. Each region (main / edge) advertises its own broker independently,
+ *      so the multi-region story stays local: edge head config decides.
+ */
+export interface VoiceCapability {
+  /**
+   * Public WSS URL of the voice broker for this region (e.g.
+   * `wss://cn.stt.kraki.chat/voice`). arm connects directly here after
+   * obtaining a lease via `request_voice_lease`.
+   */
+  brokerUrl: string;
+  /** Resource id arm should pass when calling `request_voice_lease`. */
+  resource: VoiceResource;
+}
+
+// ============================================================
 // WebSocket messages — arm ↔ head
 // ============================================================
 
