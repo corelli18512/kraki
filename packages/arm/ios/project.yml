@@ -1,0 +1,101 @@
+name: Kraki
+options:
+  bundleIdPrefix: chat.kraki.ios
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: false
+  createIntermediateGroups: true
+
+packages:
+  GRDB:
+    path: ./Vendor/GRDB.swift
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+
+schemes:
+  Kraki:
+    build:
+      targets:
+        Kraki: all
+        KrakiTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - KrakiTests
+
+targets:
+  Kraki:
+    type: application
+    platform: iOS
+    sources:
+      - path: Kraki
+        excludes:
+          - "**/.DS_Store"
+    resources:
+      - path: Kraki/Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSCameraUsageDescription: "Kraki uses the camera to scan QR codes for device pairing."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone for press-to-talk voice messages."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Kraki transcribes your voice on-device so you can dictate messages."
+        INFOPLIST_KEY_UIBackgroundModes: ["remote-notification"]
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 3A83X5JZ3S
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+      configs:
+        Debug:
+          CODE_SIGN_ENTITLEMENTS: Kraki/Kraki.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Kraki/Kraki.Release.entitlements
+    dependencies:
+      - target: KrakiNotification
+        embed: true
+      - package: GRDB
+
+  KrakiNotification:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: KrakiNotification
+        excludes:
+          - "**/.DS_Store"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.notification
+        INFOPLIST_FILE: KrakiNotification/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 3A83X5JZ3S
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: KrakiNotification/KrakiNotification.entitlements
+
+  KrakiTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: KrakiTests
+        excludes:
+          - "**/.DS_Store"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: Kraki

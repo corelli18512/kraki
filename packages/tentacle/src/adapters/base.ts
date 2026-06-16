@@ -80,6 +80,8 @@ export interface CreateSessionConfig {
   cwd?: string;
   /** Caller-supplied session ID (adapter may ignore) */
   sessionId?: string;
+  /** Target agent when using MultiAgentAdapter */
+  agentId?: import('@kraki/protocol').AgentId;
 }
 
 // ── Session info returned by listSessions ───────────────
@@ -200,4 +202,7 @@ export abstract class AgentAdapter {
 
   /** Restore persisted usage totals (called on session resume). */
   setSessionUsage(_sessionId: string, _usage: SessionUsage): void { /* no-op by default */ }
+
+  /** Pre-register a session→agent mapping (used by MultiAgentAdapter for resume). */
+  registerSessionAgent(_sessionId: string, _agentId: string): void { /* no-op by default */ }
 }

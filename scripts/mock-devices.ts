@@ -8,9 +8,9 @@ import WebSocket from 'ws';
 const RELAY_URL = 'ws://localhost:4000';
 
 const mockDevices = [
-  { name: 'CI Server', role: 'tentacle', kind: 'server', models: ['claude-sonnet-4', 'gpt-4.1'] },
-  { name: 'Linux Dev VM', role: 'tentacle', kind: 'vm', models: ['claude-sonnet-4', 'gpt-4.1', 'o3'] },
-  { name: 'Work Laptop', role: 'tentacle', kind: 'desktop', models: ['gpt-4o'] },
+  { name: 'CI Server', role: 'tentacle', kind: 'server', agents: [{ type: 'code', id: 'copilot', models: ['claude-sonnet-4', 'gpt-4.1'] }] },
+  { name: 'Linux Dev VM', role: 'tentacle', kind: 'vm', agents: [{ type: 'code', id: 'claude', models: ['claude-sonnet-4', 'gpt-4.1', 'o3'] }] },
+  { name: 'Work Laptop', role: 'tentacle', kind: 'desktop', agents: [{ type: 'code', id: 'copilot', models: ['gpt-4o'] }, { type: 'code', id: 'claude', models: ['claude-sonnet-4'] }] },
 ];
 
 for (const dev of mockDevices) {
@@ -56,7 +56,7 @@ function sendGreeting(ws: WebSocket, targetDeviceId: string, dev: typeof mockDev
     deviceId: myDeviceId,
     seq: 1,
     timestamp: new Date().toISOString(),
-    payload: { name: dev.name, kind: dev.kind, models: dev.models },
+    payload: { name: dev.name, kind: dev.kind, agents: dev.agents },
   }));
 }
 

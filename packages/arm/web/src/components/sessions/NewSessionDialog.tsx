@@ -9,6 +9,7 @@ interface Props {
 }
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
+const AGENT_PREF_KEY = 'kraki:last-agent';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
 
@@ -41,11 +42,11 @@ function saveEffortPref(modelId: string, effort: ReasoningEffort) {
 
 export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
-  const deviceModels = useStore((s) => s.deviceModels);
-  const deviceModelDetails = useStore((s) => s.deviceModelDetails);
+  const deviceAgents = useStore((s) => s.deviceAgents);
 
   const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
   const [selectedDevice, setSelectedDevice] = useState('');
+  const [selectedAgent, setSelectedAgent] = useState('');
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
   const listRef = useRef<HTMLDivElement>(null);
@@ -62,9 +63,29 @@ export function NewSessionDialog({ open, onClose }: Props) {
     }
   }, [open, tentacles.length]);
 
-  // Get models from tentacle greeting
-  const models = deviceModels.get(selectedDevice) ?? [];
-  const modelDetails = deviceModelDetails.get(selectedDevice) ?? [];
+  // Get agents for the selected device
+  const agentsList = deviceAgents.get(selectedDevice) ?? [];
+  const hasMultipleAgents = agentsList.length > 1;
+
+  // Auto-select agent when device changes
+  useEffect(() => {
+    if (agentsList.length === 0) { setSelectedAgent(''); return; }
+    // Single agent → auto-select it
+    if (agentsList.length === 1) { setSelectedAgent(agentsList[0].id); return; }
+    // Restore last agent pref, or pick first
+    const lastAgent = localStorage.getItem(AGENT_PREF_KEY);
+    if (lastAgent && agentsList.some(a => a.id === lastAgent)) {
+      setSelectedAgent(lastAgent);
+    } else {
+      setSelectedAgent(agentsList[0].id);
+    }
+  }, [selectedDevice, agentsList.length]);
+
+  // Filter models by selected agent
+  const activeAgent = agentsList.find(a => a.id === selectedAgent);
+  const models = activeAgent?.models ?? [];
+  const modelDetails = activeAgent?.modelDetails ?? [];
+  const selectedAgentId = selectedAgent || undefined;
 
   // Get reasoning effort info for selected model
   const selectedModelDetail = useMemo(
@@ -73,17 +94,18 @@ export function NewSessionDialog({ open, onClose }: Props) {
   );
   const supportedEfforts = selectedModelDetail?.supportedReasoningEfforts;
 
-  // Restore last model for this device, or auto-select first
+  // Restore last model for this device+agent, or auto-select first
   useEffect(() => {
-    if (!selectedDevice || models.length === 0) return;
+    if (!selectedDevice || !selectedAgent || models.length === 0) return;
     const prefs = getModelPrefs();
-    const lastModel = prefs[selectedDevice];
+    const prefKey = `${selectedDevice}:${selectedAgent}`;
+    const lastModel = prefs[prefKey] ?? prefs[selectedDevice];
     if (lastModel && models.includes(lastModel)) {
       setModel(lastModel);
     } else if (!model || !models.includes(model)) {
       setModel(models[0]);
     }
-  }, [models, selectedDevice]);
+  }, [models, selectedDevice, selectedAgent]);
 
   // Restore or default reasoning effort when model changes
   useEffect(() => {
@@ -114,9 +136,14 @@ export function NewSessionDialog({ open, onClose }: Props) {
     localStorage.setItem(LAST_DEVICE_KEY, id);
   };
 
+  const handleSelectAgent = (agentId: string) => {
+    setSelectedAgent(agentId);
+    localStorage.setItem(AGENT_PREF_KEY, agentId);
+  };
+
   const handleSelectModel = (m: string) => {
     setModel(m);
-    if (selectedDevice) saveModelPref(selectedDevice, m);
+    if (selectedDevice && selectedAgent) saveModelPref(`${selectedDevice}:${selectedAgent}`, m);
   };
 
   const handleSelectEffort = (effort: ReasoningEffort) => {
@@ -130,6 +157,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
       targetDeviceId: selectedDevice,
       model,
       reasoningEffort,
+      agentId: selectedAgentId,
     });
     onClose();
   };
@@ -185,11 +213,33 @@ export function NewSessionDialog({ open, onClose }: Props) {
               </div>
             </div>
 
-            {/* Model picker — scrollable list */}
+            {/* Agent picker — only shown when multiple agents */}
+            {hasMultipleAgents && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Agent</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {agentsList.map((agent) => (
+                    <button
+                      key={agent.id}
+                      onClick={() => handleSelectAgent(agent.id)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                        selectedAgent === agent.id
+                          ? 'bg-kraki-500 text-white'
+                          : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                      }`}
+                    >
+                      {agent.id}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Model picker — filtered by selected agent */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-text-secondary">Model</label>
               {models.length > 0 ? (
-                <div ref={listRef} className="max-h-40 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
+                <div ref={listRef} className="max-h-48 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
                   {models.map((m) => (
                     <button
                       key={m}

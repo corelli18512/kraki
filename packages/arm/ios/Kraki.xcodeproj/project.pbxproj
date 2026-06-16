@@ -1,0 +1,1004 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
+		063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9656866F24E385A14F14E699 /* NavigationIDs.swift */; };
+		07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01A6162027FE71CB62BA4255 /* DeviceListView.swift */; };
+		0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02010E839BEA2321FB4E19C7 /* MessageStore.swift */; };
+		09D96A4CAA9B66E0546321D5 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
+		0D84FEFC83BB1552A71A855F /* MessageRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */; };
+		12CE3DD03C496B1E150386FB /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A9A346933E404A3656AD63 /* SessionStore.swift */; };
+		13FB3A5224988D3C72001202 /* SessionTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF830792579504E8F32DFC4F /* SessionTable.swift */; };
+		1662EF0F89B6DC84803C27D8 /* ChatListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0346160D6F3232D5DEB5F3F0 /* ChatListViewController.swift */; };
+		17D7BE16A8D5D790F068FF89 /* KrakiNotification.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 714C9952404A97A090FC011F /* KrakiNotification.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */; };
+		1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */; };
+		1E626FDE917F77BEBF2D58B1 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88354093F25E3F24C8F27311 /* MessageBubbleView.swift */; };
+		1E7205DAE9C7788A1CB2A8CF /* ChatScrollCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB3EBB4CD6EF80F8A754079C /* ChatScrollCoordinator.swift */; };
+		20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */; };
+		246B2E3CF227103C6D04076D /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
+		253909D7E00B96BDB524EE36 /* IncrementalGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */; };
+		2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
+		2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33641605B16E960C6A553E38 /* ChatView.swift */; };
+		2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */; };
+		33284C120326EAC492164F6D /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
+		37C4B77D792B249BED1B3863 /* TurnGrouperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E943A85024601D5C97D75E /* TurnGrouperTests.swift */; };
+		381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */; };
+		39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */; };
+		3E6DC3A38E8C02979FFFA91D /* PendingTailBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */; };
+		4054EC9FBD2DF2BCDD28596D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E84B41258D35243F545BDB /* AppState.swift */; };
+		418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
+		41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
+		4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A625A24B0C13AF8010778069 /* Theme.swift */; };
+		45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A429810ED3F81077317149B3 /* DeviceStoreTests.swift */; };
+		4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */; };
+		4BCD8832B17517464C140526 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 69B9A691EAC2476B0D3210AC /* Assets.xcassets */; };
+		4C10C6ECF451DA2AA2A5AED0 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
+		50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
+		52884F019776B2D42A94782B /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
+		56FB3ED616BE7D72DFB31261 /* SessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */; };
+		5872624BD088114FFEB0C577 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */; };
+		5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */; };
+		638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17C06CC0E96BDAA7779524 /* SessionListView.swift */; };
+		6856421EC696E6C930A56346 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2053230A2F15EC2518979 /* NotificationService.swift */; };
+		6DC4334A2AC1E5766C6B42D9 /* QuestionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE712E4B973F287EF5B0DC17 /* QuestionCardView.swift */; };
+		70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */; };
+		7E5A1ECF6308F2C8497326D9 /* ToolStatusIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37B56341037B8B54A732E91A /* ToolStatusIcon.swift */; };
+		7F988F04B287C0F6E680229C /* ConnectionStatusChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */; };
+		84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */; };
+		87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */; };
+		891350586A2DF1FF3E5312BF /* PendingTailBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */; };
+		96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
+		A28917FCF94F3FE2A0B5AD2A /* LazyImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A84BF94261411BEF2B51101 /* LazyImageView.swift */; };
+		A66307FD3E49C88B414DB5A8 /* IncrementalGrouperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */; };
+		A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF54424FDF29034ACFC16B5A /* SettingsView.swift */; };
+		AF7953ABEEC72701AE83C546 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */; };
+		AF7FED5739CBD5B59ADEF03D /* TurnGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA25F949A584169D7628316 /* TurnGrouper.swift */; };
+		B320E431D3B0720779F6C57B /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
+		B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E805046685AE086D68B890D4 /* MainTabView.swift */; };
+		B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2ACA651B6DE122BE92C76 /* LoginView.swift */; };
+		B9799F37E9395C9A357E3A19 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = CDED8D6D15950EF64A1F92C5 /* GRDB */; };
+		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
+		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
+		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
+		CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */; };
+		CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
+		D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */; };
+		D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
+		D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
+		D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
+		DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6783BD1527A13261E67330A /* ModePickerView.swift */; };
+		DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */; };
+		DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B791C3F6BA99245733A941 /* PairingView.swift */; };
+		E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */; };
+		EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */; };
+		F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */; };
+		F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E8CC25E0F72D13A5394C5 /* PKCE.swift */; };
+		F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97B0E319E0F6D893D83C12A /* PushManager.swift */; };
+		F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8261534E96234C67C920EDCA /* AuthManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		61CA61C570F7068C35EDFBCA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08FB8B14B93E4AEACA69B644 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8CF158A689FF2418C7E20679;
+			remoteInfo = KrakiNotification;
+		};
+		95426C9C75EEA09ADABCCFA2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08FB8B14B93E4AEACA69B644 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EC0ED9322F6D2A73F356C1FC;
+			remoteInfo = Kraki;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		834918619DC3D7DB6C56EF43 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				17D7BE16A8D5D790F068FF89 /* KrakiNotification.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		00A9A346933E404A3656AD63 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		01A6162027FE71CB62BA4255 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
+		02010E839BEA2321FB4E19C7 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
+		0346160D6F3232D5DEB5F3F0 /* ChatListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListViewController.swift; sourceTree = "<group>"; };
+		04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStore.swift; sourceTree = "<group>"; };
+		0513473F4DCAC021C97802E4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
+		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
+		102ABECDD210B084B5B19319 /* MessageInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInputView.swift; sourceTree = "<group>"; };
+		11B2053230A2F15EC2518979 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionSummary.swift; sourceTree = "<group>"; };
+		1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
+		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
+		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
+		22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypesTests.swift; sourceTree = "<group>"; };
+		2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiLogger.swift; sourceTree = "<group>"; };
+		2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandSender.swift; sourceTree = "<group>"; };
+		2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
+		2DA25F949A584169D7628316 /* TurnGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouper.swift; sourceTree = "<group>"; };
+		33641605B16E960C6A553E38 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
+		39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalGrouperTests.swift; sourceTree = "<group>"; };
+		3C568CFF12F4C661F328D4DA /* Kraki.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.entitlements; sourceTree = "<group>"; };
+		3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypes.swift; sourceTree = "<group>"; };
+		41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionHandler.swift; sourceTree = "<group>"; };
+		427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionInfoSheet.swift; sourceTree = "<group>"; };
+		427C7B2406F858D980E5DFBB /* AgentAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAvatar.swift; sourceTree = "<group>"; };
+		447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		4D17C06CC0E96BDAA7779524 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+		5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
+		5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.entitlements; sourceTree = "<group>"; };
+		61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolActivityView.swift; sourceTree = "<group>"; };
+		6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDetailView.swift; sourceTree = "<group>"; };
+		64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpersTests.swift; sourceTree = "<group>"; };
+		654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRouter.swift; sourceTree = "<group>"; };
+		6685F600391FC66B987E12ED /* Kraki.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraki.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		69B9A691EAC2476B0D3210AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiApp.swift; sourceTree = "<group>"; };
+		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
+		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		76E84B41258D35243F545BDB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		77E056700BA106FD1E130382 /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
+		7A84BF94261411BEF2B51101 /* LazyImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyImageView.swift; sourceTree = "<group>"; };
+		8261534E96234C67C920EDCA /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
+		83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
+		83EB42921A7758374B21EC30 /* GRDB.swift */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GRDB.swift; path = Vendor/GRDB.swift; sourceTree = SOURCE_ROOT; };
+		88354093F25E3F24C8F27311 /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubbleView.swift; sourceTree = "<group>"; };
+		91E943A85024601D5C97D75E /* TurnGrouperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnGrouperTests.swift; sourceTree = "<group>"; };
+		924794751B4507709362A1AE /* LucideIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LucideIcon.swift; sourceTree = "<group>"; };
+		96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		9656866F24E385A14F14E699 /* NavigationIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationIDs.swift; sourceTree = "<group>"; };
+		97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBufferTests.swift; sourceTree = "<group>"; };
+		9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
+		9E85D17DFC304688DBB3F729 /* ActivityRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRow.swift; sourceTree = "<group>"; };
+		A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoManager.swift; sourceTree = "<group>"; };
+		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
+		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Release.entitlements; sourceTree = "<group>"; };
+		ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBuffer.swift; sourceTree = "<group>"; };
+		AE712E4B973F287EF5B0DC17 /* QuestionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionCardView.swift; sourceTree = "<group>"; };
+		AF830792579504E8F32DFC4F /* SessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTable.swift; sourceTree = "<group>"; };
+		B25E8CC25E0F72D13A5394C5 /* PKCE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCE.swift; sourceTree = "<group>"; };
+		C1B2ACA651B6DE122BE92C76 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		C97B0E319E0F6D893D83C12A /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
+		CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalGrouper.swift; sourceTree = "<group>"; };
+		D5B791C3F6BA99245733A941 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageProvider.swift; sourceTree = "<group>"; };
+		DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionSheet.swift; sourceTree = "<group>"; };
+		E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageDatabase.swift; sourceTree = "<group>"; };
+		E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCardView.swift; sourceTree = "<group>"; };
+		E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		E6783BD1527A13261E67330A /* ModePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePickerView.swift; sourceTree = "<group>"; };
+		E805046685AE086D68B890D4 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		EB3EBB4CD6EF80F8A754079C /* ChatScrollCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScrollCoordinator.swift; sourceTree = "<group>"; };
+		EF54424FDF29034ACFC16B5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolChipHeader.swift; sourceTree = "<group>"; };
+		F1BC3B39CCEB12DE1DD65808 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
+		F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardView.swift; sourceTree = "<group>"; };
+		FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusChip.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E8FA74518FF1D09D8538E423 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B9799F37E9395C9A357E3A19 /* GRDB in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		21B303F9ACDE747E9D85A960 /* Actions */ = {
+			isa = PBXGroup;
+			children = (
+				E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */,
+				AE712E4B973F287EF5B0DC17 /* QuestionCardView.swift */,
+			);
+			path = Actions;
+			sourceTree = "<group>";
+		};
+		3314B5B8AAAA5089045F45DF /* Storage */ = {
+			isa = PBXGroup;
+			children = (
+				77E056700BA106FD1E130382 /* AttachmentStore.swift */,
+				2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */,
+				04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */,
+				CF144CBE4F6D626D70DA84C4 /* IncrementalGrouper.swift */,
+				E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */,
+				D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */,
+				02010E839BEA2321FB4E19C7 /* MessageStore.swift */,
+				ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */,
+				00A9A346933E404A3656AD63 /* SessionStore.swift */,
+				2DA25F949A584169D7628316 /* TurnGrouper.swift */,
+			);
+			path = Storage;
+			sourceTree = "<group>";
+		};
+		3B982724391014C9760A98AF /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				8261534E96234C67C920EDCA /* AuthManager.swift */,
+				41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */,
+				654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */,
+				2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */,
+				C97B0E319E0F6D893D83C12A /* PushManager.swift */,
+				83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		46D3A4AA279A3FA758B5A27B /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				9E85D17DFC304688DBB3F729 /* ActivityRow.swift */,
+				0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */,
+				DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */,
+				F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */,
+				5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */,
+				427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */,
+				4D17C06CC0E96BDAA7779524 /* SessionListView.swift */,
+				AF830792579504E8F32DFC4F /* SessionTable.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
+		585ABCCD37D23574BAA03195 /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */,
+				C1B2ACA651B6DE122BE92C76 /* LoginView.swift */,
+				E805046685AE086D68B890D4 /* MainTabView.swift */,
+				D5B791C3F6BA99245733A941 /* PairingView.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		5CA42B4EA9A4E13D1500A189 = {
+			isa = PBXGroup;
+			children = (
+				BBDA8D94155FA58FEEB63630 /* Kraki */,
+				8DF3DD32B2C3E1FB471E63B1 /* KrakiNotification */,
+				FDCB20E9E6DE6DFD3BC671B3 /* KrakiTests */,
+				A52B4557FE045496F98B459B /* Packages */,
+				E68499EC59D084B32717E874 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		678A6E1C826CEDF5BD7565DB /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				C5625A030D347921B9A09978 /* Crypto */,
+				3B982724391014C9760A98AF /* Networking */,
+				D03B70DEBA7767E6EB904159 /* Protocol */,
+				6D40443E9C89EF198C0C160B /* Speech */,
+				3314B5B8AAAA5089045F45DF /* Storage */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		6D40443E9C89EF198C0C160B /* Speech */ = {
+			isa = PBXGroup;
+			children = (
+				1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */,
+			);
+			path = Speech;
+			sourceTree = "<group>";
+		};
+		71615332CDDC89839E753D87 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				21B303F9ACDE747E9D85A960 /* Actions */,
+				585ABCCD37D23574BAA03195 /* Auth */,
+				FFC90643C8FE411FA9B7D288 /* Chat */,
+				CAB845A6B50A40538809810C /* Devices */,
+				46D3A4AA279A3FA758B5A27B /* Sessions */,
+				F933D636097C01312BEFEC0E /* Settings */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		7F490224A28B969EB4F4BEE3 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				69B9A691EAC2476B0D3210AC /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		8DF3DD32B2C3E1FB471E63B1 /* KrakiNotification */ = {
+			isa = PBXGroup;
+			children = (
+				0513473F4DCAC021C97802E4 /* Info.plist */,
+				5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */,
+				11B2053230A2F15EC2518979 /* NotificationService.swift */,
+			);
+			path = KrakiNotification;
+			sourceTree = "<group>";
+		};
+		A52B4557FE045496F98B459B /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				83EB42921A7758374B21EC30 /* GRDB.swift */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		BBDA8D94155FA58FEEB63630 /* Kraki */ = {
+			isa = PBXGroup;
+			children = (
+				3C568CFF12F4C661F328D4DA /* Kraki.entitlements */,
+				A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */,
+				E685974EC7D62085D8F8A91A /* App */,
+				678A6E1C826CEDF5BD7565DB /* Core */,
+				71615332CDDC89839E753D87 /* Features */,
+				7F490224A28B969EB4F4BEE3 /* Resources */,
+				BBE447C3AF7E371DFE169DCA /* Shared */,
+			);
+			path = Kraki;
+			sourceTree = "<group>";
+		};
+		BBE447C3AF7E371DFE169DCA /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				427C7B2406F858D980E5DFBB /* AgentAvatar.swift */,
+				9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */,
+				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
+				924794751B4507709362A1AE /* LucideIcon.swift */,
+				9656866F24E385A14F14E699 /* NavigationIDs.swift */,
+				6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */,
+				A625A24B0C13AF8010778069 /* Theme.swift */,
+				37B56341037B8B54A732E91A /* ToolStatusIcon.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		C5625A030D347921B9A09978 /* Crypto */ = {
+			isa = PBXGroup;
+			children = (
+				A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */,
+				1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */,
+				B25E8CC25E0F72D13A5394C5 /* PKCE.swift */,
+			);
+			path = Crypto;
+			sourceTree = "<group>";
+		};
+		CAB845A6B50A40538809810C /* Devices */ = {
+			isa = PBXGroup;
+			children = (
+				6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */,
+				01A6162027FE71CB62BA4255 /* DeviceListView.swift */,
+			);
+			path = Devices;
+			sourceTree = "<group>";
+		};
+		D03B70DEBA7767E6EB904159 /* Protocol */ = {
+			isa = PBXGroup;
+			children = (
+				13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */,
+				F1BC3B39CCEB12DE1DD65808 /* Messages.swift */,
+				3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */,
+			);
+			path = Protocol;
+			sourceTree = "<group>";
+		};
+		E68499EC59D084B32717E874 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6685F600391FC66B987E12ED /* Kraki.app */,
+				714C9952404A97A090FC011F /* KrakiNotification.appex */,
+				CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E685974EC7D62085D8F8A91A /* App */ = {
+			isa = PBXGroup;
+			children = (
+				447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */,
+				76E84B41258D35243F545BDB /* AppState.swift */,
+				6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */,
+				96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		F933D636097C01312BEFEC0E /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				EF54424FDF29034ACFC16B5A /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		FDCB20E9E6DE6DFD3BC671B3 /* KrakiTests */ = {
+			isa = PBXGroup;
+			children = (
+				0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */,
+				A429810ED3F81077317149B3 /* DeviceStoreTests.swift */,
+				64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */,
+				39C292B54D8D73398D060D12 /* IncrementalGrouperTests.swift */,
+				1D6472A002F2CB9C07380792 /* MessagesTests.swift */,
+				97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */,
+				22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */,
+				6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */,
+				91E943A85024601D5C97D75E /* TurnGrouperTests.swift */,
+			);
+			path = KrakiTests;
+			sourceTree = "<group>";
+		};
+		FFC90643C8FE411FA9B7D288 /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				0346160D6F3232D5DEB5F3F0 /* ChatListViewController.swift */,
+				EB3EBB4CD6EF80F8A754079C /* ChatScrollCoordinator.swift */,
+				33641605B16E960C6A553E38 /* ChatView.swift */,
+				E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */,
+				7A84BF94261411BEF2B51101 /* LazyImageView.swift */,
+				88354093F25E3F24C8F27311 /* MessageBubbleView.swift */,
+				102ABECDD210B084B5B19319 /* MessageInputView.swift */,
+				E6783BD1527A13261E67330A /* ModePickerView.swift */,
+				61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */,
+				F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1C9C7B02590BC6E4A9557496 /* KrakiTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 289A3C0ACADCFE4907FC57AA /* Build configuration list for PBXNativeTarget "KrakiTests" */;
+			buildPhases = (
+				4DB0A897A13746DA3B4B1172 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A9564E0BD3E68522666F5129 /* PBXTargetDependency */,
+			);
+			name = KrakiTests;
+			packageProductDependencies = (
+			);
+			productName = KrakiTests;
+			productReference = CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		8CF158A689FF2418C7E20679 /* KrakiNotification */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F82C545B4DDA6E2D3D47CA56 /* Build configuration list for PBXNativeTarget "KrakiNotification" */;
+			buildPhases = (
+				C947B40F36B1554D8BFB6EB1 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = KrakiNotification;
+			packageProductDependencies = (
+			);
+			productName = KrakiNotification;
+			productReference = 714C9952404A97A090FC011F /* KrakiNotification.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		EC0ED9322F6D2A73F356C1FC /* Kraki */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 75C1BD6ECBBFBE6E17751B01 /* Build configuration list for PBXNativeTarget "Kraki" */;
+			buildPhases = (
+				76878512F80269C5E6C02AA1 /* Sources */,
+				91754CF4F3CAE716C90DCCE5 /* Resources */,
+				E8FA74518FF1D09D8538E423 /* Frameworks */,
+				834918619DC3D7DB6C56EF43 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7286A4C1B3139883DDAE18D0 /* PBXTargetDependency */,
+			);
+			name = Kraki;
+			packageProductDependencies = (
+				CDED8D6D15950EF64A1F92C5 /* GRDB */,
+			);
+			productName = Kraki;
+			productReference = 6685F600391FC66B987E12ED /* Kraki.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		08FB8B14B93E4AEACA69B644 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					8CF158A689FF2418C7E20679 = {
+						DevelopmentTeam = 3A83X5JZ3S;
+						ProvisioningStyle = Automatic;
+					};
+					EC0ED9322F6D2A73F356C1FC = {
+						DevelopmentTeam = 3A83X5JZ3S;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = BB30BBE19F82EF75874C2210 /* Build configuration list for PBXProject "Kraki" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 5CA42B4EA9A4E13D1500A189;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A86439F59AF00753FFE311D9 /* XCLocalSwiftPackageReference "Vendor/GRDB.swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EC0ED9322F6D2A73F356C1FC /* Kraki */,
+				8CF158A689FF2418C7E20679 /* KrakiNotification */,
+				1C9C7B02590BC6E4A9557496 /* KrakiTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		91754CF4F3CAE716C90DCCE5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCD8832B17517464C140526 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4DB0A897A13746DA3B4B1172 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */,
+				45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */,
+				DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */,
+				A66307FD3E49C88B414DB5A8 /* IncrementalGrouperTests.swift in Sources */,
+				C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */,
+				3E6DC3A38E8C02979FFFA91D /* PendingTailBufferTests.swift in Sources */,
+				5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */,
+				56FB3ED616BE7D72DFB31261 /* SessionStoreTests.swift in Sources */,
+				37C4B77D792B249BED1B3863 /* TurnGrouperTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		76878512F80269C5E6C02AA1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				246B2E3CF227103C6D04076D /* ActivityRow.swift in Sources */,
+				B320E431D3B0720779F6C57B /* AgentAvatar.swift in Sources */,
+				AF7953ABEEC72701AE83C546 /* AppDelegate.swift in Sources */,
+				4054EC9FBD2DF2BCDD28596D /* AppState.swift in Sources */,
+				4C10C6ECF451DA2AA2A5AED0 /* AttachmentStore.swift in Sources */,
+				F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */,
+				1662EF0F89B6DC84803C27D8 /* ChatListViewController.swift in Sources */,
+				1E7205DAE9C7788A1CB2A8CF /* ChatScrollCoordinator.swift in Sources */,
+				2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */,
+				E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */,
+				011C11527B518D1977DB2289 /* CommandSender.swift in Sources */,
+				7F988F04B287C0F6E680229C /* ConnectionStatusChip.swift in Sources */,
+				D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */,
+				1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */,
+				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
+				50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */,
+				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
+				33284C120326EAC492164F6D /* Helpers.swift in Sources */,
+				1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */,
+				253909D7E00B96BDB524EE36 /* IncrementalGrouper.swift in Sources */,
+				41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */,
+				39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */,
+				D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */,
+				A28917FCF94F3FE2A0B5AD2A /* LazyImageView.swift in Sources */,
+				CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */,
+				B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */,
+				418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */,
+				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
+				1E626FDE917F77BEBF2D58B1 /* MessageBubbleView.swift in Sources */,
+				CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */,
+				CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */,
+				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
+				0D84FEFC83BB1552A71A855F /* MessageRouter.swift in Sources */,
+				0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */,
+				52884F019776B2D42A94782B /* Messages.swift in Sources */,
+				DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */,
+				063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */,
+				EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */,
+				F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */,
+				DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */,
+				891350586A2DF1FF3E5312BF /* PendingTailBuffer.swift in Sources */,
+				381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */,
+				F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */,
+				D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */,
+				F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */,
+				6DC4334A2AC1E5766C6B42D9 /* QuestionCardView.swift in Sources */,
+				20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */,
+				09D96A4CAA9B66E0546321D5 /* SessionCardView.swift in Sources */,
+				5872624BD088114FFEB0C577 /* SessionDetailView.swift in Sources */,
+				84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */,
+				638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */,
+				12CE3DD03C496B1E150386FB /* SessionStore.swift in Sources */,
+				13FB3A5224988D3C72001202 /* SessionTable.swift in Sources */,
+				A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */,
+				2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */,
+				4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */,
+				4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */,
+				C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */,
+				2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */,
+				7E5A1ECF6308F2C8497326D9 /* ToolStatusIcon.swift in Sources */,
+				AF7FED5739CBD5B59ADEF03D /* TurnGrouper.swift in Sources */,
+				96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C947B40F36B1554D8BFB6EB1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6856421EC696E6C930A56346 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7286A4C1B3139883DDAE18D0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8CF158A689FF2418C7E20679 /* KrakiNotification */;
+			targetProxy = 61CA61C570F7068C35EDFBCA /* PBXContainerItemProxy */;
+		};
+		A9564E0BD3E68522666F5129 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EC0ED9322F6D2A73F356C1FC /* Kraki */;
+			targetProxy = 95426C9C75EEA09ADABCCFA2 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		024DD3818783B0EEB6A93A6F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki";
+			};
+			name = Release;
+		};
+		02801BDF92158FABD08054C3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				INFOPLIST_FILE = KrakiNotification/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.notification;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		086251E41EDDB7A5A2C6127F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		6DD72626986B7832F33E7AB2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		9F285059C2FC3AB278D77A58 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.Release.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = (
+					"remote-notification",
+				);
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A4BE29614D491BD977CBE5DF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki";
+			};
+			name = Debug;
+		};
+		B07D7401975D984741444A1D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = (
+					"remote-notification",
+				);
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B36AE59C73D59310EFDE0E10 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				INFOPLIST_FILE = KrakiNotification/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.notification;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		289A3C0ACADCFE4907FC57AA /* Build configuration list for PBXNativeTarget "KrakiTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A4BE29614D491BD977CBE5DF /* Debug */,
+				024DD3818783B0EEB6A93A6F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		75C1BD6ECBBFBE6E17751B01 /* Build configuration list for PBXNativeTarget "Kraki" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B07D7401975D984741444A1D /* Debug */,
+				9F285059C2FC3AB278D77A58 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BB30BBE19F82EF75874C2210 /* Build configuration list for PBXProject "Kraki" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6DD72626986B7832F33E7AB2 /* Debug */,
+				086251E41EDDB7A5A2C6127F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F82C545B4DDA6E2D3D47CA56 /* Build configuration list for PBXNativeTarget "KrakiNotification" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				02801BDF92158FABD08054C3 /* Debug */,
+				B36AE59C73D59310EFDE0E10 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A86439F59AF00753FFE311D9 /* XCLocalSwiftPackageReference "Vendor/GRDB.swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/GRDB.swift;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CDED8D6D15950EF64A1F92C5 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 08FB8B14B93E4AEACA69B644 /* Project object */;
+}

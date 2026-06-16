@@ -261,7 +261,7 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
     });
 
-    it('handles session_replay_batch without incrementing unread', async () => {
+    it('handles session_messages_range_batch without incrementing unread', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       client.connect();
       await vi.waitFor(() => {
@@ -285,9 +285,9 @@ describe('KrakiWSClient', () => {
         messageCount: 0,
       });
 
-      // Receive a replay batch — should not increment unread
+      // Receive a range batch — should not increment unread
       receiveInner({
-        type: 'session_replay_batch',
+        type: 'session_messages_range_batch',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -297,8 +297,9 @@ describe('KrakiWSClient', () => {
             { type: 'agent_message', deviceId: 'dev-1', seq: 1, timestamp: new Date().toISOString(), sessionId: 'sess-1', payload: { content: 'Batch message 1' } },
             { type: 'agent_message', deviceId: 'dev-1', seq: 2, timestamp: new Date().toISOString(), sessionId: 'sess-1', payload: { content: 'Batch message 2' } },
           ],
+          firstSeq: 1,
           lastSeq: 2,
-          totalLastSeq: 2,
+          truncated: false,
         },
       });
 

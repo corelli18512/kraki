@@ -323,9 +323,7 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   payload: {
     name: string;
     kind?: string;
-    models?: string[];
-    /** Rich model metadata including reasoning effort support */
-    modelDetails?: import('./devices.js').ModelDetail[];
+    agents?: import('./devices.js').AgentCapabilities[];
     version?: string;
   };
 }
@@ -615,6 +613,8 @@ export interface CreateSessionMessage extends BaseEnvelope {
     requestId: string;
     /** Target tentacle device ID */
     targetDeviceId: string;
+    /** Which agent to use for this session */
+    agentId: import('./devices.js').AgentId;
     /** Agent model to use (e.g. "claude-sonnet-4") */
     model: string;
     /** Reasoning effort level (only for models that support it) */

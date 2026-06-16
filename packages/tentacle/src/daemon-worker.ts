@@ -2,19 +2,22 @@
  * Kraki tentacle daemon worker.
  *
  * This file is spawned as a background process by daemon.ts.
- * It loads config, resolves authentication, starts the Copilot adapter,
+ * It loads config, resolves authentication, starts the agent adapter,
  * and connects to the head via RelayClient.
  *
  * RelayClient wires all adapter events to the head automatically.
  * SessionManager handles durable session state and crash recovery.
  * KeyManager handles E2E encryption keys.
+ *
+ * Agent detection: automatically detects available coding agents
+ * (Copilot CLI, Claude Code CLI) and starts all that are found.
  */
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
 import { ensureWindowsSystemPath, probeFda } from './checks.js';
-import { CopilotAdapter } from './adapters/copilot.js';
+import { MultiAgentAdapter } from './adapters/multi.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -56,7 +59,7 @@ const logger = createLogger('daemon');
 // ── Main ────────────────────────────────────────────────
 
 export interface WorkerResult {
-  adapter: CopilotAdapter;
+  adapter: AgentAdapter;
   relay: RelayClient;
   sessionManager: SessionManager;
   shutdown: () => Promise<void>;
@@ -142,14 +145,15 @@ export async function startWorker(): Promise<WorkerResult> {
     mcpServer = null;
   }
 
-  const adapter = new CopilotAdapter({
+  // 3c. Create multi-agent adapter (auto-detects available agents)
+  const adapter = new MultiAgentAdapter({
     attachmentStore,
     ...(mcpInfo && { krakiMcp: mcpInfo }),
   });
   const keyManager = new KeyManager();
   const deviceId = getOrCreateDeviceId();
 
-  // 4. Start Copilot adapter
+  // 4. Start agent adapters (auto-detection + startup)
   if (token) {
     process.env.GITHUB_TOKEN = token;
   }
@@ -157,40 +161,36 @@ export async function startWorker(): Promise<WorkerResult> {
   try {
     await adapter.start();
     adapterReady = true;
-    logger.info('Copilot adapter started');
+    logger.info('Multi-agent adapter started');
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, 'Copilot adapter failed to start — run "copilot login" to authenticate');
-    // Clean up streams/promises from the failed adapter to prevent unhandled rejections
+    logger.warn({ err: (err as Error).message }, 'Multi-agent adapter failed to start');
     try { await adapter.stop(); } catch { /* already dead */ }
   }
 
-  // 5. Fetch available models for device capabilities (retry once after delay
-  //    in case the SDK connection isn't fully ready immediately after start)
-  let models: string[] = [];
-  let modelDetails: import('@kraki/protocol').ModelDetail[] = [];
+  // 5. Build per-agent capabilities for device greeting
+  let agentCapabilities: import('@kraki/protocol').AgentCapabilities[] | undefined;
   if (adapterReady) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        modelDetails = await adapter.listModelDetails();
-        models = modelDetails.map(m => m.id);
-        if (models.length > 0) break;
+        agentCapabilities = await adapter.getAgentCapabilities();
+        if (agentCapabilities.length > 0) break;
         if (attempt === 0) {
-          logger.debug('Model list empty, retrying after delay…');
+          logger.debug('Agent capabilities empty, retrying after delay…');
           await new Promise(r => setTimeout(r, 2000));
         }
       } catch {
-        logger.warn('Could not fetch available models');
+        logger.warn('Could not fetch agent capabilities');
         if (attempt === 0) {
           await new Promise(r => setTimeout(r, 2000));
         }
       }
     }
-    logger.debug({ count: models.length }, 'Fetched available models');
+    logger.debug({ agents: agentCapabilities?.map(a => a.id) }, 'Built agent capabilities');
   }
 
   // 6. Connect to relay via RelayClient
   const relay = new RelayClient(
-    adapter as unknown as AgentAdapter,
+    adapter,
     sessionManager,
     {
       relayUrl: process.env.KRAKI_RELAY_URL ?? config.relay,
@@ -199,7 +199,7 @@ export async function startWorker(): Promise<WorkerResult> {
         role: 'tentacle',
         kind: 'desktop',
         deviceId,
-        capabilities: models.length > 0 ? { models, modelDetails } : undefined,
+        capabilities: agentCapabilities?.length ? { agents: agentCapabilities } : undefined,
       },
       authMethod: config.authMethod,
       token,

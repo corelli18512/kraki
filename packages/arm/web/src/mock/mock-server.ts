@@ -23,11 +23,11 @@ interface MockSession {
 }
 
 const devices = [
-  { id: 'dev-macbook', name: 'MacBook Pro', role: 'tentacle' as const, kind: 'desktop' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'claude-opus-4', 'gpt-4.1', 'gpt-4o', 'o3'] } },
-  { id: 'dev-server', name: 'CI Server', role: 'tentacle' as const, kind: 'server' as const, online: true, capabilities: { models: ['claude-sonnet-4', 'gpt-4.1'] } },
-  { id: 'dev-linux-vm', name: 'Linux Dev VM', role: 'tentacle' as const, kind: 'vm' as const, online: false, capabilities: { models: ['claude-sonnet-4'] } },
+  { id: 'dev-macbook', name: 'MacBook Pro', role: 'tentacle' as const, kind: 'desktop' as const, online: true, capabilities: { agents: [{ type: 'code' as const, id: 'copilot' as const, models: ['claude-sonnet-4', 'claude-opus-4', 'gpt-4.1', 'gpt-4o', 'o3'] }, { type: 'code' as const, id: 'claude' as const, models: ['claude-sonnet-4', 'claude-opus-4'] }] } },
+  { id: 'dev-server', name: 'CI Server', role: 'tentacle' as const, kind: 'server' as const, online: true, capabilities: { agents: [{ type: 'code' as const, id: 'copilot' as const, models: ['claude-sonnet-4', 'gpt-4.1'] }] } },
+  { id: 'dev-linux-vm', name: 'Linux Dev VM', role: 'tentacle' as const, kind: 'vm' as const, online: false, capabilities: { agents: [{ type: 'code' as const, id: 'claude' as const, models: ['claude-sonnet-4'] }] } },
   { id: 'dev-iphone', name: 'iPhone 16', role: 'app' as const, kind: 'ios' as const, online: false },
-  { id: 'dev-old-laptop', name: 'Old ThinkPad', role: 'tentacle' as const, kind: 'desktop' as const, online: false, capabilities: { models: ['gpt-4.1'] } },
+  { id: 'dev-old-laptop', name: 'Old ThinkPad', role: 'tentacle' as const, kind: 'desktop' as const, online: false, capabilities: { agents: [{ type: 'code' as const, id: 'copilot' as const, models: ['gpt-4.1'] }] } },
 ];
 
 const sessions: MockSession[] = [
@@ -109,7 +109,7 @@ wss.on('connection', (ws) => {
               payload: {
                 name: dev.name,
                 kind: dev.kind,
-                models: (dev as { capabilities?: { models?: string[] } }).capabilities?.models,
+                agents: (dev as { capabilities?: { agents?: unknown[] } }).capabilities?.agents,
               },
             }));
           }

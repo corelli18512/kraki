@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import type { DeviceSummary } from '@kraki/protocol';
+import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -14,6 +14,7 @@ function formatDate(iso?: string): string {
 export function DevicePanel({
   device,
   models,
+  agents,
   version,
   isCurrentDevice,
   selectedSessionId,
@@ -22,6 +23,7 @@ export function DevicePanel({
 }: {
   device: DeviceSummary;
   models?: string[];
+  agents?: AgentCapabilities[];
   version?: string;
   isCurrentDevice: boolean;
   selectedSessionId: string | null;
@@ -113,8 +115,26 @@ export function DevicePanel({
           )}
         </div>
 
-        {/* Models */}
-        {models && models.length > 0 && (
+        {/* Agents & Models */}
+        {agents && agents.length > 0 ? (
+          <div>
+            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Agents</h3>
+            <div className="space-y-2">
+              {agents.map((agent) => (
+                <div key={agent.id}>
+                  <div className="mb-1 text-xs font-medium capitalize text-text-secondary">{agent.id}</div>
+                  <div className="flex flex-wrap gap-1">
+                    {(agent.models ?? []).map((m) => (
+                      <span key={m} className="rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] text-text-secondary">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : models && models.length > 0 ? (
           <div>
             <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Supported Models</h3>
             <div className="flex flex-wrap gap-1">
@@ -125,7 +145,7 @@ export function DevicePanel({
               ))}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Sessions */}
         <div>

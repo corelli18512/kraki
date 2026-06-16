@@ -5,6 +5,20 @@
 export type DeviceRole = 'tentacle' | 'app';
 export type DeviceKind = 'desktop' | 'server' | 'vm' | 'web' | 'ios' | 'android';
 
+/** General agent category — extensible for future non-coding agents. */
+export type AgentType = 'code';
+
+/** Specific agent implementation within a type. */
+export type AgentId = 'copilot' | 'claude';
+
+/** Agent info reported by a tentacle. */
+export interface AgentCapabilities {
+  type: AgentType;
+  id: AgentId;
+  models?: string[];
+  modelDetails?: ModelDetail[];
+}
+
 export interface Device {
   id: string;
   channelId: string;
@@ -49,10 +63,8 @@ export interface DeviceInfo {
 }
 
 export interface DeviceCapabilities {
-  /** Available agent models (e.g. ["claude-sonnet-4", "gpt-4.1"]) */
-  models?: string[];
-  /** Rich model metadata including reasoning effort support */
-  modelDetails?: ModelDetail[];
+  /** Agents available on this device (a tentacle can run multiple) */
+  agents?: AgentCapabilities[];
 }
 
 // ── Push notification providers ──────────────────────────

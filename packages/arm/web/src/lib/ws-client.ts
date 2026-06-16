@@ -162,7 +162,7 @@ export class KrakiWSClient {
     getStore().removeSession(sessionId);
   }
 
-  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string }) {
+  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string; agentId?: string }) {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
@@ -439,12 +439,12 @@ export class KrakiWSClient {
   }
 
   /**
-   * Handle a replay batch — delegate to message provider.
+   * Handle a range-fetch batch — delegate to message provider.
    */
-  private handleReplayBatch(msg: import('@kraki/protocol').SessionReplayBatchMessage): void {
-    const { sessionId, messages, lastSeq, totalLastSeq } = msg.payload;
+  private handleRangeBatch(msg: import('@kraki/protocol').SessionMessagesRangeBatchMessage): void {
+    const { sessionId, messages, firstSeq, lastSeq, truncated } = msg.payload;
     if (!sessionId) return;
-    messageProvider.handleBatch(sessionId, messages, lastSeq, totalLastSeq);
+    messageProvider.handleRangeBatch(sessionId, messages, firstSeq, lastSeq, truncated);
   }
 
   // --- Internal ---
@@ -485,7 +485,7 @@ export class KrakiWSClient {
         cmdState: this.cmdState,
         sendEncrypted: (m) => this.sendEncrypted(m),
         onSessionList: (m) => this.handleSessionList(m),
-        onSessionReplayBatch: (m) => this.handleReplayBatch(m),
+        onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
       }),
       getHandlers: () => this.handlers,
     };
@@ -565,7 +565,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
-          getStore().setDeviceModels(left.deviceId, []);
+          getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
         break;
@@ -574,7 +574,7 @@ export class KrakiWSClient {
       case 'device_removed': {
         const removed = msg as { deviceId: string };
         if (removed.deviceId) {
-          getStore().setDeviceModels(removed.deviceId, []);
+          getStore().clearDeviceAgents(removed.deviceId);
           getStore().removeDevice(removed.deviceId);
         }
         break;
@@ -612,7 +612,7 @@ export class KrakiWSClient {
             cmdState: this.cmdState,
             sendEncrypted: (m) => this.sendEncrypted(m),
             onSessionList: (m) => this.handleSessionList(m),
-            onSessionReplayBatch: (m) => this.handleReplayBatch(m),
+            onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
           });
         }
         break;

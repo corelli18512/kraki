@@ -3,7 +3,7 @@ import { useStore } from '../../hooks/useStore';
 
 export function DeviceList() {
   const devices = useStore((s) => s.devices);
-  const deviceModels = useStore((s) => s.deviceModels);
+  const deviceAgents = useStore((s) => s.deviceAgents);
   const navigate = useNavigate();
 
   // Only show online/connecting tentacles
@@ -31,7 +31,7 @@ export function DeviceList() {
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {onlineTentacles.map((d) => {
-          const hasGreeting = deviceModels.has(d.id);
+          const hasGreeting = deviceAgents.has(d.id);
           const dotClass = hasGreeting ? 'bg-emerald-400' : 'animate-pulse bg-amber-400';
           return (
             <span key={d.id} className="flex items-center gap-1.5">

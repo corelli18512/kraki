@@ -20,8 +20,7 @@ function useIsDesktop(): boolean {
 
 export function DeviceGrid() {
   const devices = useStore((s) => s.devices);
-  const deviceModels = useStore((s) => s.deviceModels);
-  const deviceModelDetails = useStore((s) => s.deviceModelDetails);
+  const deviceAgents = useStore((s) => s.deviceAgents);
   const deviceVersions = useStore((s) => s.deviceVersions);
   const sessionUsage = useStore((s) => s.sessionUsage);
   const sessions = useStore((s) => s.sessions);
@@ -58,7 +57,8 @@ export function DeviceGrid() {
     : isDesktop && deviceSessions.length > 0 ? deviceSessions[0].id : null;
   const selectedSession = effectiveSessionId ? sessions.get(effectiveSessionId) : undefined;
 
-  const models = selectedDevice ? deviceModels.get(selectedDevice.id) : undefined;
+  const agentsList = selectedDevice ? deviceAgents.get(selectedDevice.id) : undefined;
+  const models = agentsList?.flatMap(a => a.models ?? []);
   const version = selectedDevice ? deviceVersions.get(selectedDevice.id) : undefined;
 
   const handleSelectDevice = useCallback((id: string) => {
@@ -99,7 +99,7 @@ export function DeviceGrid() {
             <DeviceButton
               key={d.id}
               device={d}
-              hasGreeting={deviceModels.has(d.id)}
+              hasGreeting={deviceAgents.has(d.id)}
               isSelected={effectiveDeviceId === d.id}
               isSelf={d.id === myDeviceId}
               onClick={() => handleSelectDevice(d.id)}
@@ -114,6 +114,7 @@ export function DeviceGrid() {
           <DevicePanel
             device={selectedDevice}
             models={models}
+            agents={agentsList}
             version={version}
             isCurrentDevice={selectedDevice.id === myDeviceId}
             selectedSessionId={effectiveSessionId}
@@ -134,7 +135,7 @@ export function DeviceGrid() {
             session={selectedSession}
             usage={sessionUsage.get(selectedSession.id)}
             models={models}
-            modelDetails={deviceModelDetails.get(selectedDevice.id)}
+            modelDetails={agentsList?.flatMap(a => a.modelDetails ?? [])}
             onClose={() => setSelectedSessionId(null)}
           />
         </div>

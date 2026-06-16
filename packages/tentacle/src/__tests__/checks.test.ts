@@ -331,21 +331,28 @@ describe('ensureWindowsSystemPath()', () => {
 // ── probeFda() ──────────────────────────────────────────
 
 describe('probeFda()', () => {
-  it('returns granted when TCC.db is readable', async () => {
+  it('returns granted when any probe path is readable', async () => {
     mockAccess.mockResolvedValue(undefined);
     expect(await probeFda()).toBe('granted');
   });
 
-  it('returns denied when TCC.db returns EPERM', async () => {
+  it('returns denied when all probe paths return EPERM', async () => {
     mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
     expect(await probeFda()).toBe('denied');
   });
 
-  it('returns missing when TCC.db does not exist', async () => {
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === 'string' && p.includes('TCC.db')) return false;
-      return true;
+  it('returns granted if first path blocked but second readable', async () => {
+    let calls = 0;
+    mockAccess.mockImplementation(() => {
+      calls++;
+      if (calls === 1) return Promise.reject(Object.assign(new Error('perm'), { code: 'EPERM' }));
+      return Promise.resolve(undefined);
     });
+    expect(await probeFda()).toBe('granted');
+  });
+
+  it('returns missing when all probe paths return ENOENT', async () => {
+    mockAccess.mockRejectedValue(Object.assign(new Error('enoent'), { code: 'ENOENT' }));
     expect(await probeFda()).toBe('missing');
   });
 
@@ -359,7 +366,7 @@ describe('probeFda()', () => {
     expect(await probeFda()).toBe('granted');
   });
 
-  it('returns denied when TCC.db returns EACCES', async () => {
+  it('returns denied when all paths return EACCES', async () => {
     mockAccess.mockRejectedValue(Object.assign(new Error('eacces'), { code: 'EACCES' }));
     expect(await probeFda()).toBe('denied');
   });

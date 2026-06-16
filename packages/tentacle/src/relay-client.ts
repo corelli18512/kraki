@@ -777,7 +777,7 @@ export class RelayClient {
 
   private async handleCreateSession(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'create_session') return;
-    const { model, reasoningEffort, cwd, prompt, requestId } = msg.payload;
+    const { model, reasoningEffort, cwd, prompt, requestId, agentId } = msg.payload;
 
     // Pre-generate a stable sessionId and map requestId BEFORE calling the adapter.
     // This is concurrency-safe: each request gets its own unique key.
@@ -787,7 +787,7 @@ export class RelayClient {
     }
 
     try {
-      const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId });
+      const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId, agentId });
 
       // If an initial prompt was provided, send it to the new session.
       // Otherwise mark idle — the SDK only fires session.idle after a turn
@@ -1416,10 +1416,28 @@ export class RelayClient {
       try {
         const result = this.sessionManager.resumeSession(sessionId);
         if (!result) return false;
+        // Tell the adapter which agent owns this session (for multi-agent routing)
+        this.adapter.registerSessionAgent(sessionId, meta.agent);
         await this.adapter.resumeSession(sessionId, result.context);
         // Restore permission mode from persisted meta
         if (meta.mode) {
           this.adapter.setSessionMode(sessionId, meta.mode);
+        }
+        // Restore the user-selected model on resume. The SDK's session
+        // state remembers the last model used for prior turns, but that
+        // model may be retired by the time we resume (e.g. after Copilot
+        // rotates its model lineup). Pushing kraki's persisted meta.model
+        // back into the SDK ensures the next turn uses the model the user
+        // intended, not whatever the SDK happened to write last.
+        if (meta.model) {
+          try {
+            await this.adapter.setSessionModel(sessionId, meta.model);
+          } catch (err) {
+            logger.warn(
+              { err, sessionId, model: meta.model },
+              'Failed to restore session model on resume — SDK will use its persisted model',
+            );
+          }
         }
         // Restore persisted usage totals so accumulation continues
         if (meta.usage) {
@@ -2098,8 +2116,7 @@ export class RelayClient {
       payload: {
         name: this.options.device.name,
         kind: this.options.device.kind,
-        models: this.options.device.capabilities?.models,
-        modelDetails: this.options.device.capabilities?.modelDetails,
+        agents: this.options.device.capabilities?.agents,
         version: this.options.version,
       },
     } as ProducerMessage);
@@ -2117,8 +2134,7 @@ export class RelayClient {
       payload: {
         name: this.options.device.name,
         kind: this.options.device.kind,
-        models: this.options.device.capabilities?.models,
-        modelDetails: this.options.device.capabilities?.modelDetails,
+        agents: this.options.device.capabilities?.agents,
         version: this.options.version,
       },
     };
