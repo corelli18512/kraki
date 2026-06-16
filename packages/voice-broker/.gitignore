@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+coverage/
+fixtures/*.pcm
+fixtures/*.wav
+!fixtures/.gitkeep

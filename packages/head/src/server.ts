@@ -6,8 +6,10 @@ import type { Server } from 'http';
 import type {
   AuthMessage, AuthErrorCode, AuthMethod,
   UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
+  VoiceResource,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
@@ -100,7 +102,20 @@ export interface HeadServerOptions {
   authBackend?: AuthBackend;
   /** This head's region identifier (e.g., 'us', 'china'). Sent to auth backend for region checks. */
   region?: string;
+  /** Voice-broker lease signer. If absent, request_voice_lease is rejected with 'not_entitled'. */
+  leaseIssuer?: LeaseIssuer;
+  /** Per-lease TTL in seconds. Default 86400 (24h). */
+  voiceLeaseTtlSec?: number;
+  /** Quota seconds embedded in each lease. Default 7200 (2h). */
+  voiceLeaseQuotaSec?: number;
+  /** Per-user-per-day cap on total issued lease quota. Default 7200 (2h). */
+  voiceDailyQuotaSec?: number;
 }
+
+const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
+const DEFAULT_VOICE_LEASE_QUOTA_SEC = 7_200;
+const DEFAULT_VOICE_DAILY_QUOTA_SEC = 7_200;
+const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 
@@ -685,6 +700,11 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'request_voice_lease') {
+      this.handleRequestVoiceLease(ws, state, msg);
+      return;
+    }
+
     if (msg.type === 'ping') {
       const pongMsg: Record<string, unknown> = { type: 'pong' };
       if (state.lastReceivedRelaySeq > 0) {
@@ -700,6 +720,122 @@ export class HeadServer {
     }
 
     this.sendError(ws, `Unknown message type: ${msg.type}`);
+  }
+
+  // --- Voice lease issuance ---
+
+  private handleRequestVoiceLease(
+    ws: WebSocket,
+    state: ClientState,
+    msg: Record<string, unknown>,
+  ): void {
+    const logger = getLogger();
+    const userId = state.userId;
+    const deviceId = state.deviceId;
+    if (!userId || !deviceId) {
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'invalid_request',
+        detail: 'Not authenticated',
+      }));
+      return;
+    }
+
+    const issuer = this.options.leaseIssuer;
+    if (!issuer) {
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'not_entitled',
+        detail: 'Voice lease issuance is not enabled on this head',
+      }));
+      return;
+    }
+
+    // Validate request shape.
+    const requestedDeviceId = typeof msg.deviceId === 'string' ? msg.deviceId : undefined;
+    const requestedResource = typeof msg.resource === 'string' ? (msg.resource as VoiceResource) : undefined;
+    if (!requestedDeviceId || !requestedResource) {
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'invalid_request',
+        detail: 'Missing deviceId or resource',
+      }));
+      return;
+    }
+
+    // Lease may only be requested for the authenticated device — no proxying.
+    if (requestedDeviceId !== deviceId) {
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'invalid_request',
+        detail: 'deviceId does not match authenticated device',
+      }));
+      return;
+    }
+
+    if (!VALID_VOICE_RESOURCES.has(requestedResource)) {
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'invalid_request',
+        detail: `Unknown resource: ${String(requestedResource)}`,
+      }));
+      return;
+    }
+
+    const ttl = this.options.voiceLeaseTtlSec ?? DEFAULT_VOICE_LEASE_TTL_SEC;
+    const quotaPerLease = this.options.voiceLeaseQuotaSec ?? DEFAULT_VOICE_LEASE_QUOTA_SEC;
+    const dailyCap = this.options.voiceDailyQuotaSec ?? DEFAULT_VOICE_DAILY_QUOTA_SEC;
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    const issuedToday = this.storage.sumVoiceLeaseQuotaIssuedToday(userId, nowSec);
+    if (issuedToday + quotaPerLease > dailyCap) {
+      logger.info('Voice lease denied: daily quota exhausted', {
+        userId, deviceId, issuedToday, quotaPerLease, dailyCap,
+      });
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'quota_exhausted',
+        detail: `Daily quota reached (${issuedToday}/${dailyCap}s)`,
+      }));
+      return;
+    }
+
+    const lease = issuer.issue({
+      userId,
+      deviceId,
+      quotaSeconds: quotaPerLease,
+      ttlSeconds: ttl,
+      resource: requestedResource,
+      nowUnixSec: nowSec,
+    });
+
+    try {
+      this.storage.recordVoiceLease({
+        jti: lease.payload.jti,
+        userId,
+        deviceId,
+        resource: requestedResource,
+        quotaSeconds: quotaPerLease,
+        issuedAtUnixSec: lease.payload.iat,
+        expiresAtUnixSec: lease.payload.exp,
+      });
+    } catch (err) {
+      logger.error('Voice lease persist failed', {
+        userId, deviceId, jti: lease.payload.jti, error: (err as Error).message,
+      });
+      ws.send(JSON.stringify({
+        type: 'voice_lease_denied',
+        reason: 'invalid_request',
+        detail: 'Lease persistence failed',
+      }));
+      return;
+    }
+
+    logger.info('Voice lease issued', {
+      userId, deviceId, jti: lease.payload.jti,
+      quotaSeconds: quotaPerLease, ttlSec: ttl,
+    });
+    ws.send(JSON.stringify({ type: 'voice_lease_grant', lease }));
   }
 
   // --- Routing ---

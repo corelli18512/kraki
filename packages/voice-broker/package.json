@@ -1,0 +1,43 @@
+{
+  "name": "@kraki/voice-broker",
+  "version": "0.0.1",
+  "description": "Kraki voice broker — holds the Doubao ASR key, relays audio from arm clients, mints transcripts. Runs as a sidecar to the head process.",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./mock": "./dist/mock-doubao.js",
+    "./logger": "./dist/logger.js"
+  },
+  "files": ["dist"],
+  "bin": {
+    "kraki-voice-broker": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/cli.ts serve",
+    "probe": "tsx src/cli.ts probe",
+    "mock": "tsx src/cli.ts mock",
+    "serve": "tsx src/cli.ts serve",
+    "web": "tsx src/cli.ts web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@kraki/crypto": "workspace:*",
+    "@kraki/protocol": "workspace:*",
+    "dotenv": "^17.3.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

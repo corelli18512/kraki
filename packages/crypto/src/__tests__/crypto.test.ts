@@ -6,6 +6,7 @@ import {
   importPublicKey,
   signChallenge,
   verifyChallenge,
+  canonicalJson,
   type KeyPair,
   type RecipientKey,
   type EncryptedPayload,
@@ -331,6 +332,59 @@ describe('@kraki/crypto', () => {
       }
       const elapsed = Date.now() - start;
       expect(elapsed).toBeLessThan(10000);
+    });
+  });
+
+  // ── canonicalJson ─────────────────────────────────────
+
+  describe('canonicalJson', () => {
+    it('sorts keys lexicographically', () => {
+      const a = canonicalJson({ b: 2, a: 1, c: 3 });
+      const b = canonicalJson({ c: 3, a: 1, b: 2 });
+      expect(a).toBe(b);
+      expect(a).toBe('{"a":1,"b":2,"c":3}');
+    });
+
+    it('produces a string with no whitespace between tokens', () => {
+      // The structural JSON has no whitespace — values can contain spaces.
+      const s = canonicalJson({ x: 1, y: 'hi' });
+      expect(s).toBe('{"x":1,"y":"hi"}');
+    });
+
+    it('is stable across insertion-order variations of the same logical payload', () => {
+      const payload1 = {
+        ver: 1, iss: 'kraki-head', sub: 'u', did: 'd',
+        iat: 1, exp: 2, quota_seconds: 7200, resource: 'voice/doubao', jti: 'j',
+      };
+      const payload2 = {
+        jti: 'j', resource: 'voice/doubao', quota_seconds: 7200, exp: 2, iat: 1,
+        did: 'd', sub: 'u', iss: 'kraki-head', ver: 1,
+      };
+      expect(canonicalJson(payload1)).toBe(canonicalJson(payload2));
+    });
+
+    it('round-trips through signChallenge → verifyChallenge', () => {
+      const kp = generateKeyPair();
+      const payload = {
+        ver: 1, iss: 'kraki-head', sub: 'user_abc', did: 'dev_xyz',
+        iat: 1000, exp: 2000, quota_seconds: 3600,
+        resource: 'voice/doubao', jti: 'lease_1',
+      };
+      const canonical = canonicalJson(payload);
+      const sig = signChallenge(canonical, kp.privateKey);
+      expect(verifyChallenge(canonical, sig, kp.publicKey)).toBe(true);
+    });
+
+    it('detects tampering (any payload mutation breaks signature)', () => {
+      const kp = generateKeyPair();
+      const payload = {
+        ver: 1, iss: 'kraki-head', sub: 'user_abc', did: 'dev_xyz',
+        iat: 1000, exp: 2000, quota_seconds: 3600,
+        resource: 'voice/doubao', jti: 'lease_1',
+      };
+      const sig = signChallenge(canonicalJson(payload), kp.privateKey);
+      const tampered = { ...payload, quota_seconds: 7200 };
+      expect(verifyChallenge(canonicalJson(tampered), sig, kp.publicKey)).toBe(false);
     });
   });
 });
