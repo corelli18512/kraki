@@ -264,6 +264,14 @@ export class ClaudeAdapter extends AgentAdapter {
     urlForSession: (sessionId: string) => string;
     bearerToken: string;
   };
+  /**
+   * Absolute path to the `claude` binary, set by the multi-adapter via
+   * `which claude` / `where claude`. We pass this to every SDK query() as
+   * `pathToClaudeCodeExecutable` to bypass the SDK's own resolution code,
+   * which calls `createRequire(import.meta.url)` and fails inside our SEA
+   * binary (no node_modules next to the executable).
+   */
+  private readonly claudeExecutablePath?: string;
 
   constructor(options: {
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
@@ -271,10 +279,12 @@ export class ClaudeAdapter extends AgentAdapter {
       urlForSession: (sessionId: string) => string;
       bearerToken: string;
     };
+    claudeExecutablePath?: string;
   } = {}) {
     super();
     this.attachmentStore = options.attachmentStore;
     this.krakiMcp = options.krakiMcp;
+    this.claudeExecutablePath = options.claudeExecutablePath;
   }
 
   /** System prompt appended to Claude Code's built-in prompt. */
@@ -368,7 +378,11 @@ export class ClaudeAdapter extends AgentAdapter {
       const noop = (async function* () { /* never yields — query blocks waiting for input */ })();
       const q = sdk.query({
         prompt: noop,
-        options: { abortController: ac, permissionMode: 'default' as PermissionMode },
+        options: {
+          abortController: ac,
+          permissionMode: 'default' as PermissionMode,
+          ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
+        },
       });
       const models = await q.supportedModels();
       ac.abort();
@@ -588,6 +602,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
     const options: Options = {
       abortController: entry.abortController,
+      ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
       ...(config?.model && { model: this.modelAliasMap.get(config.model) ?? config.model }),
       ...(config?.cwd && { cwd: config.cwd }),
       ...(config?.resume && { resume: config.resume }),
@@ -812,6 +827,7 @@ export class ClaudeAdapter extends AgentAdapter {
       const q = queryFn({
         prompt,
         options: {
+          ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
           systemPrompt: ClaudeAdapter.TITLE_SYSTEM_PROMPT,
           maxTurns: 1,
           permissionMode: 'bypassPermissions' as PermissionMode,

@@ -94,6 +94,16 @@ async function bundleCli() {
     },
     define: {
       __KRAKI_VERSION__: JSON.stringify(version),
+      // esbuild rewrites `import.meta` to an empty object `{}` when
+      // bundling .mjs sources into CJS, so any `import.meta.url` access
+      // becomes `undefined`. The Claude Agent SDK reads `import.meta.url`
+      // at module-load time via `createRequire` and `fileURLToPath`, both
+      // of which throw on `undefined`. Replace it with a runtime constant
+      // that points at the SEA executable so those calls succeed.
+      'import.meta.url': '__kraki_import_meta_url',
+    },
+    banner: {
+      js: 'const __kraki_import_meta_url = require("url").pathToFileURL(__filename).href;',
     },
   });
 }
