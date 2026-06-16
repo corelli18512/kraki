@@ -21,8 +21,54 @@ import {
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
+import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const logger = createLogger('claude-adapter');
+
+/**
+ * Load `env` overrides from `~/.claude/settings.json` (the same file
+ * Claude Code itself reads) and merge them into `process.env`.
+ *
+ * This lets users running kraki as a launchd / systemd daemon — which
+ * does not inherit their interactive shell environment — point the
+ * Claude SDK at custom Anthropic-compatible providers (e.g. DeepSeek,
+ * a self-hosted gateway) by writing standard ANTHROPIC_* keys into
+ * settings.json instead of a shell rc file.
+ *
+ * Existing values in `process.env` win, so a user who *does* have the
+ * vars exported (e.g. via plist EnvironmentVariables) keeps that
+ * behaviour.
+ *
+ * Errors are non-fatal — a missing or malformed file just means we
+ * fall back to whatever is already in `process.env`.
+ */
+function loadClaudeSettingsEnv(): void {
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) return;
+  try {
+    const raw = readFileSync(settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { env?: Record<string, unknown> };
+    const env = parsed.env;
+    if (!env || typeof env !== 'object') return;
+    let injected = 0;
+    for (const [key, value] of Object.entries(env)) {
+      if (typeof value !== 'string') continue;
+      if (process.env[key] !== undefined) continue;
+      process.env[key] = value;
+      injected += 1;
+    }
+    if (injected > 0) {
+      logger.debug({ path: settingsPath, count: injected }, 'Loaded env from Claude settings.json');
+    }
+  } catch (err) {
+    logger.warn(
+      { error: (err as Error).message, path: settingsPath },
+      'Failed to load Claude settings.json env (continuing with process env only)',
+    );
+  }
+}
 
 // ── Lazy SDK import types ───────────────────────────────
 // We import the SDK dynamically so the module can be loaded even when
@@ -349,6 +395,12 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
+    // Daemons launched via launchd / systemd do not inherit interactive
+    // shell env, so we honour the same `env` block Claude Code itself
+    // reads from ~/.claude/settings.json before checking auth. Anything
+    // already in process.env wins.
+    loadClaudeSettingsEnv();
+
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const useBedrock = process.env.CLAUDE_CODE_USE_BEDROCK === '1';
     const useVertex = process.env.CLAUDE_CODE_USE_VERTEX === '1';
