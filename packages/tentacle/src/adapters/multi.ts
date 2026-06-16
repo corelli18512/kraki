@@ -27,11 +27,27 @@ const logger = createLogger('multi-adapter');
 
 // ── Detection helpers ───────────────────────────────────
 
-async function canImport(specifier: string): Promise<boolean> {
+// Each SDK is probed via a string-literal dynamic import so esbuild can
+// statically bundle the module into the SEA binary. A previous version
+// used a generic `canImport(specifier)` helper, but a variable-specifier
+// `import()` collapses to a runtime `require()` lookup, which fails
+// inside the SEA bundle (no node_modules tree alongside the binary).
+async function canImportCopilotSdk(): Promise<boolean> {
   try {
-    await import(specifier);
+    await import('@github/copilot-sdk');
     return true;
-  } catch {
+  } catch (err) {
+    logger.debug({ error: (err as Error).message }, '@github/copilot-sdk import failed');
+    return false;
+  }
+}
+
+async function canImportClaudeSdk(): Promise<boolean> {
+  try {
+    await import('@anthropic-ai/claude-agent-sdk');
+    return true;
+  } catch (err) {
+    logger.debug({ error: (err as Error).message }, '@anthropic-ai/claude-agent-sdk import failed');
     return false;
   }
 }
@@ -51,19 +67,23 @@ export async function detectAvailableAgents(): Promise<AgentId[]> {
   const agents: AgentId[] = [];
 
   // Copilot: SDK importable + `copilot` CLI on PATH
-  if (await canImport('@github/copilot-sdk') && cliExists('copilot')) {
+  const copilotSdk = await canImportCopilotSdk();
+  const copilotCli = cliExists('copilot');
+  if (copilotSdk && copilotCli) {
     agents.push('copilot');
     logger.info('Detected Copilot: SDK + copilot CLI OK');
   } else {
-    logger.debug('Copilot not available (SDK or copilot CLI missing)');
+    logger.debug({ sdk: copilotSdk, cli: copilotCli }, 'Copilot not available');
   }
 
   // Claude: SDK importable + `claude` CLI on PATH
-  if (await canImport('@anthropic-ai/claude-agent-sdk') && cliExists('claude')) {
+  const claudeSdk = await canImportClaudeSdk();
+  const claudeCli = cliExists('claude');
+  if (claudeSdk && claudeCli) {
     agents.push('claude');
     logger.info('Detected Claude Code: SDK + claude CLI OK');
   } else {
-    logger.debug('Claude Code not available (SDK or claude CLI missing)');
+    logger.debug({ sdk: claudeSdk, cli: claudeCli }, 'Claude Code not available');
   }
 
   return agents;
