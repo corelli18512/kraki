@@ -298,6 +298,7 @@ export interface SessionModelSetMessage extends BaseEnvelope {
   payload: {
     model: string;
     reasoningEffort?: import('./devices.js').ReasoningEffort;
+    contextTier?: import('./devices.js').ContextTier;
   };
 }
 
@@ -619,6 +620,8 @@ export interface CreateSessionMessage extends BaseEnvelope {
     model: string;
     /** Reasoning effort level (only for models that support it) */
     reasoningEffort?: import('./devices.js').ReasoningEffort;
+    /** Context tier (only for models that support long_context) */
+    contextTier?: import('./devices.js').ContextTier;
     /** Initial prompt to send after session is created */
     prompt?: string;
     /** Working directory for the session */
@@ -638,6 +641,7 @@ export interface SetSessionModelMessage extends BaseEnvelope {
   payload: {
     model: string;
     reasoningEffort?: import('./devices.js').ReasoningEffort;
+    contextTier?: import('./devices.js').ContextTier;
   };
 }
 

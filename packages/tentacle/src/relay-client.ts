@@ -737,20 +737,20 @@ export class RelayClient {
           break;
         }
         case 'set_session_model': {
-          const { model, reasoningEffort } = msg.payload;
+          const { model, reasoningEffort, contextTier } = msg.payload;
           // Persist + ack immediately so the choice survives even if the
           // session is currently disconnected and lazy-resume fails.
           this.sessionManager.setModel(sessionId, model);
           this.send({
             type: 'session_model_set',
             sessionId,
-            payload: { model, reasoningEffort },
+            payload: { model, reasoningEffort, contextTier },
           });
           // Lazy resume: ensure the SDK session is live before pushing the
           // new model into it; otherwise the adapter would silently drop it
           // (and the user's selection would be lost on next interaction).
           this.ensureSessionResumed(sessionId)
-            .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort))
+            .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier))
             .catch((err) => {
               logger.error({ err, sessionId }, 'setSessionModel failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
@@ -777,7 +777,7 @@ export class RelayClient {
 
   private async handleCreateSession(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'create_session') return;
-    const { model, reasoningEffort, cwd, prompt, requestId, agentId } = msg.payload;
+    const { model, reasoningEffort, contextTier, cwd, prompt, requestId, agentId } = msg.payload;
 
     // Pre-generate a stable sessionId and map requestId BEFORE calling the adapter.
     // This is concurrency-safe: each request gets its own unique key.
@@ -787,7 +787,7 @@ export class RelayClient {
     }
 
     try {
-      const result = await this.adapter.createSession({ model, reasoningEffort, cwd: cwd || '/', sessionId: preSessionId, agentId });
+      const result = await this.adapter.createSession({ model, reasoningEffort, contextTier, cwd: cwd || '/', sessionId: preSessionId, agentId });
 
       // If an initial prompt was provided, send it to the new session.
       // Otherwise mark idle — the SDK only fires session.idle after a turn

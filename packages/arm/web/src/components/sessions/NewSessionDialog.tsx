@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import type { ReasoningEffort } from '@kraki/protocol';
+import type { ReasoningEffort, ContextTier } from '@kraki/protocol';
 
 interface Props {
   open: boolean;
@@ -12,12 +12,14 @@ const LAST_DEVICE_KEY = 'kraki:last-device';
 const AGENT_PREF_KEY = 'kraki:last-agent';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
+const CONTEXT_TIER_PREF_KEY = 'kraki:last-context-tier';
 
 const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   low: 'Low',
   medium: 'Medium',
   high: 'High',
-  xhigh: 'Max',
+  xhigh: 'XHigh',
+  max: 'Max',
 };
 
 function getModelPrefs(): Record<string, string> {
@@ -40,6 +42,16 @@ function saveEffortPref(modelId: string, effort: ReasoningEffort) {
   localStorage.setItem(EFFORT_PREF_KEY, JSON.stringify(prefs));
 }
 
+function getContextTierPrefs(): Record<string, ContextTier> {
+  try { return JSON.parse(localStorage.getItem(CONTEXT_TIER_PREF_KEY) ?? '{}'); } catch { return {}; }
+}
+
+function saveContextTierPref(modelId: string, tier: ContextTier) {
+  const prefs = getContextTierPrefs();
+  prefs[modelId] = tier;
+  localStorage.setItem(CONTEXT_TIER_PREF_KEY, JSON.stringify(prefs));
+}
+
 export function NewSessionDialog({ open, onClose }: Props) {
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
@@ -49,6 +61,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const [selectedAgent, setSelectedAgent] = useState('');
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | undefined>();
+  const [contextTier, setContextTier] = useState<ContextTier | undefined>();
   const listRef = useRef<HTMLDivElement>(null);
 
   // Default to last selected device, or single tentacle
@@ -93,6 +106,7 @@ export function NewSessionDialog({ open, onClose }: Props) {
     [modelDetails, model],
   );
   const supportedEfforts = selectedModelDetail?.supportedReasoningEfforts;
+  const supportedContextTiers = selectedModelDetail?.supportedContextTiers;
 
   // Restore last model for this device+agent, or auto-select first
   useEffect(() => {
@@ -121,6 +135,21 @@ export function NewSessionDialog({ open, onClose }: Props) {
       setReasoningEffort(selectedModelDetail.defaultReasoningEffort);
     }
   }, [model, selectedModelDetail, supportedEfforts]);
+
+  // Restore or default context tier when model changes
+  useEffect(() => {
+    if (!model || !supportedContextTiers || supportedContextTiers.length <= 1) {
+      setContextTier(undefined);
+      return;
+    }
+    const prefs = getContextTierPrefs();
+    const lastTier = prefs[model];
+    if (lastTier && supportedContextTiers.includes(lastTier)) {
+      setContextTier(lastTier);
+    } else {
+      setContextTier('default');
+    }
+  }, [model, supportedContextTiers]);
 
   // Scroll selected model into view
   useEffect(() => {
@@ -151,12 +180,18 @@ export function NewSessionDialog({ open, onClose }: Props) {
     saveEffortPref(model, effort);
   };
 
+  const handleSelectContextTier = (tier: ContextTier) => {
+    setContextTier(tier);
+    saveContextTierPref(model, tier);
+  };
+
   const handleSubmit = () => {
     if (!canSubmit) return;
     wsClient.createSession({
       targetDeviceId: selectedDevice,
       model,
       reasoningEffort,
+      contextTier: contextTier === 'long_context' ? contextTier : undefined,
       agentId: selectedAgentId,
     });
     onClose();
@@ -285,6 +320,35 @@ export function NewSessionDialog({ open, onClose }: Props) {
                       {EFFORT_LABELS[effort] ?? effort}
                     </button>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Context tier picker — only shown when model supports long_context */}
+            {supportedContextTiers && supportedContextTiers.length > 1 && (
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">Context</label>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => handleSelectContextTier('default')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      contextTier !== 'long_context'
+                        ? 'bg-ocean-500 text-white'
+                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                    }`}
+                  >
+                    Default
+                  </button>
+                  <button
+                    onClick={() => handleSelectContextTier('long_context')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      contextTier === 'long_context'
+                        ? 'bg-ocean-500 text-white'
+                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                    }`}
+                  >
+                    1M tokens
+                  </button>
                 </div>
               </div>
             )}

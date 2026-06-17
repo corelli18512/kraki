@@ -1188,7 +1188,7 @@ describe('CopilotAdapter', () => {
 
     it('merges SDK list with local active sessions', async () => {
       mockListSessions.mockResolvedValue([
-        { sessionId: 'sess-1', summary: 'first', context: { cwd: '/tmp' } },
+        { sessionId: 'sess-1', summary: 'first', context: { workingDirectory: '/tmp' } },
         { sessionId: 'sess-old', summary: 'old' },
       ]);
       await adapter.start();
@@ -1204,7 +1204,7 @@ describe('CopilotAdapter', () => {
       await adapter.start();
       await adapter.createSession({}); // mock-sess-1
       mockListSessions.mockResolvedValue([
-        { sessionId: 'mock-sess-1', context: { cwd: '/home' } },
+        { sessionId: 'mock-sess-1', context: { workingDirectory: '/home' } },
       ]);
       const list = await adapter.listSessions();
       expect(list[0]).toMatchObject({ id: 'mock-sess-1', state: 'active' });
@@ -1758,7 +1758,7 @@ describe('CopilotAdapter', () => {
 
       await adapter.setSessionModel(sessionId, 'claude-opus-4');
 
-      expect(mockSessions[0].setModel).toHaveBeenCalledWith('claude-opus-4');
+      expect(mockSessions[0].setModel).toHaveBeenCalledWith('claude-opus-4', undefined);
     });
 
     it('does not throw for unknown session', async () => {

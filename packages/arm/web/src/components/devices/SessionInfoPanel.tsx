@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import type { SessionSummary, SessionUsage, ModelDetail } from '@kraki/protocol';
+import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
 import { MessageSquare, GitFork, Trash2, Pencil } from 'lucide-react';
 
 function formatTokens(n: number): string {
@@ -26,6 +26,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [pendingEffort, setPendingEffort] = useState<string | undefined>(undefined);
+  const [pendingContextTier, setPendingContextTier] = useState<ContextTier | undefined>(undefined);
   const [editing, setEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -37,6 +38,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
   const openPicker = () => {
     setPendingModel(session.model ?? null);
     setPendingEffort(undefined);
+    setPendingContextTier(undefined);
     setShowModelPicker(true);
   };
 
@@ -44,15 +46,17 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
     setShowModelPicker(false);
     setPendingModel(null);
     setPendingEffort(undefined);
+    setPendingContextTier(undefined);
   };
 
   const applyModel = () => {
     if (pendingModel) {
-      wsClient.setSessionModel(session.id, pendingModel, pendingEffort);
+      wsClient.setSessionModel(session.id, pendingModel, pendingEffort, pendingContextTier === 'long_context' ? pendingContextTier : undefined);
     }
     setShowModelPicker(false);
     setPendingModel(null);
     setPendingEffort(undefined);
+    setPendingContextTier(undefined);
   };
 
   const sessionName = session.title ?? session.autoTitle ?? `${session.agent}${session.model ? ` · ${session.model}` : ''}`;
@@ -177,9 +181,34 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                           : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
                       }`}
                     >
-                      {effort === 'xhigh' ? 'Max' : effort.charAt(0).toUpperCase() + effort.slice(1)}
+                      {effort === 'xhigh' ? 'XHigh' : effort === 'max' ? 'Max' : effort.charAt(0).toUpperCase() + effort.slice(1)}
                     </button>
                   ))}
+                </div>
+              )}
+              {activeModelDetail?.supportedContextTiers && activeModelDetail.supportedContextTiers.length > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-text-muted">Context</span>
+                  <button
+                    onClick={() => setPendingContextTier('default')}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      pendingContextTier !== 'long_context'
+                        ? 'bg-ocean-500/15 text-ocean-400'
+                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                    }`}
+                  >
+                    Default
+                  </button>
+                  <button
+                    onClick={() => setPendingContextTier('long_context')}
+                    className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      pendingContextTier === 'long_context'
+                        ? 'bg-ocean-500/15 text-ocean-400'
+                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
+                    }`}
+                  >
+                    1M tokens
+                  </button>
                 </div>
               )}
               <div className="flex justify-end gap-2">

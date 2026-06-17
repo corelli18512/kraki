@@ -76,6 +76,8 @@ export interface CreateSessionConfig {
   model?: string;
   /** Reasoning effort level (for models that support it) */
   reasoningEffort?: string;
+  /** Context tier (for models that support long_context) */
+  contextTier?: string;
   /** Working directory for the session */
   cwd?: string;
   /** Caller-supplied session ID (adapter may ignore) */
@@ -194,8 +196,8 @@ export abstract class AgentAdapter {
   /** Generate a title for a session via LLM. Override in concrete adapters. */
   async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[]; currentTitle?: string }): Promise<string | null> { return null; }
 
-  /** Change model (and optionally reasoning effort) for a session. Override in concrete adapters. */
-  async setSessionModel(_sessionId: string, _model: string, _reasoningEffort?: string): Promise<void> { /* no-op by default */ }
+  /** Change model (and optionally reasoning effort / context tier) for a session. Override in concrete adapters. */
+  async setSessionModel(_sessionId: string, _model: string, _reasoningEffort?: string, _contextTier?: string): Promise<void> { /* no-op by default */ }
 
   /** Get current cumulative usage for a session. Override in concrete adapters. */
   getSessionUsage(_sessionId: string): SessionUsage | null { return null; }

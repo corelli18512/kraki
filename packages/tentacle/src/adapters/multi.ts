@@ -298,8 +298,8 @@ export class MultiAgentAdapter extends AgentAdapter {
     this.getSessionAdapter(sessionId).setSessionMode(sessionId, mode);
   }
 
-  async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
-    return this.getSessionAdapter(sessionId).setSessionModel(sessionId, model, reasoningEffort);
+  async setSessionModel(sessionId: string, model: string, reasoningEffort?: string, contextTier?: string): Promise<void> {
+    return this.getSessionAdapter(sessionId).setSessionModel(sessionId, model, reasoningEffort, contextTier);
   }
 
   getSessionUsage(sessionId: string): SessionUsage | null {
