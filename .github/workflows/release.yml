@@ -232,6 +232,57 @@ jobs:
             --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
             packages/tentacle/dist/sea/${{ matrix.asset_name }}
 
+      - name: Create .app bundle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          BINARY="packages/tentacle/dist/sea/${{ matrix.asset_name }}"
+          VERSION=$(node -p "require('./packages/tentacle/package.json').version")
+          APP_DIR="packages/tentacle/dist/sea/Kraki.app"
+
+          mkdir -p "$APP_DIR/Contents/MacOS"
+          cp "$BINARY" "$APP_DIR/Contents/MacOS/kraki"
+
+          cat > "$APP_DIR/Contents/Info.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>chat.kraki.cli</string>
+              <key>CFBundleName</key>
+              <string>Kraki</string>
+              <key>CFBundleExecutable</key>
+              <string>kraki</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>LSBackgroundOnly</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          # Sign the bundle — this re-signs the executable inside too
+          codesign --force --deep --options runtime \
+            --entitlements packages/tentacle/entitlements.plist \
+            --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            "$APP_DIR"
+
+          # Create tar.gz for distribution
+          ARCH="${{ matrix.asset_name }}"
+          ARCH="${ARCH#kraki-cli-macos-}"
+          tar -czf "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz" \
+            -C packages/tentacle/dist/sea Kraki.app
+
+          echo "Created kraki-macos-${ARCH}.app.tar.gz"
+          ls -lh "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz"
+
       - name: Notarize binary (macOS)
         if: runner.os == 'macOS' && needs.prepare.outputs.publish_mode == 'publish'
         env:
@@ -239,12 +290,19 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # Notarize the standalone binary
           zip $RUNNER_TEMP/binary.zip packages/tentacle/dist/sea/${{ matrix.asset_name }}
           xcrun notarytool submit $RUNNER_TEMP/binary.zip \
             --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait
           # Mach-O binaries cannot be stapled (error 73); macOS verifies
           # the notarization ticket online at first launch instead.
+
+          # Notarize the .app bundle
+          zip -r $RUNNER_TEMP/app-bundle.zip packages/tentacle/dist/sea/Kraki.app
+          xcrun notarytool submit $RUNNER_TEMP/app-bundle.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
 
       - name: Smoke test tentacle binary
         run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
@@ -254,6 +312,14 @@ jobs:
         with:
           name: build-${{ matrix.asset_name }}
           path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+      - name: Upload .app bundle artifact (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.asset_name }}-app
+          path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
           if-no-files-found: error
 
   # ─── Build Toolbar ──────────────────────────────────────

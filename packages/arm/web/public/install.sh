@@ -29,6 +29,10 @@ detect_platform() {
   if [ "$PLATFORM" = "windows" ]; then
     ASSET="kraki-cli-${PLATFORM}-${ARCH}.exe"
     BINARY_NAME="kraki.exe"
+  elif [ "$PLATFORM" = "macos" ]; then
+    # macOS: install as .app bundle so TCC/FDA grants survive binary updates
+    ASSET="kraki-macos-${ARCH}.app.tar.gz"
+    APP_BUNDLE=1
   else
     ASSET="kraki-cli-${PLATFORM}-${ARCH}"
   fi
@@ -50,23 +54,25 @@ fetch_latest_version() {
 install() {
   URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
   TMP=$(mktemp -d)
-  TARGET="${TMP}/${BINARY_NAME}"
 
   echo "  Installing Kraki ${VERSION} (${PLATFORM}/${ARCH})..."
 
-  if ! curl -fSL# -o "$TARGET" "$URL"; then
+  if ! curl -fSL# -o "${TMP}/${ASSET}" "$URL"; then
     echo "Error: Download failed — ${URL}"
     rm -rf "$TMP"
     exit 1
   fi
 
-  chmod +x "$TARGET"
-
-  # macOS: remove quarantine/provenance xattrs so Gatekeeper doesn't
-  # SIGKILL the daemon child process even when the binary is signed.
-  if [ "$PLATFORM" = "macos" ]; then
-    xattr -cr "$TARGET" 2>/dev/null || true
+  # macOS: install as .app bundle with a symlink in $INSTALL_DIR
+  if [ "${APP_BUNDLE:-}" = "1" ]; then
+    install_app_bundle "$TMP"
+    rm -rf "$TMP"
+    return
   fi
+
+  TARGET="${TMP}/${BINARY_NAME}"
+  mv "${TMP}/${ASSET}" "$TARGET"
+  chmod +x "$TARGET"
 
   # Windows (Git Bash): install to user's local bin
   if [ "$PLATFORM" = "windows" ]; then
@@ -98,6 +104,52 @@ install() {
   fi
 
   rm -rf "$TMP"
+}
+
+# ── macOS .app bundle install ────────────────────────────
+
+install_app_bundle() {
+  TMP="$1"
+  APP_HOME="${HOME}/.local/share/kraki"
+  APP_PATH="${APP_HOME}/Kraki.app"
+
+  # Extract .app bundle
+  mkdir -p "$APP_HOME"
+  rm -rf "$APP_PATH"
+  tar -xzf "${TMP}/${ASSET}" -C "$APP_HOME"
+
+  # Strip quarantine/provenance xattrs
+  xattr -cr "$APP_PATH" 2>/dev/null || true
+
+  chmod +x "$APP_PATH/Contents/MacOS/kraki"
+
+  mkdir -p "$INSTALL_DIR"
+
+  # Remove existing binary/symlink and create symlink to the .app binary
+  LINK_TARGET="${INSTALL_DIR}/${BINARY_NAME}"
+  if [ -w "$INSTALL_DIR" ] || command -v sudo >/dev/null 2>&1; then
+    if [ -w "$INSTALL_DIR" ]; then
+      rm -f "$LINK_TARGET" 2>/dev/null || true
+      ln -sf "$APP_PATH/Contents/MacOS/kraki" "$LINK_TARGET"
+    else
+      sudo rm -f "$LINK_TARGET" 2>/dev/null || true
+      sudo ln -sf "$APP_PATH/Contents/MacOS/kraki" "$LINK_TARGET"
+    fi
+    echo "  Installed to ${APP_PATH}"
+    echo "  Symlinked ${LINK_TARGET} → .app bundle"
+  else
+    INSTALL_DIR="${HOME}/.local/bin"
+    mkdir -p "$INSTALL_DIR"
+    LINK_TARGET="${INSTALL_DIR}/${BINARY_NAME}"
+    rm -f "$LINK_TARGET" 2>/dev/null || true
+    ln -sf "$APP_PATH/Contents/MacOS/kraki" "$LINK_TARGET"
+    echo "  Installed to ${APP_PATH}"
+    echo "  Symlinked ${LINK_TARGET} → .app bundle"
+    case ":$PATH:" in
+      *":${INSTALL_DIR}:"*) ;;
+      *) echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\"" ;;
+    esac
+  fi
 }
 
 # ── Main ─────────────────────────────────────────────────
