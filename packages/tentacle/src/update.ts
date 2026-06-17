@@ -9,8 +9,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from 'node:https';
@@ -419,6 +419,9 @@ export async function performUpdate(currentVersion: string): Promise<void> {
       console.log('');
       console.log(chalk.dim('  💡 Grant Full Disk Access to eliminate the "data from other apps" dialog.'));
       console.log(chalk.dim('  Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+      if (detectAppBundle()) {
+        console.log(chalk.dim('  (The .app bundle preserves FDA across updates — grant once only)'));
+      }
       console.log('');
     }
 
@@ -492,11 +495,41 @@ function getPlatformAssetName(): string {
   return `kraki-cli-${platform}-${arch}${ext}`;
 }
 
+/**
+ * Detect if the current binary lives inside a .app bundle.
+ * Returns the .app directory path, or null if standalone.
+ *
+ * Expected layout: <prefix>/Kraki.app/Contents/MacOS/kraki
+ */
+function detectAppBundle(): string | null {
+  const realPath = realpathSync(process.execPath);
+  const macosDir = dirname(realPath);
+  const contentsDir = dirname(macosDir);
+  const appDir = dirname(contentsDir);
+
+  if (
+    macosDir.endsWith('/MacOS') &&
+    contentsDir.endsWith('/Contents') &&
+    appDir.endsWith('.app') &&
+    existsSync(join(contentsDir, 'Info.plist'))
+  ) {
+    return appDir;
+  }
+  return null;
+}
+
+/**
+ * Get the .app bundle asset name for macOS.
+ * e.g. "kraki-macos-arm64.app.tar.gz"
+ */
+function getAppBundleAssetName(): string {
+  return `kraki-macos-${process.arch}.app.tar.gz`;
+}
+
 async function updateViaBinary(
   version: string,
   onProgress?: (received: number, total: number) => void,
 ): Promise<void> {
-  const assetName = getPlatformAssetName();
   // Try v* tag first, fall back to tentacle-v*
   let release: GitHubRelease;
   try {
@@ -505,6 +538,18 @@ async function updateViaBinary(
     release = await fetchJson(`https://api.github.com/repos/${GITHUB_REPO}/releases/tags/tentacle-v${version}`);
   }
 
+  // macOS: prefer .app bundle update to preserve TCC/FDA grants
+  if (process.platform === 'darwin') {
+    const appBundleName = getAppBundleAssetName();
+    const appAsset = release.assets?.find((a) => a.name === appBundleName);
+    if (appAsset) {
+      await updateViaAppBundle(release, appAsset, onProgress);
+      return;
+    }
+    // Fall through to standalone binary update if .app asset not found
+  }
+
+  const assetName = getPlatformAssetName();
   const asset = release.assets?.find((a) => a.name === assetName);
   if (!asset) {
     throw new Error(`No binary found for ${assetName} in release v${version}`);
@@ -546,6 +591,95 @@ async function updateViaBinary(
 
   // Replace current binary — try direct first, sudo fallback for system dirs
   replaceBinary(tmpPath, currentBinary);
+}
+
+// ── macOS .app bundle update ────────────────────────────
+
+async function updateViaAppBundle(
+  release: GitHubRelease,
+  appAsset: { name: string; browser_download_url: string },
+  onProgress?: (received: number, total: number) => void,
+): Promise<void> {
+  const tmpDir = join(tmpdir(), 'kraki-app-update');
+  const tarPath = join(tmpDir, appAsset.name);
+
+  // Clean up any prior failed attempt
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
+
+  // Download tar.gz
+  await downloadFile(appAsset.browser_download_url, tarPath, onProgress);
+
+  // Verify checksum
+  const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
+  if (checksumAsset) {
+    const checksumData = await fetchText(checksumAsset.browser_download_url);
+    const expectedHash = parseChecksum(checksumData, appAsset.name);
+    if (expectedHash) {
+      const actualHash = hashFile(tarPath);
+      if (actualHash !== expectedHash) {
+        rmSync(tmpDir, { recursive: true, force: true });
+        throw new Error(`Checksum mismatch for ${appAsset.name}`);
+      }
+    }
+  }
+
+  // Extract
+  execSync(`tar -xzf "${tarPath}" -C "${tmpDir}"`, { stdio: 'ignore' });
+  const extractedApp = join(tmpDir, 'Kraki.app');
+  if (!existsSync(extractedApp)) {
+    rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error('Extracted .app bundle not found');
+  }
+
+  // Strip quarantine/provenance xattrs
+  stripProvenance(extractedApp);
+
+  // Determine target location
+  const existingAppDir = detectAppBundle();
+  const appHome = join(
+    process.env.HOME || process.env.USERPROFILE || '',
+    '.local', 'share', 'kraki',
+  );
+  const targetAppDir = existingAppDir || join(appHome, 'Kraki.app');
+
+  // Replace .app bundle
+  mkdirSync(dirname(targetAppDir), { recursive: true });
+  const backupDir = targetAppDir + '.bak';
+  rmSync(backupDir, { recursive: true, force: true });
+
+  try {
+    if (existsSync(targetAppDir)) {
+      renameSync(targetAppDir, backupDir);
+    }
+    renameSync(extractedApp, targetAppDir);
+
+    // If migrating from standalone binary → .app bundle, create symlink
+    if (!existingAppDir) {
+      const currentBinary = process.execPath;
+      const binDir = dirname(currentBinary);
+      const binName = 'kraki';
+      const linkPath = join(binDir, binName);
+      const appBinary = join(targetAppDir, 'Contents', 'MacOS', 'kraki');
+
+      // Remove the old standalone binary and replace with symlink
+      try { unlinkSync(linkPath); } catch { /* ignore */ }
+      symlinkSync(appBinary, linkPath);
+    }
+
+    // Clean up backup
+    rmSync(backupDir, { recursive: true, force: true });
+  } catch (err) {
+    // Restore backup on failure
+    if (existsSync(backupDir)) {
+      rmSync(targetAppDir, { recursive: true, force: true });
+      try { renameSync(backupDir, targetAppDir); } catch { /* ignore */ }
+    }
+    rmSync(tmpDir, { recursive: true, force: true });
+    throw err;
+  }
+
+  rmSync(tmpDir, { recursive: true, force: true });
 }
 
 function replaceBinary(source: string, target: string): void {
