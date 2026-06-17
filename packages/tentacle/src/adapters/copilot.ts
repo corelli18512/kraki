@@ -43,8 +43,8 @@ import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('copilot-adapter');
-type CopilotClientCtor = typeof import('@github/copilot-sdk').CopilotClient;
-let copilotClientCtorPromise: Promise<CopilotClientCtor> | null = null;
+type CopilotSdkModule = typeof import('@github/copilot-sdk');
+let copilotSdkPromise: Promise<CopilotSdkModule> | null = null;
 
 const VSCODE_JSONRPC_NODE_SPECIFIER = 'vscode-jsonrpc/node';
 const VSCODE_JSONRPC_NODE_JS_SPECIFIER = 'vscode-jsonrpc/node.js';
@@ -349,9 +349,9 @@ export function installCopilotSdkImportCompatibility(currentUrl: string = getRun
   return null;
 }
 
-async function loadCopilotClient(): Promise<CopilotClientCtor> {
-  if (!copilotClientCtorPromise) {
-    copilotClientCtorPromise = (async () => {
+async function loadCopilotSdk(): Promise<CopilotSdkModule> {
+  if (!copilotSdkPromise) {
+    copilotSdkPromise = (async () => {
       const compatibility = installCopilotSdkImportCompatibility();
       if (compatibility === 'hook') {
         logger.debug('Installed @github/copilot-sdk ESM import compatibility hook');
@@ -360,16 +360,15 @@ async function loadCopilotClient(): Promise<CopilotClientCtor> {
       }
 
       try {
-        const mod = await import('@github/copilot-sdk');
-        return mod.CopilotClient;
+        return await import('@github/copilot-sdk');
       } catch (err) {
-        copilotClientCtorPromise = null;
+        copilotSdkPromise = null;
         throw err;
       }
     })();
   }
 
-  return copilotClientCtorPromise;
+  return copilotSdkPromise;
 }
 
 // ── Adapter ─────────────────────────────────────────────
@@ -643,12 +642,20 @@ export class CopilotAdapter extends AgentAdapter {
       } catch { /* can't find node — SDK will use process.execPath */ }
     }
 
+    // copilot-sdk 1.0.x takes the CLI path via a RuntimeConnection — the old
+    // top-level `cliPath` option is silently ignored. Pass the resolved path
+    // explicitly so the SDK never falls back to its `getBundledCliPath()`,
+    // which uses `createRequire(bundlePath).resolve.paths('@github/copilot')`
+    // and finds nothing inside a SEA binary (no node_modules tree beside the
+    // bundle). When the path is unresolved we omit the connection so the SDK
+    // can apply its own COPILOT_CLI_PATH / bundled fallback.
+    const { CopilotClient, RuntimeConnection } = await loadCopilotSdk();
     const opts = {
       useLoggedInUser: true,
-      ...(cliPath && { cliPath }),
+      ...(cliPath && { connection: RuntimeConnection.forStdio({ path: cliPath }) }),
     };
+    logger.debug({ isSea: isSea(), cliPath: cliPath ?? null }, 'starting CopilotClient');
 
-    const CopilotClient = await loadCopilotClient();
     this.client = new CopilotClient(opts);
     await this.client.start();
     if (restoreExecPath) restoreExecPath();

@@ -92,6 +92,11 @@ let mockRegister: Mock | undefined;
 
 vi.mock('@github/copilot-sdk', () => {
   return {
+    RuntimeConnection: {
+      forStdio: vi.fn((opts?: { path?: string; args?: readonly string[] }) => ({ kind: 'stdio', ...opts })),
+      forTcp: vi.fn((opts?: Record<string, unknown>) => ({ kind: 'tcp', ...opts })),
+      forUri: vi.fn((url: string) => ({ kind: 'uri', url })),
+    },
     CopilotClient: vi.fn().mockImplementation((options: Record<string, unknown>) => {
       capturedClientOptions.push(options);
       return {
@@ -223,10 +228,12 @@ describe('CopilotAdapter', () => {
     it('start() passes useLoggedInUser: true and the resolved Copilot CLI path to the SDK', async () => {
       await adapter.start();
 
+      // copilot-sdk 1.0.x takes the CLI path via a RuntimeConnection, not the
+      // legacy top-level `cliPath` option.
       expect(capturedClientOptions[0]).toEqual(
         expect.objectContaining({
           useLoggedInUser: true,
-          cliPath: fakeCopilotPath,
+          connection: expect.objectContaining({ kind: 'stdio', path: fakeCopilotPath }),
         }),
       );
       // Static gitHubToken should NOT be injected — copilot server owns auth refresh
