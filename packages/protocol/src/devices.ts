@@ -73,7 +73,9 @@ export type PushProviderType = 'apns' | 'fcm' | 'web_push';
 
 // ── Model metadata ──────────────────────────────────────
 
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export type ContextTier = 'default' | 'long_context';
 
 /** Model info exposed through the protocol (subset of SDK ModelInfo). */
 export interface ModelDetail {
@@ -84,4 +86,6 @@ export interface ModelDetail {
   defaultReasoningEffort?: ReasoningEffort;
   /** Total token ceiling for the model (e.g. 200000). */
   contextWindow?: number;
+  /** Available context tiers (omitted = only default). */
+  supportedContextTiers?: ContextTier[];
 }

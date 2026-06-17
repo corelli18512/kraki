@@ -140,8 +140,8 @@ export class KrakiWSClient {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
-  setSessionModel(sessionId: string, model: string, reasoningEffort?: string) {
-    commands.setSessionModel(sessionId, model, (msg) => this.sendEncrypted(msg), reasoningEffort);
+  setSessionModel(sessionId: string, model: string, reasoningEffort?: string, contextTier?: string) {
+    commands.setSessionModel(sessionId, model, (msg) => this.sendEncrypted(msg), reasoningEffort, contextTier);
   }
 
   deleteSession(sessionId: string) {
@@ -162,7 +162,7 @@ export class KrakiWSClient {
     getStore().removeSession(sessionId);
   }
 
-  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string; agentId?: string }) {
+  createSession(opts: { targetDeviceId: string; model: string; reasoningEffort?: string; contextTier?: string; prompt?: string; cwd?: string; agentId?: string }) {
     commands.createSession(opts, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 

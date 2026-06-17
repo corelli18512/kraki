@@ -281,11 +281,12 @@ export function setSessionModel(
   model: string,
   send: (msg: Record<string, unknown>) => void,
   reasoningEffort?: string,
+  contextTier?: string,
 ): void {
   send({
     type: 'set_session_model',
     sessionId,
-    payload: { model, ...(reasoningEffort && { reasoningEffort }) },
+    payload: { model, ...(reasoningEffort && { reasoningEffort }), ...(contextTier && { contextTier }) },
   });
   // Optimistically update the local session model
   const store = getStore();
@@ -296,7 +297,7 @@ export function setSessionModel(
 }
 
 export function createSession(
-  opts: { targetDeviceId: string; model: string; reasoningEffort?: string; prompt?: string; cwd?: string; agentId?: string },
+  opts: { targetDeviceId: string; model: string; reasoningEffort?: string; contextTier?: string; prompt?: string; cwd?: string; agentId?: string },
   send: (msg: Record<string, unknown>) => void,
   state: CommandState,
 ): void {
@@ -313,6 +314,7 @@ export function createSession(
       agentId: opts.agentId ?? 'copilot',
       model: opts.model,
       ...(opts.reasoningEffort && { reasoningEffort: opts.reasoningEffort }),
+      ...(opts.contextTier && { contextTier: opts.contextTier }),
       prompt: opts.prompt,
       cwd: opts.cwd,
     },

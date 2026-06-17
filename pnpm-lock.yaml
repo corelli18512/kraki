@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@github/copilot': 1.0.48
+  '@github/copilot': 1.0.63
 
 importers:
 
@@ -191,8 +191,8 @@ importers:
         specifier: ^0.3.156
         version: 0.3.156(@anthropic-ai/sdk@0.100.1(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
       '@github/copilot-sdk':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: ^1.0.1
+        version: 1.0.1(typescript@5.9.3)
       '@inquirer/prompts':
         specifier: ^8.3.2
         version: 8.3.2(@types/node@25.5.0)
@@ -968,48 +968,64 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@github/copilot-darwin-arm64@1.0.48':
-    resolution: {integrity: sha512-82MLoMQwPVVFM8EYssihFxSEPUYtZADE8rMzQ3jG9HgRg2qjQSfnHQS1mKe64dlXswZUK/onw6/8kjnW5I4pPg==}
+  '@github/copilot-darwin-arm64@1.0.63':
+    resolution: {integrity: sha512-z6CMBxNDlKvT6bvOpqhu4M2bhb0daEbVwSe9SN9WfDUJbt7bpoL7OKKas428iyPSWHoL2WXwxSsy/FjIwSLV6w==}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@github/copilot-darwin-x64@1.0.48':
-    resolution: {integrity: sha512-1VQ5r5F0h8GwboXmZTcutqcJT+iCpPXAF27QqodmpKEvW9aYfG8g9X2kFJOzDZoX+SA3Uaka9qXdYKF2xT6Uog==}
+  '@github/copilot-darwin-x64@1.0.63':
+    resolution: {integrity: sha512-YKd7cXZgAGxhudzrtWdWh2NS35p2G5bV22Gz3jhEyBTqmq45o4sD4OwO87+UpkvM+3nZpwsHaLd3a+ILYX6OXg==}
     cpu: [x64]
     os: [darwin]
     hasBin: true
 
-  '@github/copilot-linux-arm64@1.0.48':
-    resolution: {integrity: sha512-PmsGnb0DZlI+Bf53l9HM1PAHHkUcMyB4y8v/7tnC/jDOV5dGF124n0HnDNfJLOLiJGiQGodthIif6QtPaAxpeA==}
+  '@github/copilot-linux-arm64@1.0.63':
+    resolution: {integrity: sha512-A3DOeEfmsJH9j1N+QLc7WXmESBskbezmhDyhyAJcHkw0ngRbKctuWQf/evUHFMh/kgwy1Lr/+9jXJm3NZqr0MA==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
     hasBin: true
 
-  '@github/copilot-linux-x64@1.0.48':
-    resolution: {integrity: sha512-b2cc4euSlke9fYHXXsS2EL9UYbctN0h4lZvtAcKUDY+RCnpYAQOVBZK+c1R9dQrtsT6Z/yUv7PuFPSs8qdtc2Q==}
+  '@github/copilot-linux-x64@1.0.63':
+    resolution: {integrity: sha512-OMKfZJRoDaJOV7vuWX/nFPNdLa9/H+nhajdE83v4YT9mKLXr86aWrkXE3pPoDYsKWvgQFHg4APA6oZPao0Fyow==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
     hasBin: true
 
-  '@github/copilot-sdk@0.3.0':
-    resolution: {integrity: sha512-SUo35k56pzzgYgwmDPHcu7kZxPrzXbH66IWXaEf6pmb94DlA709F82HrrDeja087TL4djJ9OuvRFWWOKCosAsg==}
-    engines: {node: '>=20.0.0'}
+  '@github/copilot-linuxmusl-arm64@1.0.63':
+    resolution: {integrity: sha512-jcIo6B3uHgcOluNfUHp+6atShKKrXYBPLaRyF6aDT699lwI83gW9KTDuEvDs5FDg8qWsWFfOl+al2dkWDYD3CQ==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+    hasBin: true
 
-  '@github/copilot-win32-arm64@1.0.48':
-    resolution: {integrity: sha512-VEEOwddtpJ3DTbXGhnK6K8im4ofl9m08q1m/K++sNvWV8wkkOSOQBTiPdyUsuU/TXAoFhb8tZMIJv+6NnMBtMw==}
+  '@github/copilot-linuxmusl-x64@1.0.63':
+    resolution: {integrity: sha512-BEdBbEF3fG7VqXzuaAY4JtmbdGSkpJFeb2ZQYaMpq7OP3aS7ssGe1cCX8ehZNegcMM/eb4GC6PXNXsvl3X/PAQ==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+    hasBin: true
+
+  '@github/copilot-sdk@1.0.1':
+    resolution: {integrity: sha512-w6AaS0WqqTE/3iyUrZznvgCLQhsUF7ZmEVCneacuHCfOzlH0r6ww9WUmyA0zgqmXO75V0IYrkIcnFke/qJkkDg==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+
+  '@github/copilot-win32-arm64@1.0.63':
+    resolution: {integrity: sha512-7FqUwOmtoeBoOn4zkKQqRL+WGFwektVRSr5Po2FvPAbKxGXGyFXApZTmRLqVcHhMKDRzMb8KLST1LU1TMTY/wg==}
     cpu: [arm64]
     os: [win32]
     hasBin: true
 
-  '@github/copilot-win32-x64@1.0.48':
-    resolution: {integrity: sha512-93BzvXLPHTyy1gWBXQY/IWIHor4IAwZuuo7/obG80/Qa6U0WeaN9slz/FBJvrsgVNrrRfEID5Xm3At+S6Kj67Q==}
+  '@github/copilot-win32-x64@1.0.63':
+    resolution: {integrity: sha512-RC/6y9KHdw/YRCrCEksF2RzbeblfBUNE7bkYZxygaQGYThuv1GeZL2YD2jVqxC2LxKzsUmWGvwEMxerfR6pmeQ==}
     cpu: [x64]
     os: [win32]
     hasBin: true
 
-  '@github/copilot@1.0.48':
-    resolution: {integrity: sha512-U5SzyTEq376UU9A4Sd3TEKz+Y2nRUd90cLO4Hc1otaB8yFSy9Ur2UVGcI2/wCoodL3a39k6WbdgNzFxr0gWFRQ==}
+  '@github/copilot@1.0.63':
+    resolution: {integrity: sha512-e8DRYiWJQc4kepVXsXjC8vpDU2FXS/TfR+Z6p/KAojfcwIUZzKMAfCV5D1lD25hV4CryVH1Z9t7mHqChickj0Q==}
     hasBin: true
 
   '@hono/node-server@1.19.14':
@@ -1185,6 +1201,21 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@os-theme/darwin-arm64@0.0.8':
+    resolution: {integrity: sha512-gMsOs+8Ju396a5yyMWigkbA0dMTxD78U3HzG3mlpiAyn6hfd5dbyI4VGP+sfTB82KGgWLzIhWWTFX5UYY6iX0A==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@os-theme/linux-x64@0.0.8':
+    resolution: {integrity: sha512-zvjmBUiSQPjM1RbhpsfCDYMJxW4eLlGmkFPnpteC/03X2lz6CjiX2hfbN2EWLxXjNnIje3Jqaen8IsqEnWrRBg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@os-theme/win32-x64@0.0.8':
+    resolution: {integrity: sha512-N3yxKNbVl2IBa/ncDuq55QhwqwUjnYLJxDKMEmYeJbLIV950qZNojPw3scXA6PbfxPZfIiRa8iz1pzNg9XxP8w==}
+    cpu: [x64]
+    os: [win32]
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -2902,6 +2933,11 @@ packages:
     resolution: {integrity: sha512-lBX72MWFduWEf7v7uWf5DHp9Jn5BI8bNPGuFgtXMmr2uDz2Gz2749y3am3agSDdkhHPHYmmxEGSKH85ZLGzgXw==}
     engines: {node: '>=20'}
 
+  os-theme@0.0.8:
+    resolution: {integrity: sha512-u1q3bLSv5uMHNIiPItkfDrHXu6ZFs2juwqxWREFM/uVBa+7Kkhy2v49LmJev2JcinGwqiEccElB/XsH9gwasuA==}
+    peerDependencies:
+      typescript: ^5
+
   p-limit@2.3.0:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
@@ -4151,38 +4187,53 @@ snapshots:
   '@esbuild/win32-x64@0.27.4':
     optional: true
 
-  '@github/copilot-darwin-arm64@1.0.48':
+  '@github/copilot-darwin-arm64@1.0.63':
     optional: true
 
-  '@github/copilot-darwin-x64@1.0.48':
+  '@github/copilot-darwin-x64@1.0.63':
     optional: true
 
-  '@github/copilot-linux-arm64@1.0.48':
+  '@github/copilot-linux-arm64@1.0.63':
     optional: true
 
-  '@github/copilot-linux-x64@1.0.48':
+  '@github/copilot-linux-x64@1.0.63':
     optional: true
 
-  '@github/copilot-sdk@0.3.0':
+  '@github/copilot-linuxmusl-arm64@1.0.63':
+    optional: true
+
+  '@github/copilot-linuxmusl-x64@1.0.63':
+    optional: true
+
+  '@github/copilot-sdk@1.0.1(typescript@5.9.3)':
     dependencies:
-      '@github/copilot': 1.0.48
+      '@github/copilot': 1.0.63(typescript@5.9.3)
       vscode-jsonrpc: 8.2.1
       zod: 4.3.6
+    transitivePeerDependencies:
+      - typescript
 
-  '@github/copilot-win32-arm64@1.0.48':
+  '@github/copilot-win32-arm64@1.0.63':
     optional: true
 
-  '@github/copilot-win32-x64@1.0.48':
+  '@github/copilot-win32-x64@1.0.63':
     optional: true
 
-  '@github/copilot@1.0.48':
+  '@github/copilot@1.0.63(typescript@5.9.3)':
+    dependencies:
+      detect-libc: 2.1.2
+      os-theme: 0.0.8(typescript@5.9.3)
     optionalDependencies:
-      '@github/copilot-darwin-arm64': 1.0.48
-      '@github/copilot-darwin-x64': 1.0.48
-      '@github/copilot-linux-arm64': 1.0.48
-      '@github/copilot-linux-x64': 1.0.48
-      '@github/copilot-win32-arm64': 1.0.48
-      '@github/copilot-win32-x64': 1.0.48
+      '@github/copilot-darwin-arm64': 1.0.63
+      '@github/copilot-darwin-x64': 1.0.63
+      '@github/copilot-linux-arm64': 1.0.63
+      '@github/copilot-linux-x64': 1.0.63
+      '@github/copilot-linuxmusl-arm64': 1.0.63
+      '@github/copilot-linuxmusl-x64': 1.0.63
+      '@github/copilot-win32-arm64': 1.0.63
+      '@github/copilot-win32-x64': 1.0.63
+    transitivePeerDependencies:
+      - typescript
 
   '@hono/node-server@1.19.14(hono@4.12.23)':
     dependencies:
@@ -4358,6 +4409,15 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
       - supports-color
+
+  '@os-theme/darwin-arm64@0.0.8':
+    optional: true
+
+  '@os-theme/linux-x64@0.0.8':
+    optional: true
+
+  '@os-theme/win32-x64@0.0.8':
+    optional: true
 
   '@pinojs/redact@0.4.0': {}
 
@@ -6144,6 +6204,14 @@ snapshots:
       log-symbols: 7.0.1
       stdin-discarder: 0.3.1
       string-width: 8.2.0
+
+  os-theme@0.0.8(typescript@5.9.3):
+    dependencies:
+      typescript: 5.9.3
+    optionalDependencies:
+      '@os-theme/darwin-arm64': 0.0.8
+      '@os-theme/linux-x64': 0.0.8
+      '@os-theme/win32-x64': 0.0.8
 
   p-limit@2.3.0:
     dependencies:

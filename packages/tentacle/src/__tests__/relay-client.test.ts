@@ -432,7 +432,7 @@ describe('RelayClient set_session_model', () => {
     // resolves synchronously here because getMeta returns a non-disconnected
     // session, so the .then fires after a microtask).
     await vi.runAllTimersAsync();
-    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined);
+    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined, undefined);
   });
 
   it('broadcasts session_model_set after handling set_session_model', () => {
@@ -519,7 +519,7 @@ describe('RelayClient set_session_model', () => {
     // The adapter call is chained behind ensureSessionResumed.
     await vi.runAllTimersAsync();
     expect(adapter.resumeSession).toHaveBeenCalledWith('sess_d', expect.anything());
-    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4', undefined);
+    expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4', undefined, undefined);
   });
 
   it('de-duplicates concurrent lazy resumes for the same session (resume once, not twice)', async () => {

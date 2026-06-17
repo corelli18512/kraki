@@ -23,6 +23,7 @@ import type {
   PermissionRequestResult,
   SessionMetadata,
   MCPServerConfig,
+  ContextTier,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync, renameSync } from 'node:fs';
@@ -463,23 +464,18 @@ export class CopilotAdapter extends AgentAdapter {
   private lastActivityAt = new Map<string, number>();
   private evictionTimer: ReturnType<typeof setInterval> | null = null;
 
-  private static readonly CONTEXT_WINDOWS: Record<string, number> = {
-    'claude-sonnet-4.6': 200_000,
-    'claude-sonnet-4.5': 200_000,
-    'claude-haiku-4.5': 200_000,
-    'claude-opus-4.7': 200_000,
-    'claude-opus-4.7-1m-internal': 1_000_000,
-    'claude-opus-4.6': 200_000,
-    'claude-opus-4.5': 200_000,
-    'gpt-5.5': 400_000,
-    'gpt-5.4': 400_000,
-    'gpt-5.3-codex': 400_000,
-    'gpt-5.2': 400_000,
-    'gpt-5.2-codex': 400_000,
-    'gpt-5.4-mini': 128_000,
-    'gpt-5-mini': 128_000,
-    'gpt-4.1': 1_000_000,
-  };
+  /** Models known to support long_context tier (updated from Copilot docs).
+   *  Used to populate supportedContextTiers in model details. */
+  private static readonly LONG_CONTEXT_MODELS = new Set([
+    'claude-sonnet-4.6',
+    'claude-opus-4.6',
+    'claude-opus-4.7',
+    'claude-opus-4.8',
+    'gpt-5.3-codex',
+    'gpt-5.4',
+    'gpt-5.5',
+    'gemini-3.1-pro-preview',
+  ]);
 
   /** Set of attachment ids already broadcast for this session — prevents
    *  re-broadcasting bytes when the same image is shown twice. */
@@ -900,6 +896,10 @@ export class CopilotAdapter extends AgentAdapter {
       ? config.reasoningEffort as SessionConfig['reasoningEffort']
       : undefined;
 
+    const contextTier = config.contextTier === 'long_context'
+      ? 'long_context' as ContextTier
+      : undefined;
+
     // Two-phase MCP wiring: create session WITHOUT kraki MCP server first
     // (we need the SDK-assigned sessionId to scope the MCP URL), then the
     // adapter re-wires through resumeSession with the kraki entry below.
@@ -937,8 +937,9 @@ export class CopilotAdapter extends AgentAdapter {
       ...(config.sessionId && { sessionId: config.sessionId }),
       ...(config.model && { model: config.model }),
       ...(effort && { reasoningEffort: effort }),
+      ...(contextTier && { contextTier }),
       ...(config.cwd && { workingDirectory: config.cwd }),
-      configDir: getCopilotConfigDir(),
+      configDirectory: getCopilotConfigDir(),
       ...(mcpServers && { mcpServers }),
       systemMessage: { mode: 'append' as const, content: systemPromptContent },
       streaming: true,
@@ -1222,7 +1223,7 @@ export class CopilotAdapter extends AgentAdapter {
       id: s.sessionId,
       state: this.sessions.has(s.sessionId) ? 'active' as const : 'ended' as const,
       model: undefined,
-      cwd: s.context?.cwd,
+      cwd: s.context?.workingDirectory,
       summary: s.summary ?? '',
     }));
   }
@@ -1254,7 +1255,8 @@ export class CopilotAdapter extends AgentAdapter {
         supportsReasoningEffort: m.capabilities?.supports?.reasoningEffort ?? false,
         ...(m.supportedReasoningEfforts && { supportedReasoningEfforts: m.supportedReasoningEfforts }),
         ...(m.defaultReasoningEffort && { defaultReasoningEffort: m.defaultReasoningEffort }),
-        ...(CopilotAdapter.CONTEXT_WINDOWS[m.id] && { contextWindow: CopilotAdapter.CONTEXT_WINDOWS[m.id] }),
+        ...(m.capabilities?.limits?.max_context_window_tokens && { contextWindow: m.capabilities.limits.max_context_window_tokens }),
+        ...(CopilotAdapter.LONG_CONTEXT_MODELS.has(m.id) && { supportedContextTiers: ['default', 'long_context'] as import('@kraki/protocol').ContextTier[] }),
       }));
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'listModelDetails failed');
@@ -1273,7 +1275,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   /** Change model for a session via SDK */
-  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string): Promise<void> {
+  async setSessionModel(sessionId: string, model: string, reasoningEffort?: string, contextTier?: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'setSessionModel: session not found');
@@ -1281,8 +1283,16 @@ export class CopilotAdapter extends AgentAdapter {
     }
     this.expectedModels.set(sessionId, model);
     this.userRequestedModels.set(sessionId, model);
-    await entry.session.setModel(model);
-    logger.info({ sessionId, model }, 'Session model changed');
+    const validEfforts = new Set(['low', 'medium', 'high', 'xhigh']);
+    const options: { reasoningEffort?: SessionConfig['reasoningEffort']; contextTier?: ContextTier } = {};
+    if (reasoningEffort && validEfforts.has(reasoningEffort)) {
+      options.reasoningEffort = reasoningEffort as SessionConfig['reasoningEffort'];
+    }
+    if (contextTier === 'long_context') {
+      options.contextTier = 'long_context';
+    }
+    await entry.session.setModel(model, Object.keys(options).length > 0 ? options : undefined);
+    logger.info({ sessionId, model, ...options }, 'Session model changed');
   }
 
   /** Get current cumulative usage for a session */
@@ -1412,7 +1422,7 @@ export class CopilotAdapter extends AgentAdapter {
       : CopilotAdapter.SYSTEM_PROMPT;
 
     return {
-      configDir: getCopilotConfigDir(),
+      configDirectory: getCopilotConfigDir(),
       streaming: true,
       ...(mcpServers && { mcpServers }),
       systemMessage: { mode: 'append' as const, content: systemPromptContent },
@@ -1977,7 +1987,7 @@ export class CopilotAdapter extends AgentAdapter {
     try {
       logger.debug('Creating throwaway session for title generation');
       session = await this.client.createSession({
-        configDir: getCopilotConfigDir(),
+        configDirectory: getCopilotConfigDir(),
         systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
         streaming: true,
         onPermissionRequest: () => ({ kind: 'approve-once' as const }),

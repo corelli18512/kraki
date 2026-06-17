@@ -466,9 +466,7 @@ export class ClaudeAdapter extends AgentAdapter {
               name: m.displayName ?? displayId,
               supportsReasoningEffort: !!m.supportsEffort,
               ...(m.supportedEffortLevels && {
-                supportedReasoningEfforts: m.supportedEffortLevels.filter(
-                  (e): e is 'low' | 'medium' | 'high' | 'xhigh' => e !== 'max',
-                ),
+                supportedReasoningEfforts: m.supportedEffortLevels as import('@kraki/protocol').ReasoningEffort[],
               }),
             });
           }
@@ -821,7 +819,7 @@ export class ClaudeAdapter extends AgentAdapter {
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 
-  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string): Promise<void> {
+  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string, _contextTier?: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'setSessionModel: session not found');
