@@ -45,7 +45,8 @@ done
 
 current_version() {
   if [ -x "$RELAY_BIN" ]; then
-    "$RELAY_BIN" --version 2>/dev/null | tr -d '[:space:]' || true
+    # dotenv may print advisory text before the version; extract the semver.
+    "$RELAY_BIN" --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true
   fi
 }
 
