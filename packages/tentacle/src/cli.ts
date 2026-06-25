@@ -27,6 +27,7 @@ import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair
 import { printStaticBanner } from './banner.js';
 import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
+import type { AgentId } from '@kraki/protocol';
 
 // Self-heal PATH on Windows BEFORE any setup/check spawns a child
 // process. If kraki is launched from a context with a minimal PATH
@@ -68,10 +69,18 @@ function printHelp(): void {
   kraki connect        Generate QR code to connect a device
   kraki connect --url-only
                        Print pairing URL only (for toolbar / scripts)
+  kraki connect --json Print pairing token + url + expiry as JSON
   kraki setup --headless
                        Non-interactive setup (for toolbar / scripts)
+                       [--relay --auth --device-name --github-token
+                        --agent copilot|claude|both|auto --anthropic-key]
+  kraki resolve-relay --json [--github-token <tok>]
+                       Resolve best relay + region as JSON
   kraki doctor         Print environment status as JSON
+  kraki fda --json     Print macOS Full Disk Access status as JSON
+  kraki fda --watch    Stream FDA status as NDJSON until granted
   kraki status         Show status and connection info
+  kraki status --json  Print status as JSON (for desktop apps)
   kraki logs [-f]      Tail log files (-f to follow)
   kraki config         Print current config
   kraki config log     Show current log verbosity
@@ -278,9 +287,37 @@ function cmdStop(): void {
   }
 }
 
-function cmdStatus(): void {
+function cmdStatus(jsonOutput = false): void {
   const status = getDaemonStatus();
   const config = loadConfig();
+  const statusFile = readStatusFile();
+
+  if (jsonOutput) {
+    // Machine-readable for desktop apps (mac toolbar, etc.). Schema is
+    // additive — only add fields, never remove, to keep older clients
+    // working.
+    const payload = {
+      ok: true,
+      version: getVersion(),
+      daemon: {
+        running: status.running,
+        pid: status.pid,
+      },
+      config: config
+        ? {
+            exists: true,
+            relay: config.relay,
+            authMethod: config.authMethod,
+            device: { name: config.device.name, id: config.device.id },
+            agents: config.agents ?? null,
+            region: statusFile?.region ?? null,
+            logVerbosity: getLogVerbosity(config),
+          }
+        : { exists: false },
+    };
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    return;
+  }
 
   console.log('');
   console.log(chalk.bold(`${chalk.hex('#ea6046')('◈')} Kraki Status`));
@@ -296,7 +333,6 @@ function cmdStatus(): void {
     console.log(`  Relay:   ${chalk.cyan(config.relay)}`);
     console.log(`  Auth:    ${config.authMethod}`);
     console.log(`  Device:  ${config.device.name}`);
-    const statusFile = readStatusFile();
     if (statusFile?.region) {
       console.log(`  Region:  ${statusFile.region}`);
     }
@@ -377,10 +413,15 @@ async function cmdConfigReset(): Promise<void> {
   await runSetup();
 }
 
-async function cmdConnect(urlOnly = false): Promise<void> {
+async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<void> {
   let config = loadConfig();
 
   if (!isDaemonRunning()) {
+    if (jsonOutput) {
+      process.stdout.write(JSON.stringify({ ok: false, error: 'daemon_not_running' }) + '\n');
+      gracefulExit(1);
+      return;
+    }
     if (urlOnly) {
       process.stderr.write('error: daemon not running\n');
       gracefulExit(1);
@@ -398,6 +439,11 @@ async function cmdConnect(urlOnly = false): Promise<void> {
   }
 
   if (!config) {
+    if (jsonOutput) {
+      process.stdout.write(JSON.stringify({ ok: false, error: 'no_config' }) + '\n');
+      gracefulExit(1);
+      return;
+    }
     if (urlOnly) {
       process.stderr.write('error: no config found\n');
       gracefulExit(1);
@@ -407,7 +453,7 @@ async function cmdConnect(urlOnly = false): Promise<void> {
     return;
   }
 
-  if (!urlOnly) {
+  if (!urlOnly && !jsonOutput) {
     console.log(chalk.dim('  Requesting pairing token from relay...'));
   }
 
@@ -429,6 +475,20 @@ async function cmdConnect(urlOnly = false): Promise<void> {
     const info = await requestPairingToken(config.relay, token);
     const pairingUrl = buildPairingUrl(info);
 
+    if (jsonOutput) {
+      const payload = {
+        ok: true,
+        url: pairingUrl,
+        token: info.pairingToken,
+        relay: info.relay,
+        publicKey: info.publicKey ?? null,
+        expiresInSeconds: info.expiresIn,
+        expiresAt: new Date(Date.now() + info.expiresIn * 1000).toISOString(),
+      };
+      process.stdout.write(JSON.stringify(payload) + '\n');
+      return;
+    }
+
     if (urlOnly) {
       // Machine-readable output for the desktop toolbar — just the URL, no decoration
       process.stdout.write(pairingUrl + '\n');
@@ -438,6 +498,11 @@ async function cmdConnect(urlOnly = false): Promise<void> {
     const qr = await renderQrToTerminal(pairingUrl);
     console.log(qr);
   } catch (err) {
+    if (jsonOutput) {
+      process.stdout.write(JSON.stringify({ ok: false, error: (err as Error).message }) + '\n');
+      gracefulExit(1);
+      return;
+    }
     if (urlOnly) {
       process.stderr.write(`error: ${(err as Error).message}\n`);
       gracefulExit(1);
@@ -455,15 +520,51 @@ function getArgValue(args: string[], flag: string): string | undefined {
 }
 
 async function cmdSetupHeadless(args: string[]): Promise<void> {
+  const fail = (code: string, message: string): void => {
+    process.stdout.write(JSON.stringify({ ok: false, error: message, code }) + '\n');
+    gracefulExit(1);
+  };
+
   const relay = getArgValue(args, '--relay');
   const auth = getArgValue(args, '--auth') ?? 'github_token';
   const deviceName = getArgValue(args, '--device-name');
   const githubToken = getArgValue(args, '--github-token');
+  const agentArg = getArgValue(args, '--agent'); // copilot | claude | both | auto
+  const anthropicKey = getArgValue(args, '--anthropic-key');
 
   if (!relay) {
-    process.stderr.write('error: --relay is required\n');
-    gracefulExit(1);
-    return;
+    return fail('missing_relay', '--relay is required');
+  }
+
+  // Map --agent to an explicit allow-list. Omit for auto-detection.
+  let agents: AgentId[] | undefined;
+  switch (agentArg) {
+    case undefined:
+    case 'auto':
+      agents = undefined;
+      break;
+    case 'copilot':
+      agents = ['copilot'];
+      break;
+    case 'claude':
+      agents = ['claude'];
+      break;
+    case 'both':
+      agents = ['copilot', 'claude'];
+      break;
+    default:
+      return fail('bad_agent', `--agent must be one of: copilot, claude, both, auto (got "${agentArg}")`);
+  }
+
+  // Persist an Anthropic key into ~/.claude/settings.json so the daemon
+  // (launched by launchd, no shell env) can read it.
+  if (anthropicKey) {
+    const { saveAnthropicKey } = await import('./checks.js');
+    try {
+      saveAnthropicKey(anthropicKey);
+    } catch (err) {
+      return fail('anthropic_key_write_failed', (err as Error).message);
+    }
   }
 
   // Resolve GitHub token: explicit flag > gh CLI > saved token
@@ -480,28 +581,156 @@ async function cmdSetupHeadless(args: string[]): Promise<void> {
     relay,
     authMethod: auth as KrakiConfig['authMethod'],
     device: { name: deviceName ?? hostname().replace(/\.local$/, ''), id: deviceId },
+    ...(agents && { agents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 
   saveConfig(config);
-  process.stdout.write(JSON.stringify({ ok: true, configPath: getConfigPath() }) + '\n');
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    configPath: getConfigPath(),
+    agents: agents ?? 'auto',
+  }) + '\n');
+}
+
+// ── kraki resolve-relay — resolve best relay as JSON ────
+
+async function cmdResolveRelay(args: string[]): Promise<void> {
+  const jsonOutput = args.includes('--json');
+  let token = getArgValue(args, '--github-token');
+
+  // Fall back to gh CLI / saved token if not provided.
+  if (!token) {
+    try {
+      const { execSync } = await import('node:child_process');
+      token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
+    } catch { /* ignore */ }
+  }
+  if (!token) {
+    const { loadGitHubToken } = await import('./config.js');
+    token = loadGitHubToken() ?? undefined;
+  }
+
+  const { resolveRelay } = await import('./setup.js');
+  const result = await resolveRelay(token);
+
+  if (jsonOutput) {
+    process.stdout.write(JSON.stringify({
+      ok: result.ok,
+      relayUrl: result.relayUrl,
+      region: result.region ?? null,
+      user: result.user ?? null,
+      fallback: result.fallback ?? false,
+      ...(result.error && { error: result.error }),
+    }) + '\n');
+    if (!result.ok) gracefulExit(1);
+    return;
+  }
+
+  if (result.ok) {
+    console.log(`  Relay:  ${chalk.cyan(result.relayUrl)}`);
+    if (result.region) console.log(`  Region: ${chalk.cyan(result.region)}`);
+  } else {
+    console.log(chalk.yellow(`  Could not resolve — using default: ${result.relayUrl}`));
+    gracefulExit(1);
+  }
+}
+
+// ── kraki fda — macOS Full Disk Access status ───────────
+
+async function cmdFda(args: string[]): Promise<void> {
+  const watch = args.includes('--watch');
+  const { probeFda } = await import('./checks.js');
+
+  if (process.platform !== 'darwin') {
+    process.stdout.write(JSON.stringify({ ok: true, status: 'not_applicable', platform: process.platform }) + '\n');
+    return;
+  }
+
+  if (watch) {
+    // Stream NDJSON status updates until FDA is granted (or aborted).
+    const ac = new AbortController();
+    process.on('SIGINT', () => ac.abort());
+    process.on('SIGTERM', () => ac.abort());
+    let last: string | undefined;
+    while (!ac.signal.aborted) {
+      const status = await probeFda();
+      if (status !== last) {
+        last = status;
+        process.stdout.write(JSON.stringify({ ok: true, status }) + '\n');
+      }
+      if (status === 'granted') {
+        process.stdout.write(JSON.stringify({ ok: true, status: 'granted', done: true }) + '\n');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    process.stdout.write(JSON.stringify({ ok: true, status: 'aborted', done: true }) + '\n');
+    return;
+  }
+
+  const status = await probeFda();
+  process.stdout.write(JSON.stringify({ ok: true, status }) + '\n');
 }
 
 // ── kraki doctor — environment status as JSON ───────────
 
 async function cmdDoctor(): Promise<void> {
-  const { checkGhAuth, checkCopilotCli } = await import('./checks.js');
+  const {
+    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda,
+  } = await import('./checks.js');
+  // `kraki doctor` must emit a single clean JSON line on stdout. The
+  // multi-adapter logger (created at module load) defaults to info-level
+  // stdout (dev) which would interleave pino lines into the output, so
+  // force it silent before importing the module.
+  const prevLogLevel = process.env.LOG_LEVEL;
+  process.env.LOG_LEVEL = 'silent';
+  const { detectAvailableAgents } = await import('./adapters/multi.js');
+
   const config = loadConfig();
   const ghAuth = checkGhAuth();
   const copilot = checkCopilotCli();
+  const claude = checkClaudeCli();
+  const anthropic = checkAnthropicCreds();
+  const fda = await probeFda();
+
+  // SDK + CLI level "can actually start" detection (matches runtime).
+  let available: string[] = [];
+  try {
+    available = await detectAvailableAgents();
+  } catch { /* detection best-effort */ }
+  if (prevLogLevel === undefined) delete process.env.LOG_LEVEL;
+  else process.env.LOG_LEVEL = prevLogLevel;
+
+  const hasCopilotAuth = ghAuth.authenticated
+    || !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
 
   const result = {
     configExists: config !== null,
     daemonRunning: isDaemonRunning(),
+    fda,
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
+    // Legacy fields — kept so existing consumers keep working.
     copilotCli: copilot.found,
     copilotVersion: copilot.version ?? null,
+    // Structured multi-agent view.
+    agents: {
+      copilot: {
+        cli: copilot.found,
+        version: copilot.version ?? null,
+        auth: hasCopilotAuth,
+      },
+      claude: {
+        cli: claude.found,
+        version: claude.version ?? null,
+        creds: anthropic.configured,
+        credsSource: anthropic.source,
+      },
+    },
+    // Agents that can actually be started right now (SDK importable + CLI present).
+    available,
+    pinnedAgents: config?.agents ?? null,
   };
 
   process.stdout.write(JSON.stringify(result) + '\n');
@@ -677,13 +906,14 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'status') {
-    cmdStatus();
+    cmdStatus(args.includes('--json'));
     return;
   }
 
   if (cmd === 'connect') {
     const urlOnly = args.includes('--url-only');
-    await cmdConnect(urlOnly);
+    const jsonOutput = args.includes('--json');
+    await cmdConnect(urlOnly, jsonOutput);
     return;
   }
 
@@ -699,6 +929,16 @@ async function main(): Promise<void> {
 
   if (cmd === 'doctor') {
     await cmdDoctor();
+    return;
+  }
+
+  if (cmd === 'resolve-relay') {
+    await cmdResolveRelay(args);
+    return;
+  }
+
+  if (cmd === 'fda') {
+    await cmdFda(args);
     return;
   }
 

@@ -5,7 +5,7 @@
  * device naming, and agent verification.
  */
 
-import { select, input } from '@inquirer/prompts';
+import { select, input, checkbox, confirm, password } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { hostname, platform } from 'node:os';
@@ -21,9 +21,10 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, withRetry, probeFda, pollFda } from './checks.js';
+import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, saveAnthropicKey, withRetry, probeFda, pollFda } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
+import type { AgentId } from '@kraki/protocol';
 
 /**
  * Silently install the current binary as `kraki` in a PATH directory.
@@ -183,6 +184,52 @@ function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo> {
   });
 }
 
+/**
+ * Resolve the best relay + region for a GitHub token via the login API.
+ * Shared by interactive setup and the headless `resolve-relay` command.
+ * Falls back to the official relay if the API can't be reached.
+ */
+export interface ResolveRelayResult {
+  ok: boolean;
+  relayUrl: string;
+  region?: string;
+  user?: string;
+  fallback?: boolean;
+  error?: string;
+}
+
+export async function resolveRelay(
+  ghToken: string | undefined,
+  apiBase: string = process.env.KRAKI_API_URL ?? OFFICIAL_API,
+): Promise<ResolveRelayResult> {
+  try {
+    const res = await fetch(`${apiBase}/api/login/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth: { method: 'github_token', token: ghToken } }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = await res.json() as {
+      ok?: boolean;
+      region?: string;
+      relayUrl?: string;
+      user?: { login?: string };
+    };
+
+    if (data.ok && data.relayUrl) {
+      return {
+        ok: true,
+        relayUrl: data.relayUrl,
+        region: data.region,
+        user: data.user?.login,
+      };
+    }
+    return { ok: false, relayUrl: OFFICIAL_RELAY, fallback: true, error: 'unresolved' };
+  } catch (err) {
+    return { ok: false, relayUrl: OFFICIAL_RELAY, fallback: true, error: (err as Error).message };
+  }
+}
+
 // ── Box drawing ─────────────────────────────────────────
 
 function printBox(lines: string[]): void {
@@ -313,6 +360,93 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
 
 // ── Setup flow ──────────────────────────────────────────
 
+/**
+ * Detect installed agents (Copilot, Claude) and let the user choose which
+ * to enable. Returns an explicit allow-list to persist in config, or
+ * `undefined` to leave the daemon on auto-detect.
+ *
+ * For Claude, also offers to store an Anthropic API key in
+ * ~/.claude/settings.json so the launchd-spawned daemon can read it.
+ */
+async function runAgentStep(): Promise<AgentId[] | undefined> {
+  const copilotSpinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
+  const copilot = checkCopilotCli();
+  if (copilot.found) {
+    copilotSpinner.succeed(`Copilot CLI found (${copilot.version ?? 'unknown version'})`);
+  } else {
+    copilotSpinner.info('Copilot CLI not found');
+  }
+
+  const claudeSpinner = ora({ text: 'Looking for Claude CLI…', indent: 4 }).start();
+  const claude = checkClaudeCli();
+  if (claude.found) {
+    claudeSpinner.succeed(`Claude CLI found (${claude.version ?? 'unknown version'})`);
+  } else {
+    claudeSpinner.info('Claude CLI not found');
+  }
+
+  const available: AgentId[] = [];
+  if (copilot.found) available.push('copilot');
+  if (claude.found) available.push('claude');
+
+  // If Claude is present, make sure it has credentials it can actually use.
+  if (claude.found) {
+    let creds = checkAnthropicCreds();
+    if (!creds.configured) {
+      console.log(chalk.dim('    Claude needs an Anthropic API key (or Bedrock/Vertex env).'));
+      const enterKey = await confirm({
+        message: 'Add an Anthropic API key now?',
+        default: true,
+        theme: promptTheme,
+      });
+      if (enterKey) {
+        const key = await password({ message: 'Anthropic API key:', mask: '•' });
+        if (key.trim()) {
+          try {
+            saveAnthropicKey(key.trim());
+            console.log(chalk.green('    ✓ Saved to ~/.claude/settings.json'));
+            creds = { configured: true, source: 'settings' };
+          } catch (err) {
+            console.log(chalk.yellow(`    ! Could not save key: ${(err as Error).message}`));
+          }
+        }
+      }
+    } else {
+      console.log(chalk.green(`    ✓ Anthropic credentials available (${creds.source})`));
+    }
+  }
+
+  if (available.length === 0) {
+    console.log(chalk.yellow('    No agents detected. Install at least one to run sessions:'));
+    console.log(chalk.dim('      • Copilot CLI — https://github.com/features/copilot/cli/'));
+    console.log(chalk.dim('      • Claude CLI  — https://docs.anthropic.com/en/docs/claude-code'));
+    console.log(chalk.dim('    Continuing with auto-detect — install later and restart the daemon.'));
+    return undefined;
+  }
+
+  if (available.length === 1) {
+    const only = available[0];
+    // Only one agent installed — leave the daemon on auto-detect rather
+    // than pinning. If the user installs the other agent later it will be
+    // picked up automatically. (Explicit pinning is for the GUI wizard /
+    // `--agent` flag, where there's a real choice to constrain.)
+    console.log(chalk.dim(`    Using ${only === 'copilot' ? 'Copilot' : 'Claude'} (auto-detect).`));
+    return undefined;
+  }
+
+  // Both installed — let the user pick the allow-list.
+  const chosen = await checkbox<AgentId>({
+    message: 'Enable which agents?',
+    theme: promptTheme,
+    choices: [
+      { name: 'Copilot', value: 'copilot', checked: true },
+      { name: 'Claude', value: 'claude', checked: true },
+    ],
+    validate: (items) => (items.length > 0 ? true : 'Select at least one agent'),
+  });
+  return chosen;
+}
+
 export async function runSetup(): Promise<KrakiConfig> {
   await printAnimatedBanner();
 
@@ -370,31 +504,13 @@ export async function runSetup(): Promise<KrakiConfig> {
   let region: string | undefined;
 
   const resolveSpinner = ora({ text: 'Finding best relay…', indent: 4 }).start();
-  try {
-    const resolveRes = await fetch(`${apiBase}/api/login/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ auth: { method: 'github_token', token: ghToken } }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const resolveData = await resolveRes.json() as {
-      ok?: boolean;
-      region?: string;
-      relayUrl?: string;
-      user?: { login?: string };
-    };
-
-    if (resolveData.ok && resolveData.relayUrl) {
-      relay = resolveData.relayUrl;
-      region = resolveData.region;
-      resolveSpinner.succeed(`Relay assigned${region ? ` (${region})` : ''}`);
-    } else {
-      resolveSpinner.info('Could not resolve relay — using default');
-      relay = OFFICIAL_RELAY;
-    }
-  } catch {
-    resolveSpinner.info('Could not reach API — using default relay');
-    relay = OFFICIAL_RELAY;
+  const resolved = await resolveRelay(ghToken, apiBase);
+  relay = resolved.relayUrl;
+  region = resolved.region;
+  if (resolved.ok) {
+    resolveSpinner.succeed(`Relay assigned${region ? ` (${region})` : ''}`);
+  } else {
+    resolveSpinner.info('Could not resolve relay — using default');
   }
 
   // Verify relay is reachable
@@ -410,30 +526,9 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   divider();
 
-  // 3. Agent check
-  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agent Verification')}`);
-  if (isSea()) {
-    const agentSpinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
-    const copilotResult = await withRetry(
-      checkCopilotCli,
-      'Copilot CLI',
-      'Install from https://github.com/features/copilot/cli/',
-      agentSpinner,
-    );
-    agentSpinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
-
-    const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
-    const hasGhToken = checkGhAuth().authenticated;
-    const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
-    if (hasGhToken || hasEnvToken) {
-      authSpinner.succeed('Copilot authentication available');
-    } else {
-      authSpinner.succeed('Copilot authentication available (via Copilot login)');
-    }
-  } else {
-    const agentSpinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
-    agentSpinner.succeed('Copilot SDK available');
-  }
+  // 3. Agent selection (Copilot and/or Claude)
+  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
+  const selectedAgents = await runAgentStep();
 
   divider();
 
@@ -458,6 +553,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     relay,
     authMethod: 'github_token',
     device: { name: deviceName, id: deviceId },
+    ...(selectedAgents && selectedAgents.length > 0 && { agents: selectedAgents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 
@@ -475,6 +571,7 @@ export async function runSetup(): Promise<KrakiConfig> {
     `${chalk.dim('Relay')}    ${chalk.cyan(relay)}`,
     ...(region ? [`${chalk.dim('Region')}   ${chalk.cyan(region)}`] : []),
     `${chalk.dim('Auth')}     ${chalk.cyan('github_token')}`,
+    `${chalk.dim('Agents')}   ${chalk.cyan(selectedAgents && selectedAgents.length > 0 ? selectedAgents.join(', ') : 'auto-detect')}`,
     `${chalk.dim('Device')}   ${chalk.cyan(deviceName)}`,
     `${chalk.dim('Logs')}     ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
     '',
