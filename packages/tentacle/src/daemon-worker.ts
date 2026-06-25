@@ -47,6 +47,7 @@ import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile } from './status-file.js';
 import type { AgentAdapter } from './adapters/base.js';
+import type { AgentId } from '@kraki/protocol';
 
 const logger = createLogger('daemon');
 
@@ -145,9 +146,13 @@ export async function startWorker(): Promise<WorkerResult> {
     mcpServer = null;
   }
 
-  // 3c. Create multi-agent adapter (auto-detects available agents)
+  // 3c. Create multi-agent adapter. When config pins an explicit agent
+  // allow-list we honour it; otherwise the adapter auto-detects every
+  // installed agent at startup (legacy behaviour).
+  const pinnedAgents = config.agents?.filter((a): a is AgentId => a === 'copilot' || a === 'claude');
   const adapter = new MultiAgentAdapter({
     attachmentStore,
+    ...(pinnedAgents && pinnedAgents.length > 0 && { agentIds: pinnedAgents }),
     ...(mcpInfo && { krakiMcp: mcpInfo }),
   });
   const keyManager = new KeyManager();

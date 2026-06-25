@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { isSea } from 'node:sea';
-import type { AuthMethod } from '@kraki/protocol';
+import type { AuthMethod, AgentId } from '@kraki/protocol';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -20,6 +20,13 @@ export interface KrakiConfig {
   relay: string;
   authMethod: AuthMethod['method'];
   device: { name: string; id?: string };
+  /**
+   * Explicit agent allow-list. When omitted (or empty), the daemon
+   * auto-detects every installed agent at startup (legacy behaviour).
+   * When set, only these agents are started — letting setup / a GUI
+   * wizard pin the user's choice (e.g. Claude-only).
+   */
+  agents?: AgentId[];
   logging?: {
     verbosity?: KrakiLogVerbosity;
   };

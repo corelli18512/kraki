@@ -3,10 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockSelect = vi.fn();
 const mockInput = vi.fn();
+const mockCheckbox = vi.fn();
+const mockConfirm = vi.fn();
+const mockPassword = vi.fn();
 
 vi.mock("@inquirer/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
   input: (...args: unknown[]) => mockInput(...args),
+  checkbox: (...args: unknown[]) => mockCheckbox(...args),
+  confirm: (...args: unknown[]) => mockConfirm(...args),
+  password: (...args: unknown[]) => mockPassword(...args),
 }));
 
 vi.mock("ora", () => {
@@ -73,9 +79,16 @@ vi.mock("../config.js", () => ({
 
 const mockWithRetry = vi.fn();
 const mockCheckGhAuth = vi.fn().mockReturnValue({ authenticated: true, username: 'testuser', token: 'fake-token' });
+// Default agent detection: only Copilot installed → runAgentStep leaves auto-detect.
+const mockCheckCopilotCli = vi.fn().mockReturnValue({ found: true, version: '1.0' });
+const mockCheckClaudeCli = vi.fn().mockReturnValue({ found: false });
+const mockCheckAnthropicCreds = vi.fn().mockReturnValue({ configured: false, source: null });
 vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
-  checkCopilotCli: vi.fn(),
+  checkCopilotCli: (...args: unknown[]) => mockCheckCopilotCli(...args),
+  checkClaudeCli: (...args: unknown[]) => mockCheckClaudeCli(...args),
+  checkAnthropicCreds: (...args: unknown[]) => mockCheckAnthropicCreds(...args),
+  saveAnthropicKey: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
   probeFda: vi.fn().mockResolvedValue('granted'),
   pollFda: vi.fn().mockResolvedValue('granted'),
