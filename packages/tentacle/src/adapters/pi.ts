@@ -22,7 +22,7 @@ import {
 } from './base.js';
 import { PiRpcProcess } from './pi-rpc-client.js';
 import type { SessionContext } from '../session-manager.js';
-import type { ModelDetail, SessionUsage } from '@kraki/protocol';
+import type { ModelDetail, SessionUsage, ReasoningEffort } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('pi-adapter');
@@ -36,18 +36,31 @@ function toolsForMode(mode: Mode): string[] | undefined {
   return mode === 'execute' || mode === 'delegate' ? undefined : READONLY_TOOLS;
 }
 
+/** Kraki ReasoningEffort → pi ThinkingLevel. pi tops out at xhigh; "max" maps there. */
+function effortToThinking(effort?: string): string | undefined {
+  switch (effort) {
+    case 'low': return 'low';
+    case 'medium': return 'medium';
+    case 'high': return 'high';
+    case 'xhigh':
+    case 'max': return 'xhigh';
+    default: return undefined;
+  }
+}
+
 interface PiSession {
   proc: PiRpcProcess;
   cwd: string;
   model: string;
   mode: Mode;
+  thinking?: string;
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
 }
 
-const DEFAULT_PROVIDER = 'deepseek';
-const DEFAULT_MODEL = 'deepseek-chat';
+const DEFAULT_PROVIDER = 'github-copilot';
+const DEFAULT_MODEL = 'github-copilot/claude-opus-4.8';
 const EVICTION_INTERVAL_MS = 5 * 60_000;
 const IDLE_TTL_MS = 30 * 60_000;
 
@@ -76,7 +89,7 @@ export class PiAdapter extends AgentAdapter {
     return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalCost: 0, totalDurationMs: 0 };
   }
 
-  private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string): PiSession {
+  private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
     const [provider, modelId] = model.includes('/') ? model.split('/') : [DEFAULT_PROVIDER, model];
     const proc = new PiRpcProcess({
       cliPath: this.cliPath,
@@ -85,8 +98,9 @@ export class PiAdapter extends AgentAdapter {
       model: modelId,
       tools: toolsForMode(mode),
       sessionFile,
+      thinking,
     });
-    const sess: PiSession = { proc, cwd, model, mode, sessionFile, usage: this.blankUsage(), lastActivity: Date.now() };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now() };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => this.onSessionEvicted?.(sessionId);
     proc.start();
@@ -161,7 +175,8 @@ export class PiAdapter extends AgentAdapter {
   async createSession(config: CreateSessionConfig): Promise<{ sessionId: string }> {
     const sessionId = config.sessionId ?? randomUUID();
     const model = config.model ?? DEFAULT_MODEL;
-    const sess = this.spawn(sessionId, config.cwd ?? process.cwd(), model, MUTATING_DEFAULT_MODE);
+    const thinking = effortToThinking(config.reasoningEffort);
+    const sess = this.spawn(sessionId, config.cwd ?? process.cwd(), model, MUTATING_DEFAULT_MODE, undefined, thinking);
     try {
       const state = await sess.proc.request<{ sessionFile?: string }>('get_state');
       sess.sessionFile = state.sessionFile;
@@ -175,7 +190,7 @@ export class PiAdapter extends AgentAdapter {
   async resumeSession(sessionId: string, _ctx?: SessionContext): Promise<{ sessionId: string }> {
     const existing = this.sessions.get(sessionId);
     if (existing?.proc.alive) return { sessionId };
-    this.spawn(sessionId, existing?.cwd ?? process.cwd(), existing?.model ?? DEFAULT_MODEL, existing?.mode ?? MUTATING_DEFAULT_MODE, existing?.sessionFile);
+    this.spawn(sessionId, existing?.cwd ?? process.cwd(), existing?.model ?? DEFAULT_MODEL, existing?.mode ?? MUTATING_DEFAULT_MODE, existing?.sessionFile, existing?.thinking);
     return { sessionId };
   }
 
@@ -209,7 +224,7 @@ export class PiAdapter extends AgentAdapter {
     if (src?.proc.alive) {
       try { await src.proc.request('clone'); } catch { /* fall through to copy */ }
     }
-    this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? DEFAULT_MODEL, src?.mode ?? MUTATING_DEFAULT_MODE, src?.sessionFile);
+    this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? DEFAULT_MODEL, src?.mode ?? MUTATING_DEFAULT_MODE, src?.sessionFile, src?.thinking);
     return { sessionId: newSessionId };
   }
 
@@ -220,15 +235,20 @@ export class PiAdapter extends AgentAdapter {
     s.mode = mode;
     // Tool gating is spawn-time; respawn to apply the new tool set.
     s.proc.kill();
-    this.spawn(sessionId, s.cwd, s.model, mode, s.sessionFile);
+    this.spawn(sessionId, s.cwd, s.model, mode, s.sessionFile, s.thinking);
   }
 
-  async setSessionModel(sessionId: string, model: string): Promise<void> {
+  async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.model = model;
     const [provider, modelId] = model.includes('/') ? model.split('/') : [DEFAULT_PROVIDER, model];
     try { await s.proc.request('set_model', { provider, modelId }); } catch { /* ignore */ }
+    const thinking = effortToThinking(reasoningEffort);
+    if (thinking) {
+      s.thinking = thinking;
+      try { await s.proc.request('set_thinking_level', { level: thinking }); } catch { /* ignore */ }
+    }
   }
 
   async listSessions(): Promise<SessionInfo[]> {
@@ -238,13 +258,15 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async listModels(): Promise<string[]> {
-    return ['deepseek-chat', 'deepseek-reasoner'];
+    return ['github-copilot/claude-opus-4.8', 'github-copilot/claude-sonnet-4.5', 'github-copilot/claude-haiku-4.5'];
   }
 
   async listModelDetails(): Promise<ModelDetail[]> {
+    const efforts: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
     return [
-      { id: 'deepseek-chat', name: 'DeepSeek Chat', supportsReasoningEffort: false, contextWindow: 64000 },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', supportsReasoningEffort: true, contextWindow: 64000 },
+      { id: 'github-copilot/claude-opus-4.8', name: 'Claude Opus 4.8 (1M)', supportsReasoningEffort: true, supportedReasoningEfforts: efforts, defaultReasoningEffort: 'high', contextWindow: 1000000 },
+      { id: 'github-copilot/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsReasoningEffort: true, supportedReasoningEfforts: efforts, defaultReasoningEffort: 'medium', contextWindow: 200000 },
+      { id: 'github-copilot/claude-haiku-4.5', name: 'Claude Haiku 4.5', supportsReasoningEffort: false, contextWindow: 200000 },
     ];
   }
 

@@ -42,6 +42,8 @@ export interface PiRpcOptions {
   sessionFile?: string;
   /** Extra system prompt appended to pi's default. */
   appendSystemPrompt?: string;
+  /** Thinking level: off|minimal|low|medium|high|xhigh (xhigh = max). */
+  thinking?: string;
 }
 
 /** Default command timeout. Prompts run async (fire-and-forget), so this only
@@ -65,6 +67,7 @@ export class PiRpcProcess {
     if (this.opts.provider) args.push('--provider', this.opts.provider);
     if (this.opts.model) args.push('--model', this.opts.model);
     if (this.opts.tools?.length) args.push('--tools', this.opts.tools.join(','));
+    if (this.opts.thinking) args.push('--thinking', this.opts.thinking);
     if (this.opts.sessionFile) args.push('--continue');
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
 
