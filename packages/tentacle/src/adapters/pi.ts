@@ -127,11 +127,11 @@ export class PiAdapter extends AgentAdapter {
         break;
       }
       case 'message_end': {
-        const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; usage?: Partial<SessionUsage> } }).message;
+        const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }> } }).message;
         if (m?.role === 'assistant') {
           const text = (m.content ?? []).filter((c) => c.type === 'text' && c.text).map((c) => c.text).join('');
           if (text) this.onMessage?.(sessionId, { content: text });
-          if (m.usage) this.applyUsage(sessionId, m.usage);
+          void this.refreshUsage(sessionId);
         }
         break;
       }
@@ -152,8 +152,7 @@ export class PiAdapter extends AgentAdapter {
         break;
       case 'turn_end':
       case 'agent_end': {
-        const u = (e as { usage?: Partial<SessionUsage> }).usage;
-        if (u) this.applyUsage(sessionId, u);
+        void this.refreshUsage(sessionId);
         this.onIdle?.(sessionId);
         break;
       }
@@ -165,11 +164,29 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  private applyUsage(sessionId: string, u: Partial<SessionUsage>): void {
+  /** Pull authoritative cumulative usage from pi (get_session_stats) and map
+   *  pi's field names (input/output/cacheRead/cacheWrite/cost) → Kraki SessionUsage. */
+  private async refreshUsage(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
-    if (!s) return;
-    s.usage = { ...s.usage, ...u };
-    this.onUsageUpdate?.(sessionId, s.usage);
+    if (!s?.proc.alive) return;
+    try {
+      const stats = await s.proc.request<{
+        tokens?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+        cost?: number;
+      }>('get_session_stats');
+      const t = stats.tokens;
+      s.usage = {
+        inputTokens: t?.input ?? 0,
+        outputTokens: t?.output ?? 0,
+        cacheReadTokens: t?.cacheRead ?? 0,
+        cacheWriteTokens: t?.cacheWrite ?? 0,
+        totalCost: stats.cost ?? 0,
+        totalDurationMs: s.usage.totalDurationMs,
+      };
+      this.onUsageUpdate?.(sessionId, s.usage);
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'get_session_stats failed');
+    }
   }
 
   async createSession(config: CreateSessionConfig): Promise<{ sessionId: string }> {
