@@ -16,6 +16,8 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -25,6 +27,7 @@ import {
 import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
+import { getKrakiHome, getConfigDir } from '../config.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -72,7 +75,9 @@ class PiRpcProcess {
   private rl: Interface | null = null;
   private pending = new Map<string, Pending>();
   private seq = 0;
+  private intentionalExit = false;
   onEvent: ((e: PiRpcEvent) => void) | null = null;
+  /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
   onExit: ((code: number | null) => void) | null = null;
 
   constructor(private opts: PiRpcOptions) {}
@@ -83,7 +88,11 @@ class PiRpcProcess {
     if (this.opts.model) args.push('--model', this.opts.model);
     if (this.opts.tools?.length) args.push('--tools', this.opts.tools.join(','));
     if (this.opts.thinking) args.push('--thinking', this.opts.thinking);
-    if (this.opts.sessionFile) args.push('--continue');
+    // Continue an existing on-disk conversation by EXACT file path. We avoid
+    // `--continue` (which resumes whatever session was modified most recently in
+    // the cwd — ambiguous and wrong when several sessions share a cwd) and pin
+    // the precise jsonl instead. The absolute path also survives a cwd change.
+    if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
 
     this.child = spawn(this.opts.cliPath, args, {
@@ -101,7 +110,7 @@ class PiRpcProcess {
         p.reject(new Error('pi process exited'));
       }
       this.pending.clear();
-      this.onExit?.(code);
+      if (!this.intentionalExit) this.onExit?.(code);
     });
   }
 
@@ -155,6 +164,7 @@ class PiRpcProcess {
   }
 
   kill(): void {
+    this.intentionalExit = true;
     this.rl?.close();
     if (this.child && !this.child.killed) this.child.kill('SIGTERM');
     this.child = null;
@@ -216,6 +226,55 @@ export class PiAdapter extends AgentAdapter {
     this.cliPath = opts.cliPath;
   }
 
+  /** Co-located storage: pi's private transcript and the adapter recovery
+   *  sidecar both live inside the Kraki session dir (sessions/<id>/), so the
+   *  session is self-contained — nothing leaks into a global scratch area and a
+   *  daemon restart can resume by convention instead of a separate pointer. */
+  private storeDir(sessionId: string): string {
+    return join(getConfigDir(), 'sessions', sessionId);
+  }
+  /** pi's private LLM-context store (pi writes it natively via `--session`). */
+  private transcriptPath(sessionId: string): string {
+    return join(this.storeDir(sessionId), 'pi.jsonl');
+  }
+  /** Adapter recovery sidecar: cwd (pi is project-scoped), model/mode/thinking,
+   *  transcript path — the durable bits needed to re-spawn after a restart. */
+  private sidecarPath(sessionId: string): string {
+    return join(this.storeDir(sessionId), '.pi-adapter.json');
+  }
+  /** Pre-co-location sidecar location (global scratch dir). Read-only fallback
+   *  so sessions created before this change still resume. */
+  private legacySidecarPath(sessionId: string): string {
+    return join(getKrakiHome(), 'pi-adapter', `${sessionId}.json`);
+  }
+
+  /** Persist the durable bits needed to re-spawn this session after a daemon
+   *  restart, alongside pi's transcript in the session dir. */
+  private persistMeta(sessionId: string, s: PiSession): void {
+    try {
+      mkdirSync(this.storeDir(sessionId), { recursive: true });
+      writeFileSync(
+        this.sidecarPath(sessionId),
+        JSON.stringify({ cwd: s.cwd, model: s.model, mode: s.mode, thinking: s.thinking, sessionFile: s.sessionFile }),
+        'utf8',
+      );
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'persistMeta failed');
+    }
+  }
+
+  private loadMeta(sessionId: string): Partial<Pick<PiSession, 'cwd' | 'model' | 'mode' | 'thinking' | 'sessionFile'>> | null {
+    for (const p of [this.sidecarPath(sessionId), this.legacySidecarPath(sessionId)]) {
+      if (!existsSync(p)) continue;
+      try {
+        return JSON.parse(readFileSync(p, 'utf8'));
+      } catch {
+        /* try next */
+      }
+    }
+    return null;
+  }
+
   async start(): Promise<void> {
     this.evictTimer = setInterval(() => this.sweepIdle(), EVICTION_INTERVAL_MS);
     logger.info('PiAdapter started');
@@ -244,7 +303,12 @@ export class PiAdapter extends AgentAdapter {
     });
     const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now() };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
-    proc.onExit = () => this.onSessionEvicted?.(sessionId);
+    proc.onExit = () => {
+      // Process gone (crash/kill) → no agent_end will arrive. Clear the active
+      // spinner so the session doesn't hang "active" forever, then evict.
+      this.onIdle?.(sessionId);
+      this.onSessionEvicted?.(sessionId);
+    };
     proc.start();
     this.sessions.set(sessionId, sess);
     return sess;
@@ -269,8 +333,16 @@ export class PiAdapter extends AgentAdapter {
         break;
       }
       case 'message_end': {
-        const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }> } }).message;
+        const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
         if (m?.role === 'assistant') {
+          // A backend failure (bad model, 400, quota, rate-limit) surfaces here
+          // as stopReason:'error' with an empty content[] and an errorMessage.
+          // Without this the session would just go idle with no response — the
+          // exact silent-failure bug we guard against. agent_end still fires
+          // afterwards, so idle clears normally.
+          if (m.stopReason === 'error' && m.errorMessage) {
+            this.onError?.(sessionId, { message: m.errorMessage });
+          }
           const text = (m.content ?? []).filter((c) => c.type === 'text' && c.text).map((c) => c.text).join('');
           if (text) this.onMessage?.(sessionId, { content: text });
           void this.refreshUsage(sessionId);
@@ -293,8 +365,16 @@ export class PiAdapter extends AgentAdapter {
         });
         break;
       case 'turn_end':
+        // One agentic run = many turns (one per LLM round). Refresh usage but
+        // DON'T signal idle here, so the arm groups all rounds (text + tools)
+        // into a single turn. Idle is only the run boundary (agent_end).
+        void this.refreshUsage(sessionId);
+        break;
       case 'agent_end': {
         void this.refreshUsage(sessionId);
+        // pi fires agent_end again after an auto-retry/compaction continuation;
+        // willRetry === true means "not actually done" — skip the premature idle.
+        if (e.willRetry === true) break;
         this.onIdle?.(sessionId);
         break;
       }
@@ -335,13 +415,13 @@ export class PiAdapter extends AgentAdapter {
     const sessionId = config.sessionId ?? randomUUID();
     const model = config.model ?? DEFAULT_MODEL;
     const thinking = effortToThinking(config.reasoningEffort);
-    const sess = this.spawn(sessionId, config.cwd ?? process.cwd(), model, MUTATING_DEFAULT_MODE, undefined, thinking);
-    try {
-      const state = await sess.proc.request<{ sessionFile?: string }>('get_state');
-      sess.sessionFile = state.sessionFile;
-    } catch (err) {
-      logger.debug({ err: (err as Error).message }, 'get_state failed at create');
-    }
+    // Co-locate pi's transcript inside the Kraki session dir. Passing the exact
+    // path via `--session` makes pi write there natively (verified: pi reports
+    // it as sessionFile and writes lazily on the first turn).
+    const transcript = this.transcriptPath(sessionId);
+    mkdirSync(this.storeDir(sessionId), { recursive: true });
+    const sess = this.spawn(sessionId, config.cwd ?? process.cwd(), model, MUTATING_DEFAULT_MODE, transcript, thinking);
+    this.persistMeta(sessionId, sess);
     this.onSessionCreated?.({ sessionId, agent: 'pi', model });
     return { sessionId };
   }
@@ -349,7 +429,34 @@ export class PiAdapter extends AgentAdapter {
   async resumeSession(sessionId: string, _ctx?: SessionContext): Promise<{ sessionId: string }> {
     const existing = this.sessions.get(sessionId);
     if (existing?.proc.alive) return { sessionId };
-    this.spawn(sessionId, existing?.cwd ?? process.cwd(), existing?.model ?? DEFAULT_MODEL, existing?.mode ?? MUTATING_DEFAULT_MODE, existing?.sessionFile, existing?.thinking);
+    // In-memory entry survives idle-eviction (sweepIdle keeps the map entry),
+    // but a daemon restart wipes the map. Fall back to the on-disk sidecar so
+    // the conversation (cwd + jsonl) is restored instead of starting blank.
+    const meta = existing ?? this.loadMeta(sessionId);
+    // Prefer the co-located transcript (new sessions). For sessions created
+    // before co-location, the sidecar's recorded sessionFile (under ~/.pi)
+    // still points at the original jsonl — keep using it so history survives.
+    const coLocated = this.transcriptPath(sessionId);
+    const sessionFile = existsSync(coLocated) ? coLocated : (meta?.sessionFile ?? coLocated);
+    const sess = this.spawn(
+      sessionId,
+      meta?.cwd ?? process.cwd(),
+      meta?.model ?? DEFAULT_MODEL,
+      meta?.mode ?? MUTATING_DEFAULT_MODE,
+      sessionFile,
+      meta?.thinking,
+    );
+    // Await get_state so the prompt that follows isn't fired before pi has
+    // replayed the on-disk conversation into the live context (otherwise the
+    // model answers with no memory). Also refreshes the live jsonl path.
+    try {
+      const state = await sess.proc.request<{ sessionFile?: string }>('get_state');
+      if (state.sessionFile) sess.sessionFile = state.sessionFile;
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'get_state failed at resume');
+    }
+    // Re-persist (refreshes the sidecar if it was just reconstructed from disk).
+    this.persistMeta(sessionId, sess);
     return { sessionId };
   }
 
@@ -357,7 +464,20 @@ export class PiAdapter extends AgentAdapter {
     const s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
     this.touch(sessionId);
-    s.proc.send('prompt', { message: text });
+    // The `prompt` RPC resolves as soon as pi accepts the run (it streams
+    // asynchronously and ends with agent_end); backend failures surface
+    // in-stream as message_end{stopReason:'error'} -> onError. The await here
+    // is the transport-level safety net: if the request itself is rejected
+    // (stdin closed, process gone, command timeout) there will be no agent_end,
+    // so emit error + idle to avoid hanging the session "active" forever.
+    try {
+      await s.proc.request('prompt', { message: text });
+    } catch (err) {
+      const message = (err as Error).message;
+      logger.warn({ sessionId, err: message }, 'pi prompt request failed');
+      this.onError?.(sessionId, { message });
+      this.onIdle?.(sessionId);
+    }
   }
 
   async abortSession(sessionId: string): Promise<void> {
@@ -375,15 +495,26 @@ export class PiAdapter extends AgentAdapter {
   async killSession(sessionId: string): Promise<void> {
     this.sessions.get(sessionId)?.proc.kill();
     this.sessions.delete(sessionId);
+    // Remove the adapter recovery sidecar (both co-located and legacy). pi's
+    // transcript lives in the session dir and is reaped with it by the manager.
+    try { rmSync(this.sidecarPath(sessionId), { force: true }); } catch { /* ignore */ }
+    try { rmSync(this.legacySidecarPath(sessionId), { force: true }); } catch { /* ignore */ }
     this.onSessionEnded?.(sessionId, { reason: 'killed' });
   }
 
   async forkSession(sourceSessionId: string, newSessionId: string): Promise<{ sessionId: string }> {
-    const src = this.sessions.get(sourceSessionId);
-    if (src?.proc.alive) {
-      try { await src.proc.request('clone'); } catch { /* fall through to copy */ }
+    const src = this.sessions.get(sourceSessionId) ?? this.loadMeta(sourceSessionId);
+    // A fork must diverge: give it its own co-located transcript seeded with the
+    // source history, so the two sessions don't append to the same jsonl.
+    const srcFile = (this.sessions.get(sourceSessionId)?.sessionFile)
+      ?? (existsSync(this.transcriptPath(sourceSessionId)) ? this.transcriptPath(sourceSessionId) : (src as { sessionFile?: string })?.sessionFile);
+    const forkFile = this.transcriptPath(newSessionId);
+    mkdirSync(this.storeDir(newSessionId), { recursive: true });
+    if (srcFile && existsSync(srcFile)) {
+      try { copyFileSync(srcFile, forkFile); } catch (err) { logger.debug({ err: (err as Error).message }, 'fork copy failed'); }
     }
-    this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? DEFAULT_MODEL, src?.mode ?? MUTATING_DEFAULT_MODE, src?.sessionFile, src?.thinking);
+    const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? DEFAULT_MODEL, src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
+    this.persistMeta(newSessionId, next);
     return { sessionId: newSessionId };
   }
 
@@ -394,7 +525,8 @@ export class PiAdapter extends AgentAdapter {
     s.mode = mode;
     // Tool gating is spawn-time; respawn to apply the new tool set.
     s.proc.kill();
-    this.spawn(sessionId, s.cwd, s.model, mode, s.sessionFile, s.thinking);
+    const next = this.spawn(sessionId, s.cwd, s.model, mode, s.sessionFile, s.thinking);
+    this.persistMeta(sessionId, next);
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
@@ -408,6 +540,7 @@ export class PiAdapter extends AgentAdapter {
       s.thinking = thinking;
       try { await s.proc.request('set_thinking_level', { level: thinking }); } catch { /* ignore */ }
     }
+    this.persistMeta(sessionId, s);
   }
 
   async listSessions(): Promise<SessionInfo[]> {
