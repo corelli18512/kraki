@@ -76,6 +76,12 @@ class PiRpcProcess {
   private pending = new Map<string, Pending>();
   private seq = 0;
   private intentionalExit = false;
+  // Real OS-exit tracking, independent of `child` (which kill() nulls). Lets
+  // killAfterExit distinguish "kill was requested" from "process has actually
+  // exited" so a replacement never opens the --session jsonl while the old
+  // process is still finalizing writes to it.
+  private exited = false;
+  private exitWaiters: Array<() => void> = [];
   onEvent: ((e: PiRpcEvent) => void) | null = null;
   /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
   onExit: ((code: number | null) => void) | null = null;
@@ -105,12 +111,15 @@ class PiRpcProcess {
     this.rl.on('line', (line) => this.handleLine(line));
     this.child.stderr.on('data', (d) => rpcLogger.debug({ stderr: d.toString().trim() }, 'pi stderr'));
     this.child.on('exit', (code) => {
+      this.exited = true;
       for (const p of this.pending.values()) {
         clearTimeout(p.timer);
         p.reject(new Error('pi process exited'));
       }
       this.pending.clear();
       if (!this.intentionalExit) this.onExit?.(code);
+      // Fire any killAfterExit callbacks now that the process has truly exited.
+      for (const w of this.exitWaiters.splice(0)) w();
     });
   }
 
@@ -172,15 +181,16 @@ class PiRpcProcess {
 
   /** Kill the child and run `after` once it has ACTUALLY exited, so a
    *  replacement process can safely reuse the same `--session` jsonl (only one
-   *  writer at a time). If already dead, runs `after` on the next microtask. */
+   *  writer at a time). Gates on the real OS exit — NOT on `this.child`, which
+   *  kill() nulls — so a second concurrent mode change during the SIGTERM
+   *  window still waits for the first process to fully exit instead of racing
+   *  a respawn on top of it. If already exited, runs `after` next microtask. */
   killAfterExit(after: () => void): void {
-    const child = this.child;
-    if (!child || child.killed) {
-      this.kill();
+    if (this.exited) {
       queueMicrotask(after);
       return;
     }
-    child.once('exit', () => after());
+    this.exitWaiters.push(after);
     this.kill();
   }
 
@@ -223,6 +233,9 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
+  /** Set while a mode-change respawn is in flight (old child exiting, new one
+   *  not yet spawned). sendMessage awaits it so it never prompts a dead proc. */
+  respawn?: Promise<void>;
 }
 
 const DEFAULT_PROVIDER = 'github-copilot';
@@ -475,8 +488,14 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async sendMessage(sessionId: string, text: string): Promise<void> {
-    const s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
+    let s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
+    // A mode-change respawn may be in flight (old child exiting, new one not
+    // yet up). Wait for the fresh child so we don't prompt a dead stdin.
+    if (s.respawn) {
+      await s.respawn;
+      s = this.sessions.get(sessionId) ?? s;
+    }
     this.touch(sessionId);
     // The `prompt` RPC resolves as soon as pi accepts the run (it streams
     // asynchronously and ends with agent_end); backend failures surface
@@ -546,13 +565,19 @@ export class PiAdapter extends AgentAdapter {
     // the old child to FULLY exit before opening a new pi on the SAME
     // `--session` jsonl, so the two never interleave writes to the transcript.
     const dying = s.proc;
-    dying.killAfterExit(() => {
-      // Skip if the session was killed, or already respawned by a later
-      // mode change (proc identity differs) — avoids a double writer.
-      const cur = this.sessions.get(sessionId);
-      if (!cur || cur.proc !== dying) return;
-      const next = this.spawn(sessionId, cur.cwd, cur.model, cur.mode, cur.sessionFile, cur.thinking);
-      this.persistMeta(sessionId, next);
+    s.respawn = new Promise<void>((resolve) => {
+      dying.killAfterExit(() => {
+        try {
+          // Skip if the session was killed, or already respawned by a later
+          // mode change (proc identity differs) — avoids a double writer.
+          const cur = this.sessions.get(sessionId);
+          if (!cur || cur.proc !== dying) return;
+          const next = this.spawn(sessionId, cur.cwd, cur.model, cur.mode, cur.sessionFile, cur.thinking);
+          this.persistMeta(sessionId, next);
+        } finally {
+          resolve();
+        }
+      });
     });
   }
 
