@@ -960,7 +960,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessions.set(sid, { session, pendingPermissions, pendingQuestions });
     this.touchSession(sid);
     this.wireEvents(sid, session);
-
+    this.linkCopilotStore(sid);
     logger.info(`session created: ${sid} (model: ${config.model ?? 'default'})`);
     if (config.model) {
       this.expectedModels.set(sid, config.model);
@@ -1204,6 +1204,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.sessions.delete(sessionId);
     }
     this.cleanupSessionPermissions(sessionId);
+    try { unlinkSync(join(getKrakiHome(), 'sessions', sessionId, 'copilot.jsonl')); } catch { /* no link */ }
     this.onSessionEnded?.(sessionId, { reason: 'killed' });
     logger.info(`session killed: ${sessionId}`);
   }
@@ -1349,6 +1350,33 @@ export class CopilotAdapter extends AgentAdapter {
    * size and compare to the previous reading. If stable, fire immediately.
    * Otherwise retry a few times (max ~600ms total).
    */
+  /**
+   * Co-located store pointer. Copilot's SDK ties its session-state to the
+   * client (COPILOT_HOME), not to an individual session, so — unlike pi and
+   * claude — its private transcript can't be physically relocated into the
+   * Kraki session dir without a per-session client (rejected: too invasive for
+   * the shared-client pool). Instead we drop a symlink inside the session dir
+   * pointing at the real events.jsonl, so the session dir is self-describing
+   * (Option A's discoverability intent) with zero risk to the write path.
+   */
+  private copilotEventsPath(sessionId: string): string {
+    return join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
+  }
+
+  private linkCopilotStore(sessionId: string): void {
+    try {
+      const dir = join(getKrakiHome(), 'sessions', sessionId);
+      mkdirSync(dir, { recursive: true });
+      const link = join(dir, 'copilot.jsonl');
+      try { lstatSync(link); unlinkSync(link); } catch { /* no stale link */ }
+      // Target may not exist yet (SDK writes lazily) — a dangling symlink is
+      // fine and resolves once the first events are written.
+      symlinkSync(this.copilotEventsPath(sessionId), link);
+    } catch (err) {
+      logger.debug({ err: (err as Error).message, sessionId }, 'linkCopilotStore failed');
+    }
+  }
+
   private signalFlushComplete(sessionId: string): void {
     const eventsPath = join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
     const MAX_CHECKS = 3;
@@ -1454,6 +1482,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessions.set(sessionId, entry);
     this.touchSession(sessionId);
     this.wireEvents(sessionId, session);
+    this.linkCopilotStore(sessionId);
     logger.debug({ sessionId }, 'session resumed');
 
     return entry;

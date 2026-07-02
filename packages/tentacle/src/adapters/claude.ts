@@ -21,9 +21,10 @@ import {
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, cpSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { getConfigDir } from '../config.js';
 
 const logger = createLogger('claude-adapter');
 
@@ -95,11 +96,21 @@ interface PendingPermission {
   toolKind: string;
 }
 
+/** One AskUserQuestion entry from the SDK's `questions` array. */
+interface AskUserQuestionItem {
+  question: string;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
+  multiSelect?: boolean;
+  header?: string;
+}
+
 interface PendingQuestion {
   resolve: (result: PermissionResult) => void;
   questionId: string;
-  /** Original questions payload from the SDK, echoed back in the answer. */
-  questions?: unknown;
+  /** Original questions payload from the SDK, echoed back in the answer.
+   *  The SDK's AskUserQuestion `answers` map is keyed by each question's
+   *  `question` text, so we need this to build the answer. */
+  questions?: AskUserQuestionItem[];
 }
 
 /** A message pushed into the streaming input channel. */
@@ -333,6 +344,60 @@ export class ClaudeAdapter extends AgentAdapter {
     this.claudeExecutablePath = options.claudeExecutablePath;
   }
 
+  // ── Co-located storage ────────────────────────────────────
+  // Claude's private transcript (its LLM-context store) is relocated INTO the
+  // Kraki session dir via a per-session CLAUDE_CONFIG_DIR. Auth/config is shared
+  // by symlinking every ~/.claude entry except `projects` (the transcript store)
+  // into a per-session shadow home, so the transcript lands co-located while
+  // login still works. A small sidecar persists the bits needed to resume after
+  // a daemon restart: cwd (the transcript path is cwd-mangled) and the SDK's own
+  // session UUID (the value the SDK `resume` option actually expects).
+
+  private storeDir(sessionId: string): string {
+    return join(getConfigDir(), 'sessions', sessionId);
+  }
+  /** Per-session shadow CLAUDE_CONFIG_DIR (auth symlinked in, projects fresh). */
+  private claudeHome(sessionId: string): string {
+    return join(this.storeDir(sessionId), 'claude-home');
+  }
+  private sidecarPath(sessionId: string): string {
+    return join(this.storeDir(sessionId), '.claude-adapter.json');
+  }
+
+  /** Build the per-session shadow home: symlink every ~/.claude entry except
+   *  `projects` so the SDK writes its transcript into our co-located dir while
+   *  reusing the real login/config. Returns the shadow home path. */
+  private setupShadowHome(sessionId: string): string {
+    const home = this.claudeHome(sessionId);
+    mkdirSync(home, { recursive: true });
+    const real = join(homedir(), '.claude');
+    if (existsSync(real)) {
+      for (const entry of readdirSync(real)) {
+        if (entry === 'projects') continue; // keep transcript store co-located
+        const dest = join(home, entry);
+        try { lstatSync(dest); unlinkSync(dest); } catch { /* dest absent */ }
+        try { symlinkSync(join(real, entry), dest); } catch { /* best effort */ }
+      }
+    }
+    return home;
+  }
+
+  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string }): void {
+    try {
+      mkdirSync(this.storeDir(sessionId), { recursive: true });
+      const prev = this.loadMeta(sessionId) ?? {};
+      writeFileSync(this.sidecarPath(sessionId), JSON.stringify({ ...prev, ...meta }), 'utf8');
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'claude persistMeta failed');
+    }
+  }
+
+  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string } | null {
+    const p = this.sidecarPath(sessionId);
+    if (!existsSync(p)) return null;
+    try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+  }
+
   /** System prompt appended to Claude Code's built-in prompt. */
   private static readonly SYSTEM_PROMPT = [
     'You are running inside Kraki, a remote control platform. A human operator is',
@@ -521,6 +586,10 @@ export class ClaudeAdapter extends AgentAdapter {
     this.sessions.set(sessionId, entry);
     logger.info({ sessionId, model: config.model }, 'session created (deferred — query starts on first message)');
 
+    // Persist the durable resume bits up-front (cwd is needed to locate the
+    // cwd-mangled transcript; the SDK session UUID is filled in at init).
+    this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
+
     this.onSessionCreated?.({
       sessionId,
       agent: 'claude',
@@ -536,6 +605,14 @@ export class ClaudeAdapter extends AgentAdapter {
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
 
+    // Recover the durable bits from the co-located sidecar. The SDK `resume`
+    // option expects the SDK's own session UUID (NOT Kraki's id), and the
+    // transcript path is cwd-mangled — so without these a fresh daemon spawns a
+    // blank session (the daemon-restart "no context" bug). Fall back to the
+    // Kraki id / process cwd for sessions created before co-location.
+    const meta = this.loadMeta(sessionId);
+    if (meta?.sdkSessionId) this.sdkSessionIds.set(sessionId, meta.sdkSessionId);
+
     const entry: SessionEntry = {
       query: null,
       abortController,
@@ -544,12 +621,18 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingPermissions,
       pendingQuestions,
       sessionId,
+      model: meta?.model,
       consumerLoop: Promise.resolve(),
-      deferredConfig: { resume: sessionId },
+      deferredConfig: {
+        resume: meta?.sdkSessionId ?? sessionId,
+        ...(meta?.cwd && { cwd: meta.cwd }),
+        ...(meta?.model && { model: meta.model }),
+        sessionId,
+      },
     };
 
     this.sessions.set(sessionId, entry);
-    logger.info({ sessionId }, 'session resumed (deferred)');
+    logger.info({ sessionId, sdkSessionId: meta?.sdkSessionId }, 'session resumed (deferred)');
     return { sessionId };
   }
 
@@ -558,6 +641,21 @@ export class ClaudeAdapter extends AgentAdapter {
     const pendingQuestions = new Map<string, PendingQuestion>();
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
+
+    // A fork must read the source transcript from the NEW session's co-located
+    // config dir, so seed it by copying the source projects/ across, and resume
+    // with the source's SDK session UUID (not the Kraki id).
+    const srcMeta = this.loadMeta(sourceSessionId);
+    const srcProjects = join(this.claudeHome(sourceSessionId), 'projects');
+    if (existsSync(srcProjects)) {
+      try {
+        mkdirSync(this.claudeHome(newSessionId), { recursive: true });
+        cpSync(srcProjects, join(this.claudeHome(newSessionId), 'projects'), { recursive: true });
+      } catch (err) {
+        logger.debug({ err: (err as Error).message }, 'claude fork copy failed');
+      }
+    }
+    const resumeId = srcMeta?.sdkSessionId ?? this.sdkSessionIds.get(sourceSessionId) ?? sourceSessionId;
 
     const entry: SessionEntry = {
       query: null,
@@ -568,10 +666,17 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
-      deferredConfig: { resume: sourceSessionId, fork: true, sessionId: newSessionId },
+      deferredConfig: {
+        resume: resumeId,
+        fork: true,
+        ...(srcMeta?.cwd && { cwd: srcMeta.cwd }),
+        ...(srcMeta?.model && { model: srcMeta.model }),
+        sessionId: newSessionId,
+      },
     };
 
     this.sessions.set(newSessionId, entry);
+    if (srcMeta) this.persistMeta(newSessionId, { cwd: srcMeta.cwd, model: srcMeta.model });
 
     this.onSessionCreated?.({
       sessionId: newSessionId,
@@ -652,6 +757,9 @@ export class ClaudeAdapter extends AgentAdapter {
 
     const options: Options = {
       abortController: entry.abortController,
+      // Relocate Claude's private transcript INTO the Kraki session dir while
+      // reusing the real login (symlinked into the per-session shadow home).
+      env: { ...process.env, CLAUDE_CONFIG_DIR: this.setupShadowHome(sessionId) },
       ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
       ...(config?.model && { model: this.modelAliasMap.get(config.model) ?? config.model }),
       ...(config?.cwd && { cwd: config.cwd }),
@@ -675,6 +783,7 @@ export class ClaudeAdapter extends AgentAdapter {
     entry.query = q;
     entry.deferredConfig = undefined;
     entry.consumerLoop = this.consumeMessages(sessionId, q);
+    if (config?.cwd) this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
     logger.debug({ sessionId }, 'SDK query spawned');
   }
 
@@ -738,12 +847,20 @@ export class ClaudeAdapter extends AgentAdapter {
       return;
     }
 
+    // SDK schema: AskUserQuestion's `answers` is a Record keyed by each
+    // question's `question` TEXT (not a literal "answer" key), and `questions`
+    // is required. kraki only surfaces questions[0] to the user, so key the
+    // answer off questions[0].question; any remaining questions are left blank
+    // (the SDK renders them as unanswered). Passing `{ answer }` here was the
+    // bug that made every answer read as "The user did not answer the questions."
+    const qs = pending.questions ?? [];
+    const answers: Record<string, string> = {};
+    const firstQuestionText = qs[0]?.question;
+    if (firstQuestionText) answers[firstQuestionText] = answer;
+
     pending.resolve({
       behavior: 'allow',
-      updatedInput: {
-        answers: { answer },
-        ...(pending.questions ? { questions: pending.questions } : {}),
-      },
+      updatedInput: { questions: qs, answers },
     });
     entry.pendingQuestions.delete(questionId);
     logger.debug({ questionId, sessionId }, 'question answered');
@@ -944,6 +1061,9 @@ export class ClaudeAdapter extends AgentAdapter {
           const sdkSessionId = sysMsg.session_id;
           if (sdkSessionId) {
             this.sdkSessionIds.set(sessionId, sdkSessionId);
+            // Persist the SDK's own session UUID — the value its `resume`
+            // option expects — so a fresh daemon can re-attach this transcript.
+            this.persistMeta(sessionId, { sdkSessionId });
             if (sdkSessionId !== sessionId) {
               const entry = this.sessions.get(sessionId);
               if (entry) entry.sessionId = sdkSessionId;
@@ -1258,21 +1378,21 @@ export class ClaudeAdapter extends AgentAdapter {
     // Delegate mode: auto-answer questions
     if (mode === 'delegate') {
       logger.debug({ sessionId }, 'question auto-answered (delegate mode)');
+      // Key each answer by its question TEXT (SDK schema), not a literal
+      // "answer" key — otherwise the SDK sees every question as unanswered.
+      const qs = (input.questions as AskUserQuestionItem[] | undefined) ?? [];
+      const answers: Record<string, string> = {};
+      for (const q of qs) {
+        if (q?.question) answers[q.question] = 'proceed with your best judgment';
+      }
       return Promise.resolve({
         behavior: 'allow',
-        updatedInput: {
-          questions: input.questions,
-          answers: { answer: 'proceed with your best judgment' },
-        },
+        updatedInput: { questions: qs, answers },
       });
     }
 
     const qId = makeId('q');
-    const questions = input.questions as Array<{
-      question: string;
-      options?: Array<{ label: string; description?: string }>;
-      multiSelect?: boolean;
-    }> | undefined;
+    const questions = input.questions as AskUserQuestionItem[] | undefined;
 
     const firstQuestion = questions?.[0];
     const questionText = firstQuestion?.question ?? (input.question as string) ?? 'The agent has a question';
@@ -1292,7 +1412,7 @@ export class ClaudeAdapter extends AgentAdapter {
     });
 
     return new Promise<PermissionResult>((resolve) => {
-      pendingQuestions.set(qId, { resolve, questionId: qId, questions: input.questions });
+      pendingQuestions.set(qId, { resolve, questionId: qId, questions });
     });
   }
 
@@ -1317,7 +1437,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     entry.pendingPermissions.clear();
     for (const [qId, q] of entry.pendingQuestions) {
-      q.resolve({ behavior: 'allow', updatedInput: { answers: { answer: '' } } });
+      // Session ending with the question still open: echo `questions` back
+      // (required by the SDK schema) with an empty `answers` map so the SDK
+      // renders them unanswered rather than throwing on missing `questions`.
+      q.resolve({
+        behavior: 'allow',
+        updatedInput: { questions: q.questions ?? [], answers: {} },
+      });
       this.onQuestionAutoResolved?.(sessionId, qId);
     }
     entry.pendingQuestions.clear();

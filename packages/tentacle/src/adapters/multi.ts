@@ -106,6 +106,14 @@ export async function detectAvailableAgents(): Promise<AgentId[]> {
     logger.debug({ sdk: claudeSdk, cli: claudeCli }, 'Claude Code not available');
   }
 
+  // pi: `pi` CLI on PATH (package @earendil-works/pi-coding-agent)
+  if (cliExists('pi')) {
+    agents.push('pi');
+    logger.info('Detected pi: pi CLI OK');
+  } else {
+    logger.debug('pi not available');
+  }
+
   return agents;
 }
 
@@ -164,6 +172,11 @@ export class MultiAgentAdapter extends AgentAdapter {
         } else if (id === 'claude') {
           const { ClaudeAdapter } = await import('./claude.js');
           adapter = new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath });
+        } else if (id === 'pi') {
+          const { PiAdapter } = await import('./pi.js');
+          const piPath = resolveCliPath('pi');
+          if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); continue; }
+          adapter = new PiAdapter({ cliPath: piPath });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;
