@@ -594,6 +594,11 @@ export interface AnswerMessage extends BaseEnvelope {
   payload: {
     questionId: string;
     answer: string;
+    /** True when the answer was typed freely rather than picked from a
+     *  provided choice. Adapters (e.g. copilot) use this to decide whether the
+     *  answer maps to a listed option or is custom text. Optional for backward
+     *  compatibility; treated as `false` when absent. */
+    wasFreeform?: boolean;
   };
 }
 

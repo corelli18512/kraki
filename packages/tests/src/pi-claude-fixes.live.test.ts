@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  createTestEnv, connectApp, createTmpSessionDir, waitMs,
+  createTestEnv, connectApp, createTmpSessionDir, waitMs, sendToTentacle,
   type TestEnv, type MockApp,
 } from "./helpers.js";
 import { SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
@@ -98,25 +98,10 @@ async function withSession(
 }
 
 /**
- * app -> tentacle session commands (answer / set_session_mode / approve) are
- * NOT plain sends: the head only routes encrypted `unicast` envelopes. The
- * tentacle decrypts them and runs the inner ConsumerMessage. This mirrors the
- * web arm exactly. Resolve the tentacle device + its key from auth_ok.
+ * app -> tentacle session commands (answer / set_session_mode / approve) go
+ * through `sendToTentacle` (encrypted unicast), mirroring the web arm. See
+ * helpers.ts for why a plain send is dropped by the head.
  */
-function tentacleTarget(app: MockApp): { id: string; key: string } {
-  const devs = ((app.authOk.devices as Array<Record<string, unknown>>) ?? []);
-  const t =
-    devs.find((d) => d.role === "tentacle") ??
-    devs.find((d) => typeof d.name === "string" && (d.name as string).includes("Daemon")) ??
-    devs.find((d) => d.id !== app.deviceId && (d.encryptionKey || d.publicKey));
-  if (!t) throw new Error(`tentacle device not in auth_ok: ${JSON.stringify(devs)}`);
-  return { id: t.id as string, key: (t.encryptionKey ?? t.publicKey) as string };
-}
-
-function sendToTentacle(app: MockApp, inner: Record<string, unknown>): void {
-  const t = tentacleTarget(app);
-  app.sendUnicast(t.id, inner, t.key);
-}
 
 // ── A. pi ────────────────────────────────────────────────
 describe("pi: mode-change mid-turn + co-located transcript", () => {
@@ -194,11 +179,12 @@ describe("claude: AskUserQuestion answer reaches the model", () => {
       const questionId = (q.payload as Record<string, unknown>).id as string;
       expect(questionId).toBeTruthy();
 
-      // Answer it freeform, exactly like the web arm: { answer }.
+      // Answer it freeform, exactly like the web arm: choice-click sends
+      // wasFreeform=false, typed text sends wasFreeform=true.
       sendToTentacle(app, {
         type: "answer",
         sessionId: sid,
-        payload: { questionId, answer: `My secret fruit is ${MARKER}` },
+        payload: { questionId, answer: `My secret fruit is ${MARKER}`, wasFreeform: true },
       });
 
       // Relay-client emits question_resolved only after respondToQuestion is

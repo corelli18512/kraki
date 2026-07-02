@@ -16,7 +16,7 @@
  * Requires: copilot CLI installed and authenticated
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createTestEnv, connectApp, createTmpSessionDir, waitMs, type TestEnv, type MockApp } from "./helpers.js";
+import { createTestEnv, connectApp, createTmpSessionDir, waitMs, sendToTentacle, type TestEnv, type MockApp } from "./helpers.js";
 import { CopilotAdapter, SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
 import type { AgentAdapter } from "@kraki/tentacle";
 import { getOrCreateDeviceId } from "@kraki/tentacle";
@@ -101,8 +101,10 @@ describe("Full E2E: Real Daemon Wiring + Copilot + Head", () => {
       const perm = await app.waitFor("permission", 30_000);
       expect(perm.payload.id).toBeTruthy();
 
-      // Approve from app → head → relay client → adapter (full round trip)
-      app.send({ type: "approve", sessionId: sid, payload: { permissionId: perm.payload.id } });
+      // Approve from app → head → relay client → adapter (full round trip).
+      // App→tentacle commands must be encrypted unicast, not a plain send
+      // (the head drops unknown plain types).
+      sendToTentacle(app, { type: "approve", sessionId: sid, payload: { permissionId: perm.payload.id } });
       const response = await app.waitFor("agent_message", 30_000);
       expect(response.payload.content).toBeTruthy();
     });

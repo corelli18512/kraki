@@ -15,8 +15,8 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
     inputRef.current?.focus();
   }, [id, shouldAutoFocus]);
 
-  const handleAnswer = (answer: string) => {
-    wsClient.answer(id, sessionId, answer);
+  const handleAnswer = (answer: string, wasFreeform: boolean) => {
+    wsClient.answer(id, sessionId, answer, wasFreeform);
     // On mobile, blur to dismiss the keyboard after answering
     if (!shouldAutoFocus) {
       inputRef.current?.blur();
@@ -31,7 +31,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
             {choices.map((choice, i) => (
               <button
                 key={i}
-                onClick={() => handleAnswer(choice)}
+                onClick={() => handleAnswer(choice, false)}
                 className="w-full rounded-lg border border-border-primary px-3 py-2 text-left text-sm text-text-primary transition-all hover:border-violet-500 hover:bg-violet-500/10 active:scale-[0.98]"
               >
                 <Markdown components={{ p: ({ children }) => <>{children}</> }}>{choice}</Markdown>
@@ -48,7 +48,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && freeform.trim()) {
                 e.preventDefault();
-                handleAnswer(freeform.trim());
+                handleAnswer(freeform.trim(), true);
               }
             }}
             placeholder="Type your answer…"
@@ -58,7 +58,7 @@ export function QuestionInput({ question, sessionId }: { question: PendingQuesti
             className="flex-1 rounded-xl border border-border-primary bg-surface-secondary px-4 py-2.5 text-base text-text-primary placeholder-text-muted focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 sm:text-sm"
           />
           <button
-            onClick={() => { if (freeform.trim()) handleAnswer(freeform.trim()); }}
+            onClick={() => { if (freeform.trim()) handleAnswer(freeform.trim(), true); }}
             disabled={!freeform.trim()}
             aria-label="Send answer"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500 text-white transition-all hover:bg-violet-600 active:scale-95 disabled:opacity-40 disabled:hover:bg-violet-500"

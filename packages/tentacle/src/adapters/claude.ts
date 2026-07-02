@@ -111,6 +111,13 @@ interface PendingQuestion {
    *  The SDK's AskUserQuestion `answers` map is keyed by each question's
    *  `question` text, so we need this to build the answer. */
   questions?: AskUserQuestionItem[];
+  /** Index (into `questions`) of the question THIS card represents. The SDK
+   *  may ask 1–4 questions per call; kraki surfaces them to the user one card
+   *  at a time and advances on each answer. */
+  qIndex?: number;
+  /** Answers collected so far across the serial cards of one AskUserQuestion
+   *  call, keyed by question text. Shared (mutated) across the chain. */
+  collected?: Record<string, string>;
 }
 
 /** A message pushed into the streaming input channel. */
@@ -849,21 +856,32 @@ export class ClaudeAdapter extends AgentAdapter {
 
     // SDK schema: AskUserQuestion's `answers` is a Record keyed by each
     // question's `question` TEXT (not a literal "answer" key), and `questions`
-    // is required. kraki only surfaces questions[0] to the user, so key the
-    // answer off questions[0].question; any remaining questions are left blank
-    // (the SDK renders them as unanswered). Passing `{ answer }` here was the
-    // bug that made every answer read as "The user did not answer the questions."
+    // is required. Passing `{ answer }` here was the bug that made every answer
+    // read as "The user did not answer the questions."
+    //
+    // The SDK may ask 1–4 questions per call. We surface them one card at a
+    // time: record this card's answer, then either emit the next question or,
+    // once all are answered, resolve the tool permission with the full map.
     const qs = pending.questions ?? [];
-    const answers: Record<string, string> = {};
-    const firstQuestionText = qs[0]?.question;
-    if (firstQuestionText) answers[firstQuestionText] = answer;
+    const collected = pending.collected ?? {};
+    const index = pending.qIndex ?? 0;
+    const thisQuestionText = qs[index]?.question;
+    if (thisQuestionText) collected[thisQuestionText] = answer;
+
+    entry.pendingQuestions.delete(questionId);
+
+    const nextIndex = index + 1;
+    if (nextIndex < qs.length) {
+      this.emitQuestionCard(sessionId, pending.resolve, qs, nextIndex, collected, entry.pendingQuestions);
+      logger.debug({ questionId, sessionId, index, nextIndex, total: qs.length }, 'question answered, advancing');
+      return;
+    }
 
     pending.resolve({
       behavior: 'allow',
-      updatedInput: { questions: qs, answers },
+      updatedInput: { questions: qs, answers: collected },
     });
-    entry.pendingQuestions.delete(questionId);
-    logger.debug({ questionId, sessionId }, 'question answered');
+    logger.debug({ questionId, sessionId, answered: Object.keys(collected).length }, 'all questions answered');
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -1391,29 +1409,62 @@ export class ClaudeAdapter extends AgentAdapter {
       });
     }
 
-    const qId = makeId('q');
     const questions = input.questions as AskUserQuestionItem[] | undefined;
 
-    const firstQuestion = questions?.[0];
-    const questionText = firstQuestion?.question ?? (input.question as string) ?? 'The agent has a question';
-    const choices = firstQuestion?.options?.map(o => o.label);
+    return new Promise<PermissionResult>((resolve) => {
+      const qs = questions ?? [];
+      if (qs.length === 0) {
+        // Malformed AskUserQuestion with no questions: surface a single
+        // best-effort prompt so the user isn't stuck, resolve empty.
+        const qId = makeId('q');
+        this.onQuestionRequest?.(sessionId, {
+          id: qId,
+          question: (input.question as string) ?? 'The agent has a question',
+          choices: undefined,
+          allowFreeform: true,
+        });
+        pendingQuestions.set(qId, { resolve, questionId: qId, questions: qs, qIndex: 0, collected: {} });
+        return;
+      }
+      // Surface the first question; subsequent questions are emitted one at a
+      // time as each is answered (see respondToQuestion).
+      this.emitQuestionCard(sessionId, resolve, qs, 0, {}, pendingQuestions);
+    });
+  }
+
+  /**
+   * Emit a single AskUserQuestion card (question[index]) to the app and record
+   * a pending entry. Shared by the initial emit and the serial advance in
+   * respondToQuestion.
+   */
+  private emitQuestionCard(
+    sessionId: string,
+    resolve: (result: PermissionResult) => void,
+    questions: AskUserQuestionItem[],
+    index: number,
+    collected: Record<string, string>,
+    pendingQuestions: Map<string, PendingQuestion>,
+  ): void {
+    const qId = makeId('q');
+    const q = questions[index];
+    const choices = q?.options?.map(o => o.label);
 
     logger.debug({
       questionId: qId,
       sessionId,
+      index,
+      total: questions.length,
       choicesCount: choices?.length ?? 0,
     }, 'question requested');
 
     this.onQuestionRequest?.(sessionId, {
       id: qId,
-      question: questionText,
+      question: q?.question ?? 'The agent has a question',
       choices,
       allowFreeform: true,
     });
 
-    return new Promise<PermissionResult>((resolve) => {
-      pendingQuestions.set(qId, { resolve, questionId: qId, questions });
-    });
+    pendingQuestions.set(qId, { resolve, questionId: qId, questions, qIndex: index, collected });
   }
 
   // ── Helpers ───────────────────────────────────────
@@ -1437,12 +1488,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     entry.pendingPermissions.clear();
     for (const [qId, q] of entry.pendingQuestions) {
-      // Session ending with the question still open: echo `questions` back
-      // (required by the SDK schema) with an empty `answers` map so the SDK
-      // renders them unanswered rather than throwing on missing `questions`.
+      // Session ending with a question still open: echo `questions` back
+      // (required by the SDK schema) with whatever answers were collected so
+      // far in this serial chain (empty if none), so the SDK renders the rest
+      // as unanswered rather than throwing on a missing `questions` field.
       q.resolve({
         behavior: 'allow',
-        updatedInput: { questions: q.questions ?? [], answers: {} },
+        updatedInput: { questions: q.questions ?? [], answers: q.collected ?? {} },
       });
       this.onQuestionAutoResolved?.(sessionId, qId);
     }
