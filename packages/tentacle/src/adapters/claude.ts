@@ -96,11 +96,21 @@ interface PendingPermission {
   toolKind: string;
 }
 
+/** One AskUserQuestion entry from the SDK's `questions` array. */
+interface AskUserQuestionItem {
+  question: string;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
+  multiSelect?: boolean;
+  header?: string;
+}
+
 interface PendingQuestion {
   resolve: (result: PermissionResult) => void;
   questionId: string;
-  /** Original questions payload from the SDK, echoed back in the answer. */
-  questions?: unknown;
+  /** Original questions payload from the SDK, echoed back in the answer.
+   *  The SDK's AskUserQuestion `answers` map is keyed by each question's
+   *  `question` text, so we need this to build the answer. */
+  questions?: AskUserQuestionItem[];
 }
 
 /** A message pushed into the streaming input channel. */
@@ -837,12 +847,20 @@ export class ClaudeAdapter extends AgentAdapter {
       return;
     }
 
+    // SDK schema: AskUserQuestion's `answers` is a Record keyed by each
+    // question's `question` TEXT (not a literal "answer" key), and `questions`
+    // is required. kraki only surfaces questions[0] to the user, so key the
+    // answer off questions[0].question; any remaining questions are left blank
+    // (the SDK renders them as unanswered). Passing `{ answer }` here was the
+    // bug that made every answer read as "The user did not answer the questions."
+    const qs = pending.questions ?? [];
+    const answers: Record<string, string> = {};
+    const firstQuestionText = qs[0]?.question;
+    if (firstQuestionText) answers[firstQuestionText] = answer;
+
     pending.resolve({
       behavior: 'allow',
-      updatedInput: {
-        answers: { answer },
-        ...(pending.questions ? { questions: pending.questions } : {}),
-      },
+      updatedInput: { questions: qs, answers },
     });
     entry.pendingQuestions.delete(questionId);
     logger.debug({ questionId, sessionId }, 'question answered');
@@ -1360,21 +1378,21 @@ export class ClaudeAdapter extends AgentAdapter {
     // Delegate mode: auto-answer questions
     if (mode === 'delegate') {
       logger.debug({ sessionId }, 'question auto-answered (delegate mode)');
+      // Key each answer by its question TEXT (SDK schema), not a literal
+      // "answer" key — otherwise the SDK sees every question as unanswered.
+      const qs = (input.questions as AskUserQuestionItem[] | undefined) ?? [];
+      const answers: Record<string, string> = {};
+      for (const q of qs) {
+        if (q?.question) answers[q.question] = 'proceed with your best judgment';
+      }
       return Promise.resolve({
         behavior: 'allow',
-        updatedInput: {
-          questions: input.questions,
-          answers: { answer: 'proceed with your best judgment' },
-        },
+        updatedInput: { questions: qs, answers },
       });
     }
 
     const qId = makeId('q');
-    const questions = input.questions as Array<{
-      question: string;
-      options?: Array<{ label: string; description?: string }>;
-      multiSelect?: boolean;
-    }> | undefined;
+    const questions = input.questions as AskUserQuestionItem[] | undefined;
 
     const firstQuestion = questions?.[0];
     const questionText = firstQuestion?.question ?? (input.question as string) ?? 'The agent has a question';
@@ -1394,7 +1412,7 @@ export class ClaudeAdapter extends AgentAdapter {
     });
 
     return new Promise<PermissionResult>((resolve) => {
-      pendingQuestions.set(qId, { resolve, questionId: qId, questions: input.questions });
+      pendingQuestions.set(qId, { resolve, questionId: qId, questions });
     });
   }
 
@@ -1419,7 +1437,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     entry.pendingPermissions.clear();
     for (const [qId, q] of entry.pendingQuestions) {
-      q.resolve({ behavior: 'allow', updatedInput: { answers: { answer: '' } } });
+      // Session ending with the question still open: echo `questions` back
+      // (required by the SDK schema) with an empty `answers` map so the SDK
+      // renders them unanswered rather than throwing on missing `questions`.
+      q.resolve({
+        behavior: 'allow',
+        updatedInput: { questions: q.questions ?? [], answers: {} },
+      });
       this.onQuestionAutoResolved?.(sessionId, qId);
     }
     entry.pendingQuestions.clear();
