@@ -6,7 +6,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync } from 'node:fs';
+import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -145,6 +145,110 @@ export function checkCopilotCli(): CliCheckResult {
   } catch {
     return { found: false };
   }
+}
+
+export function checkClaudeCli(): CliCheckResult {
+  try {
+    const output = execSync('claude --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    // `claude --version` prints e.g. "1.2.3 (Claude Code)" — keep the
+    // leading semver if present, otherwise the whole first line.
+    const first = output.split('\n')[0];
+    const match = first.match(/(\d+\.\d+\.\d+)/);
+    return { found: true, version: match?.[1] ?? first };
+  } catch {
+    return { found: false };
+  }
+}
+
+// ── Anthropic credentials ───────────────────────────────
+//
+// The Claude adapter resolves credentials from process.env merged with
+// the `env` block of ~/.claude/settings.json (see adapters/claude.ts
+// loadClaudeSettingsEnv). A daemon launched by launchd/systemd does NOT
+// inherit the interactive shell environment, so settings.json is the
+// canonical place a key lands. We mirror that resolution order here so
+// setup/doctor report the same truth the daemon will see at runtime.
+
+export type AnthropicCredSource = 'env' | 'settings' | 'provider';
+
+export interface AnthropicCredResult {
+  configured: boolean;
+  /** Where the credential was found, or null if none. */
+  source: AnthropicCredSource | null;
+}
+
+/** Read the `env` map from ~/.claude/settings.json (best-effort). */
+export function readClaudeSettingsEnv(): Record<string, string> {
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+  try {
+    const raw = readFileSync(settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { env?: Record<string, unknown> };
+    const out: Record<string, string> = {};
+    if (parsed.env && typeof parsed.env === 'object') {
+      for (const [k, v] of Object.entries(parsed.env)) {
+        if (typeof v === 'string') out[k] = v;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Probe whether the Claude SDK will find usable credentials. Mirrors the
+ * daemon's resolution: process.env wins, then ~/.claude/settings.json,
+ * then third-party provider flags. Never makes a network call.
+ */
+export function checkAnthropicCreds(): AnthropicCredResult {
+  const settingsEnv = readClaudeSettingsEnv();
+  const get = (key: string): string | undefined =>
+    process.env[key] ?? settingsEnv[key];
+  const sourceOf = (key: string): AnthropicCredSource =>
+    process.env[key] !== undefined ? 'env' : 'settings';
+
+  // Direct API key / auth token.
+  if (get('ANTHROPIC_API_KEY')) {
+    return { configured: true, source: sourceOf('ANTHROPIC_API_KEY') };
+  }
+  if (get('ANTHROPIC_AUTH_TOKEN')) {
+    return { configured: true, source: sourceOf('ANTHROPIC_AUTH_TOKEN') };
+  }
+
+  // Third-party providers (Bedrock / Vertex / Foundry) — credentials are
+  // resolved by their own SDKs, so the flag being set is sufficient.
+  for (const flag of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) {
+    if (get(flag) === '1') return { configured: true, source: 'provider' };
+  }
+
+  return { configured: false, source: null };
+}
+
+/**
+ * Persist an Anthropic API key into ~/.claude/settings.json `env` block —
+ * the same file the daemon and Claude Code itself read. Merges into any
+ * existing settings, creating the file/dir if needed. Used by headless
+ * setup (`--anthropic-key`) so a GUI wizard can store the key where the
+ * launchd daemon will pick it up.
+ */
+export function saveAnthropicKey(key: string): void {
+  const dir = join(homedir(), '.claude');
+  const settingsPath = join(dir, 'settings.json');
+  mkdirSync(dir, { recursive: true });
+
+  let settings: { env?: Record<string, unknown>; [k: string]: unknown } = {};
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as typeof settings;
+  } catch {
+    /* missing or malformed — start fresh */
+  }
+  const env = (settings.env && typeof settings.env === 'object')
+    ? settings.env as Record<string, unknown>
+    : {};
+  env.ANTHROPIC_API_KEY = key;
+  settings.env = env;
+
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
 }
 
 // ── Retry wrapper ───────────────────────────────────────

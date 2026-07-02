@@ -45,6 +45,10 @@ vi.mock('../config.js', () => ({
   getLogVerbosity: vi.fn((config: Record<string, unknown> | null) => (config?.logging as Record<string, unknown> | undefined)?.verbosity ?? 'normal'),
   getVersion: vi.fn(() => '1.2.3'),
   loadChannelKey: (...args: unknown[]) => mockLoadChannelKey(...args),
+  getOrCreateDeviceId: vi.fn(() => 'dev_test'),
+  saveGitHubToken: vi.fn(),
+  loadGitHubToken: vi.fn(() => null),
+  DEFAULT_LOG_VERBOSITY: 'normal',
 }));
 
 vi.mock('../daemon.js', () => ({
@@ -64,8 +68,10 @@ vi.mock('../banner.js', () => ({
   printStaticBanner: vi.fn(),
 }));
 
+const mockResolveRelay = vi.fn();
 vi.mock('../setup.js', () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
+  resolveRelay: (...args: unknown[]) => mockResolveRelay(...args),
 }));
 
 vi.mock('../update.js', () => ({
@@ -111,18 +117,24 @@ vi.mock('node:fs', async () => {
 
 // Capture console output
 let consoleOutput: string[];
+let stdoutOutput: string[];
 let originalArgv: string[];
 const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
 beforeEach(() => {
   vi.resetAllMocks();
   consoleOutput = [];
+  stdoutOutput = [];
   vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
   vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
+  vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+    stdoutOutput.push(String(chunk));
+    return true;
+  }) as never);
   originalArgv = process.argv;
   // Reset mock defaults
   mockGetConfigDir.mockReturnValue('/tmp/fake-kraki');
@@ -163,6 +175,15 @@ describe('CLI --help', () => {
     expect(output).toContain('Usage:');
     expect(output).toContain('stop');
     expect(output).toContain('status');
+  });
+
+  it('documents the new multi-agent / headless commands', async () => {
+    await runCli(['--help']);
+    const output = consoleOutput.join('\n');
+    expect(output).toContain('resolve-relay');
+    expect(output).toContain('fda');
+    expect(output).toContain('--agent');
+    expect(output).toContain('status --json');
   });
 
   it('-h also prints help', async () => {
@@ -243,6 +264,100 @@ describe('CLI status', () => {
     await runCli(['status']);
     const output = consoleOutput.join('\n');
     expect(output).toContain('stopped');
+  });
+
+  it('emits machine-readable JSON with --json', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 42 });
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://relay.test',
+      authMethod: 'github_token',
+      device: { name: 'laptop', id: 'dev_1' },
+      agents: ['claude'],
+      logging: { verbosity: 'normal' },
+    });
+    await runCli(['status', '--json']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.ok).toBe(true);
+    expect(json.daemon).toEqual({ running: true, pid: 42 });
+    expect(json.config.exists).toBe(true);
+    expect(json.config.relay).toBe('wss://relay.test');
+    expect(json.config.agents).toEqual(['claude']);
+  });
+});
+
+// ── resolve-relay ───────────────────────────────────────
+
+describe('CLI resolve-relay', () => {
+  it('prints resolved relay as JSON', async () => {
+    mockResolveRelay.mockResolvedValue({
+      ok: true,
+      relayUrl: 'wss://kraki-us.example',
+      region: 'us',
+      user: 'octocat',
+    });
+    await runCli(['resolve-relay', '--json', '--github-token', 'tok123']);
+    expect(mockResolveRelay).toHaveBeenCalledWith('tok123');
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json).toMatchObject({
+      ok: true,
+      relayUrl: 'wss://kraki-us.example',
+      region: 'us',
+      user: 'octocat',
+    });
+  });
+
+  it('exits non-zero on resolve failure', async () => {
+    mockResolveRelay.mockResolvedValue({
+      ok: false,
+      relayUrl: 'wss://relay.kraki.chat',
+      fallback: true,
+      error: 'network error',
+    });
+    await runCli(['resolve-relay', '--json', '--github-token', 'tok']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.ok).toBe(false);
+    expect(json.fallback).toBe(true);
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+});
+
+// ── setup --headless ────────────────────────────────────
+
+describe('CLI setup --headless', () => {
+  it('errors as JSON when --relay is missing', async () => {
+    await runCli(['setup', '--headless']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json).toEqual({ ok: false, error: '--relay is required', code: 'missing_relay' });
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('rejects an invalid --agent value', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--agent', 'bogus']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.ok).toBe(false);
+    expect(json.code).toBe('bad_agent');
+  });
+
+  it('writes config and pins the chosen agent', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--agent', 'claude', '--device-name', 'box']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relay: 'wss://r',
+        agents: ['claude'],
+        device: expect.objectContaining({ name: 'box' }),
+      }),
+    );
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.ok).toBe(true);
+    expect(json.agents).toEqual(['claude']);
+  });
+
+  it('omits agents (auto) when --agent is auto', async () => {
+    await runCli(['setup', '--headless', '--relay', 'wss://r', '--agent', 'auto']);
+    const cfg = mockSaveConfig.mock.calls[0][0];
+    expect(cfg.agents).toBeUndefined();
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.agents).toBe('auto');
   });
 });
 
