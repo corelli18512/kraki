@@ -170,6 +170,20 @@ class PiRpcProcess {
     this.child = null;
   }
 
+  /** Kill the child and run `after` once it has ACTUALLY exited, so a
+   *  replacement process can safely reuse the same `--session` jsonl (only one
+   *  writer at a time). If already dead, runs `after` on the next microtask. */
+  killAfterExit(after: () => void): void {
+    const child = this.child;
+    if (!child || child.killed) {
+      this.kill();
+      queueMicrotask(after);
+      return;
+    }
+    child.once('exit', () => after());
+    this.kill();
+  }
+
   get alive(): boolean {
     return !!this.child && !this.child.killed;
   }
@@ -523,10 +537,23 @@ export class PiAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode === mode) return;
     s.mode = mode;
-    // Tool gating is spawn-time; respawn to apply the new tool set.
-    s.proc.kill();
-    const next = this.spawn(sessionId, s.cwd, s.model, mode, s.sessionFile, s.thinking);
-    this.persistMeta(sessionId, next);
+    // A turn may be streaming when the mode changes. Killing the child is an
+    // intentional exit, which suppresses onExit → onIdle would never fire and
+    // the session would hang "active" forever. Clear the in-flight spinner
+    // explicitly — the running turn is discarded by the respawn.
+    this.onIdle?.(sessionId);
+    // Tool gating is spawn-time, so respawn to apply the new tool set. Wait for
+    // the old child to FULLY exit before opening a new pi on the SAME
+    // `--session` jsonl, so the two never interleave writes to the transcript.
+    const dying = s.proc;
+    dying.killAfterExit(() => {
+      // Skip if the session was killed, or already respawned by a later
+      // mode change (proc identity differs) — avoids a double writer.
+      const cur = this.sessions.get(sessionId);
+      if (!cur || cur.proc !== dying) return;
+      const next = this.spawn(sessionId, cur.cwd, cur.model, cur.mode, cur.sessionFile, cur.thinking);
+      this.persistMeta(sessionId, next);
+    });
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
