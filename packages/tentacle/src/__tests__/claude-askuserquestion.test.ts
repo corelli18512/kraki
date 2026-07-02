@@ -97,4 +97,51 @@ describe('Claude AskUserQuestion answers key', () => {
     expect(captured?.updatedInput?.questions).toEqual(questions);
     expect(captured?.updatedInput?.answers).toEqual({});
   });
+
+  it('asks multiple questions one at a time and resolves with every answer keyed by text', async () => {
+    const adapter = new ClaudeAdapter();
+    const emitted: Array<{ id: string; question: string }> = [];
+    (adapter as unknown as {
+      onQuestionRequest?: (s: string, q: { id: string; question: string }) => void;
+    }).onQuestionRequest = (_s, q) => emitted.push({ id: q.id, question: q.question });
+
+    const pendingQuestions = new Map<string, PendingLike>();
+    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions });
+
+    const input = {
+      questions: [
+        { question: 'Which database?', options: [{ label: 'pg' }] },
+        { question: 'Which cache?', options: [{ label: 'redis' }] },
+      ],
+    };
+    const permission = (adapter as unknown as {
+      handleAskUserQuestion: (
+        s: string,
+        i: Record<string, unknown>,
+        p: Map<string, PendingLike>,
+      ) => Promise<CapturedResult>;
+    }).handleAskUserQuestion('s1', input, pendingQuestions);
+
+    // Only the first question surfaces initially.
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].question).toBe('Which database?');
+    expect(pendingQuestions.size).toBe(1);
+
+    // Answer the first → the second question surfaces, permission still pending.
+    await adapter.respondToQuestion('s1', emitted[0].id, 'postgres', false);
+    expect(emitted).toHaveLength(2);
+    expect(emitted[1].question).toBe('Which cache?');
+    expect(pendingQuestions.size).toBe(1);
+
+    // Answer the second → permission resolves with BOTH answers, keyed by text.
+    await adapter.respondToQuestion('s1', emitted[1].id, 'redis', true);
+    const result = await permission;
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedInput?.answers).toEqual({
+      'Which database?': 'postgres',
+      'Which cache?': 'redis',
+    });
+    expect(result.updatedInput?.questions).toEqual(input.questions);
+    expect(pendingQuestions.size).toBe(0);
+  });
 });

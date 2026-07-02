@@ -124,8 +124,8 @@ export class KrakiWSClient {
     commands.alwaysAllow(permissionId, sessionId, (msg) => this.sendEncrypted(msg), toolKind);
   }
 
-  answer(questionId: string, sessionId: string, answerText: string) {
-    commands.answer(questionId, sessionId, answerText, (msg) => this.sendEncrypted(msg));
+  answer(questionId: string, sessionId: string, answerText: string, wasFreeform = false) {
+    commands.answer(questionId, sessionId, answerText, (msg) => this.sendEncrypted(msg), wasFreeform);
   }
 
   killSession(sessionId: string) {

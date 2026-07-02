@@ -89,6 +89,33 @@ export interface MockApp {
 }
 
 /**
+ * Resolve the tentacle (daemon) device + its encryption key from an app's
+ * auth_ok device roster.
+ */
+export function tentacleTarget(app: MockApp): { id: string; key: string } {
+  const devs = (app.authOk.devices as Array<Record<string, unknown>>) ?? [];
+  const t =
+    devs.find((d) => d.role === 'tentacle') ??
+    devs.find((d) => typeof d.name === 'string' && (d.name as string).includes('Daemon')) ??
+    devs.find((d) => d.id !== app.deviceId && (d.encryptionKey || d.publicKey));
+  if (!t) throw new Error(`tentacle device not in auth_ok: ${JSON.stringify(devs)}`);
+  return { id: t.id as string, key: (t.encryptionKey ?? t.publicKey) as string };
+}
+
+/**
+ * Send an app→tentacle session command (answer / set_session_mode / approve).
+ *
+ * These are NOT plain `app.send`: the head only routes encrypted `unicast`
+ * envelopes to the tentacle, which decrypts and runs the inner ConsumerMessage.
+ * A plain send of these types is silently dropped by the head. This mirrors the
+ * real web arm's behavior exactly.
+ */
+export function sendToTentacle(app: MockApp, inner: Record<string, unknown>): void {
+  const t = tentacleTarget(app);
+  app.sendUnicast(t.id, inner, t.key);
+}
+
+/**
  * Connect a mock app client with E2E crypto support.
  * Generates a keypair, authenticates, and auto-decrypts broadcast/unicast envelopes.
  */

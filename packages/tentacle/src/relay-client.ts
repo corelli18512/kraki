@@ -650,7 +650,7 @@ export class RelayClient {
           this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
           break;
         case 'answer':
-          this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, false)
+          this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, msg.payload.wasFreeform ?? false)
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToQuestion failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });

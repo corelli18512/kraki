@@ -178,11 +178,12 @@ export function answer(
   sessionId: string,
   answerText: string,
   send: (msg: Record<string, unknown>) => void,
+  wasFreeform = false,
 ): void {
   send({
     type: 'answer',
     sessionId,
-    payload: { questionId, answer: answerText },
+    payload: { questionId, answer: answerText, wasFreeform },
   });
   getStore().removeQuestion(questionId);
   resolveQuestionMessage(sessionId, questionId, answerText);
