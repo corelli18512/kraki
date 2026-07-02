@@ -1,6 +1,7 @@
 export { AgentAdapter } from './base.js';
 export { CopilotAdapter } from './copilot.js';
 export { ClaudeAdapter } from './claude.js';
+export { PiAdapter } from './pi.js';
 export { MultiAgentAdapter, detectAvailableAgents } from './multi.js';
 
 // Re-export types consumers need

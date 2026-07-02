@@ -9,7 +9,7 @@ export type DeviceKind = 'desktop' | 'server' | 'vm' | 'web' | 'ios' | 'android'
 export type AgentType = 'code';
 
 /** Specific agent implementation within a type. */
-export type AgentId = 'copilot' | 'claude';
+export type AgentId = 'copilot' | 'claude' | 'pi';
 
 /** Agent info reported by a tentacle. */
 export interface AgentCapabilities {
