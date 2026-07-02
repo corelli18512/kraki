@@ -1,0 +1,10 @@
+{
+  "name": "copilot-anthropic-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Anthropic-compatible proxy in front of GitHub Copilot's Claude models (for Kraki's claude SDK adapter).",
+  "bin": { "copilot-anthropic-proxy": "server.mjs" },
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": { "undici": "^7.0.0" }
+}

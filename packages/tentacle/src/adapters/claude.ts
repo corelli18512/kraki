@@ -21,11 +21,56 @@ import {
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, cpSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { getConfigDir } from '../config.js';
 
 const logger = createLogger('claude-adapter');
+
+/**
+ * Copilot-backed Claude mode.
+ *
+ * When `KRAKI_CLAUDE_COPILOT_URL` points at a running copilot-anthropic-proxy
+ * (tools/copilot-proxy), the claude adapter routes Claude Code through GitHub
+ * Copilot's Claude models instead of the real Anthropic API (or the DeepSeek
+ * gateway configured in ~/.claude/settings.json). This gives a full-power,
+ * full-reasoning CC-grade harness on a Copilot subscription.
+ *
+ * The proxy translates Anthropic `/v1/messages` ⇄ Copilot chat/completions and
+ * ignores the auth token, so a placeholder token is fine.
+ */
+interface CopilotConfig {
+  baseUrl: string;
+  model: string;
+  sonnet: string;
+  haiku: string;
+}
+
+function copilotConfig(): CopilotConfig | null {
+  const baseUrl = process.env.KRAKI_CLAUDE_COPILOT_URL;
+  if (!baseUrl) return null;
+  return {
+    baseUrl,
+    model: process.env.KRAKI_CLAUDE_COPILOT_MODEL || 'claude-opus-4.8',
+    sonnet: process.env.KRAKI_CLAUDE_COPILOT_SONNET || 'claude-sonnet-4.5',
+    haiku: process.env.KRAKI_CLAUDE_COPILOT_HAIKU || 'claude-haiku-4.5',
+  };
+}
+
+/** The Anthropic env block that points Claude Code at the Copilot proxy. */
+function copilotEnvBlock(cfg: CopilotConfig): Record<string, string> {
+  return {
+    ANTHROPIC_BASE_URL: cfg.baseUrl,
+    ANTHROPIC_AUTH_TOKEN: 'kraki-copilot-proxy',
+    ANTHROPIC_MODEL: cfg.model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: cfg.model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: cfg.sonnet,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: cfg.haiku,
+    CLAUDE_CODE_SUBAGENT_MODEL: cfg.haiku,
+    CLAUDE_CODE_EFFORT_LEVEL: 'high',
+  };
+}
 
 /**
  * Load `env` overrides from `~/.claude/settings.json` (the same file
@@ -333,6 +378,73 @@ export class ClaudeAdapter extends AgentAdapter {
     this.claudeExecutablePath = options.claudeExecutablePath;
   }
 
+  // ── Co-located storage ────────────────────────────────────
+  // Claude's private transcript (its LLM-context store) is relocated INTO the
+  // Kraki session dir via a per-session CLAUDE_CONFIG_DIR. Auth/config is shared
+  // by symlinking every ~/.claude entry except `projects` (the transcript store)
+  // into a per-session shadow home, so the transcript lands co-located while
+  // login still works. A small sidecar persists the bits needed to resume after
+  // a daemon restart: cwd (the transcript path is cwd-mangled) and the SDK's own
+  // session UUID (the value the SDK `resume` option actually expects).
+
+  private storeDir(sessionId: string): string {
+    return join(getConfigDir(), 'sessions', sessionId);
+  }
+  /** Per-session shadow CLAUDE_CONFIG_DIR (auth symlinked in, projects fresh). */
+  private claudeHome(sessionId: string): string {
+    return join(this.storeDir(sessionId), 'claude-home');
+  }
+  private sidecarPath(sessionId: string): string {
+    return join(this.storeDir(sessionId), '.claude-adapter.json');
+  }
+
+  /** Build the per-session shadow home: symlink every ~/.claude entry except
+   *  `projects` so the SDK writes its transcript into our co-located dir while
+   *  reusing the real login/config. Returns the shadow home path. */
+  private setupShadowHome(sessionId: string): string {
+    const home = this.claudeHome(sessionId);
+    mkdirSync(home, { recursive: true });
+    const real = join(homedir(), '.claude');
+    const copilot = copilotConfig();
+    if (existsSync(real)) {
+      for (const entry of readdirSync(real)) {
+        if (entry === 'projects') continue; // keep transcript store co-located
+        // In Copilot mode the shadow settings.json must point at the proxy, so
+        // don't symlink the real (DeepSeek/Anthropic) settings — we write our
+        // own below. The claude CLI's config-dir settings.json wins over
+        // inherited env, so this is the authoritative control point.
+        if (copilot && (entry === 'settings.json' || entry === 'settings.local.json')) continue;
+        const dest = join(home, entry);
+        try { lstatSync(dest); unlinkSync(dest); } catch { /* dest absent */ }
+        try { symlinkSync(join(real, entry), dest); } catch { /* best effort */ }
+      }
+    }
+    if (copilot) {
+      writeFileSync(
+        join(home, 'settings.json'),
+        JSON.stringify({ env: copilotEnvBlock(copilot) }, null, 2),
+        'utf8',
+      );
+    }
+    return home;
+  }
+
+  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string }): void {
+    try {
+      mkdirSync(this.storeDir(sessionId), { recursive: true });
+      const prev = this.loadMeta(sessionId) ?? {};
+      writeFileSync(this.sidecarPath(sessionId), JSON.stringify({ ...prev, ...meta }), 'utf8');
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'claude persistMeta failed');
+    }
+  }
+
+  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string } | null {
+    const p = this.sidecarPath(sessionId);
+    if (!existsSync(p)) return null;
+    try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+  }
+
   /** System prompt appended to Claude Code's built-in prompt. */
   private static readonly SYSTEM_PROMPT = [
     'You are running inside Kraki, a remote control platform. A human operator is',
@@ -395,6 +507,17 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
+    // Copilot-backed mode: inject the proxy env FIRST so it wins over any
+    // DeepSeek/Anthropic values in ~/.claude/settings.json (loadClaudeSettingsEnv
+    // only fills keys not already present in process.env).
+    const copilot = copilotConfig();
+    if (copilot) {
+      for (const [k, v] of Object.entries(copilotEnvBlock(copilot))) {
+        process.env[k] = v;
+      }
+      logger.info({ baseUrl: copilot.baseUrl, model: copilot.model }, 'Claude adapter in Copilot-proxy mode');
+    }
+
     // Daemons launched via launchd / systemd do not inherit interactive
     // shell env, so we honour the same `env` block Claude Code itself
     // reads from ~/.claude/settings.json before checking auth. Anything
@@ -425,6 +548,34 @@ export class ClaudeAdapter extends AgentAdapter {
     // Fetch available models via a throwaway query. The SDK requires a
     // prompt to create a query, but we can call supportedModels() on it
     // and then immediately abort — no actual API call is made for models.
+    //
+    // In Copilot-proxy mode we skip SDK enumeration entirely: the SDK
+    // subprocess reads the real ~/.claude (DeepSeek) config and would leak a
+    // spurious "deepseek-*" entry into the list. The proxy only serves the
+    // three copilot models, so publish those directly.
+    if (copilot) {
+      this.modelAliasMap.clear();
+      const list: Array<[string, string]> = [
+        [copilot.model, 'opus'],
+        [copilot.sonnet, 'sonnet'],
+        [copilot.haiku, 'haiku'],
+      ];
+      this.cachedModels = list.map(([id, alias]) => {
+        this.modelAliasMap.set(id, alias);
+        return {
+          id,
+          name: id,
+          supportsReasoningEffort: alias === 'opus',
+          ...(alias === 'opus' && {
+            supportedReasoningEfforts: ['low', 'medium', 'high'] as import('@kraki/protocol').ReasoningEffort[],
+          }),
+        };
+      });
+      logger.info({ count: this.cachedModels.length }, 'Copilot-proxy model list published');
+      logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
+      return;
+    }
+
     try {
       const ac = new AbortController();
       const noop = (async function* () { /* never yields — query blocks waiting for input */ })();
@@ -521,6 +672,10 @@ export class ClaudeAdapter extends AgentAdapter {
     this.sessions.set(sessionId, entry);
     logger.info({ sessionId, model: config.model }, 'session created (deferred — query starts on first message)');
 
+    // Persist the durable resume bits up-front (cwd is needed to locate the
+    // cwd-mangled transcript; the SDK session UUID is filled in at init).
+    this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
+
     this.onSessionCreated?.({
       sessionId,
       agent: 'claude',
@@ -536,6 +691,14 @@ export class ClaudeAdapter extends AgentAdapter {
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
 
+    // Recover the durable bits from the co-located sidecar. The SDK `resume`
+    // option expects the SDK's own session UUID (NOT Kraki's id), and the
+    // transcript path is cwd-mangled — so without these a fresh daemon spawns a
+    // blank session (the daemon-restart "no context" bug). Fall back to the
+    // Kraki id / process cwd for sessions created before co-location.
+    const meta = this.loadMeta(sessionId);
+    if (meta?.sdkSessionId) this.sdkSessionIds.set(sessionId, meta.sdkSessionId);
+
     const entry: SessionEntry = {
       query: null,
       abortController,
@@ -544,12 +707,18 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingPermissions,
       pendingQuestions,
       sessionId,
+      model: meta?.model,
       consumerLoop: Promise.resolve(),
-      deferredConfig: { resume: sessionId },
+      deferredConfig: {
+        resume: meta?.sdkSessionId ?? sessionId,
+        ...(meta?.cwd && { cwd: meta.cwd }),
+        ...(meta?.model && { model: meta.model }),
+        sessionId,
+      },
     };
 
     this.sessions.set(sessionId, entry);
-    logger.info({ sessionId }, 'session resumed (deferred)');
+    logger.info({ sessionId, sdkSessionId: meta?.sdkSessionId }, 'session resumed (deferred)');
     return { sessionId };
   }
 
@@ -558,6 +727,21 @@ export class ClaudeAdapter extends AgentAdapter {
     const pendingQuestions = new Map<string, PendingQuestion>();
     const abortController = new AbortController();
     const { iterable, channel } = createInputChannel();
+
+    // A fork must read the source transcript from the NEW session's co-located
+    // config dir, so seed it by copying the source projects/ across, and resume
+    // with the source's SDK session UUID (not the Kraki id).
+    const srcMeta = this.loadMeta(sourceSessionId);
+    const srcProjects = join(this.claudeHome(sourceSessionId), 'projects');
+    if (existsSync(srcProjects)) {
+      try {
+        mkdirSync(this.claudeHome(newSessionId), { recursive: true });
+        cpSync(srcProjects, join(this.claudeHome(newSessionId), 'projects'), { recursive: true });
+      } catch (err) {
+        logger.debug({ err: (err as Error).message }, 'claude fork copy failed');
+      }
+    }
+    const resumeId = srcMeta?.sdkSessionId ?? this.sdkSessionIds.get(sourceSessionId) ?? sourceSessionId;
 
     const entry: SessionEntry = {
       query: null,
@@ -568,10 +752,17 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
-      deferredConfig: { resume: sourceSessionId, fork: true, sessionId: newSessionId },
+      deferredConfig: {
+        resume: resumeId,
+        fork: true,
+        ...(srcMeta?.cwd && { cwd: srcMeta.cwd }),
+        ...(srcMeta?.model && { model: srcMeta.model }),
+        sessionId: newSessionId,
+      },
     };
 
     this.sessions.set(newSessionId, entry);
+    if (srcMeta) this.persistMeta(newSessionId, { cwd: srcMeta.cwd, model: srcMeta.model });
 
     this.onSessionCreated?.({
       sessionId: newSessionId,
@@ -652,6 +843,9 @@ export class ClaudeAdapter extends AgentAdapter {
 
     const options: Options = {
       abortController: entry.abortController,
+      // Relocate Claude's private transcript INTO the Kraki session dir while
+      // reusing the real login (symlinked into the per-session shadow home).
+      env: { ...process.env, CLAUDE_CONFIG_DIR: this.setupShadowHome(sessionId) },
       ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
       ...(config?.model && { model: this.modelAliasMap.get(config.model) ?? config.model }),
       ...(config?.cwd && { cwd: config.cwd }),
@@ -675,6 +869,7 @@ export class ClaudeAdapter extends AgentAdapter {
     entry.query = q;
     entry.deferredConfig = undefined;
     entry.consumerLoop = this.consumeMessages(sessionId, q);
+    if (config?.cwd) this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
     logger.debug({ sessionId }, 'SDK query spawned');
   }
 
@@ -944,6 +1139,9 @@ export class ClaudeAdapter extends AgentAdapter {
           const sdkSessionId = sysMsg.session_id;
           if (sdkSessionId) {
             this.sdkSessionIds.set(sessionId, sdkSessionId);
+            // Persist the SDK's own session UUID — the value its `resume`
+            // option expects — so a fresh daemon can re-attach this transcript.
+            this.persistMeta(sessionId, { sdkSessionId });
             if (sdkSessionId !== sessionId) {
               const entry = this.sessions.get(sessionId);
               if (entry) entry.sessionId = sdkSessionId;
