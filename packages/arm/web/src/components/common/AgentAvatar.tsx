@@ -33,9 +33,22 @@ function ClaudeIcon({ className }: { className?: string }) {
   );
 }
 
+function PiIcon({ className }: { className?: string }) {
+  // Official pi mark (pi.dev): geometric "P" with a square hole + an "i" dot.
+  // viewBox is padded around the content bounds (165.29–634.72) so the mark
+  // renders at ~84% of the icon box, matching Claude/Copilot's visual weight.
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="120.29 120.29 559.43 559.43" fill="currentColor" className={className}>
+      <path fillRule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"/>
+      <path d="M517.36 400H634.72V634.72H517.36Z"/>
+    </svg>
+  );
+}
+
 function AgentIcon({ agent, className }: { agent: string; className?: string }) {
   switch (agent) {
     case 'claude': return <ClaudeIcon className={className} />;
+    case 'pi': return <PiIcon className={className} />;
     case 'copilot':
     default: return <CopilotIcon className={className} />;
   }
