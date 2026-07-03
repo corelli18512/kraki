@@ -383,7 +383,18 @@ Every row is a scenario the test suites (`ts/src/__tests__`,
 | RESTART-DURABLE | producer restarts, reloads outbox+epoch | epoch preserved ⇒ resume succeeds across restart |
 | RESTART-FRESH | producer restarts with no state (new epoch) | peer's stale-epoch resume ⇒ `RESET` ⇒ `ResetInbound` (explicit) |
 | TOO-OLD | consumer resumes past producer's pruned base | `RESET{oldest}` ⇒ `ResetInbound(oldest)`; gap surfaced, never hidden |
+| SLOW-LINK | high one-way propagation delay | delivery is delayed by the propagation time but stays in order, exactly once; outbox drains after the ack's round trip |
+| JITTER | per-frame delay varies, frames can cross | in-order, exactly-once delivery preserved; a hole waits for its predecessor |
+| DEAD-TIMER-RACE | RTT approaches `DEAD_AFTER_MS` | a healthy-but-slow link whose heartbeats still arrive is NOT false-killed; a link slower than the threshold IS declared dead (correct) |
+| PERIODIC-CUT | link severed on a fixed interval for minutes | reconnects every cycle and delivers everything exactly once, in order; a cut mid-flight loses the in-flight frame (fail-stop) but resends on resume |
 | WEDGE-FREE | any of the above, repeatedly | endpoint always returns to Connected+drained when the peer is reachable |
+
+> **Out of scope — censorship / DPI.** PERIODIC-CUT models a link that is
+> repeatedly *reset*, which pulse survives by reconnecting. It does **not**
+> model a content-inspecting or fingerprint-based blocker: such a firewall acts
+> *before the first byte*, below the layer pulse operates at. Defeating it is a
+> transport-obfuscation concern (TLS-fingerprint mimicry, domain fronting,
+> pluggable transports) that lives beneath pulse, not inside it.
 
 ---
 

@@ -23,6 +23,10 @@ final class World {
     private var dupCount: [Dir: Int] = [.aToB: 0, .bToA: 0]
     private var blackholed = false
     private var reorderBuffer: [(dir: Dir, bytes: [UInt8])]?
+    private var latencyMs = 0
+    private var jitterMs = 0
+    private var frameCounter = 0
+    private var inFlight: [(dir: Dir, bytes: [UInt8], order: Int, arriveAt: Int)] = []
 
     init(a: Endpoint, b: Endpoint) {
         self.a = a
@@ -36,15 +40,30 @@ final class World {
         while true {
             let da = a.nextDeadline() ?? Int.max
             let db = b.nextDeadline() ?? Int.max
-            let next = min(da, db)
+            let dw = earliestArrival() ?? Int.max
+            let next = min(da, db, dw)
             if next == Int.max || next > target { break }
             if next > now { now = next }
+            deliverArrivalsUpTo(now)
             pump(a.onTick(now), .aToB)
             pump(b.onTick(now), .bToA)
         }
         now = target
+        deliverArrivalsUpTo(now)
         pump(a.onTick(now), .aToB)
         pump(b.onTick(now), .bToA)
+    }
+
+    private func earliestArrival() -> Int? {
+        inFlight.map { $0.arriveAt }.min()
+    }
+
+    private func deliverArrivalsUpTo(_ t: Int) {
+        if inFlight.isEmpty { return }
+        let ready = inFlight.filter { $0.arriveAt <= t }
+            .sorted { $0.arriveAt != $1.arriveAt ? $0.arriveAt < $1.arriveAt : $0.order < $1.order }
+        inFlight = inFlight.filter { $0.arriveAt > t }
+        for e in ready { route((dir: e.dir, bytes: e.bytes)) }
     }
 
     // MARK: - Link control
@@ -60,6 +79,7 @@ final class World {
     func disconnect() {
         linkUp = false
         linkAvailable = false
+        inFlight = []  // fail-stop: a closing socket drops buffered bytes
         pump(a.onDisconnected(now), .aToB)
         pump(b.onDisconnected(now), .bToA)
     }
@@ -67,6 +87,7 @@ final class World {
     func blackhole() {
         blackholed = true
         linkAvailable = false
+        inFlight = []  // the black hole eats bytes still on the wire
     }
 
     func reopen() { connect() }
@@ -91,6 +112,8 @@ final class World {
 
     func dropNext(_ dir: Dir, _ n: Int) { dropCount[dir, default: 0] += n }
     func duplicateNext(_ dir: Dir, _ n: Int) { dupCount[dir, default: 0] += n }
+    func latency(_ ms: Int) { latencyMs = ms }
+    func jitter(_ ms: Int) { jitterMs = ms }
 
     func beginReorder() { reorderBuffer = [] }
     func flushReordered() {
@@ -141,11 +164,25 @@ final class World {
             dropCount[f.dir]! -= 1
             return
         }
-        route(f)
+        propagate(f)
         if dupCount[f.dir, default: 0] > 0 {
             dupCount[f.dir]! -= 1
-            route(f)
+            propagate(f)
         }
+    }
+
+    /// Put a frame on the wire. Zero latency ⇒ synchronous (existing scenarios'
+    /// exact timing); with latency/jitter it becomes an in-flight frame the
+    /// clock delivers later.
+    private func propagate(_ f: (dir: Dir, bytes: [UInt8])) {
+        frameCounter += 1
+        let order = frameCounter
+        if latencyMs == 0 && jitterMs == 0 {
+            route(f)
+            return
+        }
+        let extra = jitterMs == 0 ? 0 : order % (jitterMs + 1)
+        inFlight.append((dir: f.dir, bytes: f.bytes, order: order, arriveAt: now + latencyMs + extra))
     }
 
     private func route(_ f: (dir: Dir, bytes: [UInt8])) {

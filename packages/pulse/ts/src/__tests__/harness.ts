@@ -19,6 +19,8 @@ export type Dir = 'AtoB' | 'BtoA';
 interface InFlight {
   dir: Dir;
   bytes: Uint8Array;
+  /** Monotonic send order, for deterministic tie-breaking on equal arrival. */
+  order: number;
 }
 
 /**
@@ -50,6 +52,15 @@ export class World {
   private dupCount: Record<Dir, number> = { AtoB: 0, BtoA: 0 };
   private blackholed = false;
   private reorderBuffer: InFlight[] | null = null;
+  /** One-way propagation delay in virtual ms. 0 ⇒ synchronous delivery (the
+   *  default; keeps existing scenarios' timing exact). */
+  private latencyMs = 0;
+  /** Deterministic per-frame jitter added on top of latencyMs: frame k is
+   *  delayed by latencyMs + (k % (jitterMs+1)). 0 ⇒ no jitter. */
+  private jitterMs = 0;
+  private frameCounter = 0;
+  /** Frames propagating through the wire, ascending by arrival time. */
+  private inFlight: Array<{ f: InFlight; arriveAt: number }> = [];
 
   constructor(aOpts: EndpointOptions, bOpts: EndpointOptions) {
     this.a = new Endpoint(aOpts);
@@ -61,25 +72,52 @@ export class World {
   // ── Clock ──────────────────────────────────────────────────────────────
 
   /** Advance virtual time by `ms`, ticking both endpoints at each of their
-   *  requested deadlines (and at the final instant). */
+   *  requested deadlines AND delivering in-flight frames at their arrival
+   *  time (and at the final instant). */
   advance(ms: number): void {
     const target = this.now + ms;
-    // Loop: repeatedly jump to the earliest requested deadline within window.
+    // Loop: repeatedly jump to the earliest pending event (a timer deadline or
+    // an in-flight frame arrival) within the window.
     for (;;) {
       const da = this.a.nextDeadline();
       const db = this.b.nextDeadline();
+      const dw = this.earliestArrival();
       const next = Math.min(
         da ?? Number.POSITIVE_INFINITY,
         db ?? Number.POSITIVE_INFINITY,
+        dw ?? Number.POSITIVE_INFINITY,
       );
       if (next === Number.POSITIVE_INFINITY || next > target) break;
       if (next > this.now) this.now = next;
+      this.deliverArrivalsUpTo(this.now);
       this.pump(this.a.onTick(this.now), 'AtoB');
       this.pump(this.b.onTick(this.now), 'BtoA');
     }
     this.now = target;
+    this.deliverArrivalsUpTo(this.now);
     this.pump(this.a.onTick(this.now), 'AtoB');
     this.pump(this.b.onTick(this.now), 'BtoA');
+  }
+
+  private earliestArrival(): number | null {
+    let min: number | null = null;
+    for (const e of this.inFlight) {
+      if (min === null || e.arriveAt < min) min = e.arriveAt;
+    }
+    return min;
+  }
+
+  /** Deliver every in-flight frame whose arrival time has come. Frames whose
+   *  link died mid-flight are dropped (fail-stop): a real socket loses bytes
+   *  still in its buffer when it closes. */
+  private deliverArrivalsUpTo(t: number): void {
+    if (this.inFlight.length === 0) return;
+    // Ascending by arrival, then by send order (frameCounter) for determinism.
+    const ready = this.inFlight
+      .filter((e) => e.arriveAt <= t)
+      .sort((x, y) => x.arriveAt - y.arriveAt || x.f.order - y.f.order);
+    this.inFlight = this.inFlight.filter((e) => e.arriveAt > t);
+    for (const e of ready) this.route(e.f);
   }
 
   // ── Link control ─────────────────────────────────────────────────────────
@@ -92,19 +130,23 @@ export class World {
     this.pump(this.b.onConnected(this.now), 'BtoA');
   }
 
-  /** Graceful disconnect: both sides get onDisconnected. */
+  /** Graceful disconnect: both sides get onDisconnected. Frames still in
+   *  flight are lost (fail-stop: a closing socket drops buffered bytes). */
   disconnect(): void {
     this.linkUp = false;
     this.linkAvailable = false;
+    this.inFlight = [];
     this.pump(this.a.onDisconnected(this.now), 'AtoB');
     this.pump(this.b.onDisconnected(this.now), 'BtoA');
   }
 
   /** Half-open: the wire silently black-holes; NO onDisconnected fires.
-   *  The endpoints still believe they are connected until liveness trips. */
+   *  The endpoints still believe they are connected until liveness trips.
+   *  In-flight bytes vanish (the black hole eats them). */
   blackhole(): void {
     this.blackholed = true;
     this.linkAvailable = false;
+    this.inFlight = [];
   }
 
   /** Reconnect after the endpoints have (independently) decided to reopen.
@@ -141,6 +183,18 @@ export class World {
     this.dupCount[dir] += n;
   }
 
+  /** Set one-way propagation delay (virtual ms) for all subsequent frames.
+   *  Frames already in flight keep their scheduled arrival. */
+  latency(ms: number): void {
+    this.latencyMs = ms;
+  }
+  /** Add deterministic per-frame jitter on top of latency: frame k gets an
+   *  extra `k % (ms+1)` delay, so consecutive frames spread out (and can even
+   *  cross — exercising the endpoint's in-order guarantee under real jitter). */
+  jitter(ms: number): void {
+    this.jitterMs = ms;
+  }
+
   /** Begin buffering all frames instead of delivering; released, reversed,
    *  by {@link flushReordered}. Simulates adversarial reordering. */
   beginReorder(): void {
@@ -170,7 +224,7 @@ export class World {
     const producedByA = dir === 'AtoB';
     switch (e.t) {
       case 'transmit':
-        this.enqueue({ dir, bytes: e.bytes });
+        this.enqueue({ dir, bytes: e.bytes, order: ++this.frameCounter });
         break;
       case 'deliver':
         (producedByA ? this.deliveredA : this.deliveredB).push({
@@ -227,13 +281,25 @@ export class World {
       return;
     }
 
-    this.route(f);
+    this.propagate(f);
 
-    // Duplicate-next-N: deliver a second copy.
+    // Duplicate-next-N: a second copy enters the wire (same latency path).
     if (this.dupCount[f.dir] > 0) {
       this.dupCount[f.dir] -= 1;
-      this.route(f);
+      this.propagate({ ...f, order: ++this.frameCounter });
     }
+  }
+
+  /** Put a frame onto the wire. With zero latency it arrives synchronously
+   *  (preserving existing scenarios' exact timing); with latency/jitter it
+   *  becomes an in-flight frame delivered later by the clock. */
+  private propagate(f: InFlight): void {
+    if (this.latencyMs === 0 && this.jitterMs === 0) {
+      this.route(f);
+      return;
+    }
+    const extra = this.jitterMs === 0 ? 0 : f.order % (this.jitterMs + 1);
+    this.inFlight.push({ f, arriveAt: this.now + this.latencyMs + extra });
   }
 
   private route(f: InFlight): void {
