@@ -25,9 +25,10 @@ import {
   type PermissionDecision,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
-import type { ModelDetail, SessionUsage, ReasoningEffort } from '@kraki/protocol';
+import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
+import { PI_PERMISSION_GATE_SOURCE } from './pi-permission-gate.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -65,6 +66,9 @@ export interface PiRpcOptions {
   appendSystemPrompt?: string;
   /** Thinking level: off|minimal|low|medium|high|xhigh (xhigh = max). */
   thinking?: string;
+  /** Path to a pi extension loaded via `--extension`. Kraki uses this to
+   *  install the per-call permission gate in discuss/safe modes. */
+  extensionPath?: string;
 }
 
 /** Bounds short control commands; prompts run fire-and-forget. */
@@ -100,6 +104,11 @@ class PiRpcProcess {
     // the precise jsonl instead. The absolute path also survives a cwd change.
     if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
+    // Per-call permission gate (discuss/safe). Loaded as a pi extension because
+    // rpc mode has no built-in tool-approval round-trip; the extension's
+    // ctx.ui.confirm surfaces as an extension_ui_request the adapter maps to a
+    // Kraki permission card. Omitted in execute/delegate → tools run freely.
+    if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
 
     this.child = spawn(this.opts.cliPath, args, {
       cwd: this.opts.cwd ?? process.cwd(),
@@ -172,6 +181,13 @@ class PiRpcProcess {
     this.child?.stdin.write(`${JSON.stringify({ id, type, ...payload })}\n`);
   }
 
+  /** Write a raw frame verbatim. Used to answer an unsolicited pi request
+   *  (e.g. extension_ui_request) whose `id` must be echoed exactly, not a new
+   *  client-generated one. */
+  sendRaw(frame: Record<string, unknown>): void {
+    this.child?.stdin.write(`${JSON.stringify(frame)}\n`);
+  }
+
   kill(): void {
     this.intentionalExit = true;
     this.rl?.close();
@@ -204,12 +220,53 @@ class PiRpcProcess {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
-const READONLY_TOOLS = ['read', 'grep', 'find', 'ls'];
 const MUTATING_DEFAULT_MODE: Mode = 'discuss';
 
-function toolsForMode(mode: Mode): string[] | undefined {
-  // discuss / safe → read-only; execute / delegate → all tools (undefined = pi default set)
-  return mode === 'execute' || mode === 'delegate' ? undefined : READONLY_TOOLS;
+/** discuss/safe gate mutating tools behind a per-call permission prompt (via
+ *  the pi extension); execute/delegate run tools freely. */
+function modeNeedsGate(mode: Mode): boolean {
+  return mode === 'discuss' || mode === 'safe';
+}
+
+function toolsForMode(_mode: Mode): string[] | undefined {
+  // Full tool set in every mode (undefined = pi default set). Mutating calls in
+  // discuss/safe are gated per-call by the permission-gate extension instead of
+  // being stripped, so pi can still write/bash after the user approves.
+  return undefined;
+}
+
+/** Map a pi tool name + JSON-encoded input (as delivered by the permission-gate
+ *  extension's confirm request) into a Kraki permission card. Known pi tools are
+ *  normalized to the shared ToolArgs shapes; anything else falls back to the
+ *  raw name + args so the card still renders. */
+export function parsePiPermission(toolName: string, inputJson: string): { toolArgs: ToolArgs; description: string } {
+  let input: Record<string, unknown> = {};
+  try {
+    const parsed = inputJson ? JSON.parse(inputJson) : {};
+    if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
+  } catch {
+    /* leave input empty on malformed JSON */
+  }
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  switch (toolName) {
+    case 'bash': {
+      const command = str(input.command);
+      return { toolArgs: { toolName: 'shell', args: { command } }, description: command || 'Run a shell command' };
+    }
+    case 'write': {
+      const path = str(input.path);
+      return {
+        toolArgs: { toolName: 'write_file', args: { path, content: str(input.content) } },
+        description: path ? `Write ${path}` : 'Write a file',
+      };
+    }
+    case 'edit': {
+      const path = str(input.path);
+      return { toolArgs: { toolName, args: input }, description: path ? `Edit ${path}` : 'Edit a file' };
+    }
+    default:
+      return { toolArgs: { toolName, args: input }, description: toolName };
+  }
 }
 
 /** Kraki ReasoningEffort → pi ThinkingLevel. pi tops out at xhigh; "max" maps there. */
@@ -233,6 +290,10 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
+  /** Outstanding per-call permission requests (permissionId → pi's UI request
+   *  id). Cleared when answered or when the child is killed/respawned so the
+   *  arm's card doesn't dangle. */
+  pendingPerms: Map<string, string>;
   /** Set while a mode-change respawn is in flight (old child exiting, new one
    *  not yet spawned). sendMessage awaits it so it never prompts a dead proc. */
   respawn?: Promise<void>;
@@ -247,10 +308,30 @@ export class PiAdapter extends AgentAdapter {
   private cliPath: string;
   private sessions = new Map<string, PiSession>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
+  /** Lazily-materialized path to the per-call permission-gate extension. */
+  private permExtPath: string | null = null;
 
   constructor(opts: { cliPath: string }) {
     super();
     this.cliPath = opts.cliPath;
+  }
+
+  /** Write the embedded permission-gate extension to a stable on-disk path and
+   *  return it. The source is inlined in the tentacle SEA bundle, so it can't be
+   *  referenced from a repo path at runtime — we materialize it once (rewriting
+   *  on every daemon start so upgrades ship the current source). */
+  private ensurePermissionExtension(): string {
+    if (this.permExtPath) return this.permExtPath;
+    const dir = join(getConfigDir(), 'pi-extensions');
+    const path = join(dir, 'kraki-permission-gate.ts');
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path, PI_PERMISSION_GATE_SOURCE, 'utf8');
+      this.permExtPath = path;
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'failed to materialize pi permission extension');
+    }
+    return path;
   }
 
   /** Co-located storage: pi's private transcript and the adapter recovery
@@ -327,18 +408,31 @@ export class PiAdapter extends AgentAdapter {
       tools: toolsForMode(mode),
       sessionFile,
       thinking,
+      extensionPath: modeNeedsGate(mode) ? this.ensurePermissionExtension() : undefined,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now() };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map() };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Clear the active
       // spinner so the session doesn't hang "active" forever, then evict.
+      this.clearPendingPerms(sessionId);
       this.onIdle?.(sessionId);
       this.onSessionEvicted?.(sessionId);
     };
     proc.start();
     this.sessions.set(sessionId, sess);
     return sess;
+  }
+
+  /** Drop any outstanding permission cards for a session (child died / respawn)
+   *  so the arm doesn't wait on a decision that can never reach pi. */
+  private clearPendingPerms(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.pendingPerms.size === 0) return;
+    for (const permId of s.pendingPerms.keys()) {
+      this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
+    }
+    s.pendingPerms.clear();
   }
 
   private touch(id: string) {
@@ -408,6 +502,25 @@ export class PiAdapter extends AgentAdapter {
       case 'session_shutdown':
         this.onSessionEnded?.(sessionId, { reason: 'pi shutdown' });
         break;
+      case 'extension_ui_request': {
+        // Our permission-gate extension asks ctx.ui.confirm(toolName, inputJson)
+        // before every mutating tool. Turn that into a Kraki permission card;
+        // the arm's decision comes back via respondToPermission → the matching
+        // extension_ui_response. Other UI methods (notify/status/…) are not used
+        // by our extension and need no reply.
+        if (e.method !== 'confirm' || typeof e.id !== 'string') break;
+        const s = this.sessions.get(sessionId);
+        if (!s) break;
+        const permId = e.id;
+        s.pendingPerms.set(permId, permId);
+        const { toolArgs, description } = parsePiPermission(
+          String(e.title ?? 'tool'),
+          typeof e.message === 'string' ? e.message : '',
+        );
+        logger.debug({ sessionId, permId, toolName: toolArgs.toolName }, 'pi permission requested');
+        this.onPermissionRequest?.(sessionId, { id: permId, toolArgs, description });
+        break;
+      }
       default:
         break;
     }
@@ -517,8 +630,19 @@ export class PiAdapter extends AgentAdapter {
     this.sessions.get(sessionId)?.proc.send('abort');
   }
 
-  async respondToPermission(): Promise<void> {
-    // discuss/execute use spawn-time tool gating; no interactive permission round-trip.
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) { logger.warn({ sessionId }, 'respondToPermission: session not found'); return; }
+    if (!s.pendingPerms.delete(permissionId)) {
+      logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission');
+      return;
+    }
+    // 'approve' and 'always_allow' both run the tool this time. Per-session
+    // "always allow" persistence is a future enhancement — for now it behaves
+    // like a one-off approve.
+    const confirmed = decision !== 'deny';
+    s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed });
+    logger.debug({ sessionId, permissionId, confirmed }, 'pi permission answered');
   }
 
   async respondToQuestion(): Promise<void> {
@@ -526,6 +650,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async killSession(sessionId: string): Promise<void> {
+    this.clearPendingPerms(sessionId);
     this.sessions.get(sessionId)?.proc.kill();
     this.sessions.delete(sessionId);
     // Remove the adapter recovery sidecar (both co-located and legacy). pi's
@@ -556,6 +681,10 @@ export class PiAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode === mode) return;
     s.mode = mode;
+    // Drop any permission cards in flight — the child that owns them is about to
+    // die, so its confirm can never be answered. (Intentional kills suppress
+    // onExit, so the spawn cleanup won't run for this transition.)
+    this.clearPendingPerms(sessionId);
     // A turn may be streaming when the mode changes. Killing the child is an
     // intentional exit, which suppresses onExit → onIdle would never fire and
     // the session would hang "active" forever. Clear the in-flight spinner
