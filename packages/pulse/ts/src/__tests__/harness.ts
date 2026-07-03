@@ -52,6 +52,12 @@ export class World {
   private dupCount: Record<Dir, number> = { AtoB: 0, BtoA: 0 };
   private blackholed = false;
   private reorderBuffer: InFlight[] | null = null;
+  /** When true, the underlying path is healthy: an endpoint's own `open`
+   *  (auto-reconnect) succeeds, and a liveness `close` becomes a transient
+   *  disconnect the endpoint recovers from by itself. Used to model "the
+   *  network is now good; let pulse converge" without the test manually
+   *  re-dialing after every internal teardown. */
+  private healing = false;
   /** One-way propagation delay in virtual ms. 0 ⇒ synchronous delivery (the
    *  default; keeps existing scenarios' timing exact). */
   private latencyMs = 0;
@@ -134,10 +140,29 @@ export class World {
    *  flight are lost (fail-stop: a closing socket drops buffered bytes). */
   disconnect(): void {
     this.linkUp = false;
-    this.linkAvailable = false;
+    if (!this.healing) this.linkAvailable = false;
     this.inFlight = [];
     this.pump(this.a.onDisconnected(this.now), 'AtoB');
     this.pump(this.b.onDisconnected(this.now), 'BtoA');
+  }
+
+  /** Put the world into a healthy state and let the endpoints reconnect and
+   *  converge on their own: the path is available, so each endpoint's own
+   *  `open` (auto-reconnect) succeeds, and any liveness teardown self-heals.
+   *  Models "the network is now good" — the settle phase of a fault program. */
+  heal(): void {
+    this.healing = true;
+    this.blackholed = false;
+    this.linkAvailable = true;
+    this.latencyMs = 0;
+    this.jitterMs = 0;
+    this.dropCount = { AtoB: 0, BtoA: 0 };
+    this.dropPredicate = null;
+    this.dupCount = { AtoB: 0, BtoA: 0 };
+    // If the link was blackholed, the endpoints still THINK they're connected
+    // but no traffic flows; force a clean reconnect so liveness + resume run.
+    if (this.linkUp) this.disconnect();
+    this.connect();
   }
 
   /** Half-open: the wire silently black-holes; NO onDisconnected fires.
@@ -239,13 +264,16 @@ export class World {
         });
         break;
       case 'open':
-        // Endpoint asked to dial. If the test has since made the link
-        // available, connect(); otherwise model a FAILED dial by feeding
-        // onDisconnected back, which reschedules the next retry — proving the
-        // endpoint keeps trying and never wedges.
+        // Endpoint asked to dial. The two endpoints share one link, so a dial
+        // from either side brings it up for both — but only once (idempotent):
+        // a second open while already up is a no-op, not a re-connect that would
+        // reset the peer's liveness state.
+        if (this.linkUp) break;
         if (this.linkAvailable) {
           this.connect();
         } else {
+          // Model a FAILED dial by feeding onDisconnected back, which reschedules
+          // the next retry — proving the endpoint keeps trying and never wedges.
           this.pump(
             producedByA ? this.a.onDisconnected(this.now) : this.b.onDisconnected(this.now),
             dir,
