@@ -7,9 +7,14 @@
  *    child. True isolation — one crash never touches another. Memory is
  *    bounded by killing idle children; pi re-resumes from its jsonl on the
  *    next message (lazy resume).
- *  - **permission = tool gating**: discuss → read-only tool set; execute /
- *    delegate → full tools; safe → read-only (writes blocked). No per-call
- *    UI round-trip — mode is a spawn-time tool restriction.
+ *  - **permission = per-call gating**: a bridge extension (loaded in ALL modes)
+ *    intercepts every tool_call and asks the host to confirm. The adapter
+ *    applies a copilot-aligned policy on that request — execute/delegate run
+ *    everything; discuss gates only file writes (reads/shell run freely,
+ *    plan.md is allowed); safe gates every tool. No respawn on mode change.
+ *  - **capability tools**: the same extension registers kraki_get_mode /
+ *    kraki_ask / kraki_show_image, bridged to the operator via the extension-UI
+ *    channel and the shared attachment pipeline.
  *  - native fork/tree via pi's `fork` / `get_tree` RPC commands.
  */
 
@@ -28,7 +33,8 @@ import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
-import { PI_PERMISSION_GATE_SOURCE } from './pi-permission-gate.js';
+import { PI_BRIDGE_EXTENSION_SOURCE } from './pi-bridge-extension.js';
+import type { AttachmentStore } from '../attachment-store.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -67,8 +73,13 @@ export interface PiRpcOptions {
   /** Thinking level: off|minimal|low|medium|high|xhigh (xhigh = max). */
   thinking?: string;
   /** Path to a pi extension loaded via `--extension`. Kraki uses this to
-   *  install the per-call permission gate in discuss/safe modes. */
+   *  install the bridge extension (permission gate + kraki_* capability tools).
+   *  Loaded in ALL modes — mode is enforced by adapter policy, not by presence. */
   extensionPath?: string;
+  /** Absolute path to the adapter meta sidecar, exported to the child as
+   *  `KRAKI_META_FILE` so the bridge extension's kraki_get_mode can read the
+   *  live permission mode. */
+  krakiMetaFile?: string;
 }
 
 /** Bounds short control commands; prompts run fire-and-forget. */
@@ -80,12 +91,6 @@ class PiRpcProcess {
   private pending = new Map<string, Pending>();
   private seq = 0;
   private intentionalExit = false;
-  // Real OS-exit tracking, independent of `child` (which kill() nulls). Lets
-  // killAfterExit distinguish "kill was requested" from "process has actually
-  // exited" so a replacement never opens the --session jsonl while the old
-  // process is still finalizing writes to it.
-  private exited = false;
-  private exitWaiters: Array<() => void> = [];
   onEvent: ((e: PiRpcEvent) => void) | null = null;
   /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
   onExit: ((code: number | null) => void) | null = null;
@@ -104,15 +109,22 @@ class PiRpcProcess {
     // the precise jsonl instead. The absolute path also survives a cwd change.
     if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
-    // Per-call permission gate (discuss/safe). Loaded as a pi extension because
-    // rpc mode has no built-in tool-approval round-trip; the extension's
+    // Bridge extension (permission gate + kraki_* capability tools). Loaded in
+    // ALL modes because rpc mode has no built-in tool-approval round-trip; its
     // ctx.ui.confirm surfaces as an extension_ui_request the adapter maps to a
-    // Kraki permission card. Omitted in execute/delegate → tools run freely.
+    // Kraki permission card (and the adapter's policy decides silent-approve vs
+    // card). Loading unconditionally means a mode change never respawns pi.
     if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
+
+    // Export the meta sidecar path so the bridge extension's kraki_get_mode can
+    // read the live permission mode (the adapter is the source of truth).
+    const env = this.opts.krakiMetaFile
+      ? { ...process.env, KRAKI_META_FILE: this.opts.krakiMetaFile }
+      : process.env;
 
     this.child = spawn(this.opts.cliPath, args, {
       cwd: this.opts.cwd ?? process.cwd(),
-      env: process.env,
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -120,15 +132,12 @@ class PiRpcProcess {
     this.rl.on('line', (line) => this.handleLine(line));
     this.child.stderr.on('data', (d) => rpcLogger.debug({ stderr: d.toString().trim() }, 'pi stderr'));
     this.child.on('exit', (code) => {
-      this.exited = true;
       for (const p of this.pending.values()) {
         clearTimeout(p.timer);
         p.reject(new Error('pi process exited'));
       }
       this.pending.clear();
       if (!this.intentionalExit) this.onExit?.(code);
-      // Fire any killAfterExit callbacks now that the process has truly exited.
-      for (const w of this.exitWaiters.splice(0)) w();
     });
   }
 
@@ -195,21 +204,6 @@ class PiRpcProcess {
     this.child = null;
   }
 
-  /** Kill the child and run `after` once it has ACTUALLY exited, so a
-   *  replacement process can safely reuse the same `--session` jsonl (only one
-   *  writer at a time). Gates on the real OS exit — NOT on `this.child`, which
-   *  kill() nulls — so a second concurrent mode change during the SIGTERM
-   *  window still waits for the first process to fully exit instead of racing
-   *  a respawn on top of it. If already exited, runs `after` next microtask. */
-  killAfterExit(after: () => void): void {
-    if (this.exited) {
-      queueMicrotask(after);
-      return;
-    }
-    this.exitWaiters.push(after);
-    this.kill();
-  }
-
   get alive(): boolean {
     return !!this.child && !this.child.killed;
   }
@@ -219,20 +213,34 @@ class PiRpcProcess {
 //  Section 2 — adapter: pools one PiRpcProcess per Kraki session
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
+export type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
 const MUTATING_DEFAULT_MODE: Mode = 'discuss';
 
-/** discuss/safe gate mutating tools behind a per-call permission prompt (via
- *  the pi extension); execute/delegate run tools freely. */
-function modeNeedsGate(mode: Mode): boolean {
-  return mode === 'discuss' || mode === 'safe';
+/** Files that may be written without approval in discuss mode (mirrors the
+ *  copilot adapter's DISCUSS_MODE_WRITE_ALLOW_LIST). */
+const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
+
+/** Coarse tool "kind" for the permission policy — only "write" is special
+ *  (writes gate in discuss); everything else (shell/read/find/custom) is
+ *  treated the same, matching copilot's kind-based gating. */
+function isWriteTool(toolName: string): boolean {
+  return toolName === 'write' || toolName === 'edit';
 }
 
-function toolsForMode(_mode: Mode): string[] | undefined {
-  // Full tool set in every mode (undefined = pi default set). Mutating calls in
-  // discuss/safe are gated per-call by the permission-gate extension instead of
-  // being stripped, so pi can still write/bash after the user approves.
-  return undefined;
+/** copilot-aligned permission policy (copilot.ts makePermissionHandler):
+ *  execute/delegate → auto-approve all; discuss → auto-approve everything
+ *  EXCEPT non-allowlisted file writes; safe → gate every tool. Returns true
+ *  when the call should run silently (no card). */
+export function shouldAutoApprove(mode: Mode, toolName: string, input: Record<string, unknown>): boolean {
+  if (mode === 'execute' || mode === 'delegate') return true;
+  if (mode === 'discuss') {
+    if (!isWriteTool(toolName)) return true;
+    const path = typeof input.path === 'string' ? input.path
+      : typeof input.file_path === 'string' ? (input.file_path as string) : '';
+    return DISCUSS_MODE_WRITE_ALLOW_LIST.some((f) => path.endsWith('/' + f) || path === f);
+  }
+  // safe → everything gates
+  return false;
 }
 
 /** Map a pi tool name + JSON-encoded input (as delivered by the permission-gate
@@ -291,12 +299,12 @@ interface PiSession {
   usage: SessionUsage;
   lastActivity: number;
   /** Outstanding per-call permission requests (permissionId → pi's UI request
-   *  id). Cleared when answered or when the child is killed/respawned so the
-   *  arm's card doesn't dangle. */
+   *  id). Cleared when answered or when the child dies so the arm's card doesn't
+   *  dangle. */
   pendingPerms: Map<string, string>;
-  /** Set while a mode-change respawn is in flight (old child exiting, new one
-   *  not yet spawned). sendMessage awaits it so it never prompts a dead proc. */
-  respawn?: Promise<void>;
+  /** Outstanding kraki_ask question requests (the pi extension_ui_request id).
+   *  Answered via respondToQuestion → extension_ui_response{value}. */
+  pendingQuestions: Set<string>;
 }
 
 const DEFAULT_PROVIDER = 'github-copilot';
@@ -306,30 +314,36 @@ const IDLE_TTL_MS = 30 * 60_000;
 
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
+  private attachmentStore?: AttachmentStore;
   private sessions = new Map<string, PiSession>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
-  /** Lazily-materialized path to the per-call permission-gate extension. */
-  private permExtPath: string | null = null;
+  /** Lazily-materialized path to the bridge extension. */
+  private bridgeExtPath: string | null = null;
+  /** Edge-triggered mode-change signals, held at the ADAPTER level (survives
+   *  idle-eviction, which replaces the PiSession object). Prepended once to the
+   *  next user message, then cleared — mirrors the claude adapter. */
+  private pendingModeSignals = new Map<string, Mode>();
 
-  constructor(opts: { cliPath: string }) {
+  constructor(opts: { cliPath: string; attachmentStore?: AttachmentStore }) {
     super();
     this.cliPath = opts.cliPath;
+    this.attachmentStore = opts.attachmentStore;
   }
 
-  /** Write the embedded permission-gate extension to a stable on-disk path and
-   *  return it. The source is inlined in the tentacle SEA bundle, so it can't be
-   *  referenced from a repo path at runtime — we materialize it once (rewriting
-   *  on every daemon start so upgrades ship the current source). */
-  private ensurePermissionExtension(): string {
-    if (this.permExtPath) return this.permExtPath;
+  /** Write the embedded bridge extension to a stable on-disk path and return it.
+   *  The source is inlined in the tentacle SEA bundle, so it can't be referenced
+   *  from a repo path at runtime — we materialize it once (rewriting on every
+   *  daemon start so upgrades ship the current source). */
+  private ensureBridgeExtension(): string {
+    if (this.bridgeExtPath) return this.bridgeExtPath;
     const dir = join(getConfigDir(), 'pi-extensions');
-    const path = join(dir, 'kraki-permission-gate.ts');
+    const path = join(dir, 'kraki-bridge-extension.ts');
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path, PI_PERMISSION_GATE_SOURCE, 'utf8');
-      this.permExtPath = path;
+      writeFileSync(path, PI_BRIDGE_EXTENSION_SOURCE, 'utf8');
+      this.bridgeExtPath = path;
     } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'failed to materialize pi permission extension');
+      logger.warn({ err: (err as Error).message }, 'failed to materialize pi bridge extension');
     }
     return path;
   }
@@ -405,17 +419,19 @@ export class PiAdapter extends AgentAdapter {
       cwd,
       provider,
       model: modelId,
-      tools: toolsForMode(mode),
       sessionFile,
       thinking,
-      extensionPath: modeNeedsGate(mode) ? this.ensurePermissionExtension() : undefined,
+      // Bridge extension is loaded in EVERY mode (mode is enforced by adapter
+      // policy on the confirm request, not by the extension's presence).
+      extensionPath: this.ensureBridgeExtension(),
+      krakiMetaFile: this.sidecarPath(sessionId),
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map() };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Set() };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Clear the active
       // spinner so the session doesn't hang "active" forever, then evict.
-      this.clearPendingPerms(sessionId);
+      this.clearPending(sessionId);
       this.onIdle?.(sessionId);
       this.onSessionEvicted?.(sessionId);
     };
@@ -424,15 +440,20 @@ export class PiAdapter extends AgentAdapter {
     return sess;
   }
 
-  /** Drop any outstanding permission cards for a session (child died / respawn)
-   *  so the arm doesn't wait on a decision that can never reach pi. */
-  private clearPendingPerms(sessionId: string): void {
+  /** Drop any outstanding permission cards AND question cards for a session
+   *  (child died / evicted) so the arm doesn't wait on a decision that can never
+   *  reach pi. */
+  private clearPending(sessionId: string): void {
     const s = this.sessions.get(sessionId);
-    if (!s || s.pendingPerms.size === 0) return;
+    if (!s) return;
     for (const permId of s.pendingPerms.keys()) {
       this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
     }
     s.pendingPerms.clear();
+    for (const qId of s.pendingQuestions) {
+      this.onQuestionAutoResolved?.(sessionId, qId);
+    }
+    s.pendingQuestions.clear();
   }
 
   private touch(id: string) {
@@ -477,14 +498,42 @@ export class PiAdapter extends AgentAdapter {
           toolCallId: e.toolCallId as string | undefined,
         });
         break;
-      case 'tool_execution_end':
+      case 'tool_execution_end': {
+        const toolName = String(e.toolName ?? 'tool');
+        const toolCallId = e.toolCallId as string | undefined;
+        let attachments: import('@kraki/protocol').Attachment[] | undefined;
+        let result: string;
+
+        if (toolName === 'kraki_show_image') {
+          // The bridge extension returned an AgentToolResult { content:[...] }
+          // with an ImageContent block. Extract the image into the shared
+          // attachment pipeline (mirrors copilot show_image) and keep a compact
+          // text result out of the transcript instead of dumping base64.
+          const { refs, caption } = this.extractShowImage(sessionId, e.result);
+          if (refs.length > 0) attachments = refs;
+          result = caption ?? (refs.length > 0 ? 'Displayed image to operator.' : 'kraki_show_image produced no image.');
+        } else {
+          result = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '');
+        }
+
         this.onToolComplete?.(sessionId, {
-          toolName: String(e.toolName ?? 'tool'),
-          result: typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? ''),
-          toolCallId: e.toolCallId as string | undefined,
+          toolName,
+          result,
+          toolCallId,
           success: e.isError !== true,
+          attachments,
         });
+
+        // After tool_complete, fire the bytes broadcast so RelayClient can stream
+        // attachment_data chunks to all connected devices.
+        if (attachments && attachments.length > 0) {
+          const refs = attachments.filter(
+            (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
+          );
+          if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs });
+        }
         break;
+      }
       case 'turn_end':
         // One agentic run = many turns (one per LLM round). Refresh usage but
         // DON'T signal idle here, so the arm groups all rounds (text + tools)
@@ -503,27 +552,88 @@ export class PiAdapter extends AgentAdapter {
         this.onSessionEnded?.(sessionId, { reason: 'pi shutdown' });
         break;
       case 'extension_ui_request': {
-        // Our permission-gate extension asks ctx.ui.confirm(toolName, inputJson)
-        // before every mutating tool. Turn that into a Kraki permission card;
-        // the arm's decision comes back via respondToPermission → the matching
-        // extension_ui_response. Other UI methods (notify/status/…) are not used
-        // by our extension and need no reply.
-        if (e.method !== 'confirm' || typeof e.id !== 'string') break;
+        // The bridge extension drives three UI methods over this channel:
+        //  - confirm: the permission gate before each tool. Apply the copilot
+        //    policy on our in-memory mode → auto-approve silently OR raise a card.
+        //  - select / input: a kraki_ask question → a Kraki question card.
+        // Other methods (notify/status/…) are unused and need no reply.
+        if (typeof e.id !== 'string') break;
         const s = this.sessions.get(sessionId);
         if (!s) break;
-        const permId = e.id;
-        s.pendingPerms.set(permId, permId);
-        const { toolArgs, description } = parsePiPermission(
-          String(e.title ?? 'tool'),
-          typeof e.message === 'string' ? e.message : '',
-        );
-        logger.debug({ sessionId, permId, toolName: toolArgs.toolName }, 'pi permission requested');
-        this.onPermissionRequest?.(sessionId, { id: permId, toolArgs, description });
+        const reqId = e.id;
+
+        if (e.method === 'confirm') {
+          const toolName = String(e.title ?? 'tool');
+          const inputJson = typeof e.message === 'string' ? e.message : '';
+          let input: Record<string, unknown> = {};
+          try {
+            const parsed = inputJson ? JSON.parse(inputJson) : {};
+            if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
+          } catch { /* leave empty */ }
+
+          if (shouldAutoApprove(s.mode, toolName, input)) {
+            // Silent approve — no card. Respond immediately so the tool runs.
+            s.proc.sendRaw({ type: 'extension_ui_response', id: reqId, confirmed: true });
+            logger.debug({ sessionId, toolName, mode: s.mode }, 'pi tool auto-approved');
+            break;
+          }
+          s.pendingPerms.set(reqId, reqId);
+          const { toolArgs, description } = parsePiPermission(toolName, inputJson);
+          logger.debug({ sessionId, permId: reqId, toolName: toolArgs.toolName }, 'pi permission requested');
+          this.onPermissionRequest?.(sessionId, { id: reqId, toolArgs, description });
+          break;
+        }
+
+        if (e.method === 'select' || e.method === 'input') {
+          s.pendingQuestions.add(reqId);
+          const choices = e.method === 'select' && Array.isArray(e.options)
+            ? (e.options as string[]) : undefined;
+          logger.debug({ sessionId, questionId: reqId, method: e.method }, 'pi question requested');
+          this.onQuestionRequest?.(sessionId, {
+            id: reqId,
+            question: String(e.title ?? ''),
+            choices,
+            allowFreeform: true,
+          });
+          break;
+        }
         break;
       }
       default:
         break;
     }
+  }
+
+  /** Pull ImageContent blocks out of a kraki_show_image tool result and store
+   *  them in the attachment pipeline, returning content refs + any caption. The
+   *  pi result is an AgentToolResult: { content: [{type:'image',data,mimeType}],
+   *  details: { caption } }. */
+  private extractShowImage(sessionId: string, rawResult: unknown): {
+    refs: import('@kraki/protocol').ContentRef[];
+    caption?: string;
+  } {
+    const refs: import('@kraki/protocol').ContentRef[] = [];
+    if (!this.attachmentStore || !rawResult || typeof rawResult !== 'object') return { refs };
+    const r = rawResult as { content?: unknown; details?: unknown };
+    const details = (r.details && typeof r.details === 'object') ? r.details as Record<string, unknown> : {};
+    const caption = typeof details.caption === 'string' && details.caption.trim() ? details.caption.trim() : undefined;
+    const name = typeof details.path === 'string' ? details.path.split('/').pop() : undefined;
+    if (!Array.isArray(r.content)) return { refs, caption };
+    for (const block of r.content as Array<Record<string, unknown>>) {
+      if (block && block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+        try {
+          const bytes = Buffer.from(block.data, 'base64');
+          const ref = this.attachmentStore.put(sessionId, bytes, block.mimeType, {
+            ...(name && { name }),
+            ...(caption && { caption }),
+          });
+          refs.push(ref);
+        } catch (err) {
+          logger.warn({ err: (err as Error).message, sessionId }, 'failed to store show_image attachment');
+        }
+      }
+    }
+    return { refs, caption };
   }
 
   /** Pull authoritative cumulative usage from pi (get_session_stats) and map
@@ -601,15 +711,18 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async sendMessage(sessionId: string, text: string): Promise<void> {
-    let s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
+    const s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
-    // A mode-change respawn may be in flight (old child exiting, new one not
-    // yet up). Wait for the fresh child so we don't prompt a dead stdin.
-    if (s.respawn) {
-      await s.respawn;
-      s = this.sessions.get(sessionId) ?? s;
-    }
     this.touch(sessionId);
+    // Edge-triggered mode signal: if the mode changed since the last message,
+    // prepend a one-shot marker so the model knows its new permission envelope
+    // (mirrors the claude adapter). The meta file (kraki_get_mode) stays the
+    // source of truth; this is just an inline heads-up.
+    const pendingMode = this.pendingModeSignals.get(sessionId);
+    if (pendingMode) {
+      this.pendingModeSignals.delete(sessionId);
+      text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
+    }
     // The `prompt` RPC resolves as soon as pi accepts the run (it streams
     // asynchronously and ends with agent_end); backend failures surface
     // in-stream as message_end{stopReason:'error'} -> onError. The await here
@@ -645,12 +758,22 @@ export class PiAdapter extends AgentAdapter {
     logger.debug({ sessionId, permissionId, confirmed }, 'pi permission answered');
   }
 
-  async respondToQuestion(): Promise<void> {
-    // pi RPC questions arrive as extension_ui_request; not used by default tool set.
+  async respondToQuestion(sessionId: string, questionId: string, answer: string, _wasFreeform: boolean): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) { logger.warn({ sessionId }, 'respondToQuestion: session not found'); return; }
+    if (!s.pendingQuestions.delete(questionId)) {
+      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
+      return;
+    }
+    // Answer the extension's ctx.ui.select / ctx.ui.input — its promise resolves
+    // with this value, which kraki_ask returns to the model as the tool result.
+    s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: answer });
+    logger.debug({ sessionId, questionId }, 'pi question answered');
   }
 
   async killSession(sessionId: string): Promise<void> {
-    this.clearPendingPerms(sessionId);
+    this.clearPending(sessionId);
+    this.pendingModeSignals.delete(sessionId);
     this.sessions.get(sessionId)?.proc.kill();
     this.sessions.delete(sessionId);
     // Remove the adapter recovery sidecar (both co-located and legacy). pi's
@@ -681,33 +804,36 @@ export class PiAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode === mode) return;
     s.mode = mode;
-    // Drop any permission cards in flight — the child that owns them is about to
-    // die, so its confirm can never be answered. (Intentional kills suppress
-    // onExit, so the spawn cleanup won't run for this transition.)
-    this.clearPendingPerms(sessionId);
-    // A turn may be streaming when the mode changes. Killing the child is an
-    // intentional exit, which suppresses onExit → onIdle would never fire and
-    // the session would hang "active" forever. Clear the in-flight spinner
-    // explicitly — the running turn is discarded by the respawn.
-    this.onIdle?.(sessionId);
-    // Tool gating is spawn-time, so respawn to apply the new tool set. Wait for
-    // the old child to FULLY exit before opening a new pi on the SAME
-    // `--session` jsonl, so the two never interleave writes to the transcript.
-    const dying = s.proc;
-    s.respawn = new Promise<void>((resolve) => {
-      dying.killAfterExit(() => {
-        try {
-          // Skip if the session was killed, or already respawned by a later
-          // mode change (proc identity differs) — avoids a double writer.
-          const cur = this.sessions.get(sessionId);
-          if (!cur || cur.proc !== dying) return;
-          const next = this.spawn(sessionId, cur.cwd, cur.model, cur.mode, cur.sessionFile, cur.thinking);
-          this.persistMeta(sessionId, next);
-        } finally {
-          resolve();
-        }
-      });
-    });
+    // Persist the new mode so it survives a daemon restart AND so the bridge
+    // extension's kraki_get_mode (which reads KRAKI_META_FILE) sees it live.
+    this.persistMeta(sessionId, s);
+    // Edge-triggered: prepend a one-shot marker to the next user message.
+    this.pendingModeSignals.set(sessionId, mode);
+    // If a turn is streaming/compacting right now, also nudge the model mid-run
+    // via steer so it doesn't act on a stale envelope before the next message.
+    // The nudge is MODE-AGNOSTIC: pi's steer queue is one-at-a-time, so a
+    // concrete value could go stale; kraki_get_mode reads the live truth.
+    void this.steerModeNudge(sessionId);
+    logger.debug({ sessionId, mode }, 'pi session mode changed');
+  }
+
+  /** Steer a mode-agnostic nudge into an active turn so the model re-checks its
+   *  permission envelope. No-op when the session is idle (the prepend on the
+   *  next message covers that). Active state is read from pi's get_state
+   *  (isStreaming/isCompacting) rather than a hand-tracked flag, because pi's
+   *  auto-retry and compaction continuations run AFTER agent_end. */
+  private async steerModeNudge(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s?.proc.alive) return;
+    try {
+      const state = await s.proc.request<{ isStreaming?: boolean; isCompacting?: boolean }>('get_state');
+      if (state.isStreaming || state.isCompacting) {
+        s.proc.send('steer', { message: '[kraki: permission mode changed — call kraki_get_mode before acting]' });
+        logger.debug({ sessionId }, 'pi mode-change steer nudge sent');
+      }
+    } catch (err) {
+      logger.debug({ err: (err as Error).message }, 'steer mode nudge failed');
+    }
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {

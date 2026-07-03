@@ -176,7 +176,7 @@ export class MultiAgentAdapter extends AgentAdapter {
           const { PiAdapter } = await import('./pi.js');
           const piPath = resolveCliPath('pi');
           if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); continue; }
-          adapter = new PiAdapter({ cliPath: piPath });
+          adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;
