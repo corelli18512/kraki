@@ -7,13 +7,13 @@
 <p align="center"><strong>Control your coding agents from your phone</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-unstable%20%C2%B7%20do%20not%20use-red" alt="Unstable — do not use">
+  <img src="https://img.shields.io/badge/status-unstable%20%C2%B7%20not%20recommended-orange" alt="Unstable — not recommended">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/E2E-AES--256--GCM-green?logo=letsencrypt&logoColor=white" alt="E2E Encrypted">
   <a href="https://github.com/corelli18512/kraki/actions/workflows/ci.yml"><img src="https://github.com/corelli18512/kraki/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-> ⚠️ **Not usable right now — please don't use it.** Kraki is going through a large wave of breaking changes and is currently unstable and unsupported. Things will break without notice. If you're curious about where it's heading and want to follow along, [DM me](mailto:corelli@corelli.cloud).
+> ⚠️ **Not recommended for use right now.** Kraki is going through a large wave of breaking changes and is still unstable — it mostly works, but things can break without notice, so it's not ready for real use yet. If you're curious about where it's heading and want to follow along, [DM me](mailto:corelli@corelli.cloud).
 
 Kraki bridges your coding agent to your phone or browser. Watch sessions in real time, approve tool calls, answer questions, and send follow-up instructions — from anywhere, on any device. All traffic is end-to-end encrypted.
 
