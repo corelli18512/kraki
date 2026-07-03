@@ -290,6 +290,9 @@ importers:
       '@kraki/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@kraki/pulse':
+        specifier: workspace:*
+        version: link:../pulse/ts
       '@kraki/tentacle':
         specifier: workspace:*
         version: link:../tentacle

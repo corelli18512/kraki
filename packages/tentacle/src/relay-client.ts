@@ -1901,6 +1901,16 @@ export class RelayClient {
   // instead of Partial<ProducerMessage> so TypeScript enforces correct payload
   // shape per message type (e.g. user_message must have payload.content).
   private send(msg: Partial<ProducerMessage>): void {
+    // Pulse reliable path: handle BEFORE the ws-open guard below. A reliable
+    // message produced while the socket is down must still be persisted and
+    // enter the pulse outbox (buffered for resend on reconnect) — the legacy
+    // early-return would otherwise drop it with no trace. This is the exact
+    // invisible-mid-turn-loss hole pulse exists to close.
+    if (this.pulse.isEnabled() && this.keyManager && isReliableType(msg.type)) {
+      this.sendReliableViaPulse(msg);
+      return;
+    }
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     // Coalesce streaming deltas to amortize per-recipient RSA cost.
@@ -1986,6 +1996,49 @@ export class RelayClient {
     }
   }
 
+  /**
+   * Reliable-message path when pulse is enabled. Runs regardless of socket
+   * state: it enriches, persists to messages.jsonl (durable replay is still
+   * owned by SessionManager), and hands the message to each online device's
+   * pulse endpoint. If the socket is down the endpoint buffers it in its outbox
+   * and resends on reconnect — no silent loss, no gap.
+   */
+  private sendReliableViaPulse(msg: Partial<ProducerMessage>): void {
+    // Flush any pending deltas first so ordering (delta before the message that
+    // supersedes it) is preserved on the legacy path for that session.
+    if (msg.sessionId && this.deltaBuffers.has(msg.sessionId)) {
+      this.flushDelta(msg.sessionId);
+    }
+
+    const enriched = msg as Record<string, unknown>;
+    enriched.seq = ++this.seqCounter;
+    enriched.timestamp = new Date().toISOString();
+    if (this.authInfo) enriched.deviceId = this.authInfo.deviceId;
+
+    const type = enriched.type as string;
+    const sessionId = enriched.sessionId as string | undefined;
+    if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
+      enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
+      if (this.eventsWatcher) this.eventsWatcher.skipToEnd(sessionId);
+    }
+
+    const messageJson = JSON.stringify(enriched);
+    let sentToAny = false;
+    for (const deviceId of this.onlineConsumers) {
+      if (!this.consumerKeys.has(deviceId)) continue;
+      this.pulse.send(deviceId, messageJson);
+      sentToAny = true;
+    }
+    // Emit a push preview for offline devices (matches legacy behavior).
+    this.emitPushPreviewIfNeeded(msg);
+
+    // If no online consumer has a key yet, also stash in the legacy queue so a
+    // brand-new device that connects later still gets it via flushE2eQueue.
+    if (!sentToAny && this.consumerKeys.size === 0 && this.pendingE2eQueue.length < 1000) {
+      this.pendingE2eQueue.push(msg);
+    }
+  }
+
   /** Append to a session's delta buffer, arming a flush timer on first append. */
   private bufferDelta(sessionId: string, content: string): void {
     if (!content) return;
@@ -2063,25 +2116,9 @@ export class RelayClient {
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
-    // Pulse path: reliable types go through a per-device endpoint (resumable,
-    // acked, gap-free across reconnects). Everything else keeps the existing
-    // single-broadcast fire-and-forget path unchanged.
-    if (this.pulse.isEnabled() && isReliableType(msg.type)) {
-      const messageJson = JSON.stringify(msg);
-      let sentToAny = false;
-      for (const deviceId of this.onlineConsumers) {
-        if (!this.consumerKeys.has(deviceId)) continue;
-        this.pulse.send(deviceId, messageJson);
-        sentToAny = true;
-      }
-      // Still emit the push preview for offline devices (pulse only covers
-      // online delivery; offline recovery is pulse resume on reconnect).
-      this.emitPushPreviewIfNeeded(msg);
-      if (sentToAny) return;
-      // No online consumer with a key yet — fall through to the legacy path,
-      // which queues into pendingE2eQueue for delivery once a key arrives.
-    }
-
+    // NOTE: reliable types are diverted to the pulse path in send() before they
+    // reach here (when pulse is enabled), so this remains the transient /
+    // pulse-disabled broadcast path unchanged.
     const recipients: RecipientKey[] = [];
     for (const [deviceId, compactKey] of this.consumerKeys) {
       try {

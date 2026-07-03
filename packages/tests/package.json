@@ -13,6 +13,7 @@
     "@kraki/protocol": "workspace:*",
     "@kraki/crypto": "workspace:*",
     "@kraki/head": "workspace:*",
+    "@kraki/pulse": "workspace:*",
     "@kraki/tentacle": "workspace:*",
     "@kraki/voice-broker": "workspace:*",
     "ws": "^8.19.0"
