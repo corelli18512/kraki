@@ -23,8 +23,23 @@ interface OutboxEntry {
   payload: Payload;
 }
 
-const b64encode = (u: Uint8Array): string => Buffer.from(u).toString('base64');
-const b64decode = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
+// Isomorphic base64 for snapshot payloads (runs in Node AND the browser). The
+// core must not depend on Buffer — the arm imports this in a browser context.
+function b64encode(u: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]!);
+  // btoa in the browser; Buffer fallback only if btoa is absent (old Node).
+  return typeof btoa === 'function' ? btoa(s) : Buffer.from(u).toString('base64');
+}
+function b64decode(s: string): Uint8Array {
+  if (typeof atob === 'function') {
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return new Uint8Array(Buffer.from(s, 'base64'));
+}
 
 export class Endpoint {
   private readonly params: PulseParams;

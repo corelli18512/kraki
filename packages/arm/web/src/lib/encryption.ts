@@ -9,6 +9,9 @@ const logger = createLogger('encryption');
 export interface EncryptionCallbacks {
   handleDataMessage: (msg: InnerMessage) => void;
   getHandlers: () => MessageHandler[];
+  /** If set and the decrypted plaintext is a pulse frame, this consumes it and
+   *  returns true (so the normal parse/dispatch is skipped). */
+  tryPulseFrame?: (plaintext: string) => boolean;
 }
 
 /** Handles E2E encrypted message decryption and outbound encryption. */
@@ -113,6 +116,28 @@ export class EncryptionHandler {
     }
   }
 
+  /** Encrypt an already-serialized plaintext for exactly one device and send it
+   *  as a UnicastEnvelope. Used by the pulse layer to put a frame on the wire. */
+  async encryptOutboundRaw(
+    plaintext: string,
+    targetDeviceId: string,
+    send: (msg: Record<string, unknown>) => void,
+  ): Promise<void> {
+    if (!this.keyStore.isReady()) return;
+    const store = getStore();
+    const targetDev = store.devices.get(targetDeviceId);
+    const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
+    if (!targetKey) return;
+    try {
+      const { blob, keys } = await this.keyStore.encryptToBlob(plaintext, [
+        { deviceId: targetDeviceId, publicKeyBase64: targetKey },
+      ]);
+      send({ type: 'unicast', to: targetDeviceId, blob, keys });
+    } catch (err) {
+      logger.error('Pulse raw encryption failed:', err);
+    }
+  }
+
   /** Handle an incoming BroadcastEnvelope or UnicastEnvelope. */
   async handleEncrypted(
     msg: {
@@ -141,6 +166,11 @@ export class EncryptionHandler {
         { blob: msg.blob, keys: msg.keys },
         deviceId,
       );
+      // Pulse-framed reliable message? Let the pulse client consume the frame;
+      // it will re-invoke handleDataMessage on an in-order `deliver`.
+      if (callbacks.tryPulseFrame?.(plaintext)) {
+        return;
+      }
       const inner = JSON.parse(plaintext) as InnerMessage;
 
       callbacks.handleDataMessage(inner);

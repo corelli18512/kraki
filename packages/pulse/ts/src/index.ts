@@ -33,3 +33,12 @@ export {
   type Snapshot,
 } from './types.js';
 export { PulseSocket, type PulseSocketOptions } from './adapter-ws.js';
+export {
+  fromUtf8,
+  isReliableType,
+  packPulsePlaintext,
+  type PulseEnvelope,
+  RELIABLE_TYPES,
+  tryUnpackPulse,
+  utf8,
+} from './kraki.js';

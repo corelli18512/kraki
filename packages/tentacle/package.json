@@ -41,6 +41,7 @@
     "@inquirer/prompts": "^8.3.2",
     "@kraki/crypto": "workspace:*",
     "@kraki/protocol": "workspace:*",
+    "@kraki/pulse": "workspace:*",
     "chalk": "^5.6.2",
     "ora": "^9.3.0",
     "pino": "^10.3.1",

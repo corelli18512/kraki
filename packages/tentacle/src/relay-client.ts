@@ -26,6 +26,8 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
+import { PulseManager } from './pulse-manager.js';
+import { isReliableType, tryUnpackPulse } from '@kraki/pulse';
 
 const logger = createLogger('relay-client');
 
@@ -161,10 +163,24 @@ export class RelayClient {
     this.options = options;
     this.keyManager = keyManager ?? null;
     this.attachmentStore = attachmentStore;
+    // Pulse reliable-delivery layer. Opt-in via KRAKI_PULSE=1 while it soaks;
+    // when off, every path below falls back to the existing behavior verbatim.
+    this.pulse = new PulseManager(
+      {
+        sendToDevice: (deviceId, plaintext) => this.sendEncryptedPlaintextToDevice(deviceId, plaintext),
+        onDelivered: (_deviceId, payload) => this.handlePulseDelivered(payload),
+        now: () => Date.now(),
+      },
+      getKrakiHome(),
+      process.env.KRAKI_PULSE === '1',
+    );
     this.wireAdapterEvents();
   }
 
   private readonly attachmentStore?: import('./attachment-store.js').AttachmentStore;
+
+  /** Reliable-delivery layer (per consumer device). Opt-in; see constructor. */
+  private readonly pulse: PulseManager;
 
   /** Track attachment ids already broadcast per session — prevents double-push
    *  if the agent calls show_image twice with the same image bytes. The
@@ -300,6 +316,9 @@ export class RelayClient {
       this.ws = null;
       logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
+      // Every device's pulse link is down; endpoints keep their outbox for
+      // resend on reconnect.
+      this.pulse.onDisconnectedAll();
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -363,6 +382,8 @@ export class RelayClient {
     if (msg.type === 'auth_ok') {
       this.authInfo = msg as unknown as AuthOkMessage;
       this.preferChallengeAuth = true;
+      // Pulse frames stamp our own deviceId as `src` so arms route them.
+      this.pulse.setOwnDeviceId(this.authInfo.deviceId);
       // Cache consumer device public keys for E2E
       if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
@@ -443,6 +464,8 @@ export class RelayClient {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
           this.flushE2eQueue();
+          // Bring up this device's pulse endpoint (resume prior stream if any).
+          this.pulse.onConnected(device.id);
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
           // Send session list so the app can sync
@@ -463,6 +486,7 @@ export class RelayClient {
       const deviceId = msg.deviceId as string;
       this.consumerKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
+      this.pulse.remove(deviceId);
       return;
     }
 
@@ -474,6 +498,15 @@ export class RelayClient {
           this.authInfo.deviceId,
           this.keyManager.getKeyPair().privateKey,
         );
+        // Pulse-framed reliable message? Route the frame to the peer's endpoint;
+        // the resulting `deliver` calls back into handleConsumerMessage.
+        if (this.pulse.isEnabled()) {
+          const unpacked = tryUnpackPulse(decrypted);
+          if (unpacked) {
+            this.pulse.onFrame(unpacked.src, unpacked.frame);
+            return;
+          }
+        }
         const inner = JSON.parse(decrypted);
         this.handleConsumerMessage(inner as ConsumerMessage);
       } catch {
@@ -2030,6 +2063,25 @@ export class RelayClient {
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
+    // Pulse path: reliable types go through a per-device endpoint (resumable,
+    // acked, gap-free across reconnects). Everything else keeps the existing
+    // single-broadcast fire-and-forget path unchanged.
+    if (this.pulse.isEnabled() && isReliableType(msg.type)) {
+      const messageJson = JSON.stringify(msg);
+      let sentToAny = false;
+      for (const deviceId of this.onlineConsumers) {
+        if (!this.consumerKeys.has(deviceId)) continue;
+        this.pulse.send(deviceId, messageJson);
+        sentToAny = true;
+      }
+      // Still emit the push preview for offline devices (pulse only covers
+      // online delivery; offline recovery is pulse resume on reconnect).
+      this.emitPushPreviewIfNeeded(msg);
+      if (sentToAny) return;
+      // No online consumer with a key yet — fall through to the legacy path,
+      // which queues into pendingE2eQueue for delivery once a key arrives.
+    }
+
     const recipients: RecipientKey[] = [];
     for (const [deviceId, compactKey] of this.consumerKeys) {
       try {
@@ -2075,6 +2127,84 @@ export class RelayClient {
       this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
+    }
+  }
+
+  // ── Pulse glue (only active when KRAKI_PULSE=1) ────────────────────────────
+
+  /** Encrypt an already-serialized plaintext for exactly one device and unicast
+   *  it. Used by PulseManager to put a pulse frame on the wire per device. */
+  private sendEncryptedPlaintextToDevice(deviceId: string, plaintext: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
+    const compactKey = this.consumerKeys.get(deviceId);
+    if (!compactKey) return;
+    try {
+      const recipientPubKey = importPublicKey(compactKey);
+      const { blob, keys } = encryptToBlob(plaintext, [{ deviceId, publicKey: recipientPubKey }]);
+      const envelope: UnicastEnvelope = { type: 'unicast', to: deviceId, blob, keys };
+      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+    } catch (err) {
+      logger.error({ err, deviceId }, 'Pulse frame encryption failed');
+    }
+  }
+
+  /** A reliable producer message was delivered in order by pulse — but on the
+   *  tentacle side pulse only *sends* producer messages; a delivered payload
+   *  here is an arm→tentacle consumer message that arrived reliably. Route it to
+   *  the normal consumer handler. */
+  private handlePulseDelivered(payload: string): void {
+    try {
+      const inner = JSON.parse(payload) as ConsumerMessage;
+      this.handleConsumerMessage(inner);
+    } catch (err) {
+      logger.error({ err }, 'Pulse delivered payload parse failed');
+    }
+  }
+
+  /** Track last agent content + emit a push preview for notification-worthy
+   *  reliable messages, matching the legacy broadcast path. */
+  private emitPushPreviewIfNeeded(msg: Partial<ProducerMessage>): void {
+    if (msg.type === 'agent_message' && msg.sessionId) {
+      const content = (msg.payload as Record<string, unknown>).content as string;
+      if (content) this.lastAgentContent.set(msg.sessionId as string, content);
+    }
+    let previewSummary: string | undefined;
+    if (msg.type === 'permission') {
+      previewSummary = (msg.payload as Record<string, unknown>).description as string;
+    } else if (msg.type === 'question') {
+      previewSummary = (msg.payload as Record<string, unknown>).question as string;
+    } else if (msg.type === 'idle') {
+      previewSummary = this.lastAgentContent.get(msg.sessionId as string);
+    }
+    if (!previewSummary) return;
+    const recipients: RecipientKey[] = [];
+    for (const [deviceId, compactKey] of this.consumerKeys) {
+      try {
+        recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
+      } catch {
+        /* skip invalid key */
+      }
+    }
+    if (recipients.length === 0 || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const preview = JSON.stringify({
+        type: msg.type,
+        summary: previewSummary.slice(0, 50),
+        sessionId: msg.sessionId,
+      });
+      const previewBlob = encryptToBlob(preview, recipients);
+      // A standalone broadcast whose only purpose is to carry the pushPreview to
+      // head for offline fan-out; online devices already got the real message
+      // via pulse and ignore a broadcast they can't map to a session.
+      const envelope: BroadcastEnvelope = {
+        type: 'broadcast',
+        blob: previewBlob.blob,
+        keys: previewBlob.keys,
+        pushPreview: { blob: previewBlob.blob, keys: previewBlob.keys },
+      };
+      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+    } catch (err) {
+      logger.debug({ err }, 'Pulse push-preview emit failed');
     }
   }
 
@@ -2161,7 +2291,12 @@ export class RelayClient {
         const key = d.encryptionKey ?? d.publicKey;
         if (key) {
           this.consumerKeys.set(d.id, key);
-          if (d.online) this.onlineConsumers.add(d.id);
+          if (d.online) {
+            this.onlineConsumers.add(d.id);
+            // Reconnect/auth learned this device is online — resume its pulse
+            // stream (re-sends unacked outbox from the peer's cursor).
+            this.pulse.onConnected(d.id);
+          }
         }
       }
     }
@@ -2262,6 +2397,10 @@ export class RelayClient {
         }
       }
       this.staleCheckLastTickAt = now;
+
+      // Drive pulse heartbeat + liveness for all device endpoints (5s tick is
+      // finer than the 15s heartbeat, so cadence is preserved).
+      this.pulse.tick();
 
       if (this.state !== 'connected' && this.state !== 'authenticating') return;
       const elapsed = now - this.lastActivityAt;
