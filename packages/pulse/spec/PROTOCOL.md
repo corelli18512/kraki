@@ -110,6 +110,7 @@ deterministically testable: feed inputs, assert effects.
 | `OpenConnection` | begin establishing the link (dial) |
 | `CloseConnection` | tear down the current link (it is dead/stale) |
 | `ResetInbound(fromSeq, peerEpoch)` | inbound history before `fromSeq` is unrecoverable; the application is re-synced at `fromSeq` and MUST discard assumptions about earlier peer messages (the explicit "recovered=false") |
+| `Acked(seqUpTo)` | the peer has confirmed receipt of every outbound message with seq ≤ `seqUpTo`; the application may resolve "delivered" for what it sent (e.g. clear/roll back optimistic UI). Purely observational — emitting it changes no protocol behavior |
 
 **Ordering contract.** When the core assigns a seq to an outbound payload
 (§5.1), the `outbox` entry is created **before** any `Transmit` for it is
@@ -237,17 +238,21 @@ prune outbox by ack (peer confirms our outbound up to `ack`):
 if seq == recvCursor + 1:                 # the expected next message
     recvCursor = seq
     emit Deliver(seq, payload)
-elif seq <= recvCursor:                    # duplicate (resend overlap) — safe
-    (drop; do not deliver again)
+elif seq <= recvCursor:                    # duplicate (our earlier ack was lost)
+    # Do NOT re-deliver — but DO re-advertise our cursor so the sender learns we
+    # already have it and stops resending. Without this, a lost ack can wedge the
+    # sender resending forever and it never observes delivery. (Same rationale as
+    # TCP's dup-ACK.)
+    emit Transmit(encodeACK(recvCursor))
 else:                                      # seq > recvCursor + 1 : a hole
     (do NOT deliver, do NOT advance)
     emit Transmit(encodeACK(recvCursor))   # tell peer to rewind and resend
 lastRecvAt = now
 ```
 
-Because the live link is ordered and reconnect always resumes from
-`recvCursor + 1`, the hole branch is defensive; it self-heals by asking the peer
-to rewind rather than delivering out of order.
+Both the duplicate and hole branches re-ACK: pruning the sender's outbox
+(and thus firing its `Acked` observation) requires the cursor to get back, so a
+receiver that already has a message must still say so when it sees a resend.
 
 **Exactly-once at the app boundary** is a consequence: in-order delivery advances
 the cursor by one; duplicates fall in the `seq <= recvCursor` branch and are

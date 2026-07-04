@@ -40,6 +40,10 @@ export class World {
   /** reset-inbound effects observed at each side. */
   readonly resetsA: Array<{ fromSeq: bigint; peerEpoch: string }> = [];
   readonly resetsB: Array<{ fromSeq: bigint; peerEpoch: string }> = [];
+  /** Highest acked seq observed at each side (the delivery-confirmation floor
+   *  for messages that side SENT). Last value = latest. */
+  readonly ackedA: bigint[] = [];
+  readonly ackedB: bigint[] = [];
 
   private linkUp = false;
   /** Whether a dial would currently succeed. Distinct from linkUp (currently
@@ -262,6 +266,9 @@ export class World {
           fromSeq: e.fromSeq,
           peerEpoch: e.peerEpoch,
         });
+        break;
+      case 'acked':
+        (producedByA ? this.ackedA : this.ackedB).push(e.seqUpTo);
         break;
       case 'open':
         // Endpoint asked to dial. The two endpoints share one link, so a dial

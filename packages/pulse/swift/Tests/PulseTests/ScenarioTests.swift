@@ -262,4 +262,90 @@ final class ScenarioTests: XCTestCase {
         XCTAssertEqual(payloads(w.deliveredB), [1])
         XCTAssertEqual(payloads(w.deliveredA), [2])
     }
+
+    // ACKED — sender observes confirmed delivery of what it sent
+
+    func testAckedFiresAfterPeerConfirms() {
+        let w = makeWorld()
+        w.connect()
+        XCTAssertEqual(w.ackedA, [])
+        w.sendA(marker(1))
+        w.sendA(marker(2))
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(w.ackedA.last, 2)
+        XCTAssertEqual(w.a.outboxSize, 0)
+    }
+
+    func testAckedDoesNotFireWhileUndelivered() {
+        let w = makeWorld()
+        w.connect()
+        w.disconnect()
+        w.sendA(marker(1))
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(w.ackedA, [])
+        XCTAssertEqual(w.a.outboxSize, 1)
+        w.reopen()
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(w.ackedA.last, 1)
+    }
+
+    func testAckedFloorMonotonic() {
+        let w = makeWorld()
+        w.connect()
+        w.sendA(marker(1))
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(w.ackedA.last, 1)
+        w.sendA(marker(2))
+        w.sendA(marker(3))
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(w.ackedA.last, 3)
+        for i in 1..<w.ackedA.count {
+            XCTAssertTrue(w.ackedA[i] > w.ackedA[i - 1])
+        }
+    }
+
+    /// A duplicate at the receiver (our earlier ack was lost) must trigger a
+    /// re-ACK so the sender learns delivery and confirms exactly once. Driven at
+    /// the Endpoint level to isolate the property from harness clock mechanics.
+    func testResentMessageConfirmsExactlyOnce() {
+        let a = Endpoint(epoch: "A", random: { 0.5 })
+        let b = Endpoint(epoch: "B", random: { 0.5 })
+        var t = 0
+        var ackedA: [UInt64] = []
+        var deliveredB: [Int] = []
+        func pump(_ effects: [Effect], _ from: String, dropBHeartbeat: Bool = false) {
+            for e in effects {
+                switch e {
+                case let .acked(seqUpTo) where from == "A":
+                    ackedA.append(seqUpTo)
+                case let .deliver(_, payload) where from == "B":
+                    deliveredB.append(Int(payload.first ?? 255))
+                case let .transmit(bytes):
+                    let fr = decodeFrame(bytes)
+                    if dropBHeartbeat, from == "B", case .heartbeat = fr { continue }
+                    if from == "A" { pump(b.onBytes(bytes, t), "B") }
+                    else { pump(a.onBytes(bytes, t), "A") }
+                default:
+                    break
+                }
+            }
+        }
+        pump(a.onConnected(t), "A")
+        pump(b.onConnected(t), "B")
+        pump(a.send(marker(1)).effects, "A")
+        XCTAssertEqual(deliveredB, [1])
+
+        t = 15_000
+        pump(a.onTick(t), "A")
+        pump(b.onTick(t), "B", dropBHeartbeat: true)  // lose B's first cursor
+        XCTAssertEqual(ackedA, [])
+
+        t = 30_000
+        pump(a.onTick(t), "A")
+        pump(b.onTick(t), "B")  // next heartbeat confirms
+        XCTAssertEqual(deliveredB, [1])
+        XCTAssertEqual(ackedA.last, 1)
+        XCTAssertEqual(ackedA.filter { $0 == 1 }.count, 1)
+    }
 }
+

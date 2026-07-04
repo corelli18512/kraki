@@ -35,7 +35,15 @@ export type Effect =
    * messages. This is the explicit "recovered = false". `peerEpoch` is the
    * peer's current outbound epoch.
    */
-  | { t: 'reset-inbound'; fromSeq: Seq; peerEpoch: string };
+  | { t: 'reset-inbound'; fromSeq: Seq; peerEpoch: string }
+  /**
+   * The peer has confirmed receipt of every outbound message with seq ≤
+   * `seqUpTo` (our outbox pruned up to here). Lets the application resolve
+   * "delivered" for messages it sent — e.g. clear an optimistic UI, or roll it
+   * back on timeout if this never arrives. Purely observational; emitting it
+   * changes no protocol behavior.
+   */
+  | { t: 'acked'; seqUpTo: Seq };
 
 /** Tunable parameters. Defaults in spec/PROTOCOL.md §8. */
 export interface PulseParams {

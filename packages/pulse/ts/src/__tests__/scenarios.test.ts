@@ -9,7 +9,9 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PARAMS } from '../types.js';
+import { Endpoint } from '../endpoint.js';
+import { DEFAULT_PARAMS, type Effect } from '../types.js';
+import { decodeFrame } from '../wire.js';
 import {
   freshEpoch,
   marker,
@@ -315,3 +317,97 @@ describe('BIDIRECTIONAL: both directions are independent and symmetric', () => {
     expect(payloadsOf(w.deliveredA)).toEqual([2]);
   });
 });
+
+describe('ACKED: the sender observes confirmed delivery of what it sent', () => {
+  it('fires acked once the peer confirms receipt', () => {
+    const w = makeWorld();
+    w.connect();
+    // Before any round trip, nothing is confirmed.
+    expect(w.ackedA).toEqual([]);
+    w.sendA(marker(1));
+    w.sendA(marker(2));
+    // B delivered them; its piggybacked cursor must come back to A to confirm.
+    // A heartbeat carries B's cursor back within one interval.
+    w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1);
+    // A now knows the peer received through seq 2.
+    expect(w.ackedA.at(-1)).toBe(2n);
+    // And its outbox is drained (acked == pruned).
+    expect(w.a.outboxSize).toBe(0);
+  });
+
+  it('does NOT fire acked while the message is undelivered (socket down)', () => {
+    const w = makeWorld();
+    w.connect();
+    w.disconnect();
+    w.sendA(marker(1)); // produced offline, sits in outbox
+    w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1);
+    // Nothing confirmed — the app must keep showing "sending"/optimistic and be
+    // ready to roll back on its own timeout.
+    expect(w.ackedA).toEqual([]);
+    expect(w.a.outboxSize).toBe(1);
+    // On reconnect the confirmation finally arrives.
+    w.reopen();
+    w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1);
+    expect(w.ackedA.at(-1)).toBe(1n);
+  });
+
+  it('advances the acked floor monotonically, once per new confirmation', () => {
+    const w = makeWorld();
+    w.connect();
+    w.sendA(marker(1));
+    w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1);
+    const afterFirst = w.ackedA.at(-1);
+    expect(afterFirst).toBe(1n);
+    w.sendA(marker(2));
+    w.sendA(marker(3));
+    w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1);
+    expect(w.ackedA.at(-1)).toBe(3n);
+    // Every reported floor is strictly increasing (no duplicate/backward acks).
+    for (let i = 1; i < w.ackedA.length; i++) {
+      expect(w.ackedA[i]! > w.ackedA[i - 1]!).toBe(true);
+    }
+  });
+
+  it('a resent message (lost ack) confirms exactly once, no double-ack', () => {
+    // A duplicate arriving at the receiver (because our earlier ack was lost)
+    // must trigger a re-ACK so the sender learns delivery and stops resending —
+    // and the sender must observe the confirmation exactly once. Driven at the
+    // Endpoint level to isolate the property from harness clock mechanics.
+    const A = new Endpoint({ epoch: 'A', random: () => 0.5 });
+    const B = new Endpoint({ epoch: 'B', random: () => 0.5 });
+    let t = 0;
+    const ackedA: bigint[] = [];
+    const deliveredB: number[] = [];
+    function pump(effects: Effect[], from: 'A' | 'B', dropBHeartbeat = false): void {
+      for (const e of effects) {
+        if (e.t === 'acked' && from === 'A') ackedA.push(e.seqUpTo);
+        if (e.t === 'deliver' && from === 'B') deliveredB.push(e.payload[0] ?? -1);
+        if (e.t === 'transmit') {
+          const fr = decodeFrame(e.bytes);
+          if (dropBHeartbeat && from === 'B' && fr?.t === 'heartbeat') continue;
+          if (from === 'A') pump(B.onBytes(e.bytes, t), 'B');
+          else pump(A.onBytes(e.bytes, t), 'A');
+        }
+      }
+    }
+    pump(A.onConnected(t), 'A');
+    pump(B.onConnected(t), 'B');
+    pump(A.send(marker(1)).effects, 'A');
+    expect(deliveredB).toEqual([1]); // delivered once, live
+
+    // B's first cursor-carrying heartbeat is lost.
+    t = 15_000;
+    pump(A.onTick(t), 'A');
+    pump(B.onTick(t), 'B', /* dropBHeartbeat */ true);
+    expect(ackedA).toEqual([]); // not yet confirmed — app keeps optimistic state
+
+    // Next heartbeat gets through: confirmation arrives, exactly once.
+    t = 30_000;
+    pump(A.onTick(t), 'A');
+    pump(B.onTick(t), 'B');
+    expect(deliveredB).toEqual([1]); // still delivered exactly once
+    expect(ackedA.at(-1)).toBe(1n);
+    expect(ackedA.filter((s) => s === 1n).length).toBe(1);
+  });
+});
+

@@ -162,7 +162,7 @@ export class Endpoint {
 
     // (b) Prune what the peer already has, then resend the rest.
     if (f.recvCursor >= this.outboxBase) {
-      this.pruneOutbox(f.recvCursor);
+      this.pruneOutbox(f.recvCursor, effects);
       this.resendFrom(f.recvCursor + 1n, effects, now);
     } else {
       // Peer is behind our oldest retained seq — we pruned what it needs.
@@ -175,13 +175,17 @@ export class Endpoint {
   }
 
   private onData(f: Extract<Frame, { t: 'data' }>, now: number): Effect[] {
-    this.pruneOutbox(f.ack); // peer piggybacks its receipt of our outbound
     const effects: Effect[] = [];
+    this.pruneOutbox(f.ack, effects); // peer piggybacks its receipt of our outbound
     if (f.seq === this.recvCursor + 1n) {
       this.recvCursor = f.seq;
       effects.push({ t: 'deliver', seq: f.seq, payload: f.payload });
     } else if (f.seq <= this.recvCursor) {
-      // duplicate (resend overlap) — safe to drop, never re-deliver
+      // Duplicate (a resend because our earlier ack was lost). Re-advertise our
+      // cursor so the sender learns we already have it and stops resending —
+      // without this, a lost ack can wedge the sender resending forever and it
+      // never observes delivery. (Same rationale as TCP's dup-ACK.)
+      effects.push(this.transmit({ t: 'ack', ack: this.recvCursor }, now));
     } else {
       // hole: seq > recvCursor+1. Do not deliver; ask peer to rewind.
       effects.push(this.transmit({ t: 'ack', ack: this.recvCursor }, now));
@@ -195,8 +199,8 @@ export class Endpoint {
    * so tail-loss and holes self-heal without a reconnect.
    */
   private onPeerCursor(peerCursor: Seq, now: number): Effect[] {
-    this.pruneOutbox(peerCursor);
     const effects: Effect[] = [];
+    this.pruneOutbox(peerCursor, effects);
     if (peerCursor < this.sendSeq) {
       this.resendFrom(peerCursor + 1n, effects, now);
     }
@@ -226,10 +230,13 @@ export class Endpoint {
     }
   }
 
-  private pruneOutbox(ackSeq: Seq): void {
+  private pruneOutbox(ackSeq: Seq, effects?: Effect[]): void {
     if (ackSeq <= this.outboxBase) return;
     this.outbox = this.outbox.filter((e) => e.seq > ackSeq);
-    if (ackSeq > this.outboxBase) this.outboxBase = ackSeq;
+    this.outboxBase = ackSeq;
+    // Surface the confirmed delivery floor so the app can resolve/roll back
+    // optimistic UI for messages it sent. Observational only.
+    effects?.push({ t: 'acked', seqUpTo: ackSeq });
   }
 
   /** Build a transmit effect and mark send activity. `now` optional for the

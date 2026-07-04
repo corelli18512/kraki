@@ -12,6 +12,10 @@ public enum Effect: Equatable {
     case close
     /// Inbound history before `fromSeq` is unrecoverable; re-sync there.
     case resetInbound(fromSeq: UInt64, peerEpoch: String)
+    /// The peer confirmed receipt of every outbound message with seq ≤ `seqUpTo`
+    /// (our outbox pruned up to here). Lets the app resolve "delivered" for what
+    /// it sent — e.g. clear/roll back optimistic UI. Observational only.
+    case acked(seqUpTo: UInt64)
 }
 
 public enum LinkState: Equatable {
@@ -175,7 +179,7 @@ public final class Endpoint {
 
         // (b) Prune what the peer already has, then resend the rest.
         if recvCursor >= outboxBase {
-            pruneOutbox(recvCursor)
+            pruneOutbox(recvCursor, &effects)
             resendFrom(recvCursor + 1, &effects, now)
         } else {
             effects.append(transmit(.reset(epoch: self.epoch, oldest: outboxBase + 1), now: now))
@@ -185,13 +189,17 @@ public final class Endpoint {
     }
 
     private func onData(seq: UInt64, ack: UInt64, payload: [UInt8], now: Int) -> [Effect] {
-        pruneOutbox(ack)  // peer piggybacks its receipt of our outbound
         var effects: [Effect] = []
+        pruneOutbox(ack, &effects)  // peer piggybacks its receipt of our outbound
         if seq == recvCursor + 1 {
             recvCursor = seq
             effects.append(.deliver(seq: seq, payload: payload))
         } else if seq <= recvCursor {
-            // duplicate — safe to drop, never re-deliver
+            // Duplicate (a resend because our earlier ack was lost). Re-advertise
+            // our cursor so the sender learns we have it and stops resending —
+            // without this a lost ack can wedge the sender resending forever and
+            // it never observes delivery. (Same rationale as TCP's dup-ACK.)
+            effects.append(transmit(.ack(ack: recvCursor), now: now))
         } else {
             // hole: seq > recvCursor+1. Ask peer to rewind.
             effects.append(transmit(.ack(ack: recvCursor), now: now))
@@ -203,8 +211,8 @@ public final class Endpoint {
     /// Prune what it confirms; if it lags our latest send, resend the gap so
     /// tail-loss and holes self-heal without a reconnect.
     private func onPeerCursor(_ peerCursor: UInt64, _ now: Int) -> [Effect] {
-        pruneOutbox(peerCursor)
         var effects: [Effect] = []
+        pruneOutbox(peerCursor, &effects)
         if peerCursor < sendSeq {
             resendFrom(peerCursor + 1, &effects, now)
         }
@@ -229,10 +237,13 @@ public final class Endpoint {
         }
     }
 
-    private func pruneOutbox(_ ackSeq: UInt64) {
+    private func pruneOutbox(_ ackSeq: UInt64, _ effects: inout [Effect]) {
         if ackSeq <= outboxBase { return }
         outbox.removeAll { $0.seq <= ackSeq }
-        if ackSeq > outboxBase { outboxBase = ackSeq }
+        outboxBase = ackSeq
+        // Surface the confirmed delivery floor so the app can resolve/roll back
+        // optimistic UI for messages it sent. Observational only.
+        effects.append(.acked(seqUpTo: ackSeq))
     }
 
     private func transmit(_ frame: Frame, now: Int? = nil) -> Effect {

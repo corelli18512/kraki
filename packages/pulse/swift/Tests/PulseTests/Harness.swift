@@ -16,6 +16,8 @@ final class World {
     var deliveredB: [(seq: UInt64, payload: [UInt8])] = []
     var resetsA: [(fromSeq: UInt64, peerEpoch: String)] = []
     var resetsB: [(fromSeq: UInt64, peerEpoch: String)] = []
+    var ackedA: [UInt64] = []
+    var ackedB: [UInt64] = []
 
     private var linkUp = false
     private var linkAvailable = false
@@ -139,6 +141,9 @@ final class World {
         case let .resetInbound(fromSeq, peerEpoch):
             if producedByA { resetsA.append((fromSeq, peerEpoch)) }
             else { resetsB.append((fromSeq, peerEpoch)) }
+        case let .acked(seqUpTo):
+            if producedByA { ackedA.append(seqUpTo) }
+            else { ackedB.append(seqUpTo) }
         case .open:
             if linkAvailable {
                 connect()
