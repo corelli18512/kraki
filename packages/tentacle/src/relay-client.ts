@@ -485,11 +485,9 @@ export class RelayClient {
     // Incoming encrypted messages from apps — decrypt and handle inner message
     if ((msg.type === 'unicast' || msg.type === 'broadcast') && this.keyManager && this.authInfo) {
       // Pulse-framed? Feed the frame to our endpoint; a `deliver` will call
-      // handlePulseDelivered with the blob to decrypt. `keys` come with it.
+      // handlePulseDelivered with the {blob,keys} payload to decrypt.
       if (this.pulse.isEnabled() && typeof msg.pulse === 'string') {
-        this.pulseInboundKeys = (msg.keys as Record<string, string>) ?? {};
         this.pulse.onFrame(msg.pulse as string);
-        this.pulseInboundKeys = null;
         return;
       }
       try {
@@ -2087,13 +2085,12 @@ export class RelayClient {
       }
 
       // Pulse path: reliable types go through the per-hop pulse endpoint to head
-      // (head fans out + acks + durably holds for offline arms). The encrypted
-      // blob IS the pulse frame's payload; `keys` rides the envelope. Everything
-      // else (deltas, active, attachment_data) keeps the legacy broadcast.
+      // (head fans out + acks + durably holds for offline arms). The pulse
+      // frame's payload carries BOTH the ciphertext blob AND the per-recipient
+      // keys, so everything the receiver needs travels together through head
+      // (head never touches keys). Everything else keeps the legacy broadcast.
       if (this.pulse.isEnabled() && RelayClient.PERSISTENT_TYPES.has(msg.type as string)) {
-        this.pendingPulseKeys = keys; // handed to sendPulseEnvelope for this frame
-        this.pulse.send(blob);
-        this.pendingPulseKeys = null;
+        this.pulse.send(JSON.stringify({ blob, keys }));
         this.emitPushPreviewIfNeeded(msg, recipients);
         return;
       }
@@ -2126,30 +2123,22 @@ export class RelayClient {
     }
   }
 
-  /** Keys map for the pulse frame currently being sent (set by sendEncrypted,
-   *  consumed by sendPulseEnvelope). Per-frame, synchronous. */
-  private pendingPulseKeys: Record<string, string> | null = null;
-
   /** Put a pulse frame on the wire as a broadcast envelope: head reads `pulse`
-   *  for transport, `keys` for fan-out; `blob` is empty (payload is in `pulse`). */
+   *  for transport and fan-out. The payload ({blob,keys}) is inside the frame. */
   private sendPulseEnvelope(pulseB64: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const envelope = {
-      type: 'broadcast',
-      pulse: pulseB64,
-      blob: '',
-      keys: this.pendingPulseKeys ?? {},
-    };
+    const envelope = { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
     this.ws.send(JSON.stringify(this.withAck(envelope as Record<string, unknown>)));
   }
 
   /** A reliable consumer message was delivered in order by pulse (arm→tentacle).
-   *  `blobB64` is the encrypted blob; decrypt + dispatch as usual. */
-  private handlePulseDelivered(blobB64: string): void {
+   *  `payloadJson` is the JSON string {blob, keys}; decrypt + dispatch. */
+  private handlePulseDelivered(payloadJson: string): void {
     if (!this.keyManager || !this.authInfo) return;
     try {
+      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
       const decrypted = decryptFromBlob(
-        { blob: blobB64, keys: this.pulseInboundKeys ?? {} },
+        { blob, keys },
         this.authInfo.deviceId,
         this.keyManager.getKeyPair().privateKey,
       );
@@ -2158,9 +2147,6 @@ export class RelayClient {
       logger.error({ err }, 'Pulse delivered payload decrypt failed');
     }
   }
-
-  /** Keys from the inbound pulse envelope currently being processed. */
-  private pulseInboundKeys: Record<string, string> | null = null;
 
   /** Emit a push preview for notification-worthy reliable messages (pulse path
    *  covers online delivery; offline arms are reached by push + pulse durable). */

@@ -32,9 +32,11 @@ export interface PulseHubHost {
   /** Send a pulse-framed envelope's `pulse` string to `deviceId` if online.
    *  Returns true if the device is currently connected. */
   sendPulseTo(deviceId: string, pulseB64: string): boolean;
-  /** Given a device that just delivered a payload to the hub, and the routing
-   *  the app envelope implies, return the destination device id(s). For a
-   *  unicast this is the `to`; the hub records it per source stream. */
+  /** Fan-out targets for a BROADCAST from `fromDevice`: the other devices of the
+   *  same user that the delivered payload should be forwarded to. (A tentacle
+   *  broadcasts to all the user's apps; an app that broadcasts, to the
+   *  tentacles.) Empty for a pure unicast (routing comes from `to` instead). */
+  broadcastTargets(fromDevice: string): string[];
   now(): number;
 }
 
@@ -115,15 +117,16 @@ export class PulseHub {
   onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string }): void {
     if (!env.pulse) return;
     const d = this.ep(fromDevice);
-    // The destination for anything this device delivers to us.
-    const dest = env.to;
-    this.run(fromDevice, d.endpoint.onBytes(b64decode(env.pulse), this.host.now()), dest);
+    // Destinations for anything this device delivers: an explicit unicast `to`,
+    // or (for a broadcast) the fan-out targets from the host.
+    const dests = env.to ? [env.to] : this.host.broadcastTargets(fromDevice);
+    this.run(fromDevice, d.endpoint.onBytes(b64decode(env.pulse), this.host.now()), dests);
     this.saveSnapshot(fromDevice);
   }
 
   // ── Effect execution ────────────────────────────────────────────────────────
 
-  private run(deviceId: string, effects: Effect[], dest?: string): void {
+  private run(deviceId: string, effects: Effect[], dests?: string[]): void {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit':
@@ -131,13 +134,12 @@ export class PulseHub {
           this.host.sendPulseTo(deviceId, b64encode(e.bytes));
           break;
         case 'deliver':
-          // Store-and-forward bridge: a reliable payload arrived from this
-          // device; forward it onto the destination device's endpoint,
-          // preserving the durable intent. `dest` is the app-level target.
-          if (dest) this.forward(dest, e.payload, e.durable);
+          // Store-and-forward bridge: forward the reliable payload onto each
+          // destination device's endpoint, preserving the durable intent.
+          for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable);
           break;
         case 'store':
-          this.storeOutbox(deviceId, e.seq, e.payload, dest);
+          this.storeOutbox(deviceId, e.seq, e.payload, (dests ?? []).join(','));
           break;
         case 'unstore':
           this.unstoreOutbox(deviceId, e.seqUpTo);

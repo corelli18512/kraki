@@ -210,6 +210,7 @@ export class HeadServer {
       this.pulseHub = new PulseHub(this.storage.rawDb, {
         now: () => Date.now(),
         sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
+        broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
       });
       this.pulseHub.recoverOnBoot();
       getLogger().info('Pulse hub enabled (KRAKI_PULSE=1)');
@@ -912,6 +913,19 @@ export class HeadServer {
     // is empty because the payload (if any) is inside the pulse frame.
     ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
     return true;
+  }
+
+  /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER devices
+   *  of the same user (the online ones the hub can forward to). Mirrors the
+   *  legacy handleBroadcast routing. */
+  private pulseBroadcastTargets(fromDevice: string): string[] {
+    const userId = this.userByDevice.get(fromDevice);
+    if (!userId) return [];
+    const targets: string[] = [];
+    for (const device of this.storage.getDevicesByUser(userId)) {
+      if (device.id !== fromDevice) targets.push(device.id);
+    }
+    return targets;
   }
 
   private handleUnicast(ws: WebSocket, state: ClientState, msg: UnicastEnvelope): void {

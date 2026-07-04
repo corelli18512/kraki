@@ -21,14 +21,15 @@ const logger = createLogger('pulse');
 export interface TentaclePulseHost {
   /** Send a pulse frame to the relay as a broadcast envelope (head fans out). */
   sendPulseFrame(pulseB64: string): void;
-  /** A reliable payload was delivered in order — hand the decrypted-ready blob
-   *  (a base64 blob string) back to the normal inbound handler. */
-  onDelivered(blobB64: string): void;
+  /** A reliable payload was delivered in order — the JSON string carrying
+   *  {blob, keys} for the normal decrypt+dispatch path. */
+  onDelivered(payloadJson: string): void;
   now(): number;
 }
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64');
-const unb64 = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
 export class TentaclePulse {
   private endpoint: Endpoint;
@@ -48,9 +49,9 @@ export class TentaclePulse {
     return this.enabled;
   }
 
-  /** Send a reliable message (already encrypted to `blobB64`) via pulse. */
-  send(blobB64: string): void {
-    const { effects } = this.endpoint.send(unb64(blobB64));
+  /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse. */
+  send(payloadJson: string): void {
+    const { effects } = this.endpoint.send(enc.encode(payloadJson));
     this.run(effects);
   }
 
@@ -66,7 +67,7 @@ export class TentaclePulse {
 
   /** An inbound pulse frame arrived from the relay. */
   onFrame(pulseB64: string): void {
-    this.run(this.endpoint.onBytes(unb64(pulseB64), this.host.now()));
+    this.run(this.endpoint.onBytes(new Uint8Array(Buffer.from(pulseB64, 'base64')), this.host.now()));
   }
 
   /** Periodic tick (heartbeat + liveness). */
@@ -81,9 +82,8 @@ export class TentaclePulse {
           this.host.sendPulseFrame(b64(e.bytes));
           break;
         case 'deliver':
-          // The delivered payload is the encrypted blob bytes → base64 back to
-          // the normal decrypt+dispatch path.
-          this.host.onDelivered(b64(e.payload));
+          // The delivered payload is the JSON {blob, keys} string.
+          this.host.onDelivered(dec.decode(e.payload));
           break;
         case 'reset-inbound':
           logger.warn({ fromSeq: String(e.fromSeq) }, 'pulse reset-inbound (relay stream reset)');

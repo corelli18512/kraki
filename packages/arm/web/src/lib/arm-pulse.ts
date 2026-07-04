@@ -21,8 +21,8 @@ const logger = createLogger('pulse');
 export interface ArmPulseHost {
   /** Send a pulse frame to the relay (unicast envelope, `pulse` field). */
   sendPulseFrame(pulseB64: string, targetDeviceId: string): void;
-  /** A reliable payload was delivered in order — the blob (base64) to decrypt. */
-  onDelivered(blobB64: string): void;
+  /** A reliable payload was delivered in order — the JSON string {blob, keys}. */
+  onDelivered(payloadJson: string): void;
   /** The relay confirmed receipt of every send with seq ≤ seqUpTo. */
   onAcked(seqUpTo: bigint): void;
   now(): number;
@@ -40,6 +40,8 @@ function unb64(s: string): Uint8Array {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
 export class ArmPulse {
   private endpoint: Endpoint;
@@ -58,12 +60,12 @@ export class ArmPulse {
     return this.enabled;
   }
 
-  /** Send a reliable message (already encrypted to `blobB64`) toward a tentacle.
+  /** Send a reliable message (a JSON string {blob, keys}) toward a tentacle.
    *  `durable` marks it for relay persistence while the tentacle is offline.
    *  Returns the assigned pulse seq so the caller can track it for rollback. */
-  send(blobB64: string, targetDeviceId: string, durable: boolean): bigint {
+  send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
     this.currentTarget = targetDeviceId;
-    const { seq, effects } = this.endpoint.send(unb64(blobB64), { durable });
+    const { seq, effects } = this.endpoint.send(enc.encode(payloadJson), { durable });
     this.run(effects);
     this.currentTarget = '';
     return seq;
@@ -89,7 +91,7 @@ export class ArmPulse {
           this.host.sendPulseFrame(b64(e.bytes), this.currentTarget);
           break;
         case 'deliver':
-          this.host.onDelivered(b64(e.payload));
+          this.host.onDelivered(dec.decode(e.payload));
           break;
         case 'acked':
           this.host.onAcked(e.seqUpTo);

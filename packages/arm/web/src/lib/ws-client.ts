@@ -28,8 +28,6 @@ export class KrakiWSClient {
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
-  /** keys of the inbound pulse envelope currently being processed. */
-  private pulseInboundKeys: Record<string, string> | null = null;
 
   get url(): string { return this.transport.url; }
 
@@ -110,9 +108,9 @@ export class KrakiWSClient {
           onSeq?.(null);
           return;
         }
-        this.pulseSendKeys = enc.keys;
-        const seq = this.pulse.send(enc.blob, enc.to, durable);
-        this.pulseSendKeys = null;
+        // The pulse payload carries BOTH blob and keys so everything the
+        // tentacle needs to decrypt travels together through head.
+        const seq = this.pulse.send(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, durable);
         onSeq?.(seq);
       });
       return;
@@ -121,19 +119,22 @@ export class KrakiWSClient {
     onSeq?.(null);
   }
 
-  /** Keys of the pulse frame currently being emitted (set by sendEncrypted). */
-  private pulseSendKeys: Record<string, string> | null = null;
-
   /** Put a pulse frame on the wire as a unicast envelope to the tentacle via
-   *  head: head reads `pulse` for transport + `to` for the forward destination;
-   *  `keys` lets the destination decrypt; `blob` is empty (payload in `pulse`). */
+   *  head: head reads `pulse` for transport + `to` for the forward destination.
+   *  The payload ({blob,keys}) is inside the frame. */
   private sendPulseEnvelope(pulseB64: string, to: string) {
-    this.transport.send({ type: 'unicast', to, pulse: pulseB64, blob: '', keys: this.pulseSendKeys ?? {} });
+    this.transport.send({ type: 'unicast', to, pulse: pulseB64, blob: '', keys: {} });
   }
 
   /** A reliable message was delivered in order by pulse (tentacle→arm). */
-  private handlePulseDelivered(blobB64: string) {
-    void this.encryption.decryptBlob(blobB64, this.pulseInboundKeys ?? {}).then((inner) => {
+  private handlePulseDelivered(payloadJson: string) {
+    let parsed: { blob: string; keys: Record<string, string> };
+    try {
+      parsed = JSON.parse(payloadJson);
+    } catch {
+      return;
+    }
+    void this.encryption.decryptBlob(parsed.blob, parsed.keys).then((inner) => {
       if (inner) this.dispatchInner(inner);
     });
   }
@@ -620,9 +621,7 @@ export class KrakiWSClient {
         // handlePulseDelivered with the blob to decrypt.
         const env = msg as unknown as Record<string, unknown>;
         if (this.pulse.isEnabled() && typeof env.pulse === 'string') {
-          this.pulseInboundKeys = (env.keys as Record<string, string>) ?? {};
           this.pulse.onFrame(env.pulse as string);
-          this.pulseInboundKeys = null;
           return;
         }
         this.encryption.handleEncrypted(msg as RelayEnvelope, this.encryptionCallbacks());

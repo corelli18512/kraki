@@ -35,6 +35,7 @@ class World {
     const host: PulseHubHost = {
       now: () => this.now,
       sendPulseTo: (deviceId, pulseB64) => this.deliverToDevice(deviceId, pulseB64),
+      broadcastTargets: () => [], // this test uses explicit `to` (unicast)
     };
     this.hub = new PulseHub(db, host);
     this.arm = new Endpoint({ epoch: 'arm', random: () => 0.5 });
