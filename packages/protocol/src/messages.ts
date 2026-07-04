@@ -47,8 +47,31 @@ export interface TransportAckFields {
   ack?: number;
 }
 
+/** Per-hop pulse framing (visible to the relay, like a WS frame header).
+ *
+ *  When present, this envelope is carried by the pulse reliable-delivery layer
+ *  (pulse = a reliable WebSocket replacement). `pulse` holds the base64 of the
+ *  COMPLETE pulse wire frame, whose payload segment is the E2E ciphertext. The
+ *  relay — itself a pulse endpoint on each hop — decodes the frame to read
+ *  seq / ack / durable / hello / resend and to route, ack, and durably store;
+ *  it treats the frame's payload segment as opaque bytes it never decrypts.
+ *
+ *  The ciphertext lives INSIDE the pulse frame (not in `blob`) so that pulse's
+ *  own outbox, resume, and durable persistence carry it. `keys` (per-recipient
+ *  wrapped AES keys) stays an envelope field because the relay reads it for
+ *  fan-out and the recipient needs it to decrypt. For a pulse-carried envelope,
+ *  `blob` is unused (empty string); the payload is in `pulse`.
+ *
+ *  Absent ⇒ legacy fire-and-forget path (`blob`/`keys` as before). Peers that
+ *  don't speak pulse simply never set it. */
+export interface PulseFrameField {
+  /** base64 of the complete pulse wire frame (header + payload; the payload
+   *  segment is the E2E ciphertext, opaque to the relay). */
+  pulse?: string;
+}
+
 /** App → specific tentacle. Relay reads `to` for routing. */
-export interface UnicastEnvelope extends TransportAckFields {
+export interface UnicastEnvelope extends TransportAckFields, PulseFrameField {
   type: 'unicast';
   /** Target device ID */
   to: string;
@@ -61,7 +84,7 @@ export interface UnicastEnvelope extends TransportAckFields {
 }
 
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
-export interface BroadcastEnvelope extends TransportAckFields {
+export interface BroadcastEnvelope extends TransportAckFields, PulseFrameField {
   type: 'broadcast';
   /** Encrypted payload: base64(iv + ciphertext + tag) */
   blob: string;
