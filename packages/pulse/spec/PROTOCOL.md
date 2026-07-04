@@ -111,6 +111,8 @@ deterministically testable: feed inputs, assert effects.
 | `CloseConnection` | tear down the current link (it is dead/stale) |
 | `ResetInbound(fromSeq, peerEpoch)` | inbound history before `fromSeq` is unrecoverable; the application is re-synced at `fromSeq` and MUST discard assumptions about earlier peer messages (the explicit "recovered=false") |
 | `Acked(seqUpTo)` | the peer has confirmed receipt of every outbound message with seq ≤ `seqUpTo`; the application may resolve "delivered" for what it sent (e.g. clear/roll back optimistic UI). Purely observational — emitting it changes no protocol behavior |
+| `Store(seq, payload)` | persist this outbox entry to durable storage (survives a process restart). Emitted only by a `durableSupported` endpoint, only for messages sent with `durable: true`. The adapter writes `(seq → payload)` to disk. The core supplies **only seq and bytes** — never a destination, key, or routing hint (it has none). |
+| `Unstore(seqUpTo)` | durable entries with seq ≤ `seqUpTo` are confirmed delivered (or expired) and may be deleted from durable storage. |
 
 **Ordering contract.** When the core assigns a seq to an outbound payload
 (§5.1), the `outbox` entry is created **before** any `Transmit` for it is
@@ -160,11 +162,21 @@ Primitives:
 
 | type | name | body |
 |------|------|------|
-| 1 | HELLO | `str epoch` · `str recvEpoch` · `u64 recvCursor` |
-| 2 | DATA | `u64 seq` · `u64 ack` · `blob payload` |
+| 1 | HELLO | `str epoch` · `str recvEpoch` · `u64 recvCursor` · `u8 durFlags` · `u64 maxRetentionMs` |
+| 2 | DATA | `u8 msgFlags` · `u64 seq` · `u64 ack` · `blob payload` |
 | 3 | ACK | `u64 ack` |
 | 4 | RESET | `str epoch` · `u64 oldest` |
 | 5 | HEARTBEAT | `u64 ack` |
+
+**Flag bytes** (bitfields; all undefined bits reserved 0):
+
+- HELLO `durFlags` bit 0 = `durableSupported` (this endpoint can persist its
+  outbox across a process restart). `maxRetentionMs` is meaningful only when the
+  bit is set (else 0): the longest a persisted entry is kept before it is
+  abandoned. This is a pure transport capability advertised at handshake time.
+- DATA `msgFlags` bit 0 = `durable` (this message must be persisted, not merely
+  buffered in memory — see §8.x). The sender only sets it when the peer
+  advertised `durableSupported`; otherwise it is ignored on the wire.
 
 A frame that is malformed, has the wrong magic/version, or an unknown type is
 **ignored** (dropped without state change). Robustness over strictness: a future
@@ -366,6 +378,58 @@ initiates reconnect — the side that knows its own local link best — instead 
 both racing. This is a deployment choice, not a protocol change. (It is the
 lesson of a real prior heartbeat race: the reclaiming side should be the one
 with the tighter timeout.)
+
+## 8.1 Durable outbox (persist across restart)
+
+Ordinary outbox entries live in memory. They survive **reconnects within one
+run** (resend on resume, §5.3) but are lost if the process restarts without a
+snapshot. That is the right default: most messages are only worth delivering
+while the sender is alive to retry them.
+
+Some messages must survive a **process restart** of the sender, because the
+sender may go away entirely before the peer ever comes back (a mobile client
+that sends, then is killed). For those, an endpoint can persist the outbox entry
+to disk. This is a **transport capability**, not an application concept: the core
+knows only "this entry is durable" and "my outbox can be persisted." It does not
+know why, what the payload is, or where it ultimately goes.
+
+Two independent pieces:
+
+- **Capability (per endpoint, advertised at handshake).** An endpoint with
+  `durableSupported = true` (HELLO `durFlags` bit 0) can persist its outbox. It
+  advertises `maxRetentionMs` — how long a persisted entry is kept before being
+  abandoned. Default endpoints advertise `false`.
+
+- **Per-message flag (per send).** `send(payload, { durable: true })` marks one
+  message. On transmit, the DATA `msgFlags` durable bit is set **only if the
+  peer advertised `durableSupported`** — a durable message is pointless unless
+  the receiving side can persist it. If the peer cannot, the bit is cleared and
+  the message degrades to an ordinary in-memory entry (the application decides,
+  via `Acked` timeout, whether that is a failure).
+
+Behavior on a `durableSupported` endpoint:
+
+```
+# on send(payload, {durable:true}), after the outbox entry is created:
+if self.durableSupported and this entry is durable:
+    emit Store(seq, payload)          # adapter writes seq→bytes to disk
+
+# on prune (peer acked seq ≤ N):
+emit Unstore(N)                        # adapter deletes durable entries ≤ N
+
+# on restore after restart:
+#   the adapter reloads persisted (seq→payload) entries into the outbox
+#   BEFORE the first input; resume (§5.3) then resends them normally.
+
+# on onTick, for any durable entry older than maxRetentionMs:
+#   drop it from the outbox and emit Unstore(seq); it will never be resent.
+```
+
+The core never learns a destination for a stored entry — `Store`/`Unstore`
+carry only seq and bytes. "Which peer this is ultimately for, where to keep it,
+how to route it after restart" is entirely the adapter's concern. This is the
+line that keeps the core context-free: durability is *its own outbox persisting
+itself*, not *a store forwarding to a third party*.
 
 ---
 

@@ -43,7 +43,19 @@ export type Effect =
    * back on timeout if this never arrives. Purely observational; emitting it
    * changes no protocol behavior.
    */
-  | { t: 'acked'; seqUpTo: Seq };
+  | { t: 'acked'; seqUpTo: Seq }
+  /**
+   * Persist this outbox entry to durable storage (survives a process restart).
+   * Emitted only by a durable-supported endpoint, only for durable sends. The
+   * adapter writes (seq → payload) to disk. Carries ONLY seq and bytes — never a
+   * destination, key, or routing hint (the core has none).
+   */
+  | { t: 'store'; seq: Seq; payload: Payload }
+  /**
+   * Durable entries with seq ≤ `seqUpTo` are confirmed delivered (or expired)
+   * and may be deleted from durable storage.
+   */
+  | { t: 'unstore'; seqUpTo: Seq };
 
 /** Tunable parameters. Defaults in spec/PROTOCOL.md §8. */
 export interface PulseParams {
@@ -71,9 +83,18 @@ export interface Snapshot {
   epoch: string;
   sendSeq: string; // bigint as decimal string (JSON-safe)
   outboxBase: string;
-  outbox: Array<{ seq: string; payloadB64: string }>;
+  outbox: Array<{ seq: string; payloadB64: string; durable?: boolean; sentAt?: number }>;
   recvCursor: string;
   peerEpoch: string;
+}
+
+/** Per-endpoint durability capability (advertised at handshake). See spec §8.1. */
+export interface DurableConfig {
+  /** This endpoint can persist its outbox to disk (survives process restart). */
+  supported: boolean;
+  /** How long a persisted entry is kept before being abandoned (ms). Only
+   *  meaningful when supported. Default: kept indefinitely (0 = no expiry). */
+  maxRetentionMs?: number;
 }
 
 export interface EndpointOptions {
@@ -89,6 +110,8 @@ export interface EndpointOptions {
   random?: () => number;
   /** Restore prior durable state (restart-durability). */
   restore?: Snapshot;
+  /** Durability capability. Defaults to { supported: false }. */
+  durable?: DurableConfig;
 }
 
 export const LinkState = {

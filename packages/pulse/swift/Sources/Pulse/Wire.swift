@@ -22,8 +22,8 @@ public enum FrameType: UInt8 {
 
 /// A decoded protocol frame.
 public enum Frame: Equatable {
-    case hello(epoch: String, recvEpoch: String, recvCursor: UInt64)
-    case data(seq: UInt64, ack: UInt64, payload: [UInt8])
+    case hello(epoch: String, recvEpoch: String, recvCursor: UInt64, durableSupported: Bool, maxRetentionMs: UInt64)
+    case data(seq: UInt64, ack: UInt64, payload: [UInt8], durable: Bool)
     case ack(ack: UInt64)
     case reset(epoch: String, oldest: UInt64)
     case heartbeat(ack: UInt64)
@@ -73,13 +73,16 @@ private struct Writer {
 public func encodeFrame(_ f: Frame) throws -> [UInt8] {
     var w = Writer()
     switch f {
-    case let .hello(epoch, recvEpoch, recvCursor):
+    case let .hello(epoch, recvEpoch, recvCursor, durableSupported, maxRetentionMs):
         w.header(.hello)
         try w.str(epoch)
         try w.str(recvEpoch)
         w.u64(recvCursor)
-    case let .data(seq, ack, payload):
+        w.u8(durableSupported ? 1 : 0)
+        w.u64(maxRetentionMs)
+    case let .data(seq, ack, payload, durable):
         w.header(.data)
+        w.u8(durable ? 1 : 0)
         w.u64(seq)
         w.u64(ack)
         w.blob(payload)
@@ -157,12 +160,17 @@ public func decodeFrame(_ bytes: [UInt8]) -> Frame? {
             let epoch = try r.str()
             let recvEpoch = try r.str()
             let recvCursor = try r.u64()
-            return .hello(epoch: epoch, recvEpoch: recvEpoch, recvCursor: recvCursor)
+            let durFlags = try r.u8()
+            let maxRetentionMs = try r.u64()
+            return .hello(
+                epoch: epoch, recvEpoch: recvEpoch, recvCursor: recvCursor,
+                durableSupported: (durFlags & 1) == 1, maxRetentionMs: maxRetentionMs)
         case .data:
+            let msgFlags = try r.u8()
             let seq = try r.u64()
             let ack = try r.u64()
             let payload = try r.blob()
-            return .data(seq: seq, ack: ack, payload: payload)
+            return .data(seq: seq, ack: ack, payload: payload, durable: (msgFlags & 1) == 1)
         case .ack:
             return .ack(ack: try r.u64())
         case .reset:

@@ -25,31 +25,47 @@ Every frame begins with `B1 01 <type>`.
 
 Each fixture: a logical frame, its field values, and the exact bytes.
 
-### F1 — HELLO, cold consumer (nothing received yet)
+### F1 — HELLO, cold consumer (nothing received yet, durable not supported)
 ```
-frame  : HELLO { epoch: "a", recvEpoch: "", recvCursor: 0 }
-bytes  : B1 01 01  01 61  00  00 00 00 00 00 00 00 00
-          └header┘  │└"a"  │   └──── u64 recvCursor=0 ────┘
-                    len=1   len=0 (empty recvEpoch)
-```
-
-### F2 — HELLO, warm resume
-```
-frame  : HELLO { epoch: "node-7", recvEpoch: "phone-3", recvCursor: 42 }
-bytes  : B1 01 01  06 6E6F64652D37  07 70686F6E652D33  00 00 00 00 00 00 00 2A
+frame  : HELLO { epoch: "a", recvEpoch: "", recvCursor: 0, durableSupported: false, maxRetentionMs: 0 }
+bytes  : B1 01 01  01 61  00  00 00 00 00 00 00 00 00  00  00 00 00 00 00 00 00 00
+          └header┘  │└"a"  │   └──── u64 recvCursor=0 ────┘ │  └── u64 maxRetentionMs=0 ──┘
+                    len=1   len=0                        durFlags=0
 ```
 
-### F3 — DATA, first message, no ack
+### F2 — HELLO, warm resume (durable not supported)
 ```
-frame  : DATA { seq: 1, ack: 0, payload: 0x DE AD BE EF }
-bytes  : B1 01 02  00 00 00 00 00 00 00 01  00 00 00 00 00 00 00 00  00 00 00 04  DEADBEEF
-          └header┘  └──── u64 seq=1 ─────┘  └──── u64 ack=0 ─────┘  └u32 len=4┘ └payload┘
+frame  : HELLO { epoch: "node-7", recvEpoch: "phone-3", recvCursor: 42, durableSupported: false, maxRetentionMs: 0 }
+bytes  : B1 01 01  06 6E6F64652D37  07 70686F6E652D33  00 00 00 00 00 00 00 2A  00  00 00 00 00 00 00 00 00
+```
+
+### F2b — HELLO, durable-supported endpoint (30-day retention)
+```
+frame  : HELLO { epoch: "head-1", recvEpoch: "", recvCursor: 0, durableSupported: true, maxRetentionMs: 2592000000 }
+note   : durFlags bit 0 = 1; 2592000000 ms = 30 days = 0x9A7EC800
+bytes  : B1 01 01  06 686561642D31  00  00 00 00 00 00 00 00 00  01  00 00 00 00 9A 7E C8 00
+                                                              durFlags=1  └ maxRetentionMs ┘
+```
+
+### F3 — DATA, first message, no ack, not durable
+```
+frame  : DATA { seq: 1, ack: 0, payload: 0x DE AD BE EF, durable: false }
+bytes  : B1 01 02  00  00 00 00 00 00 00 00 01  00 00 00 00 00 00 00 00  00 00 00 04  DEADBEEF
+          └header┘ │   └──── u64 seq=1 ─────┘  └──── u64 ack=0 ─────┘  └u32 len=4┘ └payload┘
+              msgFlags=0
+```
+
+### F3b — DATA, durable bit set
+```
+frame  : DATA { seq: 7, ack: 0, payload: 0x DE AD BE EF, durable: true }
+bytes  : B1 01 02  01  00 00 00 00 00 00 00 07  00 00 00 00 00 00 00 00  00 00 00 04  DEADBEEF
+              msgFlags=1 (durable)
 ```
 
 ### F4 — DATA, with ack and empty payload
 ```
-frame  : DATA { seq: 258, ack: 257, payload: <empty> }
-bytes  : B1 01 02  00 00 00 00 00 00 01 02  00 00 00 00 00 00 01 01  00 00 00 00
+frame  : DATA { seq: 258, ack: 257, payload: <empty>, durable: false }
+bytes  : B1 01 02  00  00 00 00 00 00 00 01 02  00 00 00 00 00 00 01 01  00 00 00 00
 ```
 
 ### F5 — ACK
@@ -72,8 +88,8 @@ bytes  : B1 01 05  00 00 00 00 00 00 00 2A
 
 ### F8 — DATA with a large seq (64-bit boundary sanity)
 ```
-frame  : DATA { seq: 72057594037927937 (0x0100000000000001), ack: 0, payload: 0x41 }
-bytes  : B1 01 02  01 00 00 00 00 00 00 01  00 00 00 00 00 00 00 00  00 00 00 01  41
+frame  : DATA { seq: 72057594037927937 (0x0100000000000001), ack: 0, payload: 0x41, durable: false }
+bytes  : B1 01 02  00  01 00 00 00 00 00 00 01  00 00 00 00 00 00 00 00  00 00 00 01  41
 ```
 
 ### F9 — HELLO with multibyte-UTF8 epoch (length is in BYTES, not chars)

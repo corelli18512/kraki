@@ -8,6 +8,7 @@
 
 import {
   DEFAULT_PARAMS,
+  type DurableConfig,
   type Effect,
   type EndpointOptions,
   LinkState,
@@ -21,10 +22,14 @@ import { decodeFrame, encodeFrame, type Frame } from './wire.js';
 interface OutboxEntry {
   seq: Seq;
   payload: Payload;
+  /** Sent with durable:true — persist across restart (only if we support it). */
+  durable: boolean;
+  /** When first assigned a send time, for retention expiry (ms). */
+  sentAt: number;
 }
 
 // Isomorphic base64 for snapshot payloads (runs in Node AND the browser). The
-// core must not depend on Buffer — the arm imports this in a browser context.
+// core must not depend on Buffer — a browser caller imports this too.
 function b64encode(u: Uint8Array): string {
   let s = '';
   for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]!);
@@ -53,35 +58,56 @@ export class Endpoint {
   private recvCursor: Seq = 0n;
   private peerEpoch = '';
 
+  /** My durability capability (advertised in my HELLO). */
+  private readonly durable: DurableConfig;
+  /** Whether the peer advertised it can persist (learned from its HELLO). */
+  private peerDurableSupported = false;
+
   private state: LinkState = LinkState.Disconnected;
   private lastRecvAt = 0;
   private lastSendAt = 0;
   private reconnectAt: number | null = null;
   private attempt = 0;
+  /** Last-known clock (ms), updated on every timed input. Used to stamp sentAt
+   *  on send() which has no `now` of its own. */
+  private clock = 0;
 
   constructor(opts: EndpointOptions) {
     this.params = { ...DEFAULT_PARAMS, ...(opts.params ?? {}) };
     this.random = opts.random ?? Math.random;
     this.epoch = opts.epoch;
+    this.durable = opts.durable ?? { supported: false };
     if (opts.restore) this.loadSnapshot(opts.restore);
   }
 
   // ── Inputs ──────────────────────────────────────────────────────────────
 
-  send(payload: Payload): { seq: Seq; effects: Effect[] } {
+  send(payload: Payload, opts?: { durable?: boolean }): { seq: Seq; effects: Effect[] } {
     this.sendSeq += 1n;
     const seq = this.sendSeq;
+    // A message is durable only if the app asked AND we can persist. If the app
+    // asked but we can't, it degrades to a normal in-memory entry (spec §8.1).
+    const durable = opts?.durable === true && this.durable.supported;
     // Outbox entry created BEFORE any transmit (spec §3 ordering rule): the
     // payload is resendable before it is ever entrusted to the wire.
-    this.outbox.push({ seq, payload });
+    this.outbox.push({ seq, payload, durable, sentAt: this.clock });
     const effects: Effect[] = [];
+    // Persist to durable storage immediately (before transmit), so it survives a
+    // restart even if the socket is down right now. Only seq+bytes — no target.
+    if (durable) effects.push({ t: 'store', seq, payload });
     if (this.state === LinkState.Connected) {
-      effects.push(this.transmit({ t: 'data', seq, ack: this.recvCursor, payload }));
+      // The DATA durable bit is set only if the PEER can persist it; otherwise
+      // it's pointless on the wire. (Our own `durable` above governs OUR outbox
+      // persistence; this bit tells the peer to persist on ITS side if it's the
+      // one that will hold the message onward — e.g. a store-and-forward node.)
+      const wireDurable = opts?.durable === true && this.peerDurableSupported;
+      effects.push(this.transmit({ t: 'data', seq, ack: this.recvCursor, payload, durable: wireDurable }));
     }
     return { seq, effects };
   }
 
   onConnected(now: number): Effect[] {
+    this.clock = now;
     this.state = LinkState.Connected;
     this.attempt = 0;
     this.reconnectAt = null;
@@ -89,7 +115,14 @@ export class Endpoint {
     const effects: Effect[] = [];
     effects.push(
       this.transmit(
-        { t: 'hello', epoch: this.epoch, recvEpoch: this.peerEpoch, recvCursor: this.recvCursor },
+        {
+          t: 'hello',
+          epoch: this.epoch,
+          recvEpoch: this.peerEpoch,
+          recvCursor: this.recvCursor,
+          durableSupported: this.durable.supported,
+          maxRetentionMs: BigInt(this.durable.maxRetentionMs ?? 0),
+        },
         now,
       ),
     );
@@ -97,6 +130,7 @@ export class Endpoint {
   }
 
   onDisconnected(now: number): Effect[] {
+    this.clock = now;
     this.state = LinkState.Disconnected;
     this.attempt += 1;
     this.reconnectAt = now + this.backoffDelay(this.attempt);
@@ -104,6 +138,7 @@ export class Endpoint {
   }
 
   onBytes(bytes: Uint8Array, now: number): Effect[] {
+    this.clock = now;
     const frame = decodeFrame(bytes);
     if (frame === null) return []; // malformed ⇒ ignore (spec §5.0)
     this.lastRecvAt = now;
@@ -127,7 +162,11 @@ export class Endpoint {
   }
 
   onTick(now: number): Effect[] {
+    this.clock = now;
     const effects: Effect[] = [];
+    // Expire durable outbox entries older than our retention window: drop them
+    // and tell the adapter to delete them from disk. They will never be resent.
+    this.expireDurable(now, effects);
     if (this.state === LinkState.Connected) {
       if (now - this.lastSendAt >= this.params.heartbeatIntervalMs) {
         effects.push(this.transmit({ t: 'heartbeat', ack: this.recvCursor }, now));
@@ -142,6 +181,23 @@ export class Endpoint {
     return effects;
   }
 
+  /** Drop durable outbox entries past the retention window; emit unstore for
+   *  each so the adapter clears disk. Only runs when we have a finite retention
+   *  and are the durable-supported side. */
+  private expireDurable(now: number, effects: Effect[]): void {
+    const ttl = this.durable.maxRetentionMs ?? 0;
+    if (!this.durable.supported || ttl <= 0) return;
+    const expired = this.outbox.filter((e) => e.durable && now - e.sentAt >= ttl);
+    if (expired.length === 0) return;
+    // Remove expired entries. unstore floor = highest expired seq that is also
+    // contiguous from outboxBase is not required; we emit a precise unstore per
+    // the highest expired seq (adapter deletes ≤ that among durable ids it holds).
+    const expiredSeqs = new Set(expired.map((e) => e.seq));
+    this.outbox = this.outbox.filter((e) => !expiredSeqs.has(e.seq));
+    const highest = expired.reduce((m, e) => (e.seq > m ? e.seq : m), 0n);
+    effects.push({ t: 'unstore', seqUpTo: highest });
+  }
+
   // ── Frame handlers ────────────────────────────────────────────────────────
 
   private onHello(
@@ -150,6 +206,8 @@ export class Endpoint {
   ): Effect[] {
     const effects: Effect[] = [];
     this.peerEpoch = f.epoch;
+    // Learn whether the peer can persist — governs the wire durable bit we set.
+    this.peerDurableSupported = f.durableSupported;
 
     // (a) Peer resuming against an epoch we no longer have (we cold-started).
     if (f.recvEpoch !== '' && f.recvEpoch !== this.epoch) {
@@ -160,10 +218,11 @@ export class Endpoint {
       return effects;
     }
 
-    // (b) Prune what the peer already has, then resend the rest.
+    // (b) Prune what the peer already has, then resend the rest — announcing any
+    // gap at the head of our outbox (e.g. a non-durable entry lost in a restart).
     if (f.recvCursor >= this.outboxBase) {
       this.pruneOutbox(f.recvCursor, effects);
-      this.resendFrom(f.recvCursor + 1n, effects, now);
+      this.resendWithGapAnnounce(f.recvCursor + 1n, effects, now);
     } else {
       // Peer is behind our oldest retained seq — we pruned what it needs.
       effects.push(
@@ -202,9 +261,31 @@ export class Endpoint {
     const effects: Effect[] = [];
     this.pruneOutbox(peerCursor, effects);
     if (peerCursor < this.sendSeq) {
-      this.resendFrom(peerCursor + 1n, effects, now);
+      this.resendWithGapAnnounce(peerCursor + 1n, effects, now);
     }
     return effects;
+  }
+
+  /** Resend outbox entries from `fromSeq`, but first announce (via RESET) any
+   *  gap at the head: if our oldest retained seq is beyond `fromSeq`, we can
+   *  never fill `fromSeq..oldest-1` (they were discarded — e.g. a non-durable
+   *  entry lost in a restart). Without the RESET the peer treats the resend as a
+   *  hole, re-ACKs, and we livelock resending forever. */
+  private resendWithGapAnnounce(fromSeq: Seq, effects: Effect[], now: number): void {
+    const oldest = this.oldestRetainedSeq();
+    if (oldest !== null && oldest > fromSeq) {
+      effects.push(this.transmit({ t: 'reset', epoch: this.epoch, oldest }, now));
+    }
+    this.resendFrom(fromSeq, effects, now);
+  }
+
+  /** Lowest seq still held in the outbox, or null if empty. */
+  private oldestRetainedSeq(): Seq | null {
+    let min: Seq | null = null;
+    for (const e of this.outbox) {
+      if (min === null || e.seq < min) min = e.seq;
+    }
+    return min;
   }
 
   private onReset(f: Extract<Frame, { t: 'reset' }>): Effect[] {
@@ -223,8 +304,14 @@ export class Endpoint {
   private resendFrom(fromSeq: Seq, effects: Effect[], now: number): void {
     for (const e of this.outbox) {
       if (e.seq >= fromSeq) {
+        // Preserve durable intent on resend: the wire bit reflects whether the
+        // peer can persist, matching the original send.
+        const wireDurable = e.durable && this.peerDurableSupported;
         effects.push(
-          this.transmit({ t: 'data', seq: e.seq, ack: this.recvCursor, payload: e.payload }, now),
+          this.transmit(
+            { t: 'data', seq: e.seq, ack: this.recvCursor, payload: e.payload, durable: wireDurable },
+            now,
+          ),
         );
       }
     }
@@ -232,11 +319,15 @@ export class Endpoint {
 
   private pruneOutbox(ackSeq: Seq, effects?: Effect[]): void {
     if (ackSeq <= this.outboxBase) return;
+    // Any durable entries being pruned are now confirmed delivered — tell the
+    // adapter it may delete them from disk.
+    const hadDurable = this.outbox.some((e) => e.seq <= ackSeq && e.durable);
     this.outbox = this.outbox.filter((e) => e.seq > ackSeq);
     this.outboxBase = ackSeq;
     // Surface the confirmed delivery floor so the app can resolve/roll back
     // optimistic UI for messages it sent. Observational only.
     effects?.push({ t: 'acked', seqUpTo: ackSeq });
+    if (hadDurable) effects?.push({ t: 'unstore', seqUpTo: ackSeq });
   }
 
   /** Build a transmit effect and mark send activity. `now` optional for the
@@ -285,7 +376,12 @@ export class Endpoint {
       epoch: this.epoch,
       sendSeq: this.sendSeq.toString(),
       outboxBase: this.outboxBase.toString(),
-      outbox: this.outbox.map((e) => ({ seq: e.seq.toString(), payloadB64: b64encode(e.payload) })),
+      outbox: this.outbox.map((e) => ({
+        seq: e.seq.toString(),
+        payloadB64: b64encode(e.payload),
+        durable: e.durable,
+        sentAt: e.sentAt,
+      })),
       recvCursor: this.recvCursor.toString(),
       peerEpoch: this.peerEpoch,
     };
@@ -295,7 +391,12 @@ export class Endpoint {
     this.epoch = s.epoch;
     this.sendSeq = BigInt(s.sendSeq);
     this.outboxBase = BigInt(s.outboxBase);
-    this.outbox = s.outbox.map((e) => ({ seq: BigInt(e.seq), payload: b64decode(e.payloadB64) }));
+    this.outbox = s.outbox.map((e) => ({
+      seq: BigInt(e.seq),
+      payload: b64decode(e.payloadB64),
+      durable: e.durable ?? false,
+      sentAt: e.sentAt ?? 0,
+    }));
     this.recvCursor = BigInt(s.recvCursor);
     this.peerEpoch = s.peerEpoch;
   }

@@ -8,11 +8,25 @@ import XCTest
 /// See `spec/FIXTURES.md`.
 final class WireTests: XCTestCase {
 
+    /// A fixture field value: either a string (numbers/hex/epochs) or a bool
+    /// (durable flags). The shared wire.json mixes both.
+    enum FieldValue: Decodable {
+        case string(String)
+        case bool(Bool)
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if let b = try? c.decode(Bool.self) { self = .bool(b) }
+            else { self = .string(try c.decode(String.self)) }
+        }
+        var str: String { if case let .string(s) = self { return s }; return "" }
+        var bool: Bool { if case let .bool(b) = self { return b }; return false }
+    }
+
     struct Fixtures: Decodable {
         struct F: Decodable {
             let name: String
             let type: String
-            let fields: [String: String]
+            let fields: [String: FieldValue]
             let hex: String
         }
         struct M: Decodable {
@@ -37,18 +51,21 @@ final class WireTests: XCTestCase {
         switch f.type {
         case "hello":
             return .hello(
-                epoch: x["epoch"]!, recvEpoch: x["recvEpoch"]!,
-                recvCursor: UInt64(x["recvCursor"]!)!)
+                epoch: x["epoch"]!.str, recvEpoch: x["recvEpoch"]!.str,
+                recvCursor: UInt64(x["recvCursor"]!.str)!,
+                durableSupported: x["durableSupported"]?.bool ?? false,
+                maxRetentionMs: UInt64(x["maxRetentionMs"]?.str ?? "0")!)
         case "data":
             return .data(
-                seq: UInt64(x["seq"]!)!, ack: UInt64(x["ack"]!)!,
-                payload: unhex(x["payloadHex"]!))
+                seq: UInt64(x["seq"]!.str)!, ack: UInt64(x["ack"]!.str)!,
+                payload: unhex(x["payloadHex"]!.str),
+                durable: x["durable"]?.bool ?? false)
         case "ack":
-            return .ack(ack: UInt64(x["ack"]!)!)
+            return .ack(ack: UInt64(x["ack"]!.str)!)
         case "reset":
-            return .reset(epoch: x["epoch"]!, oldest: UInt64(x["oldest"]!)!)
+            return .reset(epoch: x["epoch"]!.str, oldest: UInt64(x["oldest"]!.str)!)
         case "heartbeat":
-            return .heartbeat(ack: UInt64(x["ack"]!)!)
+            return .heartbeat(ack: UInt64(x["ack"]!.str)!)
         default:
             fatalError("unknown fixture type \(f.type)")
         }
@@ -87,19 +104,19 @@ final class WireTests: XCTestCase {
 
     func testPreservesSeqBeyond53Bits() throws {
         let big: UInt64 = (1 << 63) + 12345
-        let f: Frame = .data(seq: big, ack: 0, payload: [])
+        let f: Frame = .data(seq: big, ack: 0, payload: [], durable: false)
         let rt = decodeFrame(try encodeFrame(f))
         XCTAssertEqual(rt, f)
     }
 
     func testStrLengthIsUTF8Bytes() throws {
-        let f: Frame = .hello(epoch: "🐙", recvEpoch: "", recvCursor: 0)
+        let f: Frame = .hello(epoch: "🐙", recvEpoch: "", recvCursor: 0, durableSupported: false, maxRetentionMs: 0)
         let rt = decodeFrame(try encodeFrame(f))
         XCTAssertEqual(rt, f)
     }
 
     func testRejectsEpochLongerThan255Bytes() {
-        let f: Frame = .hello(epoch: String(repeating: "x", count: 256), recvEpoch: "", recvCursor: 0)
+        let f: Frame = .hello(epoch: String(repeating: "x", count: 256), recvEpoch: "", recvCursor: 0, durableSupported: false, maxRetentionMs: 0)
         XCTAssertThrowsError(try encodeFrame(f))
     }
 }

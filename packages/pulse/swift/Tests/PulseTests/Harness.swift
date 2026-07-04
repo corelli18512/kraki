@@ -18,6 +18,8 @@ final class World {
     var resetsB: [(fromSeq: UInt64, peerEpoch: String)] = []
     var ackedA: [UInt64] = []
     var ackedB: [UInt64] = []
+    var storeA: [UInt64: Int] = [:]
+    var storeB: [UInt64: Int] = [:]
 
     private var linkUp = false
     private var linkAvailable = false
@@ -97,15 +99,15 @@ final class World {
     // MARK: - Application send
 
     @discardableResult
-    func sendA(_ payload: [UInt8]) -> UInt64 {
-        let (seq, effects) = a.send(payload)
+    func sendA(_ payload: [UInt8], durable: Bool = false) -> UInt64 {
+        let (seq, effects) = a.send(payload, durable: durable)
         pump(effects, .aToB)
         return seq
     }
 
     @discardableResult
-    func sendB(_ payload: [UInt8]) -> UInt64 {
-        let (seq, effects) = b.send(payload)
+    func sendB(_ payload: [UInt8], durable: Bool = false) -> UInt64 {
+        let (seq, effects) = b.send(payload, durable: durable)
         pump(effects, .bToA)
         return seq
     }
@@ -144,6 +146,15 @@ final class World {
         case let .acked(seqUpTo):
             if producedByA { ackedA.append(seqUpTo) }
             else { ackedB.append(seqUpTo) }
+        case let .store(seq, payload):
+            let marker = Int(payload.first ?? 255)
+            if producedByA { storeA[seq] = marker } else { storeB[seq] = marker }
+        case let .unstore(seqUpTo):
+            if producedByA {
+                for k in storeA.keys where k <= seqUpTo { storeA[k] = nil }
+            } else {
+                for k in storeB.keys where k <= seqUpTo { storeB[k] = nil }
+            }
         case .open:
             if linkAvailable {
                 connect()

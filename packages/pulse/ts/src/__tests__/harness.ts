@@ -44,6 +44,10 @@ export class World {
    *  for messages that side SENT). Last value = latest. */
   readonly ackedA: bigint[] = [];
   readonly ackedB: bigint[] = [];
+  /** Durable store effects observed at each side: entries the adapter would
+   *  persist. Keyed by seq → payload byte marker. unstore removes ≤ seqUpTo. */
+  readonly storeA = new Map<bigint, number>();
+  readonly storeB = new Map<bigint, number>();
 
   private linkUp = false;
   /** Whether a dial would currently succeed. Distinct from linkUp (currently
@@ -186,13 +190,13 @@ export class World {
 
   // ── Application send ───────────────────────────────────────────────────────
 
-  sendA(payload: Uint8Array): bigint {
-    const { seq, effects } = this.a.send(payload);
+  sendA(payload: Uint8Array, opts?: { durable?: boolean }): bigint {
+    const { seq, effects } = this.a.send(payload, opts);
     this.pump(effects, 'AtoB');
     return seq;
   }
-  sendB(payload: Uint8Array): bigint {
-    const { seq, effects } = this.b.send(payload);
+  sendB(payload: Uint8Array, opts?: { durable?: boolean }): bigint {
+    const { seq, effects } = this.b.send(payload, opts);
     this.pump(effects, 'BtoA');
     return seq;
   }
@@ -270,6 +274,20 @@ export class World {
       case 'acked':
         (producedByA ? this.ackedA : this.ackedB).push(e.seqUpTo);
         break;
+      case 'store': {
+        // Model the adapter persisting (seq → payload) to disk.
+        const store = producedByA ? this.storeA : this.storeB;
+        store.set(e.seq, e.payload[0] ?? -1);
+        break;
+      }
+      case 'unstore': {
+        // Delete durable entries with seq ≤ seqUpTo.
+        const store = producedByA ? this.storeA : this.storeB;
+        for (const seq of [...store.keys()]) {
+          if (seq <= e.seqUpTo) store.delete(seq);
+        }
+        break;
+      }
       case 'open':
         // Endpoint asked to dial. The two endpoints share one link, so a dial
         // from either side brings it up for both — but only once (idempotent):

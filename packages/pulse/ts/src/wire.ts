@@ -23,8 +23,18 @@ export const FrameType = {
 } as const;
 
 export type Frame =
-  | { t: 'hello'; epoch: string; recvEpoch: string; recvCursor: Seq }
-  | { t: 'data'; seq: Seq; ack: Seq; payload: Uint8Array }
+  | {
+      t: 'hello';
+      epoch: string;
+      recvEpoch: string;
+      recvCursor: Seq;
+      /** This endpoint can persist its outbox across a process restart. */
+      durableSupported: boolean;
+      /** How long a persisted entry is kept (ms). Meaningful only when
+       *  durableSupported; 0 otherwise. */
+      maxRetentionMs: Seq;
+    }
+  | { t: 'data'; seq: Seq; ack: Seq; payload: Uint8Array; durable: boolean }
   | { t: 'ack'; ack: Seq }
   | { t: 'reset'; epoch: string; oldest: Seq }
   | { t: 'heartbeat'; ack: Seq };
@@ -76,9 +86,12 @@ export function encodeFrame(f: Frame): Uint8Array {
       w.str(f.epoch);
       w.str(f.recvEpoch);
       w.u64(f.recvCursor);
+      w.u8(f.durableSupported ? 1 : 0);
+      w.u64(f.maxRetentionMs);
       break;
     case 'data':
       w.header(FrameType.DATA);
+      w.u8(f.durable ? 1 : 0);
       w.u64(f.seq);
       w.u64(f.ack);
       w.blob(f.payload);
@@ -165,13 +178,23 @@ export function decodeFrame(bytes: Uint8Array): Frame | null {
         const epoch = r.str();
         const recvEpoch = r.str();
         const recvCursor = r.u64();
-        return { t: 'hello', epoch, recvEpoch, recvCursor };
+        const durFlags = r.u8();
+        const maxRetentionMs = r.u64();
+        return {
+          t: 'hello',
+          epoch,
+          recvEpoch,
+          recvCursor,
+          durableSupported: (durFlags & 1) === 1,
+          maxRetentionMs,
+        };
       }
       case FrameType.DATA: {
+        const msgFlags = r.u8();
         const seq = r.u64();
         const ack = r.u64();
         const payload = r.blob();
-        return { t: 'data', seq, ack, payload };
+        return { t: 'data', seq, ack, payload, durable: (msgFlags & 1) === 1 };
       }
       case FrameType.ACK:
         return { t: 'ack', ack: r.u64() };

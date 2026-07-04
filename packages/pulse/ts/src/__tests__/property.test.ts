@@ -174,3 +174,130 @@ describe('property: any fault interleaving preserves the core invariants', () =>
     );
   });
 });
+
+// ── Durable property: every durable message survives, even across a restart ──
+
+/** One step of a durable fault program. */
+type DurOp =
+  | { op: 'sendPlain' }
+  | { op: 'sendDurable' }
+  | { op: 'disconnect' }
+  | { op: 'reopen' }
+  | { op: 'restartA' }
+  | { op: 'advance'; ms: number };
+
+const durOpArb: fc.Arbitrary<DurOp> = fc.oneof(
+  fc.constant({ op: 'sendPlain' as const }),
+  fc.constant({ op: 'sendDurable' as const }),
+  fc.constant({ op: 'sendDurable' as const }), // weight durable higher
+  fc.constant({ op: 'disconnect' as const }),
+  fc.constant({ op: 'reopen' as const }),
+  fc.constant({ op: 'restartA' as const }),
+  fc.record({ op: fc.constant('advance' as const), ms: fc.integer({ min: 1, max: 40_000 }) }),
+);
+
+describe('property: durable messages survive any interleaving incl. restarts', () => {
+  it('every durable A→B message is eventually delivered exactly once; store drains', () => {
+    fc.assert(
+      fc.property(fc.array(durOpArb, { minLength: 1, maxLength: 50 }), (program) => {
+        const random = () => 0.5;
+        // A and B both durable-supported so the wire bit is honored and A stores.
+        let w = new World(
+          { epoch: 'A', random, durable: { supported: true } },
+          { epoch: 'B', random, durable: { supported: true } },
+        );
+        w.connect();
+        let markerN = 0;
+        const durableMarkers: number[] = []; // markers sent with durable:true
+        // Delivery history that PERSISTS across a restart of A (B is unaffected
+        // by A restarting, so what B already delivered must not be forgotten).
+        const deliveredHistory: Array<{ seq: bigint; marker: number }> = [];
+        let deliveredCount = 0;
+        const harvestDelivered = () => {
+          // Append any new deliveries from the current World's B.
+          for (let i = deliveredCount; i < w.deliveredB.length; i++) {
+            const d = w.deliveredB[i]!;
+            deliveredHistory.push({ seq: d.seq, marker: d.payload[0] ?? -1 });
+          }
+          deliveredCount = w.deliveredB.length;
+        };
+        // The adapter's durable disk for A — persists across a restart of A.
+        const disk = new Map<bigint, number>();
+        const syncDisk = () => {
+          // Fold the World's storeA into our persistent disk view.
+          for (const [seq, m] of w.storeA) disk.set(seq, m);
+          // Honor unstores: anything not in storeA and ≤ current base is gone.
+          for (const seq of [...disk.keys()]) if (!w.storeA.has(seq)) disk.delete(seq);
+        };
+
+        for (const step of program) {
+          switch (step.op) {
+            case 'sendPlain':
+              markerN += 1;
+              w.sendA(marker(markerN));
+              break;
+            case 'sendDurable':
+              markerN += 1;
+              durableMarkers.push(markerN);
+              w.sendA(marker(markerN), { durable: true });
+              break;
+            case 'disconnect':
+              w.disconnect();
+              break;
+            case 'reopen':
+              w.reopen();
+              break;
+            case 'advance':
+              w.advance(step.ms);
+              break;
+            case 'restartA': {
+              // A restarts: rebuild from snapshot + persisted disk. Non-durable
+              // in-flight entries are allowed to be lost; durable ones persist.
+              harvestDelivered(); // preserve what old-B delivered
+              syncDisk();
+              const snap = w.a.snapshot();
+              // Reconstruct A's outbox from the durable disk (what the adapter
+              // would reload): keep only durable entries in the snapshot.
+              const durableSnap = {
+                ...snap,
+                outbox: snap.outbox.filter((e) => e.durable),
+              };
+              const bSnap = w.b.snapshot();
+              w = new World(
+                { epoch: 'A', random, durable: { supported: true }, restore: durableSnap },
+                { epoch: 'B', random, durable: { supported: true }, restore: bSnap },
+              );
+              deliveredCount = 0; // fresh World's deliveredB starts empty
+              // Reseed the visible store from disk (adapter had it on disk).
+              for (const [seq, m] of disk) w.storeA.set(seq, m);
+              w.connect();
+              break;
+            }
+          }
+          syncDisk();
+        }
+
+        // Settle: heal + advance several heartbeat windows so everything drains.
+        w.heal();
+        for (let i = 0; i < 8; i++) w.advance(DEFAULT_PARAMS.heartbeatIntervalMs + 1000);
+        harvestDelivered(); // fold in the final World's deliveries
+
+        // INVARIANT: every durable marker was delivered to B, exactly once —
+        // counting deliveries ACROSS restarts (B is unaffected by A restarting).
+        const deliveredMarkers = deliveredHistory.map((d) => d.marker);
+        const deliveredSet = new Set(deliveredMarkers);
+        for (const m of durableMarkers) {
+          expect(deliveredSet.has(m), `durable marker ${m} lost`).toBe(true);
+        }
+        // Exactly once: no durable marker delivered twice.
+        for (const m of durableMarkers) {
+          const count = deliveredMarkers.filter((x) => x === m).length;
+          expect(count, `durable marker ${m} delivered ${count}×`).toBe(1);
+        }
+        // Store drains once everything is confirmed.
+        expect(w.storeA.size, 'durable store not drained').toBe(0);
+      }),
+      { numRuns: 1500 },
+    );
+  });
+});
