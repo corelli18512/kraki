@@ -299,10 +299,16 @@ importers:
       '@kraki/voice-broker':
         specifier: workspace:*
         version: link:../voice-broker
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
       ws:
         specifier: ^8.19.0
         version: 8.19.0
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
