@@ -10,7 +10,6 @@ import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
-import { PulseClient } from './pulse-client';
 
 const logger = createLogger('ws-client');
 
@@ -19,8 +18,6 @@ export class KrakiWSClient {
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
-  private pulse: PulseClient;
-  private pulseTick: ReturnType<typeof setInterval> | null = null;
 
   get url(): string { return this.transport.url; }
 
@@ -33,18 +30,6 @@ export class KrakiWSClient {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
 
-    // Pulse reliable-delivery layer (opt-in via VITE_KRAKI_PULSE=1).
-    this.pulse = new PulseClient(
-      {
-        myDeviceId: () => getStore().deviceId ?? null,
-        sendToDevice: (tentacleDeviceId, plaintext) =>
-          this.sendPulsePlaintextTo(tentacleDeviceId, plaintext),
-        deliver: (msg) => this.dispatchDelivered(msg),
-        now: () => Date.now(),
-      },
-      import.meta.env.VITE_KRAKI_PULSE === '1',
-    );
-
     // Visibility change listener removed — replay is now handled by tentacle,
     // not the relay. Tab focus/blur doesn't trigger relay-side replay anymore.
     this.transport = new KrakiTransport(
@@ -54,7 +39,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
-        onClose: () => { this.clearReplayTracking(); this.pulse.onDisconnected(); },
+        onClose: () => { this.clearReplayTracking(); },
       },
       url,
     );
@@ -72,14 +57,7 @@ export class KrakiWSClient {
 
   disconnect() {
     this.clearReplayTracking();
-    if (this.pulseTick) { clearInterval(this.pulseTick); this.pulseTick = null; }
     this.transport.disconnect();
-  }
-
-  /** Drive pulse heartbeat + liveness every 5s (finer than the 15s heartbeat). */
-  private startPulseTick() {
-    if (!this.pulse.isEnabled() || this.pulseTick) return;
-    this.pulseTick = setInterval(() => this.pulse.tick(), 5000);
   }
 
   send(msg: Record<string, unknown>) {
@@ -510,29 +488,7 @@ export class KrakiWSClient {
         onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
       }),
       getHandlers: () => this.handlers,
-      tryPulseFrame: (plaintext: string) => this.pulse.tryFrame(plaintext),
     };
-  }
-
-  /** Encrypt an already-serialized pulse plaintext and unicast to one tentacle. */
-  private sendPulsePlaintextTo(tentacleDeviceId: string, plaintext: string) {
-    this.encryption.encryptOutboundRaw(
-      plaintext,
-      tentacleDeviceId,
-      (m) => this.transport.send(m),
-    );
-  }
-
-  /** A pulse `deliver` — route the reliable message through the normal pipeline
-   *  exactly as if it had arrived un-pulsed. */
-  private dispatchDelivered(msg: InnerMessage) {
-    handleDataMessage(msg, {
-      cmdState: this.cmdState,
-      sendEncrypted: (m) => this.sendEncrypted(m),
-      onSessionList: (m) => this.handleSessionList(m),
-      onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
-    });
-    this.handlers.forEach((h) => h(msg as unknown as Message));
   }
 
   private handleMessage(msg: Message) {
@@ -553,9 +509,6 @@ export class KrakiWSClient {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
         });
-        // Resume pulse streams to all known tentacles + start the tick loop.
-        this.pulse.onConnected();
-        this.startPulseTick();
         break;
 
       case 'auth_challenge':
