@@ -26,6 +26,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
+import { TentaclePulse } from './tentacle-pulse.js';
 
 const logger = createLogger('relay-client');
 
@@ -161,8 +162,20 @@ export class RelayClient {
     this.options = options;
     this.keyManager = keyManager ?? null;
     this.attachmentStore = attachmentStore;
+    // Per-hop pulse endpoint to the relay (opt-in via KRAKI_PULSE=1).
+    this.pulse = new TentaclePulse(
+      {
+        now: () => Date.now(),
+        sendPulseFrame: (pulseB64) => this.sendPulseEnvelope(pulseB64),
+        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
+      },
+      process.env.KRAKI_PULSE === '1',
+      `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
+    );
     this.wireAdapterEvents();
   }
+
+  private readonly pulse: TentaclePulse;
 
   private readonly attachmentStore?: import('./attachment-store.js').AttachmentStore;
 
@@ -300,6 +313,7 @@ export class RelayClient {
       this.ws = null;
       logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
+      this.pulse.onDisconnected();
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -369,6 +383,8 @@ export class RelayClient {
       }
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
+      // Bring up the pulse endpoint to the relay (resume the stream).
+      this.pulse.onConnected();
       // Initialize events watcher for imported sessions
       this.initEventsWatcher();
       // Process queued messages from the relay BEFORE broadcasting session list
@@ -468,6 +484,14 @@ export class RelayClient {
 
     // Incoming encrypted messages from apps — decrypt and handle inner message
     if ((msg.type === 'unicast' || msg.type === 'broadcast') && this.keyManager && this.authInfo) {
+      // Pulse-framed? Feed the frame to our endpoint; a `deliver` will call
+      // handlePulseDelivered with the blob to decrypt. `keys` come with it.
+      if (this.pulse.isEnabled() && typeof msg.pulse === 'string') {
+        this.pulseInboundKeys = (msg.keys as Record<string, string>) ?? {};
+        this.pulse.onFrame(msg.pulse as string);
+        this.pulseInboundKeys = null;
+        return;
+      }
       try {
         const decrypted = decryptFromBlob(
           { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
@@ -626,36 +650,48 @@ export class RelayClient {
             });
           break;
         case 'approve':
+          // Broadcast the resolution only AFTER the adapter actually applies it,
+          // so arms are never told "approved" for a permission that failed /
+          // already timed out. (Adapter no-ops on an unknown/resolved id, so a
+          // pulse resend is safe.)
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
           break;
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
           break;
         case 'answer':
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, msg.payload.wasFreeform ?? false)
+            .then(() => {
+              this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToQuestion failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
             });
-          this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
           break;
         case 'kill_session':
           this.adapter.killSession(sessionId)
@@ -2044,17 +2080,29 @@ export class RelayClient {
       const plaintext = JSON.stringify(msg);
       const { blob, keys } = encryptToBlob(plaintext, recipients);
 
+      // Track last agent message for idle push preview (needed by both paths).
+      if (msg.type === 'agent_message' && msg.sessionId) {
+        const content = (msg.payload as Record<string, unknown>).content as string;
+        if (content) this.lastAgentContent.set(msg.sessionId as string, content);
+      }
+
+      // Pulse path: reliable types go through the per-hop pulse endpoint to head
+      // (head fans out + acks + durably holds for offline arms). The encrypted
+      // blob IS the pulse frame's payload; `keys` rides the envelope. Everything
+      // else (deltas, active, attachment_data) keeps the legacy broadcast.
+      if (this.pulse.isEnabled() && RelayClient.PERSISTENT_TYPES.has(msg.type as string)) {
+        this.pendingPulseKeys = keys; // handed to sendPulseEnvelope for this frame
+        this.pulse.send(blob);
+        this.pendingPulseKeys = null;
+        this.emitPushPreviewIfNeeded(msg, recipients);
+        return;
+      }
+
       const envelope: BroadcastEnvelope = {
         type: 'broadcast',
         blob,
         keys,
       };
-
-      // Track last agent message for idle push preview
-      if (msg.type === 'agent_message' && msg.sessionId) {
-        const content = (msg.payload as Record<string, unknown>).content as string;
-        if (content) this.lastAgentContent.set(msg.sessionId as string, content);
-      }
 
       // Build encrypted push preview for notification-worthy messages
       let previewSummary: string | undefined;
@@ -2075,6 +2123,69 @@ export class RelayClient {
       this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
+    }
+  }
+
+  /** Keys map for the pulse frame currently being sent (set by sendEncrypted,
+   *  consumed by sendPulseEnvelope). Per-frame, synchronous. */
+  private pendingPulseKeys: Record<string, string> | null = null;
+
+  /** Put a pulse frame on the wire as a broadcast envelope: head reads `pulse`
+   *  for transport, `keys` for fan-out; `blob` is empty (payload is in `pulse`). */
+  private sendPulseEnvelope(pulseB64: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const envelope = {
+      type: 'broadcast',
+      pulse: pulseB64,
+      blob: '',
+      keys: this.pendingPulseKeys ?? {},
+    };
+    this.ws.send(JSON.stringify(this.withAck(envelope as Record<string, unknown>)));
+  }
+
+  /** A reliable consumer message was delivered in order by pulse (arm→tentacle).
+   *  `blobB64` is the encrypted blob; decrypt + dispatch as usual. */
+  private handlePulseDelivered(blobB64: string): void {
+    if (!this.keyManager || !this.authInfo) return;
+    try {
+      const decrypted = decryptFromBlob(
+        { blob: blobB64, keys: this.pulseInboundKeys ?? {} },
+        this.authInfo.deviceId,
+        this.keyManager.getKeyPair().privateKey,
+      );
+      this.handleConsumerMessage(JSON.parse(decrypted) as ConsumerMessage);
+    } catch (err) {
+      logger.error({ err }, 'Pulse delivered payload decrypt failed');
+    }
+  }
+
+  /** Keys from the inbound pulse envelope currently being processed. */
+  private pulseInboundKeys: Record<string, string> | null = null;
+
+  /** Emit a push preview for notification-worthy reliable messages (pulse path
+   *  covers online delivery; offline arms are reached by push + pulse durable). */
+  private emitPushPreviewIfNeeded(msg: Partial<ProducerMessage>, recipients: RecipientKey[]): void {
+    let previewSummary: string | undefined;
+    if (msg.type === 'permission') {
+      previewSummary = (msg.payload as Record<string, unknown>).description as string;
+    } else if (msg.type === 'question') {
+      previewSummary = (msg.payload as Record<string, unknown>).question as string;
+    } else if (msg.type === 'idle') {
+      previewSummary = this.lastAgentContent.get(msg.sessionId as string);
+    }
+    if (!previewSummary || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
+      const previewBlob = encryptToBlob(preview, recipients);
+      const envelope = {
+        type: 'broadcast',
+        blob: previewBlob.blob,
+        keys: previewBlob.keys,
+        pushPreview: { blob: previewBlob.blob, keys: previewBlob.keys },
+      };
+      this.ws.send(JSON.stringify(this.withAck(envelope as Record<string, unknown>)));
+    } catch (err) {
+      logger.debug({ err }, 'Pulse push-preview emit failed');
     }
   }
 
@@ -2251,6 +2362,8 @@ export class RelayClient {
     this.staleCheckLastTickAt = 0;
     this.staleCheckTimer = setInterval(() => {
       const now = Date.now();
+      // Drive pulse heartbeat + liveness (5s tick, finer than 15s heartbeat).
+      this.pulse.tick();
       // Tick instrumentation: detect timer drift / event-loop block
       if (this.staleCheckLastTickAt > 0) {
         const tickDrift = now - this.staleCheckLastTickAt - RelayClient.STALE_CHECK_INTERVAL;

@@ -1,0 +1,96 @@
+/**
+ * TentaclePulse — the tentacle's single per-hop pulse endpoint to the relay.
+ *
+ * pulse is a reliable-WebSocket-replacement layer. The tentacle has exactly one
+ * WebSocket (to head), so it runs exactly one {@link Endpoint} here. Reliable
+ * producer messages (encrypted to an opaque blob) are handed to the endpoint;
+ * the resulting pulse frame travels in the envelope `pulse` field. head (a pulse
+ * endpoint on its side) acks, and — crucially — fans the payload out to each arm
+ * via head's own per-arm endpoints. So the tentacle no longer fans out itself;
+ * it sends ONE reliable stream to head.
+ *
+ * Not durable-supported: the tentacle is the "should-always-be-online" side; the
+ * relay holds durable messages for offline arms, not the tentacle.
+ */
+
+import { type Effect, Endpoint } from '@kraki/pulse';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('pulse');
+
+export interface TentaclePulseHost {
+  /** Send a pulse frame to the relay as a broadcast envelope (head fans out). */
+  sendPulseFrame(pulseB64: string): void;
+  /** A reliable payload was delivered in order — hand the decrypted-ready blob
+   *  (a base64 blob string) back to the normal inbound handler. */
+  onDelivered(blobB64: string): void;
+  now(): number;
+}
+
+const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64');
+const unb64 = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
+
+export class TentaclePulse {
+  private endpoint: Endpoint;
+
+  constructor(
+    private readonly host: TentaclePulseHost,
+    private readonly enabled: boolean,
+    epoch: string,
+  ) {
+    this.endpoint = new Endpoint({
+      epoch,
+      durable: { supported: false },
+    });
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Send a reliable message (already encrypted to `blobB64`) via pulse. */
+  send(blobB64: string): void {
+    const { effects } = this.endpoint.send(unb64(blobB64));
+    this.run(effects);
+  }
+
+  /** The relay connection is up — resume the stream. */
+  onConnected(): void {
+    this.run(this.endpoint.onConnected(this.host.now()));
+  }
+
+  /** The relay connection dropped. */
+  onDisconnected(): void {
+    this.endpoint.onDisconnected(this.host.now());
+  }
+
+  /** An inbound pulse frame arrived from the relay. */
+  onFrame(pulseB64: string): void {
+    this.run(this.endpoint.onBytes(unb64(pulseB64), this.host.now()));
+  }
+
+  /** Periodic tick (heartbeat + liveness). */
+  tick(): void {
+    this.run(this.endpoint.onTick(this.host.now()));
+  }
+
+  private run(effects: Effect[]): void {
+    for (const e of effects) {
+      switch (e.t) {
+        case 'transmit':
+          this.host.sendPulseFrame(b64(e.bytes));
+          break;
+        case 'deliver':
+          // The delivered payload is the encrypted blob bytes → base64 back to
+          // the normal decrypt+dispatch path.
+          this.host.onDelivered(b64(e.payload));
+          break;
+        case 'reset-inbound':
+          logger.warn({ fromSeq: String(e.fromSeq) }, 'pulse reset-inbound (relay stream reset)');
+          break;
+        // acked/store/unstore/open/close: nothing for the tentacle to do here
+        // (not durable-supported; link lifecycle driven explicitly).
+      }
+    }
+  }
+}
