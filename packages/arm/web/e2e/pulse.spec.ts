@@ -3,16 +3,16 @@ import { MockRelayServer } from './helpers/mock-ws-server';
 import type { WebSocket } from 'ws';
 
 /**
- * Pulse-enabled browser smoke — the real web arm, built with VITE_KRAKI_PULSE=1,
- * must still boot, connect, authenticate, and render a live session.
+ * Pulse-enabled browser pass — the real web arm, built with VITE_KRAKI_PULSE=1.
  *
- * The mock relay speaks PLAINTEXT (no E2E), so messages arrive un-pulse-framed;
- * the arm's PulseClient.tryFrame() returns false for them and they flow through
- * the normal pipeline. This verifies the crucial property that turning pulse ON
- * does not break the existing browser transport/auth/render path — the
- * regression risk of the integration. (End-to-end pulse resume-across-disconnect
- * is proven deterministically in packages/tests/pulse-integration.test.ts, which
- * exercises the real E2E crypto path pulse frames actually ride.)
+ * The mock relay speaks the LEGACY plaintext envelope (no E2E, no `pulse`
+ * field), so inbound messages have no pulse frame and flow through the arm's
+ * legacy path unchanged. This proves the key regression property: turning pulse
+ * ON does not break the browser boot / auth / render pipeline.
+ *
+ * (The full per-hop pulse path with real E2E crypto — tentacle ⇄ head hub ⇄ app,
+ * durable store, head restart — is proven in packages/tests/pulse-e2e.test.ts
+ * and packages/head/src/__tests__/pulse-hub.test.ts against real servers.)
  */
 
 const SESSION_ID = 'session-pulse';
@@ -64,8 +64,8 @@ test.describe('pulse-enabled build', () => {
     await sessionCard.click();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 3000 });
 
-    // A live agent_message (plaintext, non-pulse) still renders — pulse ON must
-    // not swallow or break normal messages.
+    // A live agent_message (legacy plaintext, no pulse frame) still renders —
+    // pulse ON must not swallow or break normal messages.
     server.sendMessage(ws, {
       type: 'agent_message',
       sessionId: SESSION_ID,
