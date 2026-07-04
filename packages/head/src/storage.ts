@@ -101,6 +101,13 @@ const SCHEMA_VERSION = 8;
 export class Storage {
   private db: Database.Database;
 
+  /** Raw SQLite handle for adjacent subsystems (e.g. the pulse hub's own
+   *  tables). Same file + connection, so writes are transactionally consistent
+   *  with the users/devices/pending tables. */
+  get rawDb(): Database.Database {
+    return this.db;
+  }
+
   private static hashSecret(secret: string): string {
     return createHash('sha256').update(secret).digest('hex');
   }

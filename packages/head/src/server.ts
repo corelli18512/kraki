@@ -9,6 +9,7 @@ import type {
   VoiceResource, VoiceCapability,
 } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { PulseHub } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
@@ -189,6 +190,9 @@ export class HeadServer {
   private clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setInterval> | null = null;
+  /** Per-hop pulse hub (opt-in via KRAKI_PULSE=1). Null ⇒ legacy path only. */
+  private pulseHub: PulseHub | null = null;
+  private pulseTickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
     this.storage = storage;
@@ -200,6 +204,18 @@ export class HeadServer {
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.startPingInterval();
     this.startRetryInterval();
+
+    // Pulse per-hop reliable delivery (opt-in). Shares the Storage SQLite file.
+    if (process.env.KRAKI_PULSE === '1') {
+      this.pulseHub = new PulseHub(this.storage.rawDb, {
+        now: () => Date.now(),
+        sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
+      });
+      this.pulseHub.recoverOnBoot();
+      getLogger().info('Pulse hub enabled (KRAKI_PULSE=1)');
+      // Drive pulse heartbeat/liveness/durable-expiry every 5s.
+      this.pulseTickTimer = setInterval(() => this.pulseHub?.tick(), 5_000);
+    }
 
     // Expire old pending messages on startup
     const expired = this.storage.expirePending();
@@ -569,6 +585,7 @@ export class HeadServer {
           try { this.storage.touchDeviceLastSeen(disconnectedDeviceId); } catch { /* storage may be closed */ }
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
+          this.pulseHub?.onDeviceDisconnected(disconnectedDeviceId);
           logger.info('Device disconnected', {
             deviceId: disconnectedDeviceId,
             closeCode: code,
@@ -670,6 +687,15 @@ export class HeadServer {
     }
 
     if (msg.type === 'unicast') {
+      // Pulse-framed envelope? The hub (a pulse endpoint on each hop) handles
+      // reliable delivery + durable store-and-forward. Legacy path untouched.
+      if (this.pulseHub && typeof msg.pulse === 'string' && state.deviceId) {
+        this.pulseHub.onPulseEnvelope(state.deviceId, {
+          pulse: msg.pulse as string,
+          to: msg.to as string,
+        });
+        return;
+      }
       if (!isValidUnicast(msg)) {
         this.sendError(ws, 'Invalid unicast: to, blob, keys required');
         return;
@@ -679,6 +705,12 @@ export class HeadServer {
     }
 
     if (msg.type === 'broadcast') {
+      // Pulse broadcast frames (control: hello/ack/heartbeat) are addressed to a
+      // specific hop via the hub too; a producer fans out per-device unicasts.
+      if (this.pulseHub && typeof msg.pulse === 'string' && state.deviceId) {
+        this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
+        return;
+      }
       if (!isValidBroadcast(msg)) {
         this.sendError(ws, 'Invalid broadcast: blob, keys required');
         return;
@@ -869,6 +901,18 @@ export class HeadServer {
   }
 
   // --- Routing ---
+
+  /** Send a pulse frame (control or forwarded data) to a device's socket, as a
+   *  minimal unicast envelope carrying only the `pulse` field. Returns true if
+   *  the device is online. Used by the PulseHub to reach endpoints. */
+  private sendPulseFrameTo(deviceId: string, pulseB64: string): boolean {
+    const ws = this.connections.get(deviceId);
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    // `to` lets the receiver's own pulse layer know which stream this is; blob
+    // is empty because the payload (if any) is inside the pulse frame.
+    ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
+    return true;
+  }
 
   private handleUnicast(ws: WebSocket, state: ClientState, msg: UnicastEnvelope): void {
     const logger = getLogger();
@@ -1170,6 +1214,7 @@ export class HeadServer {
     state.userId = user.userId;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
+    this.pulseHub?.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
@@ -1207,6 +1252,7 @@ export class HeadServer {
     state.userId = result.userId;
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
+    this.pulseHub?.onDeviceConnected(result.deviceId);
 
     logger.info('Device authenticated (via backend)', {
       deviceId: result.deviceId,
@@ -1379,6 +1425,7 @@ export class HeadServer {
     state.userId = user.id;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
+    this.pulseHub?.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated', {
       deviceId,
@@ -1919,6 +1966,10 @@ export class HeadServer {
     if (this.retryTimer) {
       clearInterval(this.retryTimer);
       this.retryTimer = null;
+    }
+    if (this.pulseTickTimer) {
+      clearInterval(this.pulseTickTimer);
+      this.pulseTickTimer = null;
     }
     for (const ws of this.clients.keys()) {
       ws.close();

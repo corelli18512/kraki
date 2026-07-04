@@ -141,6 +141,9 @@ importers:
       '@kraki/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@kraki/pulse':
+        specifier: workspace:*
+        version: link:../pulse/ts
       better-sqlite3:
         specifier: ^11.0.0
         version: 11.10.0
