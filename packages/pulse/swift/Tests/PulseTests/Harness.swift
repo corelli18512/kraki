@@ -137,7 +137,7 @@ final class World {
         switch e {
         case let .transmit(bytes):
             enqueue((dir: dir, bytes: bytes))
-        case let .deliver(seq, payload):
+        case let .deliver(seq, payload, _):
             if producedByA { deliveredA.append((seq, payload)) }
             else { deliveredB.append((seq, payload)) }
         case let .resetInbound(fromSeq, peerEpoch):

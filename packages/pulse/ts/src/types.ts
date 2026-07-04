@@ -24,7 +24,10 @@ export type Effect =
   /** Send these bytes as ONE message on the current link. */
   | { t: 'transmit'; bytes: Uint8Array }
   /** Hand this payload to the application — in order, exactly once. */
-  | { t: 'deliver'; seq: Seq; payload: Payload }
+  /** Hand this payload to the application — in order, exactly once. `durable`
+   *  echoes the sender's per-message durable flag, so a bridging application can
+   *  preserve the intent when forwarding onto another hop. Pure transport info. */
+  | { t: 'deliver'; seq: Seq; payload: Payload; durable: boolean }
   /** Begin establishing the link (dial). */
   | { t: 'open' }
   /** Tear down the current link (dead/stale). */

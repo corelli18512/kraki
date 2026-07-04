@@ -238,7 +238,7 @@ export class Endpoint {
     this.pruneOutbox(f.ack, effects); // peer piggybacks its receipt of our outbound
     if (f.seq === this.recvCursor + 1n) {
       this.recvCursor = f.seq;
-      effects.push({ t: 'deliver', seq: f.seq, payload: f.payload });
+      effects.push({ t: 'deliver', seq: f.seq, payload: f.payload, durable: f.durable });
     } else if (f.seq <= this.recvCursor) {
       // Duplicate (a resend because our earlier ack was lost). Re-advertise our
       // cursor so the sender learns we already have it and stops resending —

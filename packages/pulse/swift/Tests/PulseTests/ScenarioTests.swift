@@ -318,7 +318,7 @@ final class ScenarioTests: XCTestCase {
                 switch e {
                 case let .acked(seqUpTo) where from == "A":
                     ackedA.append(seqUpTo)
-                case let .deliver(_, payload) where from == "B":
+                case let .deliver(_, payload, _) where from == "B":
                     deliveredB.append(Int(payload.first ?? 255))
                 case let .transmit(bytes):
                     let fr = decodeFrame(bytes)

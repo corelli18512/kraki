@@ -37,7 +37,7 @@ final class DurableTests: XCTestCase {
             for e in effects {
                 if from == "A" { applyDisk(e) }
                 if case let .acked(s) = e, from == "A" { ackedA.append(s) }
-                if case let .deliver(_, payload) = e, from == "B" { deliveredB.append(Int(payload.first ?? 255)) }
+                if case let .deliver(_, payload, _) = e, from == "B" { deliveredB.append(Int(payload.first ?? 255)) }
                 if case let .transmit(bytes) = e {
                     if !linkUp { continue }
                     let fr = decodeFrame(bytes)

@@ -5,7 +5,10 @@ public enum Effect: Equatable {
     /// Send these bytes as ONE message on the current link.
     case transmit([UInt8])
     /// Hand this payload to the application — in order, exactly once.
-    case deliver(seq: UInt64, payload: [UInt8])
+    /// Hand this payload to the application — in order, exactly once. `durable`
+    /// echoes the sender's per-message durable flag so a bridging app can
+    /// preserve the intent when forwarding onto another hop. Pure transport info.
+    case deliver(seq: UInt64, payload: [UInt8], durable: Bool)
     /// Begin establishing the link (dial).
     case open
     /// Tear down the current link (dead/stale).
@@ -175,8 +178,8 @@ public final class Endpoint {
             return onHello(
                 epoch: epoch, recvEpoch: recvEpoch, recvCursor: recvCursor,
                 durableSupported: durableSupported, now: now)
-        case let .data(seq, ack, payload, _):
-            return onData(seq: seq, ack: ack, payload: payload, now: now)
+        case let .data(seq, ack, payload, durable):
+            return onData(seq: seq, ack: ack, payload: payload, durable: durable, now: now)
         case let .ack(ack):
             return onPeerCursor(ack, now)
         case let .reset(epoch, oldest):
@@ -244,12 +247,12 @@ public final class Endpoint {
         return effects
     }
 
-    private func onData(seq: UInt64, ack: UInt64, payload: [UInt8], now: Int) -> [Effect] {
+    private func onData(seq: UInt64, ack: UInt64, payload: [UInt8], durable: Bool, now: Int) -> [Effect] {
         var effects: [Effect] = []
         pruneOutbox(ack, &effects)  // peer piggybacks its receipt of our outbound
         if seq == recvCursor + 1 {
             recvCursor = seq
-            effects.append(.deliver(seq: seq, payload: payload))
+            effects.append(.deliver(seq: seq, payload: payload, durable: durable))
         } else if seq <= recvCursor {
             // Duplicate (a resend because our earlier ack was lost). Re-advertise
             // our cursor so the sender learns we have it and stops resending —
