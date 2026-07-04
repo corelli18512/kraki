@@ -10,14 +10,26 @@ import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
+import { ArmPulse } from './arm-pulse';
 
 const logger = createLogger('ws-client');
+
+/** Consumer message types that go through pulse reliable delivery. */
+const RELIABLE_CONSUMER_TYPES = new Set<string>([
+  'send_input', 'approve', 'deny', 'always_allow', 'answer',
+  'create_session', 'fork_session', 'kill_session', 'abort_session',
+  'set_session_mode', 'set_session_model', 'delete_session',
+]);
 
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
+  private pulse: ArmPulse;
+  private pulseTick: ReturnType<typeof setInterval> | null = null;
+  /** keys of the inbound pulse envelope currently being processed. */
+  private pulseInboundKeys: Record<string, string> | null = null;
 
   get url(): string { return this.transport.url; }
 
@@ -30,6 +42,18 @@ export class KrakiWSClient {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
 
+    // Per-hop pulse endpoint to the relay (opt-in via VITE_KRAKI_PULSE=1).
+    this.pulse = new ArmPulse(
+      {
+        now: () => Date.now(),
+        sendPulseFrame: (pulseB64, to) => this.sendPulseEnvelope(pulseB64, to),
+        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
+        onAcked: (seqUpTo) => this.cmdState.resolvePulseAcked(seqUpTo),
+      },
+      import.meta.env.VITE_KRAKI_PULSE === '1',
+      `arm:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    );
+
     // Visibility change listener removed — replay is now handled by tentacle,
     // not the relay. Tab focus/blur doesn't trigger relay-side replay anymore.
     this.transport = new KrakiTransport(
@@ -39,7 +63,7 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
-        onClose: () => { this.clearReplayTracking(); },
+        onClose: () => { this.clearReplayTracking(); this.pulse.onDisconnected(); },
       },
       url,
     );
@@ -73,9 +97,62 @@ export class KrakiWSClient {
 
   // --- Actions ---
 
-  /** Send through encryption layer as UnicastEnvelope. */
-  sendEncrypted(msg: Record<string, unknown>) {
+  /** Send through encryption layer as UnicastEnvelope. Reliable types route
+   *  through pulse (opt-in); everything else keeps the direct path. `onSeq`, if
+   *  given, receives the pulse send seq (for optimistic-rollback tracking), or
+   *  null when the message did not go through pulse. */
+  sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
+    if (this.pulse.isEnabled() && RELIABLE_CONSUMER_TYPES.has(msg.type as string)) {
+      const durable = msg.type === 'delete_session';
+      void this.encryption.encryptForTarget(msg).then((enc) => {
+        if (!enc) {
+          this.encryption.encryptOutbound(msg, (m) => this.transport.send(m));
+          onSeq?.(null);
+          return;
+        }
+        this.pulseSendKeys = enc.keys;
+        const seq = this.pulse.send(enc.blob, enc.to, durable);
+        this.pulseSendKeys = null;
+        onSeq?.(seq);
+      });
+      return;
+    }
     this.encryption.encryptOutbound(msg, (m) => this.transport.send(m));
+    onSeq?.(null);
+  }
+
+  /** Keys of the pulse frame currently being emitted (set by sendEncrypted). */
+  private pulseSendKeys: Record<string, string> | null = null;
+
+  /** Put a pulse frame on the wire as a unicast envelope to the tentacle via
+   *  head: head reads `pulse` for transport + `to` for the forward destination;
+   *  `keys` lets the destination decrypt; `blob` is empty (payload in `pulse`). */
+  private sendPulseEnvelope(pulseB64: string, to: string) {
+    this.transport.send({ type: 'unicast', to, pulse: pulseB64, blob: '', keys: this.pulseSendKeys ?? {} });
+  }
+
+  /** A reliable message was delivered in order by pulse (tentacle→arm). */
+  private handlePulseDelivered(blobB64: string) {
+    void this.encryption.decryptBlob(blobB64, this.pulseInboundKeys ?? {}).then((inner) => {
+      if (inner) this.dispatchInner(inner);
+    });
+  }
+
+  /** Route a decrypted inner message through the normal pipeline. */
+  private dispatchInner(inner: InnerMessage) {
+    handleDataMessage(inner, {
+      cmdState: this.cmdState,
+      sendEncrypted: (m) => this.sendEncrypted(m),
+      onSessionList: (m) => this.handleSessionList(m),
+      onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
+    });
+    this.handlers.forEach((h) => h(inner as unknown as Message));
+  }
+
+  /** Drive pulse heartbeat/liveness every 5s (finer than the 15s heartbeat). */
+  private startPulseTick() {
+    if (!this.pulse.isEnabled() || this.pulseTick) return;
+    this.pulseTick = setInterval(() => this.pulse.tick(), 5000);
   }
 
   /** Send through encryption layer as BroadcastEnvelope to all devices. */
@@ -113,19 +190,59 @@ export class KrakiWSClient {
   }
 
   approve(permissionId: string, sessionId: string) {
-    commands.approve(permissionId, sessionId, (msg) => this.sendEncrypted(msg));
+    this.optimisticPermission(permissionId, sessionId, () =>
+      commands.approve(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
+        this.registerRollback(seq, sessionId))),
+    );
   }
 
   deny(permissionId: string, sessionId: string) {
-    commands.deny(permissionId, sessionId, (msg) => this.sendEncrypted(msg));
+    this.optimisticPermission(permissionId, sessionId, () =>
+      commands.deny(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
+        this.registerRollback(seq, sessionId))),
+    );
   }
 
   alwaysAllow(permissionId: string, sessionId: string, toolKind?: string) {
-    commands.alwaysAllow(permissionId, sessionId, (msg) => this.sendEncrypted(msg), toolKind);
+    this.optimisticPermission(permissionId, sessionId, () =>
+      commands.alwaysAllow(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
+        this.registerRollback(seq, sessionId)), toolKind),
+    );
   }
 
   answer(questionId: string, sessionId: string, answerText: string, wasFreeform = false) {
-    commands.answer(questionId, sessionId, answerText, (msg) => this.sendEncrypted(msg), wasFreeform);
+    commands.answer(questionId, sessionId, answerText, (msg) => this.sendEncrypted(msg, (seq) =>
+      this.registerRollback(seq, sessionId)), wasFreeform);
+  }
+
+  /** Snapshot the permission before an optimistic resolve, so a failed pulse
+   *  send (no ack within the timeout) can roll the UI back and show an error. */
+  private optimisticPermission(permissionId: string, sessionId: string, apply: () => void) {
+    const store = getStore();
+    const snapshot = store.pendingPermissions?.get?.(permissionId);
+    this.rollbackSnapshots.set(sessionId + '/' + permissionId, () => {
+      // Restore the permission card as unresolved + surface an error.
+      if (snapshot) store.addPermission?.(snapshot);
+      store.setLastError?.('Action could not be delivered — tap to retry.');
+    });
+    apply();
+  }
+
+  private rollbackSnapshots = new Map<string, () => void>();
+
+  /** Register the most-recent optimistic action's rollback under its pulse seq.
+   *  On ack (resolvePulseAcked) the timer is cleared; on timeout it fires. */
+  private registerRollback(seq: bigint | null, _sessionId: string) {
+    if (seq === null) {
+      // Not pulse-routed (legacy path or no target) — clear any pending snapshot.
+      this.rollbackSnapshots.clear();
+      return;
+    }
+    const entries = [...this.rollbackSnapshots.values()];
+    this.rollbackSnapshots.clear();
+    this.cmdState.trackPulseSend(seq, () => {
+      for (const rb of entries) rb();
+    });
   }
 
   killSession(sessionId: string) {
@@ -498,9 +615,19 @@ export class KrakiWSClient {
     switch (msg.type) {
       // --- Encrypted envelopes ---
       case 'unicast':
-      case 'broadcast':
+      case 'broadcast': {
+        // Pulse-framed? Feed the frame to our endpoint; a `deliver` calls
+        // handlePulseDelivered with the blob to decrypt.
+        const env = msg as unknown as Record<string, unknown>;
+        if (this.pulse.isEnabled() && typeof env.pulse === 'string') {
+          this.pulseInboundKeys = (env.keys as Record<string, string>) ?? {};
+          this.pulse.onFrame(env.pulse as string);
+          this.pulseInboundKeys = null;
+          return;
+        }
         this.encryption.handleEncrypted(msg as RelayEnvelope, this.encryptionCallbacks());
         return;
+      }
 
       // --- Control messages ---
       case 'auth_ok':
@@ -509,6 +636,9 @@ export class KrakiWSClient {
           setStoredDeviceId: (id) => { this.transport.storedDeviceId = id; },
           drainEncryptedQueue: () => this.encryption.drainEncryptedQueue(this.encryptionCallbacks()),
         });
+        // Bring up the pulse endpoint + start the tick loop.
+        this.pulse.onConnected();
+        this.startPulseTick();
         break;
 
       case 'auth_challenge':

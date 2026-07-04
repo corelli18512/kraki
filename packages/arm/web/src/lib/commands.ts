@@ -8,6 +8,31 @@ export class CommandState {
   /** Count of in-flight mode changes per session (for echo suppression). */
   readonly pendingModeChanges = new Map<string, number>();
 
+  /** Optimistic actions awaiting a pulse ack, keyed by the pulse send seq.
+   *  On ack → resolve() finalizes (drop tracking). On timeout → rollback(). */
+  private pulsePending = new Map<bigint, { rollback: () => void; timer: ReturnType<typeof setTimeout> }>();
+
+  /** Register an optimistic action tracked by its pulse seq. If no ack arrives
+   *  within `timeoutMs`, `rollback` runs (revert UI + show error). */
+  trackPulseSend(seq: bigint, rollback: () => void, timeoutMs = 10_000): void {
+    const timer = setTimeout(() => {
+      this.pulsePending.delete(seq);
+      rollback();
+    }, timeoutMs);
+    this.pulsePending.set(seq, { rollback, timer });
+  }
+
+  /** The relay confirmed receipt up to `seqUpTo` — finalize those optimistic
+   *  actions (cancel their rollback timers). */
+  resolvePulseAcked(seqUpTo: bigint): void {
+    for (const [seq, entry] of this.pulsePending) {
+      if (seq <= seqUpTo) {
+        clearTimeout(entry.timer);
+        this.pulsePending.delete(seq);
+      }
+    }
+  }
+
   /** Clean up a failed request (called on server_error with requestId). */
   clearRequest(requestId: string): void {
     this.pendingPrompts.delete(requestId);

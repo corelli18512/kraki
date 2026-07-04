@@ -113,6 +113,48 @@ export class EncryptionHandler {
     }
   }
 
+  /** Encrypt a message for its target tentacle and return the parts WITHOUT
+   *  sending — so the pulse layer can carry the blob. Mirrors the unicast branch
+   *  of encryptOutbound. Returns null if no target/key. */
+  async encryptForTarget(
+    msg: Record<string, unknown>,
+  ): Promise<{ blob: string; keys: Record<string, string>; to: string } | null> {
+    if (!this.keyStore.isReady()) return null;
+    const store = getStore();
+    let targetDeviceId: string | undefined;
+    const sessionId = msg.sessionId as string | undefined;
+    const payload = msg.payload as Record<string, unknown> | undefined;
+    if (payload?.targetDeviceId) targetDeviceId = payload.targetDeviceId as string;
+    else if (sessionId) targetDeviceId = store.sessions.get(sessionId)?.deviceId;
+    if (!targetDeviceId) return null;
+    const targetDev = store.devices.get(targetDeviceId);
+    const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
+    if (!targetKey) return null;
+    try {
+      const { blob, keys } = await this.keyStore.encryptToBlob(JSON.stringify(msg), [
+        { deviceId: targetDeviceId, publicKeyBase64: targetKey },
+      ]);
+      return { blob, keys, to: targetDeviceId };
+    } catch (err) {
+      logger.error('encryptForTarget failed:', err);
+      return null;
+    }
+  }
+
+  /** Decrypt a raw blob+keys (used by the pulse inbound path). */
+  async decryptBlob(blob: string, keys: Record<string, string>): Promise<InnerMessage | null> {
+    const store = getStore();
+    const deviceId = store.deviceId;
+    if (!deviceId || !this.keyStore.isReady()) return null;
+    try {
+      const plaintext = await this.keyStore.decryptFromBlob({ blob, keys }, deviceId);
+      return JSON.parse(plaintext) as InnerMessage;
+    } catch (err) {
+      logger.error('decryptBlob failed:', err);
+      return null;
+    }
+  }
+
   /** Handle an incoming BroadcastEnvelope or UnicastEnvelope. */
   async handleEncrypted(
     msg: {
