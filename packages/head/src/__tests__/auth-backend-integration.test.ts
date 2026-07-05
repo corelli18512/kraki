@@ -1,29 +1,21 @@
 /**
  * Tests for the edge-mode auth path (authBackend configured).
  *
- * These specifically guard against bugs that were silently active for ~a
- * month after the multi-region migration:
+ * These specifically guard against a bug that was silently active for ~a
+ * month after the multi-region migration: the edge path did not merge local
+ * user preferences into the auth_ok user response — it returned the backend's
+ * user object verbatim. A user updating preferences via an edge would have
+ * their local prefs overwritten by the backend's stale view on next reconnect.
  *
- *  1. The edge head's local `pending_messages` table was never flushed on
- *     reconnect, because `handleBackendAuthResult` only used the auth
- *     backend's `pendingMessages` (which is always empty in delegated mode).
- *     Any unicasts the edge had queued for an offline device were silently
- *     dropped on reconnect.
- *
- *  2. The edge path also did not merge local user preferences into the
- *     auth_ok user response — it returned the backend's user object verbatim.
- *     A user updating preferences via an edge would have their local prefs
- *     overwritten by the backend's stale view on next reconnect.
- *
- * Both are now fixed by routing all three auth paths through a single
+ * Now fixed by routing all auth paths through a single
  * `completeAuthHandshake` helper.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
-import type { AuthMethod, DeviceInfo, UnicastEnvelope } from '@kraki/protocol';
+import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
 import type {
@@ -33,14 +25,11 @@ import type {
 // ── Minimal mock auth backend ───────────────────────────────
 
 /**
- * Mock auth backend that always succeeds for `open` and `pairing` and reports
- * an empty pendingMessages list (simulating a real edge where the remote
- * backend has no view into the edge's local pending queue).
+ * Mock auth backend that always succeeds for `open` and `pairing`
+ * (simulating a real edge that delegates auth to a remote backend).
  */
 class MockAuthBackend implements AuthBackend {
   private static seq = 0;
-  /** Override per call if needed (default: empty). */
-  backendPendingMessages: UnicastEnvelope[] = [];
   /** User identity returned to the head. */
   user: {
     id: string;
@@ -73,7 +62,6 @@ class MockAuthBackend implements AuthBackend {
         encryptionKey: device.encryptionKey,
         online: false,
       }],
-      pendingMessages: this.backendPendingMessages,
     };
   }
 
@@ -163,65 +151,6 @@ async function connectEdge(port: number, deviceId: string, role: 'tentacle' | 'a
 }
 
 // ── Tests ───────────────────────────────────────────────────
-
-describe('Edge-mode auth: local pending_messages flush on reconnect', () => {
-  let env: EdgeTestEnv;
-  beforeEach(async () => { env = await createEdgeTestEnv(); });
-  afterEach(async () => { await env.cleanup(); });
-
-  it('delivers locally-queued pending messages alongside auth_ok', async () => {
-    // Pre-condition: head has 3 pending unicasts queued locally for dev_t1.
-    // (This is what happens when an arm sends a unicast to a tentacle that
-    // happens to be offline. handleUnicast → storage.insertPending.)
-    env.storage.insertPending('dev_t1', 'u_remote', JSON.stringify({
-      type: 'unicast', to: 'dev_t1', blob: 'envelope_1', keys: { 'dev_t1': 'k' },
-    }));
-    env.storage.insertPending('dev_t1', 'u_remote', JSON.stringify({
-      type: 'unicast', to: 'dev_t1', blob: 'envelope_2', keys: { 'dev_t1': 'k' },
-    }));
-    env.storage.insertPending('dev_t1', 'u_remote', JSON.stringify({
-      type: 'unicast', to: 'dev_t1', blob: 'envelope_3', keys: { 'dev_t1': 'k' },
-    }));
-
-    const { authOk } = await connectEdge(env.port, 'dev_t1');
-
-    expect(authOk.pendingMessages).toBeDefined();
-    const pending = authOk.pendingMessages as UnicastEnvelope[];
-    expect(pending).toHaveLength(3);
-    expect(pending.map(p => p.blob)).toEqual(['envelope_1', 'envelope_2', 'envelope_3']);
-
-    // Queue is now empty (flushPendingEnvelopes both reads AND deletes).
-    expect(env.storage.flushPending('dev_t1')).toHaveLength(0);
-  });
-
-  it('merges backend-supplied and locally-queued pending messages', async () => {
-    // Backend hands us one pending message…
-    env.backend.backendPendingMessages = [{
-      type: 'unicast', to: 'dev_t2', blob: 'from_backend', keys: { 'dev_t2': 'k' },
-    }];
-    // …and head has two queued locally.
-    env.storage.insertPending('dev_t2', 'u_remote', JSON.stringify({
-      type: 'unicast', to: 'dev_t2', blob: 'local_1', keys: { 'dev_t2': 'k' },
-    }));
-    env.storage.insertPending('dev_t2', 'u_remote', JSON.stringify({
-      type: 'unicast', to: 'dev_t2', blob: 'local_2', keys: { 'dev_t2': 'k' },
-    }));
-
-    const { authOk } = await connectEdge(env.port, 'dev_t2');
-
-    const pending = authOk.pendingMessages as UnicastEnvelope[];
-    expect(pending).toHaveLength(3);
-    // Backend's contribution comes first (preserving prior behavior),
-    // then local entries.
-    expect(pending[0].blob).toBe('from_backend');
-    expect(pending.slice(1).map(p => p.blob).sort()).toEqual(['local_1', 'local_2']);
-  });
-
-  it('omits pendingMessages from auth_ok when both queues are empty', async () => {
-    const { authOk } = await connectEdge(env.port, 'dev_t3');
-    expect(authOk.pendingMessages).toBeUndefined();
-  });
-});
 
 describe('Edge-mode auth: local preferences merged into user response', () => {
   let env: EdgeTestEnv;

@@ -8,7 +8,7 @@
  * locally or remotely — same code path for both standalone and connected mode.
  */
 
-import type { AuthMethod, DeviceInfo, DeviceSummary, UnicastEnvelope } from '@kraki/protocol';
+import type { AuthMethod, DeviceInfo, DeviceSummary } from '@kraki/protocol';
 import type { AuthUser } from './auth.js';
 
 // ── Result types ────────────────────────────────────────
@@ -27,7 +27,6 @@ export interface AuthResult {
     region?: string;
   };
   devices: DeviceSummary[];
-  pendingMessages: UnicastEnvelope[];
   githubClientId?: string;
   vapidPublicKey?: string;
 }
@@ -61,7 +60,7 @@ export type ChallengeOutcome = AuthChallengeResult | AuthRegionMismatch | AuthEr
 export interface AuthBackend {
   /**
    * Full auth flow (token-based methods: github_token, github_oauth, apikey, open, pairing).
-   * Returns the full auth result including device list and pending messages.
+   * Returns the full auth result including device list.
    */
   authenticate(
     auth: AuthMethod,

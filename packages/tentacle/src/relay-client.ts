@@ -131,15 +131,6 @@ export class RelayClient {
   /** How often to check for stale connection (ms) */
   private static readonly STALE_CHECK_INTERVAL = 5_000;
 
-  // ── Delivery assurance state (per-connection) ──────────────
-  /** Highest relaySeq received from head on this connection. Echoed back as
-   *  `ack` in outbound messages so head can prune its in-flight buffer. */
-  private lastReceivedRelaySeq = 0;
-  /** Recent relaySeqs already processed — used to silently drop duplicate
-   *  retries from head. Bounded; cleared on reconnect. */
-  private seenRelaySeqs = new Set<number>();
-  private static readonly RELAY_SEQ_DEDUP_WINDOW = 200;
-
   /** Called when relay state changes */
   onStateChange: ((state: RelayClientState) => void) | null = null;
   /** Called on auth success */
@@ -275,10 +266,6 @@ export class RelayClient {
     this.intentionalDisconnect = false;
     this.setState('connecting');
 
-    // Reset delivery-assurance state — relaySeq is per-connection.
-    this.lastReceivedRelaySeq = 0;
-    this.seenRelaySeqs.clear();
-
     const ws = new WebSocket(this.options.relayUrl);
     this.ws = ws;
 
@@ -299,8 +286,6 @@ export class RelayClient {
       this.lastActivityAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
-        // Dedup duplicate retries from head silently.
-        if (this.trackInboundRelaySeq(msg)) return;
         this.handleMessage(msg);
       } catch {
         // Ignore malformed messages from head
@@ -387,9 +372,6 @@ export class RelayClient {
       this.pulse.onConnected();
       // Initialize events watcher for imported sessions
       this.initEventsWatcher();
-      // Process queued messages from the relay BEFORE broadcasting session list
-      // so that deletes/mode changes are applied first
-      this.processPendingMessages(this.authInfo.pendingMessages);
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
       this.broadcastSessionList();
@@ -440,9 +422,7 @@ export class RelayClient {
     if (msg.type === 'ping') {
       logger.debug('Received JSON ping from relay');
       if (this.ws?.readyState === WebSocket.OPEN) {
-        const pong: Record<string, unknown> = { type: 'pong' };
-        if (this.lastReceivedRelaySeq > 0) pong.ack = this.lastReceivedRelaySeq;
-        this.ws.send(JSON.stringify(pong));
+        this.ws.send(JSON.stringify({ type: 'pong' }));
         logger.debug('Sent JSON pong to relay');
       } else {
         logger.warn({ readyState: this.ws?.readyState }, 'Could not pong — WS not open');
@@ -709,8 +689,7 @@ export class RelayClient {
         case 'delete_session':
           // Remove from local session state SYNCHRONOUSLY. The adapter's
           // killSession runs async and may take a while to talk to the
-          // Copilot SDK; we don't want broadcastSessionList (which fires
-          // immediately after processPendingMessages on auth_ok) to see
+          // Copilot SDK; we don't want broadcastSessionList to see
           // the still-tracked session and broadcast it back to arms.
           this.sessionManager.removeLinkByKrakiId(sessionId);
           this.sessionManager.deleteSession(sessionId);
@@ -1096,57 +1075,6 @@ export class RelayClient {
     // Start watching all currently linked sessions
     for (const link of this.sessionManager.getAllLinks()) {
       this.eventsWatcher.watch(link.localSessionId);
-    }
-  }
-
-  // ── Pending message processing ─────────────────────
-
-  /**
-   * Process queued unicast envelopes delivered by the relay in auth_ok.
-   * These are messages sent by arms while this tentacle was offline — they
-   * may be seconds to days old depending on how long the device was
-   * disconnected (the relay's pending_messages table has a 30-day TTL).
-   *
-   * Currently only `delete_session` is replayed: it's idempotent, time-
-   * insensitive, and the user's explicit intent to remove a session
-   * remains valid no matter how stale. Other types (send_input, approve,
-   * set_session_mode, etc.) carry interactive intent that decays quickly
-   * and could cause confusing behavior if replayed — e.g. a stale
-   * send_input would broadcast a phantom user_message and kick off an
-   * agent turn the user never asked for. Those are logged and dropped
-   * here; deciding which (if any) to replay needs further design.
-   *
-   * Must run before broadcastSessionList so delete_session takes effect
-   * before the arm receives the session list (otherwise the just-deleted
-   * session would appear in the list and then disappear).
-   */
-  private processPendingMessages(messages?: UnicastEnvelope[]): void {
-    if (!messages || messages.length === 0 || !this.keyManager || !this.authInfo) return;
-
-    logger.info(`Processing ${messages.length} pending message(s) from relay`);
-    let processed = 0;
-    let skipped = 0;
-    for (const envelope of messages) {
-      try {
-        const decrypted = decryptFromBlob(
-          { blob: envelope.blob, keys: envelope.keys },
-          this.authInfo.deviceId,
-          this.keyManager.getKeyPair().privateKey,
-        );
-        const inner = JSON.parse(decrypted) as ConsumerMessage;
-        if (inner.type !== 'delete_session') {
-          logger.debug({ type: inner.type }, 'Skipping stale pending message');
-          skipped += 1;
-          continue;
-        }
-        this.handleConsumerMessage(inner);
-        processed += 1;
-      } catch (err) {
-        logger.warn({ err }, 'Failed to process pending message');
-      }
-    }
-    if (skipped > 0) {
-      logger.info({ processed, skipped }, 'Pending message replay summary');
     }
   }
 
@@ -1981,7 +1909,7 @@ export class RelayClient {
     }
 
     try {
-      this.ws.send(JSON.stringify(this.withAck(msg as Record<string, unknown>)));
+      this.ws.send(JSON.stringify(msg as Record<string, unknown>));
     } catch (err) {
       logger.error({ err }, 'ws.send failed');
     }
@@ -2028,34 +1956,6 @@ export class RelayClient {
       clearTimeout(entry.timer);
     }
     this.deltaBuffers.clear();
-  }
-
-  /** Inject cumulative ack into an outbound envelope. Piggybacks delivery
-   *  acknowledgments on existing traffic — no dedicated ack message. */
-  private withAck<T extends Record<string, unknown>>(msg: T): T {
-    if (this.lastReceivedRelaySeq <= 0) return msg;
-    return { ...msg, ack: this.lastReceivedRelaySeq };
-  }
-
-  /** Update inbound relaySeq tracking. Returns true if this is a duplicate
-   *  retry from head and should be silently dropped. */
-  private trackInboundRelaySeq(msg: Record<string, unknown>): boolean {
-    if (!('relaySeq' in msg)) return false;
-    const seq = msg.relaySeq;
-    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
-
-    if (this.seenRelaySeqs.has(seq)) {
-      return true;
-    }
-    if (this.seenRelaySeqs.size >= RelayClient.RELAY_SEQ_DEDUP_WINDOW) {
-      const iter = this.seenRelaySeqs.values().next();
-      if (!iter.done) this.seenRelaySeqs.delete(iter.value);
-    }
-    this.seenRelaySeqs.add(seq);
-    if (seq > this.lastReceivedRelaySeq) {
-      this.lastReceivedRelaySeq = seq;
-    }
-    return false;
   }
 
   /**
@@ -2117,7 +2017,7 @@ export class RelayClient {
         envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
       }
 
-      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+      this.ws.send(JSON.stringify(envelope as unknown as Record<string, unknown>));
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
     }
@@ -2128,7 +2028,7 @@ export class RelayClient {
   private sendPulseEnvelope(pulseB64: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const envelope = { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
-    this.ws.send(JSON.stringify(this.withAck(envelope as Record<string, unknown>)));
+    this.ws.send(JSON.stringify(envelope as Record<string, unknown>));
   }
 
   /** A reliable consumer message was delivered in order by pulse (arm→tentacle).
@@ -2169,7 +2069,7 @@ export class RelayClient {
         keys: previewBlob.keys,
         pushPreview: { blob: previewBlob.blob, keys: previewBlob.keys },
       };
-      this.ws.send(JSON.stringify(this.withAck(envelope as Record<string, unknown>)));
+      this.ws.send(JSON.stringify(envelope as Record<string, unknown>));
     } catch (err) {
       logger.debug({ err }, 'Pulse push-preview emit failed');
     }
@@ -2195,7 +2095,7 @@ export class RelayClient {
         keys,
       };
 
-      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+      this.ws.send(JSON.stringify(envelope as unknown as Record<string, unknown>));
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Encrypted unicast failed');
     }

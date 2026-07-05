@@ -12,40 +12,15 @@
 // Inner messages (ProducerMessage / ConsumerMessage) are encrypted
 // inside the blob and only visible to endpoints after decryption.
 //
-// Transport-layer delivery tracking (relaySeq, ack) is a separate
-// per-hop, per-connection concern — see TransportAckFields below.
-// It does not interact with the per-session application seq inside
-// the encrypted blob.
+// Reliable per-hop delivery (seq / ack / resume / durable) is handled by
+// the pulse layer, framed in the `pulse` envelope field — see
+// PulseFrameField below. It does not interact with the per-session
+// application seq inside the encrypted blob.
 // ------------------------------------------------------------
 
 // ============================================================
 // Relay envelopes (visible to relay)
 // ============================================================
-
-/** Per-hop transport delivery tracking fields.
- *
- *  Stamped by the sender of each hop; mirrored back by the receiver
- *  in its outbound `ack` field. Both fields are envelope-level, visible
- *  to the relay, and independent of the encrypted payload's per-session
- *  application seq.
- *
- *  Counters are per WebSocket direction (one for sender→receiver,
- *  another for receiver→sender) and reset on every new connection.
- *
- *  Recipients that don't understand these fields can safely ignore them
- *  (graceful degradation — head detects support via the `ack` field
- *  appearing on incoming messages and only retries for capable peers).
- */
-export interface TransportAckFields {
-  /** Strictly monotonic per WebSocket direction, assigned by the sender
-   *  just before send. Receiver dedups by this and reports the highest
-   *  contiguous value back via `ack`. */
-  relaySeq?: number;
-  /** Cumulative ack: "I have received all relaySeqs ≤ this number from
-   *  the peer on the other end of this WebSocket." Piggybacks on any
-   *  outbound message — no dedicated ack message exists. */
-  ack?: number;
-}
 
 /** Per-hop pulse framing (visible to the relay, like a WS frame header).
  *
@@ -71,7 +46,7 @@ export interface PulseFrameField {
 }
 
 /** App → specific tentacle. Relay reads `to` for routing. */
-export interface UnicastEnvelope extends TransportAckFields, PulseFrameField {
+export interface UnicastEnvelope extends PulseFrameField {
   type: 'unicast';
   /** Target device ID */
   to: string;
@@ -84,7 +59,7 @@ export interface UnicastEnvelope extends TransportAckFields, PulseFrameField {
 }
 
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
-export interface BroadcastEnvelope extends TransportAckFields, PulseFrameField {
+export interface BroadcastEnvelope extends PulseFrameField {
   type: 'broadcast';
   /** Encrypted payload: base64(iv + ciphertext + tag) */
   blob: string;
@@ -106,13 +81,12 @@ export interface BlobPayload {
   keys: Record<string, string>;
 }
 
-/** Ping / pong control messages carry `ack` to keep delivery acknowledgments
- *  flowing during idle periods (no dedicated ack message exists). */
-export interface PingMessage extends TransportAckFields {
+/** Ping / pong control messages for connection keepalive. */
+export interface PingMessage {
   type: 'ping';
 }
 
-export interface PongMessage extends TransportAckFields {
+export interface PongMessage {
   type: 'pong';
 }
 
@@ -882,8 +856,6 @@ export interface AuthOkMessage {
   vapidPublicKey?: string;
   /** Relay server version */
   relayVersion?: string;
-  /** Queued unicast envelopes received while this device was offline */
-  pendingMessages?: UnicastEnvelope[];
   /**
    * Voice dictation capability for this region. Absent when the head has
    * no voice broker configured — arm should hide the mic UI in that case.

@@ -89,7 +89,6 @@ describe('LocalAuthBackend', () => {
     if (result.ok) {
       expect(result.user.region).toBe('us');
       expect(result.devices.length).toBe(1);
-      expect(result.pendingMessages).toEqual([]);
     }
   });
 

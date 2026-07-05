@@ -5,7 +5,7 @@
 
 import { randomBytes, createVerify } from 'crypto';
 import { v4 as uuid } from 'uuid';
-import type { AuthMethod, DeviceInfo, DeviceSummary, UnicastEnvelope, DeviceRole, DeviceKind } from '@kraki/protocol';
+import type { AuthMethod, DeviceInfo, DeviceSummary, DeviceRole, DeviceKind } from '@kraki/protocol';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
 import type { AuthProvider, AuthUser } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
@@ -179,7 +179,6 @@ export class LocalAuthBackend implements AuthBackend {
         region: user.region,
       },
       devices: this.getDeviceSummaries(user.userId),
-      pendingMessages: this.flushPending(deviceId),
       githubClientId: this.getGitHubClientId(),
       vapidPublicKey: this.getVapidPublicKey(),
     };
@@ -457,7 +456,6 @@ export class LocalAuthBackend implements AuthBackend {
         region: fullUser?.region,
       },
       devices: this.getDeviceSummaries(authUser.id),
-      pendingMessages: this.flushPending(deviceId),
       githubClientId: this.getGitHubClientId(),
       vapidPublicKey: this.getVapidPublicKey(),
     };
@@ -587,14 +585,5 @@ export class LocalAuthBackend implements AuthBackend {
       lastSeen: d.lastSeen,
       createdAt: d.createdAt,
     }));
-  }
-
-  private flushPending(deviceId: string): UnicastEnvelope[] {
-    const rows = this.storage.flushPending(deviceId);
-    const envelopes: UnicastEnvelope[] = [];
-    for (const raw of rows) {
-      try { envelopes.push(JSON.parse(raw)); } catch { /* skip malformed */ }
-    }
-    return envelopes;
   }
 }
