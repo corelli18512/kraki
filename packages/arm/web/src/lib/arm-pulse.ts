@@ -64,6 +64,7 @@ export class ArmPulse {
    *  `durable` marks it for relay persistence while the tentacle is offline.
    *  Returns the assigned pulse seq so the caller can track it for rollback. */
   send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
+    if (!this.enabled) return 0n;
     this.currentTarget = targetDeviceId;
     const { seq, effects } = this.endpoint.send(enc.encode(payloadJson), { durable });
     this.run(effects);
@@ -72,15 +73,19 @@ export class ArmPulse {
   }
 
   onConnected(): void {
+    if (!this.enabled) return;
     this.run(this.endpoint.onConnected(this.host.now()));
   }
   onDisconnected(): void {
+    if (!this.enabled) return;
     this.endpoint.onDisconnected(this.host.now());
   }
   onFrame(pulseB64: string): void {
+    if (!this.enabled) return;
     this.run(this.endpoint.onBytes(unb64(pulseB64), this.host.now()));
   }
   tick(): void {
+    if (!this.enabled) return;
     this.run(this.endpoint.onTick(this.host.now()));
   }
 

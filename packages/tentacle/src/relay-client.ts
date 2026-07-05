@@ -2063,10 +2063,16 @@ export class RelayClient {
     try {
       const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
       const previewBlob = encryptToBlob(preview, recipients);
+      // The reliable message already went out via pulse; this envelope exists
+      // ONLY to carry the push preview to head's push manager (offline devices).
+      // Keep the main blob/keys EMPTY so online arms — which decode `blob` when
+      // `keys[deviceId]` is present — skip it (no key → not addressed to them),
+      // instead of decoding the preview as a phantom message. This matches the
+      // legacy side-channel semantics (preview never was the deliverable blob).
       const envelope = {
         type: 'broadcast',
-        blob: previewBlob.blob,
-        keys: previewBlob.keys,
+        blob: '',
+        keys: {},
         pushPreview: { blob: previewBlob.blob, keys: previewBlob.keys },
       };
       this.ws.send(JSON.stringify(envelope as Record<string, unknown>));
