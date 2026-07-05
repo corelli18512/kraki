@@ -21,7 +21,7 @@ import {
   signChallenge,
   type KeyPair,
 } from '@kraki/crypto';
-import { Endpoint } from '@kraki/pulse';
+import { Endpoint } from '@coinfra/pulse';
 import { KeyManager, RelayClient, SessionManager } from '@kraki/tentacle';
 import type { AgentAdapter } from '@kraki/tentacle';
 import { createTestEnv, createTmpSessionDir, waitMs, type TestEnv } from './helpers.js';

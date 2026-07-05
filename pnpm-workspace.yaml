@@ -4,7 +4,6 @@ packages:
   - packages/head
   - packages/tentacle
   - packages/arm/*
-  - packages/pulse/ts
   - packages/toolbar
   - packages/tests
   - packages/voice-broker

@@ -21,7 +21,7 @@
 
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type Effect, Endpoint, type Snapshot } from '@kraki/pulse';
+import { type Effect, Endpoint, type Snapshot } from '@coinfra/pulse';
 
 // ── A tiny durable store backed by real SQLite (what head's adapter would do) ─
 

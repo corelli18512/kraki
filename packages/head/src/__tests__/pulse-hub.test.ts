@@ -10,7 +10,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { decodeFrame, Endpoint, encodeFrame } from '@kraki/pulse';
+import { decodeFrame, Endpoint, encodeFrame } from '@coinfra/pulse';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PulseHub, type PulseHubHost } from '../pulse-hub.js';
 

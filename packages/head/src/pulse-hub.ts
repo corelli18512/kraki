@@ -22,7 +22,7 @@
  */
 
 import type Database from 'better-sqlite3';
-import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@kraki/pulse';
+import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@coinfra/pulse';
 import type { PulseFrameField, UnicastEnvelope } from '@kraki/protocol';
 
 /** How the hub reaches out: send bytes to a device, and resolve where a

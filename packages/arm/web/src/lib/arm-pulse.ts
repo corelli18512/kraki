@@ -1,4 +1,4 @@
-import { type Effect, Endpoint } from '@kraki/pulse';
+import { type Effect, Endpoint } from '@coinfra/pulse';
 import type { InnerMessage } from '@kraki/protocol';
 import { createLogger } from './logger';
 

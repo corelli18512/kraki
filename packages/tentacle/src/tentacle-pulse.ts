@@ -13,7 +13,7 @@
  * relay holds durable messages for offline arms, not the tentacle.
  */
 
-import { type Effect, Endpoint } from '@kraki/pulse';
+import { type Effect, Endpoint } from '@coinfra/pulse';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('pulse');
