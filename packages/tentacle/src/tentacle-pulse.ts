@@ -36,7 +36,6 @@ export class TentaclePulse {
 
   constructor(
     private readonly host: TentaclePulseHost,
-    private readonly enabled: boolean,
     epoch: string,
   ) {
     this.endpoint = new Endpoint({
@@ -45,38 +44,29 @@ export class TentaclePulse {
     });
   }
 
-  isEnabled(): boolean {
-    return this.enabled;
-  }
-
   /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse. */
   send(payloadJson: string): void {
-    if (!this.enabled) return;
     const { effects } = this.endpoint.send(enc.encode(payloadJson));
     this.run(effects);
   }
 
   /** The relay connection is up — resume the stream. */
   onConnected(): void {
-    if (!this.enabled) return;
     this.run(this.endpoint.onConnected(this.host.now()));
   }
 
   /** The relay connection dropped. */
   onDisconnected(): void {
-    if (!this.enabled) return;
     this.endpoint.onDisconnected(this.host.now());
   }
 
   /** An inbound pulse frame arrived from the relay. */
   onFrame(pulseB64: string): void {
-    if (!this.enabled) return;
     this.run(this.endpoint.onBytes(new Uint8Array(Buffer.from(pulseB64, 'base64')), this.host.now()));
   }
 
   /** Periodic tick (heartbeat + liveness). */
   tick(): void {
-    if (!this.enabled) return;
     this.run(this.endpoint.onTick(this.host.now()));
   }
 

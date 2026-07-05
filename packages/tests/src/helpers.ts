@@ -18,9 +18,59 @@ import {
   encryptToBlob, decryptFromBlob, signChallenge,
 } from '@kraki/crypto';
 import type { KeyPair } from '@kraki/crypto';
+import { Endpoint } from '@coinfra/pulse';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+// Pulse framing helpers for the mock apps. Every real arm/tentacle speaks pulse
+// unconditionally now, so a mock app must too: reliable producer messages arrive
+// wrapped in a `pulse` frame (empty blob), and app→tentacle reliable sends go out
+// as pulse frames the head hub fans out.
+const pb64 = (u: Uint8Array): string => Buffer.from(u).toString('base64');
+const punb64 = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
+
+/** A pulse endpoint for a mock app: drives HELLO on connect, decodes inbound
+ *  pulse frames to their {blob,keys} payload, and frames outbound reliable sends.
+ *  `onPayload` gets each delivered {blob,keys} JSON string for the app to decrypt. */
+export function createPulseAppLayer(
+  ws: WebSocket,
+  onPayload: (payloadJson: string) => void,
+): {
+  onConnected: () => void;
+  onRawFrame: (pulseB64: string) => void;
+  sendReliable: (payloadJson: string, to: string) => void;
+} {
+  const endpoint = new Endpoint({
+    epoch: `mockapp:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`,
+    random: () => 0.5,
+    durable: { supported: false },
+  });
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  let currentTo = '';
+
+  function run(effects: ReturnType<Endpoint['onTick']>): void {
+    for (const e of effects) {
+      if (e.t === 'transmit') {
+        ws.send(JSON.stringify({ type: 'unicast', to: currentTo, pulse: pb64(e.bytes), blob: '', keys: {} }));
+      } else if (e.t === 'deliver') {
+        onPayload(dec.decode(e.payload));
+      }
+    }
+  }
+
+  return {
+    onConnected: () => run(endpoint.onConnected(Date.now())),
+    onRawFrame: (pulseB64: string) => run(endpoint.onBytes(punb64(pulseB64), Date.now())),
+    sendReliable: (payloadJson: string, to: string) => {
+      currentTo = to;
+      run(endpoint.send(enc.encode(payloadJson)).effects);
+      currentTo = '';
+    },
+  };
+}
+
 
 export interface TestEnv {
   port: number;
@@ -140,6 +190,14 @@ export async function connectApp(
 
   ws.on('message', (data) => {
     const raw = JSON.parse(data.toString());
+    // Pulse-framed reliable message: decode the frame, then decrypt its payload.
+    if ((raw.type === 'broadcast' || raw.type === 'unicast') && typeof raw.pulse === 'string') {
+      pulse.onRawFrame(raw.pulse);
+      return;
+    }
+    if (raw.type === 'auth_ok') {
+      pulse.onConnected();
+    }
     let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
       rawEnvelopes.push(raw);
@@ -158,6 +216,19 @@ export async function connectApp(
     }
     messages.push(msg);
     for (const l of listeners.slice()) l(msg);
+  });
+
+  // Pulse layer: delivers decoded {blob,keys} payloads → decrypt → dispatch.
+  const pulse = createPulseAppLayer(ws, (payloadJson) => {
+    try {
+      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
+      const decrypted = decryptFromBlob({ blob, keys }, deviceId, kp.privateKey);
+      const msg = JSON.parse(decrypted) as Record<string, unknown>;
+      messages.push(msg);
+      for (const l of listeners.slice()) l(msg);
+    } catch {
+      /* not for us */
+    }
   });
 
   // Auth
@@ -217,7 +288,9 @@ export async function connectApp(
     const { blob, keys } = encryptToBlob(JSON.stringify(innerMsg), [
       { deviceId: to, publicKey: recipientPubKey },
     ]);
-    ws.send(JSON.stringify({ type: 'unicast', to, blob, keys }));
+    // Reliable app→tentacle send goes through pulse (mirrors ArmPulse): the head
+    // hub fans the frame out to the target tentacle, which decodes {blob,keys}.
+    pulse.sendReliable(JSON.stringify({ blob, keys }), to);
   }
 
   return {
@@ -254,6 +327,13 @@ export async function connectAppWithCrypto(
 
   ws.on('message', (data) => {
     const raw = JSON.parse(data.toString());
+    if ((raw.type === 'broadcast' || raw.type === 'unicast') && typeof raw.pulse === 'string') {
+      pulse.onRawFrame(raw.pulse);
+      return;
+    }
+    if (raw.type === 'auth_ok') {
+      pulse.onConnected();
+    }
     let msg: Record<string, unknown>;
     if (raw.type === 'broadcast' || raw.type === 'unicast') {
       rawEnvelopes.push(raw);
@@ -272,6 +352,18 @@ export async function connectAppWithCrypto(
     }
     messages.push(msg);
     for (const l of listeners.slice()) l(msg);
+  });
+
+  const pulse = createPulseAppLayer(ws, (payloadJson) => {
+    try {
+      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
+      const decrypted = decryptFromBlob({ blob, keys }, deviceId, opts.privateKey);
+      const msg = JSON.parse(decrypted) as Record<string, unknown>;
+      messages.push(msg);
+      for (const l of listeners.slice()) l(msg);
+    } catch {
+      /* not for us */
+    }
   });
 
   // Auth with challenge (reconnecting known device)
@@ -357,7 +449,9 @@ export async function connectAppWithCrypto(
     const { blob, keys } = encryptToBlob(JSON.stringify(innerMsg), [
       { deviceId: to, publicKey: recipientPubKey },
     ]);
-    ws.send(JSON.stringify({ type: 'unicast', to, blob, keys }));
+    // Reliable app→tentacle send goes through pulse (mirrors ArmPulse): the head
+    // hub fans the frame out to the target tentacle, which decodes {blob,keys}.
+    pulse.sendReliable(JSON.stringify({ blob, keys }), to);
   }
 
   return {

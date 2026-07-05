@@ -3,12 +3,13 @@ import { MockRelayServer } from './helpers/mock-ws-server';
 import type { WebSocket } from 'ws';
 
 /**
- * Pulse-enabled browser pass — the real web arm, built with VITE_KRAKI_PULSE=1.
+ * Browser boot pass — the real web arm (pulse is the unconditional transport).
  *
  * The mock relay speaks the LEGACY plaintext envelope (no E2E, no `pulse`
  * field), so inbound messages have no pulse frame and flow through the arm's
- * legacy path unchanged. This proves the key regression property: turning pulse
- * ON does not break the browser boot / auth / render pipeline.
+ * plain path unchanged. This proves the key regression property: the pulse
+ * endpoint being always-on does not break the browser boot / auth / render
+ * pipeline.
  *
  * (The full per-hop pulse path with real E2E crypto — tentacle ⇄ head hub ⇄ app,
  * durable store, head restart — is proven in packages/tests/pulse-e2e.test.ts

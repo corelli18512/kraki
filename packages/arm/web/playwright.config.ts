@@ -10,7 +10,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'pnpm build -- --mode e2e && pnpm preview --port 4173',
+    command: 'pnpm build && pnpm preview --port 4173',
     port: 4173,
     reuseExistingServer: !process.env.CI,
     timeout: 60000,

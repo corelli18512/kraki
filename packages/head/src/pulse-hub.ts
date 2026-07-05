@@ -17,8 +17,8 @@
  * The hub reads only the pulse frame header (seq/ack/durable) — the frame's
  * payload segment is the opaque E2E ciphertext, never decrypted here.
  *
- * This lives ALONGSIDE the legacy fire-and-forget path: only envelopes carrying
- * a `pulse` field reach the hub. Flag-gated by KRAKI_PULSE at the call site.
+ * Only envelopes carrying a `pulse` field reach the hub; plain broadcast/unicast
+ * envelopes keep the fire-and-forget path.
  */
 
 import type Database from 'better-sqlite3';

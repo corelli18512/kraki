@@ -148,8 +148,8 @@ export class HeadServer {
   private clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
-  /** Per-hop pulse hub (opt-in via KRAKI_PULSE=1). Null ⇒ legacy path only. */
-  private pulseHub: PulseHub | null = null;
+  /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
+  private pulseHub!: PulseHub;
   private pulseTickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
@@ -163,18 +163,15 @@ export class HeadServer {
     this.startPingInterval();
     this.startLivenessSweep();
 
-    // Pulse per-hop reliable delivery (opt-in). Shares the Storage SQLite file.
-    if (process.env.KRAKI_PULSE === '1') {
-      this.pulseHub = new PulseHub(this.storage.rawDb, {
-        now: () => Date.now(),
-        sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
-        broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
-      });
-      this.pulseHub.recoverOnBoot();
-      getLogger().info('Pulse hub enabled (KRAKI_PULSE=1)');
-      // Drive pulse heartbeat/liveness/durable-expiry every 5s.
-      this.pulseTickTimer = setInterval(() => this.pulseHub?.tick(), 5_000);
-    }
+    // Pulse per-hop reliable delivery. Shares the Storage SQLite file.
+    this.pulseHub = new PulseHub(this.storage.rawDb, {
+      now: () => Date.now(),
+      sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
+      broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
+    });
+    this.pulseHub.recoverOnBoot();
+    // Drive pulse heartbeat/liveness/durable-expiry every 5s.
+    this.pulseTickTimer = setInterval(() => this.pulseHub.tick(), 5_000);
   }
 
   private startPingInterval(): void {
@@ -371,7 +368,7 @@ export class HeadServer {
           try { this.storage.touchDeviceLastSeen(disconnectedDeviceId); } catch { /* storage may be closed */ }
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
-          this.pulseHub?.onDeviceDisconnected(disconnectedDeviceId);
+          this.pulseHub.onDeviceDisconnected(disconnectedDeviceId);
           logger.info('Device disconnected', {
             deviceId: disconnectedDeviceId,
             closeCode: code,
@@ -466,7 +463,7 @@ export class HeadServer {
     if (msg.type === 'unicast') {
       // Pulse-framed envelope? The hub (a pulse endpoint on each hop) handles
       // reliable delivery + durable store-and-forward. Legacy path untouched.
-      if (this.pulseHub && typeof msg.pulse === 'string' && state.deviceId) {
+      if (typeof msg.pulse === 'string' && state.deviceId) {
         this.pulseHub.onPulseEnvelope(state.deviceId, {
           pulse: msg.pulse as string,
           to: msg.to as string,
@@ -484,7 +481,7 @@ export class HeadServer {
     if (msg.type === 'broadcast') {
       // Pulse broadcast frames (control: hello/ack/heartbeat) are addressed to a
       // specific hop via the hub too; a producer fans out per-device unicasts.
-      if (this.pulseHub && typeof msg.pulse === 'string' && state.deviceId) {
+      if (typeof msg.pulse === 'string' && state.deviceId) {
         this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
         return;
       }
@@ -999,7 +996,7 @@ export class HeadServer {
     state.userId = user.userId;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
-    this.pulseHub?.onDeviceConnected(deviceId);
+    this.pulseHub.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
@@ -1037,7 +1034,7 @@ export class HeadServer {
     state.userId = result.userId;
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
-    this.pulseHub?.onDeviceConnected(result.deviceId);
+    this.pulseHub.onDeviceConnected(result.deviceId);
 
     logger.info('Device authenticated (via backend)', {
       deviceId: result.deviceId,
@@ -1194,7 +1191,7 @@ export class HeadServer {
     state.userId = user.id;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
-    this.pulseHub?.onDeviceConnected(deviceId);
+    this.pulseHub.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated', {
       deviceId,

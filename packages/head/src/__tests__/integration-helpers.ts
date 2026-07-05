@@ -76,6 +76,11 @@ export async function connectDevice(
 
   ws.on('message', (data) => {
     const msg = JSON.parse(data.toString());
+    // Pulse control frames (HELLO/ACK/heartbeat) ride an envelope carrying a
+    // `pulse` field with an empty blob. A real client hands these to its pulse
+    // layer, not its message handlers — this bare mock has no pulse layer, so
+    // it ignores them the same way (they're not business messages).
+    if (typeof msg.pulse === 'string') return;
     messages.push(msg);
 
     for (const listener of listeners) {

@@ -153,14 +153,13 @@ export class RelayClient {
     this.options = options;
     this.keyManager = keyManager ?? null;
     this.attachmentStore = attachmentStore;
-    // Per-hop pulse endpoint to the relay (opt-in via KRAKI_PULSE=1).
+    // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
     this.pulse = new TentaclePulse(
       {
         now: () => Date.now(),
         sendPulseFrame: (pulseB64) => this.sendPulseEnvelope(pulseB64),
         onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
       },
-      process.env.KRAKI_PULSE === '1',
       `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
     );
     this.wireAdapterEvents();
@@ -466,7 +465,7 @@ export class RelayClient {
     if ((msg.type === 'unicast' || msg.type === 'broadcast') && this.keyManager && this.authInfo) {
       // Pulse-framed? Feed the frame to our endpoint; a `deliver` will call
       // handlePulseDelivered with the {blob,keys} payload to decrypt.
-      if (this.pulse.isEnabled() && typeof msg.pulse === 'string') {
+      if (typeof msg.pulse === 'string') {
         this.pulse.onFrame(msg.pulse as string);
         return;
       }
@@ -1989,7 +1988,7 @@ export class RelayClient {
       // frame's payload carries BOTH the ciphertext blob AND the per-recipient
       // keys, so everything the receiver needs travels together through head
       // (head never touches keys). Everything else keeps the legacy broadcast.
-      if (this.pulse.isEnabled() && RelayClient.PERSISTENT_TYPES.has(msg.type as string)) {
+      if (RelayClient.PERSISTENT_TYPES.has(msg.type as string)) {
         this.pulse.send(JSON.stringify({ blob, keys }));
         this.emitPushPreviewIfNeeded(msg, recipients);
         return;

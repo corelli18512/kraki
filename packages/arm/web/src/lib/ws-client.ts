@@ -40,7 +40,7 @@ export class KrakiWSClient {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
 
-    // Per-hop pulse endpoint to the relay (opt-in via VITE_KRAKI_PULSE=1).
+    // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
     this.pulse = new ArmPulse(
       {
         now: () => Date.now(),
@@ -48,7 +48,6 @@ export class KrakiWSClient {
         onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
         onAcked: (seqUpTo) => this.cmdState.resolvePulseAcked(seqUpTo),
       },
-      import.meta.env.VITE_KRAKI_PULSE === '1',
       `arm:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     );
 
@@ -100,7 +99,7 @@ export class KrakiWSClient {
    *  given, receives the pulse send seq (for optimistic-rollback tracking), or
    *  null when the message did not go through pulse. */
   sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
-    if (this.pulse.isEnabled() && RELIABLE_CONSUMER_TYPES.has(msg.type as string)) {
+    if (RELIABLE_CONSUMER_TYPES.has(msg.type as string)) {
       const durable = msg.type === 'delete_session';
       void this.encryption.encryptForTarget(msg).then((enc) => {
         if (!enc) {
@@ -152,7 +151,7 @@ export class KrakiWSClient {
 
   /** Drive pulse heartbeat/liveness every 5s (finer than the 15s heartbeat). */
   private startPulseTick() {
-    if (!this.pulse.isEnabled() || this.pulseTick) return;
+    if (this.pulseTick) return;
     this.pulseTick = setInterval(() => this.pulse.tick(), 5000);
   }
 
@@ -620,7 +619,7 @@ export class KrakiWSClient {
         // Pulse-framed? Feed the frame to our endpoint; a `deliver` calls
         // handlePulseDelivered with the blob to decrypt.
         const env = msg as unknown as Record<string, unknown>;
-        if (this.pulse.isEnabled() && typeof env.pulse === 'string') {
+        if (typeof env.pulse === 'string') {
           this.pulse.onFrame(env.pulse as string);
           return;
         }

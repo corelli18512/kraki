@@ -33,7 +33,15 @@ function mockGitHubFetcher(users: Record<string, { id: number | string; login: s
 
 function waitForMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
-    ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+    const handler = (data: Buffer) => {
+      const msg = JSON.parse(data.toString());
+      // Ignore pulse control frames (empty-blob envelope with a `pulse` field);
+      // a real client routes these to its pulse layer, not its message handlers.
+      if (typeof msg.pulse === 'string') return;
+      ws.off('message', handler);
+      resolve(msg);
+    };
+    ws.on('message', handler);
   });
 }
 
@@ -45,6 +53,7 @@ function waitForMessageOfType(ws: WebSocket, type: string, timeout = 5000): Prom
     }, timeout);
     const handler = (data: Buffer) => {
       const msg = JSON.parse(data.toString());
+      if (typeof msg.pulse === 'string') return;
       if (msg.type === type) {
         clearTimeout(timer);
         ws.off('message', handler);

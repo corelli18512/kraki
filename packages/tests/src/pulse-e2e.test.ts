@@ -1,6 +1,6 @@
 /**
  * Pulse per-hop END-TO-END — real head (pulse hub) + real tentacle RelayClient
- * (pulse) + a pulse-aware app, all with KRAKI_PULSE on. Proves the full chain:
+ * (pulse) + a pulse-aware app. Proves the full chain:
  *
  *   tentacle ⇄(pulse)⇄ head(hub, SQLite) ⇄(pulse)⇄ app
  *
@@ -164,7 +164,6 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
   let homeDir: { dir: string; cleanup: () => void };
 
   beforeEach(async () => {
-    process.env.KRAKI_PULSE = '1';
     env = await createTestEnv();
     adapter = new EmitAdapter();
     sessDir = createTmpSessionDir();
@@ -176,7 +175,6 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
   });
 
   afterEach(async () => {
-    delete process.env.KRAKI_PULSE;
     relay?.disconnect();
     await env.cleanup();
     sessDir.cleanup();
