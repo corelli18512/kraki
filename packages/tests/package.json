@@ -13,7 +13,7 @@
     "@kraki/crypto": "workspace:*",
     "@kraki/head": "workspace:*",
     "@kraki/protocol": "workspace:*",
-    "@coinfra/pulse": "^0.1.0",
+    "@coinfra/pulse": "^0.1.1",
     "@kraki/tentacle": "workspace:*",
     "@kraki/voice-broker": "workspace:*",
     "better-sqlite3": "^11.0.0",

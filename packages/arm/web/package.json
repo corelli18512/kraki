@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@kraki/protocol": "workspace:*",
-    "@coinfra/pulse": "^0.1.0",
+    "@coinfra/pulse": "^0.1.1",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",
     "jsqr": "^1.4.0",
