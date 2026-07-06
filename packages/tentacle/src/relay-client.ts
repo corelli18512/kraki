@@ -1381,6 +1381,15 @@ export class RelayClient {
     const resumable = this.sessionManager.getResumableSessions();
     let normalised = 0;
     for (const meta of resumable) {
+      // Pre-register agent mapping so message routing works BEFORE the session
+      // is lazy-resumed on first interaction. Without this, any message that
+      // arrives before ensureSessionResumed runs (approve/deny/answer/kill/
+      // abort/set_session_mode, or the very first send_input on an active/idle
+      // meta that skips the lazy-resume gate) hits MultiAgentAdapter with no
+      // known agent → falls through to the default (first) adapter → fails
+      // with "Session not found" for claude/pi sessions. registerSessionAgent
+      // is a no-op on single-agent adapters and idempotent on the multi one.
+      this.adapter.registerSessionAgent(meta.id, meta.agent);
       if (meta.state === 'active' || meta.state === 'idle') {
         this.sessionManager.markDisconnected(meta.id);
         normalised++;
