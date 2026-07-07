@@ -1,6 +1,40 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { decodeFrame } from '@coinfra/pulse';
 import { KrakiWSClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
+
+/** Recover the inner producer message from a captured wire send. Reliable
+ *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
+ *  `pulse` field is a pulse frame carrying `{blob,keys}`; the encryption mock puts
+ *  the plaintext message JSON in `blob`. Non-pulse sends (auth) pass through.
+ *  Returns null for non-data pulse frames (hello/ack/heartbeat control). */
+function decodePulseSend(raw: string): Record<string, unknown> | null {
+  const env = JSON.parse(raw) as Record<string, unknown>;
+  if (typeof env.pulse !== 'string') return env;
+  const frame = decodeFrame(Uint8Array.from(atob(env.pulse), (c) => c.charCodeAt(0)));
+  if (!frame || frame.t !== 'data') return null;
+  const { blob } = JSON.parse(new TextDecoder().decode(frame.payload)) as { blob: string };
+  return JSON.parse(blob) as Record<string, unknown>;
+}
+
+/** Wait for the arm to put a pulse-carried DATA message on the wire (the send
+ *  path is async: encryptForTarget → pulse.send, and pulse emits control frames
+ *  like hello first), then decode the first application message. */
+async function waitForDecodedSend(
+  ws: { sentMessages: string[] },
+): Promise<Record<string, unknown>> {
+  let decoded: Record<string, unknown> | null = null;
+  await vi.waitFor(() => {
+    for (const raw of ws.sentMessages) {
+      // Only application sends ride pulse; skip raw auth passthrough envelopes.
+      if (typeof (JSON.parse(raw) as { pulse?: unknown }).pulse !== 'string') continue;
+      const msg = decodePulseSend(raw);
+      if (msg && typeof msg.type === 'string') { decoded = msg; return; }
+    }
+    throw new Error('no decoded pulse data send yet');
+  });
+  return decoded as unknown as Record<string, unknown>;
+}
 
 // Mock encryption so data messages pass through without real crypto
 vi.mock('./message-db', () => ({
@@ -455,7 +489,7 @@ describe('KrakiWSClient', () => {
       const client = await setupClient();
       client.sendInput('sess-1', 'Hello agent');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('send_input');
       expect(sent.sessionId).toBe('sess-1');
       expect(sent.payload.text).toBe('Hello agent');
@@ -470,7 +504,7 @@ describe('KrakiWSClient', () => {
 
       client.approve('perm-1', 'sess-1');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('approve');
       expect(sent.payload.permissionId).toBe('perm-1');
       expect(useStore.getState().pendingPermissions.size).toBe(0);
@@ -485,7 +519,7 @@ describe('KrakiWSClient', () => {
 
       client.deny('perm-1', 'sess-1');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('deny');
       expect(useStore.getState().pendingPermissions.size).toBe(0);
     });
@@ -499,7 +533,7 @@ describe('KrakiWSClient', () => {
 
       client.alwaysAllow('perm-1', 'sess-1');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('always_allow');
       expect(useStore.getState().pendingPermissions.size).toBe(0);
     });
@@ -513,7 +547,7 @@ describe('KrakiWSClient', () => {
 
       client.answer('q-1', 'sess-1', 'A');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('answer');
       expect(sent.payload.questionId).toBe('q-1');
       expect(sent.payload.answer).toBe('A');
@@ -524,7 +558,7 @@ describe('KrakiWSClient', () => {
       const client = await setupClient();
       client.killSession('sess-1');
 
-      const sent = JSON.parse(lastWsInstance.sentMessages[0]);
+      const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('kill_session');
       expect(sent.sessionId).toBe('sess-1');
     });
@@ -935,17 +969,13 @@ describe('KrakiWSClient', () => {
 
       client.createSession({ targetDeviceId: 'dev-tent', model: 'gpt-4.1', prompt: 'Hello' });
 
-      const sent = lastWsInstance.sentMessages;
-      const createMsg = sent.find((m: string) => {
-        const p = JSON.parse(m);
-        return p.type === 'create_session';
-      });
-      expect(createMsg).toBeTruthy();
-      const parsed = JSON.parse(createMsg);
-      expect(parsed.payload.requestId).toBeTruthy();
-      expect(parsed.payload.targetDeviceId).toBe('dev-tent');
-      expect(parsed.payload.model).toBe('gpt-4.1');
-      expect(parsed.payload.prompt).toBe('Hello');
+      const parsed = await waitForDecodedSend(lastWsInstance);
+      expect(parsed.type).toBe('create_session');
+      const payload = parsed.payload as Record<string, unknown>;
+      expect(payload.requestId).toBeTruthy();
+      expect(payload.targetDeviceId).toBe('dev-tent');
+      expect(payload.model).toBe('gpt-4.1');
+      expect(payload.prompt).toBe('Hello');
     });
 
     it('inserts initial prompt as user message on session_created with matching requestId', async () => {
@@ -954,10 +984,9 @@ describe('KrakiWSClient', () => {
 
       client.createSession({ targetDeviceId: 'dev-tent', model: 'gpt-4.1', prompt: 'Fix the bug' });
 
-      // Extract the requestId from the sent message
-      const sent = lastWsInstance.sentMessages;
-      const createMsg = sent.find((m: string) => JSON.parse(m).type === 'create_session');
-      const requestId = JSON.parse(createMsg).payload.requestId;
+      // Extract the requestId from the sent (pulse-carried) create_session.
+      const createMsg = await waitForDecodedSend(lastWsInstance);
+      const requestId = (createMsg.payload as Record<string, unknown>).requestId;
 
       // Simulate session_created with matching requestId
       receiveInner({
@@ -1028,9 +1057,8 @@ describe('KrakiWSClient', () => {
       await connectAndAuth(client);
 
       client.createSession({ targetDeviceId: 'dev-tent', model: 'gpt-4.1', prompt: 'Hello' });
-      const sent = lastWsInstance.sentMessages;
-      const createMsg = sent.find((m: string) => JSON.parse(m).type === 'create_session');
-      const requestId = JSON.parse(createMsg).payload.requestId;
+      const createMsg = await waitForDecodedSend(lastWsInstance);
+      const requestId = (createMsg.payload as Record<string, unknown>).requestId;
 
       // server_error with ref matching the requestId (relay echoes ref from envelope)
       lastWsInstance._receive({
