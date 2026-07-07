@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
 import {
   createTestEnv, connectApp, connectAppWithCrypto, createRelayClient,
-  createTmpSessionDir, waitMs, type TestEnv, type MockApp,
+  createTmpSessionDir, waitMs, createPulseAppLayer, type TestEnv, type MockApp,
 } from "./helpers.js";
 import { SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
 import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from "@kraki/tentacle";
@@ -408,7 +408,13 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const wsB = new WebSocket(`ws://127.0.0.1:${multiEnv.port}`);
     await new Promise<void>(r => wsB.on("open", r));
     const bMessages: Record<string, unknown>[] = [];
-    wsB.on("message", (d) => bMessages.push(JSON.parse(d.toString())));
+    wsB.on("message", (d) => {
+      const m = JSON.parse(d.toString());
+      // A real client hands pulse control frames to its pulse layer, not its
+      // message handlers — a bare-ws mock ignores them the same way.
+      if (typeof m.pulse === "string") return;
+      bMessages.push(m);
+    });
     wsB.send(JSON.stringify({
       type: "auth", auth: { method: "open", sharedKey: "user_b" },
       device: { name: "B Phone", role: "app", kind: "web" },
@@ -530,10 +536,22 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Paired Phone", role: "app", kind: "ios", deviceId: pairDeviceId, publicKey: pairCompactKey },
     }));
+    // Paired app speaks pulse (like every real client): decode inbound pulse
+    // frames, then decrypt the delivered {blob,keys} payload.
+    let pairReceived: ((inner: Record<string, unknown>) => void) | null = null;
+    const pairPulse = createPulseAppLayer(pairWs, (payloadJson) => {
+      try {
+        const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
+        const decrypted = decryptFromBlob({ blob, keys }, pairDeviceId, pairKp.privateKey);
+        const inner = JSON.parse(decrypted) as Record<string, unknown>;
+        if (inner.type === "agent_message" && pairReceived) pairReceived(inner);
+      } catch { /* not for us */ }
+    });
     const authOk = await new Promise<Record<string, unknown>>((resolve) => {
       pairWs.on("message", (d: Buffer) => {
         const m = JSON.parse(d.toString());
-        if (m.type === "auth_ok") resolve(m);
+        if (typeof m.pulse === "string") { pairPulse.onRawFrame(m.pulse); return; }
+        if (m.type === "auth_ok") { pairPulse.onConnected(); resolve(m); }
       });
     });
     expect(authOk.type).toBe("auth_ok");
@@ -548,18 +566,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     adapter.simulateAgentMessage(sessionId, "to paired app");
     const received = await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("No message received")), 5000);
-      pairWs.on("message", (d: Buffer) => {
-        const raw = JSON.parse(d.toString());
-        if (raw.type === "broadcast") {
-          try {
-            const decrypted = decryptFromBlob(
-              { blob: raw.blob, keys: raw.keys }, pairDeviceId, pairKp.privateKey,
-            );
-            const inner = JSON.parse(decrypted);
-            if (inner.type === "agent_message") { clearTimeout(timer); resolve(inner); }
-          } catch { /* skip */ }
-        }
-      });
+      pairReceived = (inner) => { clearTimeout(timer); resolve(inner); };
     });
     expect(received.payload.content).toBe("to paired app");
 
@@ -762,7 +769,11 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "First", role: "app" },
     }));
-    const ok = await new Promise<Record<string, unknown>>(r => ws1.on("message", (d: Buffer) => r(JSON.parse(d.toString()))));
+    const ok = await new Promise<Record<string, unknown>>(r => ws1.on("message", (d: Buffer) => {
+      const m = JSON.parse(d.toString());
+      if (typeof m.pulse === "string") return;
+      r(m);
+    }));
     expect(ok.type).toBe("auth_ok");
     ws1.close();
 
@@ -773,7 +784,11 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       type: "auth", auth: { method: "pairing", token: tokenMsg.token },
       device: { name: "Second", role: "app" },
     }));
-    const err = await new Promise<Record<string, unknown>>(r => ws2.on("message", (d: Buffer) => r(JSON.parse(d.toString()))));
+    const err = await new Promise<Record<string, unknown>>(r => ws2.on("message", (d: Buffer) => {
+      const m = JSON.parse(d.toString());
+      if (typeof m.pulse === "string") return;
+      r(m);
+    }));
     expect(err.type).toBe("auth_error");
     expect(err.code).toBe("invalid_pairing_token");
     expect(err.message).toContain("Invalid or expired");
@@ -1119,16 +1134,18 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     await app.waitFor("permission");
 
-    // Find the broadcast envelope that has pushPreview
-    const envelope = app.rawEnvelopes.find(
-      (e) => e.type === "broadcast" && e.pushPreview,
-    );
-    expect(envelope).toBeDefined();
+    // The pushPreview rides the same pulse envelope the tentacle sends to the
+    // head; the head consumes that envelope and fires the preview at its push
+    // layer (offline notifications) rather than forwarding it to online apps.
+    // So we observe it via the head's PushManager spy, not on the app socket.
+    // It's encrypted for every recipient (incl. this online app), so the app's
+    // key still decrypts it.
+    const preview = await env.pushSpy.waitForPreview();
+    expect(preview).toBeDefined();
 
     // Decrypt the pushPreview
-    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
     const decrypted = decryptFromBlob(
-      { blob: preview.blob, keys: preview.keys },
+      { blob: preview!.blob, keys: preview!.keys },
       app.deviceId,
       app.keyPair.privateKey,
     );
@@ -1154,23 +1171,21 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     adapter.onIdle?.(sessionId);
     await app.waitFor("idle");
 
-    const envelope = app.rawEnvelopes.find(
-      (e) => e.type === "broadcast" && e.pushPreview
-        && (() => {
-          try {
-            const d = decryptFromBlob(
-              { blob: (e.pushPreview as Record<string, unknown>).blob as string, keys: (e.pushPreview as Record<string, unknown>).keys as Record<string, string> },
-              app.deviceId, app.keyPair.privateKey,
-            );
-            return JSON.parse(d).type === "idle";
-          } catch { return false; }
-        })(),
-    );
-    expect(envelope).toBeDefined();
+    // Observe the preview at the head's push layer (see note above); match the
+    // idle preview specifically in case other previews were also captured.
+    const preview = await env.pushSpy.waitForPreview((p) => {
+      try {
+        const d = decryptFromBlob(
+          { blob: p.blob, keys: p.keys },
+          app.deviceId, app.keyPair.privateKey,
+        );
+        return JSON.parse(d).type === "idle";
+      } catch { return false; }
+    });
+    expect(preview).toBeDefined();
 
-    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
     const parsed = JSON.parse(decryptFromBlob(
-      { blob: preview.blob, keys: preview.keys },
+      { blob: preview!.blob, keys: preview!.keys },
       app.deviceId, app.keyPair.privateKey,
     ));
     expect(parsed.type).toBe("idle");
@@ -1189,21 +1204,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     adapter.onMessage?.(sessionId, { content: "hello world" });
     await app.waitFor("agent_message");
 
-    // Find the envelope for this agent_message — it should NOT have pushPreview
-    const agentEnvelopes = app.rawEnvelopes.filter((e) => {
-      if (e.type !== "broadcast") return false;
-      try {
-        const d = decryptFromBlob(
-          { blob: e.blob as string, keys: e.keys as Record<string, string> },
-          app.deviceId, app.keyPair.privateKey,
-        );
-        return JSON.parse(d).type === "agent_message";
-      } catch { return false; }
-    });
-    expect(agentEnvelopes.length).toBeGreaterThan(0);
-    for (const env of agentEnvelopes) {
-      expect(env.pushPreview).toBeUndefined();
-    }
+    // A regular agent_message must NOT emit a pushPreview side-channel. The
+    // preview (when present) rides the pulse envelope to the head and surfaces
+    // at its push layer, so assert none was fired there. Give any (erroneous)
+    // preview a moment to arrive first.
+    await waitMs(200);
+    expect(env.pushSpy.previews.length).toBe(0);
 
     app.close();
   });
@@ -1224,12 +1230,11 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     await app.waitFor("permission");
 
-    const envelope = app.rawEnvelopes.find(
-      (e) => e.type === "broadcast" && e.pushPreview,
-    );
-    const preview = envelope!.pushPreview as { blob: string; keys: Record<string, string> };
+    // Observe the preview at the head's push layer (see note above).
+    const preview = await env.pushSpy.waitForPreview();
+    expect(preview).toBeDefined();
     const parsed = JSON.parse(decryptFromBlob(
-      { blob: preview.blob, keys: preview.keys },
+      { blob: preview!.blob, keys: preview!.keys },
       app.deviceId, app.keyPair.privateKey,
     ));
     expect(parsed.summary.length).toBe(50);

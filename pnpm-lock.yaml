@@ -20,6 +20,9 @@ importers:
 
   packages/arm/web:
     dependencies:
+      '@coinfra/pulse':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@kraki/protocol':
         specifier: workspace:*
         version: link:../../protocol
@@ -132,6 +135,9 @@ importers:
 
   packages/head:
     dependencies:
+      '@coinfra/pulse':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -190,6 +196,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.156
         version: 0.3.156(@anthropic-ai/sdk@0.100.1(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
+      '@coinfra/pulse':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.2
         version: 0.80.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
@@ -254,6 +263,9 @@ importers:
 
   packages/tests:
     dependencies:
+      '@coinfra/pulse':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -269,10 +281,16 @@ importers:
       '@kraki/voice-broker':
         specifier: workspace:*
         version: link:../voice-broker
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
       ws:
         specifier: ^8.19.0
         version: 8.19.0
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.0
+        version: 7.6.13
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
@@ -696,6 +714,9 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@coinfra/pulse@0.1.1':
+    resolution: {integrity: sha512-GGf4bIdIuPqF2aEBC1dpsEYkgysvWkeiPY+8NJw4391e2wsmfKzmgf0+db0pc8ZNmL9ZspjyafFkN3CVlmXBTA==}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -4619,6 +4640,8 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.4.9':
     optional: true
+
+  '@coinfra/pulse@0.1.1': {}
 
   '@csstools/color-helpers@5.1.0': {}
 

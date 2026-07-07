@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { decodeFrame } from '@coinfra/pulse';
 
 const { sockets, MockSocket } = vi.hoisted(() => {
   const sockets: Array<{
@@ -79,6 +80,39 @@ import { AttachmentStore } from '../attachment-store.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+/** Decode the messages a tentacle put on the wire. After the pulse migration,
+ *  producer messages ride pulse frames ({type, pulse, blob:'', keys:{}}); this
+ *  unwraps them back to the inner messages so tests can assert by type. Ignores
+ *  non-data frames (hello/ack/heartbeat) and non-pulse envelopes. The crypto
+ *  mock makes each frame payload `JSON.stringify({blob, keys})` where `blob` is
+ *  the raw plaintext JSON of the message, so: decode frame → parse payload →
+ *  `.blob` → parse = the inner message. Order is preserved. */
+function decodePulseSends(sent: string[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const raw of sent) {
+    let env: Record<string, unknown>;
+    try {
+      env = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    // Non-pulse envelope (e.g. auth handshake) passes through unchanged.
+    if (typeof env.pulse !== 'string') {
+      out.push(env);
+      continue;
+    }
+    const frame = decodeFrame(new Uint8Array(Buffer.from(env.pulse as string, 'base64')));
+    if (!frame || frame.t !== 'data') continue;
+    try {
+      const { blob } = JSON.parse(new TextDecoder().decode(frame.payload)) as { blob: string };
+      out.push(JSON.parse(blob) as Record<string, unknown>);
+    } catch {
+      /* skip frames whose payload isn't a {blob} message */
+    }
+  }
+  return out;
+}
 
 function createAdapter(): Record<string, unknown> {
   return {
@@ -450,7 +484,7 @@ describe('RelayClient set_session_model', () => {
       authMethod: 'open',
       device: { name: 'Test', role: 'tentacle' },
       reconnectDelay: 10,
-    });
+    }, createKeyManager());
     client.connect();
     sockets[0].emit('open');
     // Complete auth so handleConsumerMessage can run
@@ -460,6 +494,13 @@ describe('RelayClient set_session_model', () => {
       authMethod: 'open',
       user: { id: 'u1', login: 'test', provider: 'open' },
       devices: [],
+    })));
+    // Register a consumer device so `consumerKeys` is populated — without it,
+    // send() has no recipients and queues messages instead of putting them on
+    // the wire (post-pulse-migration there is no plaintext fallback).
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
     return { adapter, sm, client };
   }
@@ -501,7 +542,7 @@ describe('RelayClient set_session_model', () => {
     })));
 
     // Find the session_model_set broadcast in sent messages
-    const sent = ws.sent.map(s => JSON.parse(s));
+    const sent = decodePulseSends(ws.sent);
     const modelSet = sent.find(m => m.type === 'session_model_set');
     expect(modelSet).toBeDefined();
     expect(modelSet.payload.model).toBe('gpt-5');
@@ -724,7 +765,7 @@ describe('RelayClient set_session_model', () => {
 
     expect(sm.setPin).toHaveBeenCalledWith('sess_1', true);
 
-    const sent = ws.sent.map(s => JSON.parse(s));
+    const sent = decodePulseSends(ws.sent);
     const pinned = sent.find(m => m.type === 'session_pinned');
     expect(pinned).toBeDefined();
     expect(pinned.payload.pinned).toBe(true);
@@ -747,7 +788,7 @@ describe('RelayClient set_session_model', () => {
 
     expect(sm.markRead).toHaveBeenCalledWith('sess_1', 42);
 
-    const sent = ws.sent.map(s => JSON.parse(s));
+    const sent = decodePulseSends(ws.sent);
     const readMsg = sent.find(m => m.type === 'session_read');
     expect(readMsg).toBeDefined();
     expect(readMsg.payload.seq).toBe(42);
@@ -756,8 +797,7 @@ describe('RelayClient set_session_model', () => {
 
   it('delete_session removes from sessionManager SYNCHRONOUSLY before any awaits', () => {
     // Regression for: pre-fix, session removal happened in adapter.killSession()'s
-    // .finally(), so a broadcastSessionList fired immediately after (e.g. on
-    // auth_ok during reconnect after processPendingMessages) would still see
+    // .finally(), so a broadcastSessionList fired immediately after would still see
     // the session and broadcast it back to arms. After the fix, deletion is
     // synchronous; the async killSession runs in the background.
     const { adapter, sm } = buildConnectedClient();
@@ -782,7 +822,7 @@ describe('RelayClient set_session_model', () => {
     expect(sm.removeLinkByKrakiId).toHaveBeenCalledWith('sess_1');
 
     // SYNCHRONOUSLY: session_deleted broadcast was sent.
-    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    const sent = decodePulseSends(ws.sent);
     const deletedMsg = sent.find((m: { type: string }) => m.type === 'session_deleted');
     expect(deletedMsg).toBeDefined();
     expect(deletedMsg.sessionId).toBe('sess_1');
@@ -809,308 +849,9 @@ describe('RelayClient set_session_model', () => {
     })));
 
     expect(sm.deleteSession).toHaveBeenCalledWith('sess_doomed');
-    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    const sent = decodePulseSends(ws.sent);
     const deletedMsg = sent.find((m: { type: string }) => m.type === 'session_deleted');
     expect(deletedMsg).toBeDefined();
-  });
-});
-
-describe('RelayClient processPendingMessages filter', () => {
-  beforeEach(() => {
-    sockets.length = 0;
-    vi.useFakeTimers();
-  });
-
-  function buildClientWithKeys() {
-    const adapter = {
-      ...createAdapter(),
-      sendMessage: vi.fn(() => Promise.resolve()),
-      respondToPermission: vi.fn(() => Promise.resolve()),
-      respondToQuestion: vi.fn(() => Promise.resolve()),
-      killSession: vi.fn(() => Promise.resolve()),
-      abortSession: vi.fn(() => Promise.resolve()),
-      setSessionMode: vi.fn(),
-    };
-    const sm = {
-      ...createSessionManager(),
-      deleteSession: vi.fn(),
-      removeLinkByKrakiId: vi.fn(),
-      markActive: vi.fn(),
-    };
-    const km = createKeyManager();
-    return { adapter, sm, km };
-  }
-
-  /** Connect and complete auth, then return ws and adapter/sm. */
-  function connectWithPending(
-    pendingMessages: Array<Record<string, unknown>>,
-  ): { adapter: Record<string, unknown>; sm: Record<string, unknown>; ws: typeof sockets[number] } {
-    const { adapter, sm, km } = buildClientWithKeys();
-    const client = new RelayClient(adapter, sm, {
-      relayUrl: 'ws://localhost:4000',
-      authMethod: 'open',
-      device: { name: 'Test', role: 'tentacle' },
-      reconnectDelay: 10,
-    }, km);
-    client.connect();
-    sockets[0].emit('open');
-    // The decryptFromBlob mock returns blob field as plaintext, so we put
-    // a JSON-stringified ConsumerMessage in the blob field directly.
-    const envelopes = pendingMessages.map((inner) => ({
-      type: 'unicast',
-      to: 'dev_1',
-      blob: JSON.stringify(inner),
-      keys: { dev_1: 'x' },
-    }));
-    sockets[0].emit('message', Buffer.from(JSON.stringify({
-      type: 'auth_ok',
-      deviceId: 'dev_1',
-      authMethod: 'open',
-      user: { id: 'u1', login: 'test', provider: 'open' },
-      devices: [],
-      pendingMessages: envelopes,
-    })));
-    return { adapter, sm, ws: sockets[0] };
-  }
-
-  it('processes pending delete_session', () => {
-    const { adapter, sm } = connectWithPending([
-      {
-        type: 'delete_session',
-        sessionId: 'stale_sess',
-        deviceId: 'dev_app',
-        seq: 1,
-        timestamp: new Date().toISOString(),
-        payload: {},
-      },
-    ]);
-
-    expect(sm.deleteSession).toHaveBeenCalledWith('stale_sess');
-    expect(sm.removeLinkByKrakiId).toHaveBeenCalledWith('stale_sess');
-    expect(adapter.killSession).toHaveBeenCalledWith('stale_sess');
-  });
-
-  it('drops stale send_input without broadcasting user_message or calling adapter', () => {
-    const { adapter, ws } = connectWithPending([
-      {
-        type: 'send_input',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 1,
-        timestamp: new Date().toISOString(),
-        payload: { text: 'remove the pinned icon' },
-      },
-    ]);
-
-    expect(adapter.sendMessage).not.toHaveBeenCalled();
-    const sent = ws.sent.map((s: string) => JSON.parse(s));
-    const userMsg = sent.find((m: { type: string }) => m.type === 'user_message');
-    expect(userMsg).toBeUndefined();
-  });
-
-  it('drops stale approve / deny without calling adapter.respondToPermission', () => {
-    const { adapter } = connectWithPending([
-      {
-        type: 'approve',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 1,
-        timestamp: new Date().toISOString(),
-        payload: { permissionId: 'perm_1' },
-      },
-      {
-        type: 'deny',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 2,
-        timestamp: new Date().toISOString(),
-        payload: { permissionId: 'perm_2' },
-      },
-    ]);
-
-    expect(adapter.respondToPermission).not.toHaveBeenCalled();
-  });
-
-  it('drops stale set_session_mode without applying it', () => {
-    const { adapter, sm } = connectWithPending([
-      {
-        type: 'set_session_mode',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 1,
-        timestamp: new Date().toISOString(),
-        payload: { mode: 'execute' },
-      },
-    ]);
-
-    expect(adapter.setSessionMode).not.toHaveBeenCalled();
-    expect(sm.setMode).not.toHaveBeenCalled();
-  });
-
-  it('processes delete_session even when mixed with stale send_input', () => {
-    const { adapter, sm } = connectWithPending([
-      {
-        type: 'send_input',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 1,
-        timestamp: new Date().toISOString(),
-        payload: { text: 'stale text' },
-      },
-      {
-        type: 'delete_session',
-        sessionId: 'sess_doomed',
-        deviceId: 'dev_app',
-        seq: 2,
-        timestamp: new Date().toISOString(),
-        payload: {},
-      },
-      {
-        type: 'approve',
-        sessionId: 'sess_1',
-        deviceId: 'dev_app',
-        seq: 3,
-        timestamp: new Date().toISOString(),
-        payload: { permissionId: 'perm_x' },
-      },
-    ]);
-
-    expect(sm.deleteSession).toHaveBeenCalledWith('sess_doomed');
-    expect(adapter.sendMessage).not.toHaveBeenCalled();
-    expect(adapter.respondToPermission).not.toHaveBeenCalled();
-  });
-});
-
-describe('RelayClient delivery assurance', () => {
-  beforeEach(() => {
-    sockets.length = 0;
-    vi.useFakeTimers();
-  });
-
-  function buildAuthedClient() {
-    const adapter = createAdapter();
-    const sm = createSessionManager();
-    const km = createKeyManager();
-    const client = new RelayClient(adapter, sm, {
-      relayUrl: 'ws://localhost:4000',
-      authMethod: 'open',
-      device: { name: 'Test', role: 'tentacle' },
-      reconnectDelay: 10,
-    }, km);
-    client.connect();
-    sockets[0].emit('open');
-    sockets[0].emit('message', Buffer.from(JSON.stringify({
-      type: 'auth_ok',
-      deviceId: 'dev_t',
-      authMethod: 'open',
-      user: { id: 'u1', login: 'test', provider: 'open' },
-      devices: [],
-    })));
-    return { adapter, sm, client, ws: sockets[0] };
-  }
-
-  it('echoes ack in pong response with highest received relaySeq', () => {
-    const { ws } = buildAuthedClient();
-    ws.sent.length = 0;
-
-    // Head sends some tracked messages.
-    ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'device_joined',
-      device: { id: 'app-1', name: 'Phone', role: 'app', online: true },
-      relaySeq: 3,
-    })));
-    ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'device_joined',
-      device: { id: 'app-2', name: 'Phone2', role: 'app', online: true },
-      relaySeq: 5,
-    })));
-
-    // Head pings — tentacle responds with pong including cumulative ack.
-    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 6 })));
-
-    const sent = ws.sent.map(s => JSON.parse(s));
-    const pong = sent.find(m => m.type === 'pong');
-    expect(pong).toBeDefined();
-    expect(pong.ack).toBe(6); // ping advanced lastReceivedRelaySeq to 6
-  });
-
-  it('dedups duplicate inbound relaySeq from head', () => {
-    const { ws } = buildAuthedClient();
-
-    // device_joined for the same app, sent twice with same relaySeq (a retry).
-    const device = { id: 'app-1', name: 'Phone', role: 'app', encryptionKey: 'pub', online: true };
-    ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'device_joined',
-      device,
-      relaySeq: 1,
-    })));
-    const firstSendCount = ws.sent.length;
-
-    // Duplicate retry — should be silently dropped, no additional outbound effect.
-    ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'device_joined',
-      device,
-      relaySeq: 1,
-    })));
-
-    // No additional greeting/session_list cascade triggered by the duplicate.
-    expect(ws.sent.length).toBe(firstSendCount);
-  });
-
-  it('does not flip lastReceivedRelaySeq backward', () => {
-    const { ws } = buildAuthedClient();
-    ws.sent.length = 0;
-
-    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 10 })));
-    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping', relaySeq: 5 })));
-
-    // Pongs reflect highest seen — 10 from first, still 10 after the lower one.
-    const pongs = ws.sent.map(s => JSON.parse(s)).filter(m => m.type === 'pong');
-    expect(pongs.length).toBe(2);
-    expect(pongs[0].ack).toBe(10);
-    expect(pongs[1].ack).toBe(10);
-  });
-
-  it('handles inbound messages without relaySeq normally (old relay compat)', () => {
-    const { ws } = buildAuthedClient();
-
-    // Old-style ping with no relaySeq.
-    ws.emit('message', Buffer.from(JSON.stringify({ type: 'ping' })));
-
-    const sent = ws.sent.map(s => JSON.parse(s));
-    const pong = sent.find(m => m.type === 'pong');
-    expect(pong).toBeDefined();
-    expect(pong.ack).toBeUndefined(); // no relaySeq received, no ack to send
-  });
-
-  it('resets ack tracking after reconnect', () => {
-    const { ws, client } = buildAuthedClient();
-
-    ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'device_joined',
-      device: { id: 'app-1', name: 'Phone', role: 'app', online: true },
-      relaySeq: 7,
-    })));
-
-    // Disconnect and reconnect to a fresh socket.
-    ws.close();
-    client.connect();
-    const ws2 = sockets[1]!;
-    ws2.emit('open');
-    ws2.emit('message', Buffer.from(JSON.stringify({
-      type: 'auth_ok',
-      deviceId: 'dev_t',
-      authMethod: 'open',
-      user: { id: 'u1', login: 'test', provider: 'open' },
-      devices: [],
-    })));
-    ws2.sent.length = 0;
-
-    ws2.emit('message', Buffer.from(JSON.stringify({ type: 'ping' })));
-
-    const pong = ws2.sent.map(s => JSON.parse(s)).find(m => m.type === 'pong');
-    expect(pong).toBeDefined();
-    expect(pong.ack).toBeUndefined(); // state cleared, no stale ack
   });
 });
 
@@ -1126,15 +867,14 @@ describe('RelayClient tool message lazy-load shape', () => {
 
     const adapter = createAdapter();
     const sm = createSessionManager();
-    // No keyManager → relay-client bypasses E2E encryption and sends messages
-    // directly. This matches how existing relay-client tests work and lets us
-    // inspect the wire shape from ws.sent.
+    // A keyManager makes producer messages ride encrypted pulse frames; the
+    // wire shape is then read back via decodePulseSends (see helper up top).
     const client = new RelayClient(adapter, sm, {
       relayUrl: 'ws://localhost:4000',
       authMethod: 'open',
       device: { name: 'Test', role: 'tentacle' },
       reconnectDelay: 10,
-    }, null, store);
+    }, createKeyManager(), store);
     client.connect();
     sockets[0].emit('open');
     sockets[0].emit('message', Buffer.from(JSON.stringify({
@@ -1143,6 +883,13 @@ describe('RelayClient tool message lazy-load shape', () => {
       authMethod: 'open',
       user: { id: 'u1', login: 'test', provider: 'open' },
       devices: [],
+    })));
+    // Register a consumer device so `consumerKeys` is populated — otherwise
+    // send() has no recipients and queues messages instead of putting them on
+    // the wire.
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
     return { adapter, sm, client, ws: sockets[0], store, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
@@ -1157,7 +904,7 @@ describe('RelayClient tool message lazy-load shape', () => {
         args: bigArgs,
         toolCallId: 'tc1',
       });
-      const start = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_start');
+      const start = decodePulseSends(ws.sent).find(m => m.type === 'tool_start');
       expect(start).toBeDefined();
       expect(start.payload.toolName).toBe('bash');
       expect(start.payload.headline).toMatch(/^\$ echo/);
@@ -1177,7 +924,7 @@ describe('RelayClient tool message lazy-load shape', () => {
         args: { path: '/foo.ts' },
         toolCallId: 'tc1',
       });
-      const start = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_start');
+      const start = decodePulseSends(ws.sent).find(m => m.type === 'tool_start');
       expect(start.payload.headline).toBe('/foo.ts');
       expect(start.payload.argsRef).toBeUndefined();
       expect(start.payload.args).toEqual({ path: '/foo.ts' });
@@ -1193,7 +940,7 @@ describe('RelayClient tool message lazy-load shape', () => {
         result: 'ok',
         toolCallId: 'tc1',
       });
-      const complete = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_complete');
+      const complete = decodePulseSends(ws.sent).find(m => m.type === 'tool_complete');
       expect(complete.payload.toolName).toBe('bash');
       expect(complete.payload.result).toBeUndefined();
       expect(complete.payload.resultRef).toBeDefined();
@@ -1211,7 +958,7 @@ describe('RelayClient tool message lazy-load shape', () => {
         result: 'hello world',
         toolCallId: 'tc1',
       });
-      const sent = ws.sent.map(s => JSON.parse(s));
+      const sent = decodePulseSends(ws.sent);
       const completeIdx = sent.findIndex(m => m.type === 'tool_complete');
       const chunkIdx = sent.findIndex(m => m.type === 'attachment_data');
       expect(completeIdx).toBeGreaterThanOrEqual(0);
@@ -1233,7 +980,7 @@ describe('RelayClient tool message lazy-load shape', () => {
         result: '',
         toolCallId: 'tc1',
       });
-      const complete = ws.sent.map(s => JSON.parse(s)).find(m => m.type === 'tool_complete');
+      const complete = decodePulseSends(ws.sent).find(m => m.type === 'tool_complete');
       expect(complete.payload.resultRef).toBeUndefined();
     } finally { cleanup(); }
   });
@@ -1290,7 +1037,7 @@ describe('RelayClient delta debounce', () => {
         device: { name: 'Test', role: 'tentacle' },
         reconnectDelay: 10,
       },
-      null,
+      createKeyManager(),
     );
     client.connect();
     sockets[0].emit('open');
@@ -1300,6 +1047,13 @@ describe('RelayClient delta debounce', () => {
       authMethod: 'open',
       user: { id: 'u1', login: 'test', provider: 'local' },
       devices: [],
+    })));
+    // Register a consumer device so `consumerKeys` is populated — otherwise
+    // send() has no recipients and queues deltas instead of putting the merged
+    // pulse frame on the wire.
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
     sockets[0].sent.length = 0;
     return { adapter, sm, client };
@@ -1314,12 +1068,11 @@ describe('RelayClient delta debounce', () => {
     onDelta('s1', { content: 'world!' });
 
     // Nothing on the wire yet — buffered.
-    expect(sockets[0].sent.filter(s => JSON.parse(s).type === 'agent_message_delta')).toHaveLength(0);
+    expect(decodePulseSends(sockets[0].sent).filter(m => m.type === 'agent_message_delta')).toHaveLength(0);
 
     vi.advanceTimersByTime(40);
 
-    const deltas = sockets[0].sent
-      .map(s => JSON.parse(s))
+    const deltas = decodePulseSends(sockets[0].sent)
       .filter(m => m.type === 'agent_message_delta');
     expect(deltas).toHaveLength(1);
     expect(deltas[0].payload.content).toBe('Hello, world!');
@@ -1336,13 +1089,14 @@ describe('RelayClient delta debounce', () => {
     // Final message arrives before the timer fires — must trigger a sync flush.
     onMessage('s1', { content: 'final reply' });
 
-    const types = sockets[0].sent.map(s => JSON.parse(s).type);
+    const decoded = decodePulseSends(sockets[0].sent);
+    const types = decoded.map(m => m.type);
     const deltaIdx = types.indexOf('agent_message_delta');
     const finalIdx = types.indexOf('agent_message');
     expect(deltaIdx).toBeGreaterThanOrEqual(0);
     expect(finalIdx).toBeGreaterThan(deltaIdx);
 
-    const delta = JSON.parse(sockets[0].sent[deltaIdx]);
+    const delta = decoded[deltaIdx];
     expect(delta.payload.content).toBe('streaming text');
   });
 
@@ -1356,8 +1110,7 @@ describe('RelayClient delta debounce', () => {
 
     vi.advanceTimersByTime(40);
 
-    const deltas = sockets[0].sent
-      .map(s => JSON.parse(s))
+    const deltas = decodePulseSends(sockets[0].sent)
       .filter(m => m.type === 'agent_message_delta');
     const bySession = new Map(deltas.map(d => [d.sessionId, d.payload.content]));
     expect(bySession.get('s1')).toBe('aa');
@@ -1473,15 +1226,24 @@ describe('RelayClient handleSessionMessagesRange', () => {
       })));
     }
 
-    /** Find the single range-batch reply produced by the last request. */
+    /** Find the single range-batch reply produced by the last request.
+     *  Per-app replies now ride pulse: the unicast envelope carries a `pulse`
+     *  frame (empty blob). Decode each captured frame at the wire level and read
+     *  the DATA frames' payloads. Each payload is `JSON.stringify({blob, keys})`;
+     *  the crypto mock makes `blob` the raw plaintext message JSON (see the
+     *  encryptToBlob/decryptFromBlob mocks above). */
     function lastRangeBatch(): RangeBatch | undefined {
+      let found: RangeBatch | undefined;
       for (const raw of ws.sent) {
         const env = JSON.parse(raw);
-        if (env.type !== 'unicast' || env.to !== 'consumer-dev') continue;
-        const inner = JSON.parse(env.blob as string);
-        if (inner.type === 'session_messages_range_batch') return inner as RangeBatch;
+        if (env.type !== 'unicast' || env.to !== 'consumer-dev' || typeof env.pulse !== 'string') continue;
+        const frame = decodeFrame(new Uint8Array(Buffer.from(env.pulse as string, 'base64')));
+        if (!frame || frame.t !== 'data') continue;
+        const { blob } = JSON.parse(new TextDecoder().decode(frame.payload)) as { blob: string };
+        const inner = JSON.parse(blob);
+        if (inner.type === 'session_messages_range_batch') found = inner as RangeBatch;
       }
-      return undefined;
+      return found;
     }
 
     return { adapter, sm, client, ws, sendRangeRequest, lastRangeBatch };

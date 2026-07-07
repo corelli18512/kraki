@@ -41,8 +41,8 @@ describe('device_pending liveness broadcast', () => {
     tentacle.send({ type: 'pong' });
     await new Promise(r => setTimeout(r, 50));
 
-    // Run retry pass (includes pending check) — pong arrived, so no pending
-    env.server.forceRetryPass();
+    // Run liveness sweep — pong arrived, so no pending
+    env.server.forceLivenessSweep();
     await new Promise(r => setTimeout(r, 100));
 
     expect(messagesOfType(app.messages, 'device_pending')).toHaveLength(0);
@@ -61,8 +61,8 @@ describe('device_pending liveness broadcast', () => {
     // Expire the grace timer (simulates 8s passing without pong)
     env.server.expirePongGrace(tentacle.deviceId);
 
-    // Retry pass detects overdue → broadcasts device_pending
-    env.server.forceRetryPass();
+    // Liveness sweep detects overdue → broadcasts device_pending
+    env.server.forceLivenessSweep();
 
     const pending = await app.waitFor('device_pending', 2000);
     expect(pending.deviceId).toBe(tentacle.deviceId);
@@ -86,7 +86,7 @@ describe('device_pending liveness broadcast', () => {
 
     // Grace expires
     env.server.expirePongGrace(tentacle.deviceId);
-    env.server.forceRetryPass();
+    env.server.forceLivenessSweep();
 
     const pending = await app.waitFor('device_pending', 2000);
     expect(pending.deviceId).toBe(tentacle.deviceId);
@@ -106,7 +106,7 @@ describe('device_pending liveness broadcast', () => {
 
     env.server.simulatePingSent(tentacle.deviceId);
     env.server.expirePongGrace(tentacle.deviceId);
-    env.server.forceRetryPass();
+    env.server.forceLivenessSweep();
 
     await app.waitFor('device_pending', 2000);
     await new Promise(r => setTimeout(r, 100));
@@ -130,18 +130,18 @@ describe('device_pending liveness broadcast', () => {
     env.server.simulatePingSent(tentacle.deviceId);
     tentacle.send({ type: 'pong' });
     await new Promise(r => setTimeout(r, 50));
-    env.server.forceRetryPass();
+    env.server.forceLivenessSweep();
 
     // Cycle 2: same
     env.server.simulatePingSent(tentacle.deviceId);
     tentacle.send({ type: 'pong' });
     await new Promise(r => setTimeout(r, 50));
-    env.server.forceRetryPass();
+    env.server.forceLivenessSweep();
 
     // Cycle 3: grace expires → pending
     env.server.simulatePingSent(tentacle.deviceId);
     env.server.expirePongGrace(tentacle.deviceId);
-    env.server.forceRetryPass();
+    env.server.forceLivenessSweep();
 
     await app.waitFor('device_pending', 2000);
     await new Promise(r => setTimeout(r, 100));

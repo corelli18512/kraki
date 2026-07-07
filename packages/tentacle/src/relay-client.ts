@@ -13,8 +13,8 @@ import { homedir } from 'node:os';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
-  BroadcastEnvelope, UnicastEnvelope,
 } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
@@ -26,6 +26,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
+import { TentaclePulse } from './tentacle-pulse.js';
 
 const logger = createLogger('relay-client');
 
@@ -103,6 +104,10 @@ export class RelayClient {
   // ── Push preview state ─────────────────────────────
   /** Last agent message content per session (for idle push preview) */
   private lastAgentContent = new Map<string, string>();
+  /** Push preview to attach to the next pulse broadcast envelope (set just
+   *  before pulse.send for a notification-worthy message, consumed by
+   *  sendPulseEnvelope). */
+  private pendingPushPreview: { blob: string; keys: Record<string, string> } | undefined;
 
   // ── Streaming delta debounce ───────────────────────
   // Each agent_message_delta otherwise triggers a full hybrid encryption
@@ -130,15 +135,6 @@ export class RelayClient {
   /** How often to check for stale connection (ms) */
   private static readonly STALE_CHECK_INTERVAL = 5_000;
 
-  // ── Delivery assurance state (per-connection) ──────────────
-  /** Highest relaySeq received from head on this connection. Echoed back as
-   *  `ack` in outbound messages so head can prune its in-flight buffer. */
-  private lastReceivedRelaySeq = 0;
-  /** Recent relaySeqs already processed — used to silently drop duplicate
-   *  retries from head. Bounded; cleared on reconnect. */
-  private seenRelaySeqs = new Set<number>();
-  private static readonly RELAY_SEQ_DEDUP_WINDOW = 200;
-
   /** Called when relay state changes */
   onStateChange: ((state: RelayClientState) => void) | null = null;
   /** Called on auth success */
@@ -161,8 +157,19 @@ export class RelayClient {
     this.options = options;
     this.keyManager = keyManager ?? null;
     this.attachmentStore = attachmentStore;
+    // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
+    this.pulse = new TentaclePulse(
+      {
+        now: () => Date.now(),
+        sendPulseFrame: (pulseB64, targetDeviceId) => this.sendPulseEnvelope(pulseB64, targetDeviceId),
+        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
+      },
+      `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
+    );
     this.wireAdapterEvents();
   }
+
+  private readonly pulse: TentaclePulse;
 
   private readonly attachmentStore?: import('./attachment-store.js').AttachmentStore;
 
@@ -262,10 +269,6 @@ export class RelayClient {
     this.intentionalDisconnect = false;
     this.setState('connecting');
 
-    // Reset delivery-assurance state — relaySeq is per-connection.
-    this.lastReceivedRelaySeq = 0;
-    this.seenRelaySeqs.clear();
-
     const ws = new WebSocket(this.options.relayUrl);
     this.ws = ws;
 
@@ -286,8 +289,6 @@ export class RelayClient {
       this.lastActivityAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
-        // Dedup duplicate retries from head silently.
-        if (this.trackInboundRelaySeq(msg)) return;
         this.handleMessage(msg);
       } catch {
         // Ignore malformed messages from head
@@ -300,6 +301,7 @@ export class RelayClient {
       this.ws = null;
       logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
+      this.pulse.onDisconnected();
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -369,11 +371,10 @@ export class RelayClient {
       }
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
+      // Bring up the pulse endpoint to the relay (resume the stream).
+      this.pulse.onConnected();
       // Initialize events watcher for imported sessions
       this.initEventsWatcher();
-      // Process queued messages from the relay BEFORE broadcasting session list
-      // so that deletes/mode changes are applied first
-      this.processPendingMessages(this.authInfo.pendingMessages);
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
       this.broadcastSessionList();
@@ -424,9 +425,7 @@ export class RelayClient {
     if (msg.type === 'ping') {
       logger.debug('Received JSON ping from relay');
       if (this.ws?.readyState === WebSocket.OPEN) {
-        const pong: Record<string, unknown> = { type: 'pong' };
-        if (this.lastReceivedRelaySeq > 0) pong.ack = this.lastReceivedRelaySeq;
-        this.ws.send(JSON.stringify(pong));
+        this.ws.send(JSON.stringify({ type: 'pong' }));
         logger.debug('Sent JSON pong to relay');
       } else {
         logger.warn({ readyState: this.ws?.readyState }, 'Could not pong — WS not open');
@@ -468,6 +467,12 @@ export class RelayClient {
 
     // Incoming encrypted messages from apps — decrypt and handle inner message
     if ((msg.type === 'unicast' || msg.type === 'broadcast') && this.keyManager && this.authInfo) {
+      // Pulse-framed? Feed the frame to our endpoint; a `deliver` will call
+      // handlePulseDelivered with the {blob,keys} payload to decrypt.
+      if (typeof msg.pulse === 'string') {
+        this.pulse.onFrame(msg.pulse as string);
+        return;
+      }
       try {
         const decrypted = decryptFromBlob(
           { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
@@ -626,36 +631,48 @@ export class RelayClient {
             });
           break;
         case 'approve':
+          // Broadcast the resolution only AFTER the adapter actually applies it,
+          // so arms are never told "approved" for a permission that failed /
+          // already timed out. (Adapter no-ops on an unknown/resolved id, so a
+          // pulse resend is safe.)
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
           break;
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
+            .then(() => {
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
             });
-          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
           break;
         case 'answer':
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, msg.payload.wasFreeform ?? false)
+            .then(() => {
+              this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
+            })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToQuestion failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
             });
-          this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
           break;
         case 'kill_session':
           this.adapter.killSession(sessionId)
@@ -675,8 +692,7 @@ export class RelayClient {
         case 'delete_session':
           // Remove from local session state SYNCHRONOUSLY. The adapter's
           // killSession runs async and may take a while to talk to the
-          // Copilot SDK; we don't want broadcastSessionList (which fires
-          // immediately after processPendingMessages on auth_ok) to see
+          // Copilot SDK; we don't want broadcastSessionList to see
           // the still-tracked session and broadcast it back to arms.
           this.sessionManager.removeLinkByKrakiId(sessionId);
           this.sessionManager.deleteSession(sessionId);
@@ -878,7 +894,7 @@ export class RelayClient {
       };
 
       if (requesterKey) {
-        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+        this.sendReliableUnicastTo(requesterDeviceId, requesterKey, response);
       } else {
         // No encryption key — broadcast (works in open/non-E2E mode)
         this.send(response as Partial<ProducerMessage>);
@@ -896,7 +912,7 @@ export class RelayClient {
       };
 
       if (requesterKey) {
-        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+        this.sendReliableUnicastTo(requesterDeviceId, requesterKey, response);
       } else {
         this.send(response as Partial<ProducerMessage>);
       }
@@ -1062,57 +1078,6 @@ export class RelayClient {
     // Start watching all currently linked sessions
     for (const link of this.sessionManager.getAllLinks()) {
       this.eventsWatcher.watch(link.localSessionId);
-    }
-  }
-
-  // ── Pending message processing ─────────────────────
-
-  /**
-   * Process queued unicast envelopes delivered by the relay in auth_ok.
-   * These are messages sent by arms while this tentacle was offline — they
-   * may be seconds to days old depending on how long the device was
-   * disconnected (the relay's pending_messages table has a 30-day TTL).
-   *
-   * Currently only `delete_session` is replayed: it's idempotent, time-
-   * insensitive, and the user's explicit intent to remove a session
-   * remains valid no matter how stale. Other types (send_input, approve,
-   * set_session_mode, etc.) carry interactive intent that decays quickly
-   * and could cause confusing behavior if replayed — e.g. a stale
-   * send_input would broadcast a phantom user_message and kick off an
-   * agent turn the user never asked for. Those are logged and dropped
-   * here; deciding which (if any) to replay needs further design.
-   *
-   * Must run before broadcastSessionList so delete_session takes effect
-   * before the arm receives the session list (otherwise the just-deleted
-   * session would appear in the list and then disappear).
-   */
-  private processPendingMessages(messages?: UnicastEnvelope[]): void {
-    if (!messages || messages.length === 0 || !this.keyManager || !this.authInfo) return;
-
-    logger.info(`Processing ${messages.length} pending message(s) from relay`);
-    let processed = 0;
-    let skipped = 0;
-    for (const envelope of messages) {
-      try {
-        const decrypted = decryptFromBlob(
-          { blob: envelope.blob, keys: envelope.keys },
-          this.authInfo.deviceId,
-          this.keyManager.getKeyPair().privateKey,
-        );
-        const inner = JSON.parse(decrypted) as ConsumerMessage;
-        if (inner.type !== 'delete_session') {
-          logger.debug({ type: inner.type }, 'Skipping stale pending message');
-          skipped += 1;
-          continue;
-        }
-        this.handleConsumerMessage(inner);
-        processed += 1;
-      } catch (err) {
-        logger.warn({ err }, 'Failed to process pending message');
-      }
-    }
-    if (skipped > 0) {
-      logger.info({ processed, skipped }, 'Pending message replay summary');
     }
   }
 
@@ -1480,7 +1445,7 @@ export class RelayClient {
       timestamp: new Date().toISOString(),
       payload: { sessions },
     };
-    this.sendUnicastTo(targetDeviceId, compactPubKey, msg);
+    this.sendReliableUnicastTo(targetDeviceId, compactPubKey, msg);
   }
 
   /**
@@ -1540,7 +1505,7 @@ export class RelayClient {
         totalLastSeq: meta?.lastSeq ?? replayedLastSeq,
       },
     };
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   /**
@@ -1555,7 +1520,7 @@ export class RelayClient {
 
     const meta = this.sessionManager.getMeta(sessionId);
     if (!meta) {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1569,7 +1534,7 @@ export class RelayClient {
     const endSeqExclusive = beforeSeq ?? headSeq + 1;
 
     if (endSeqExclusive <= 1) {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1620,7 +1585,7 @@ export class RelayClient {
       { requesterDeviceId, sessionId, beforeSeq, startSeq, endSeqInclusive, count: parsed.length },
       'Replied to turn-aware session messages request',
     );
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   /**
@@ -1661,7 +1626,7 @@ export class RelayClient {
     }
 
     const sendEmpty = (): void => {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_range_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1731,7 +1696,7 @@ export class RelayClient {
       { requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq, count: parsed.length, truncated },
       'Replied to range session messages request',
     );
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   // ── Attachment bytes ────────────────────────────────
@@ -1833,7 +1798,7 @@ export class RelayClient {
           data: slice.toString('base64'),
         },
       };
-      this.sendUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
     }
   }
 
@@ -1852,7 +1817,7 @@ export class RelayClient {
       timestamp: new Date().toISOString(),
       payload: { id, index: 0, total: 0, mimeType: '', data: '', error },
     };
-    this.sendUnicastTo(requesterDeviceId, requesterKey, errorMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, errorMsg);
   }
 
   // ── Client log shipping ─────────────────────────────
@@ -1932,33 +1897,26 @@ export class RelayClient {
       this.eventsWatcher.skipToEnd(sessionId);
     }
 
-    if (this.keyManager) {
-      if (this.consumerKeys.size === 0) {
-        // No consumer keys at all — queue until a device registers
-        if (this.pendingE2eQueue.length < 1000) {
-          this.pendingE2eQueue.push(msg);
-        } else {
-          logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
-        }
-        return;
-      }
-
-      // Broadcast to all known devices (online get it via WS, offline via pushPreview)
-      this.sendEncrypted(msg);
-
-      // Also queue if no online consumers, so new devices get it on connect
-      if (this.onlineConsumers.size === 0) {
-        if (this.pendingE2eQueue.length < 1000) {
-          this.pendingE2eQueue.push(msg);
-        }
+    if (this.consumerKeys.size === 0) {
+      // No consumer keys at all — queue until a device registers
+      if (this.pendingE2eQueue.length < 1000) {
+        this.pendingE2eQueue.push(msg);
+      } else {
+        logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
       }
       return;
     }
 
-    try {
-      this.ws.send(JSON.stringify(this.withAck(msg as Record<string, unknown>)));
-    } catch (err) {
-      logger.error({ err }, 'ws.send failed');
+    // Broadcast to all known devices (online get it via WS, offline via pushPreview).
+    // Everything rides pulse — there is no non-E2E plaintext path (a keyManager is
+    // always present; daemon-worker constructs one unconditionally).
+    this.sendEncrypted(msg);
+
+    // Also queue if no online consumers, so new devices get it on connect
+    if (this.onlineConsumers.size === 0) {
+      if (this.pendingE2eQueue.length < 1000) {
+        this.pendingE2eQueue.push(msg);
+      }
     }
   }
 
@@ -2005,36 +1963,8 @@ export class RelayClient {
     this.deltaBuffers.clear();
   }
 
-  /** Inject cumulative ack into an outbound envelope. Piggybacks delivery
-   *  acknowledgments on existing traffic — no dedicated ack message. */
-  private withAck<T extends Record<string, unknown>>(msg: T): T {
-    if (this.lastReceivedRelaySeq <= 0) return msg;
-    return { ...msg, ack: this.lastReceivedRelaySeq };
-  }
-
-  /** Update inbound relaySeq tracking. Returns true if this is a duplicate
-   *  retry from head and should be silently dropped. */
-  private trackInboundRelaySeq(msg: Record<string, unknown>): boolean {
-    if (!('relaySeq' in msg)) return false;
-    const seq = msg.relaySeq;
-    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
-
-    if (this.seenRelaySeqs.has(seq)) {
-      return true;
-    }
-    if (this.seenRelaySeqs.size >= RelayClient.RELAY_SEQ_DEDUP_WINDOW) {
-      const iter = this.seenRelaySeqs.values().next();
-      if (!iter.done) this.seenRelaySeqs.delete(iter.value);
-    }
-    this.seenRelaySeqs.add(seq);
-    if (seq > this.lastReceivedRelaySeq) {
-      this.lastReceivedRelaySeq = seq;
-    }
-    return false;
-  }
-
   /**
-   * Encrypt and send a message to the relay as a BroadcastEnvelope.
+   * Encrypt a producer message to all consumers and send it over pulse.
    */
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
@@ -2053,63 +1983,130 @@ export class RelayClient {
       const plaintext = JSON.stringify(msg);
       const { blob, keys } = encryptToBlob(plaintext, recipients);
 
-      const envelope: BroadcastEnvelope = {
-        type: 'broadcast',
-        blob,
-        keys,
-      };
-
-      // Track last agent message for idle push preview
+      // Track last agent message for idle push preview (needed by both paths).
       if (msg.type === 'agent_message' && msg.sessionId) {
         const content = (msg.payload as Record<string, unknown>).content as string;
         if (content) this.lastAgentContent.set(msg.sessionId as string, content);
       }
 
-      // Build encrypted push preview for notification-worthy messages
-      let previewSummary: string | undefined;
-      if (msg.type === 'permission') {
-        previewSummary = (msg.payload as Record<string, unknown>).description as string;
-      } else if (msg.type === 'question') {
-        previewSummary = (msg.payload as Record<string, unknown>).question as string;
-      } else if (msg.type === 'idle') {
-        previewSummary = this.lastAgentContent.get(msg.sessionId as string);
-      }
-
-      if (previewSummary) {
-        const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
-        const previewBlob = encryptToBlob(preview, recipients);
-        envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
-      }
-
-      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+      // All producer messages ride the per-hop pulse endpoint to head (head fans
+      // out + acks + durably holds for offline arms). The pulse frame's payload
+      // carries BOTH the ciphertext blob AND the per-recipient keys, so everything
+      // the receiver needs travels together through head (head never touches keys).
+      //
+      // The push preview (for notification-worthy messages) rides the SAME pulse
+      // envelope — the head reads `pushPreview` off it in its broadcast branch — so
+      // there is no separate raw send.
+      this.pendingPushPreview = this.buildPushPreview(msg, recipients);
+      this.pulse.send(JSON.stringify({ blob, keys }));
+      this.pendingPushPreview = undefined;
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
     }
   }
 
+  /** Put a pulse frame on the wire. With no target it rides a BROADCAST envelope
+   *  (head fans out to all the user's apps); with a `targetDeviceId` it rides a
+   *  UNICAST envelope so head forwards it to exactly that one app. head reads
+   *  `pulse` for transport (+ `to` for unicast routing); the payload ({blob,keys})
+   *  is inside the frame. */
+  private sendPulseEnvelope(pulseB64: string, targetDeviceId?: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const envelope: Record<string, unknown> = targetDeviceId
+      ? { type: 'unicast', to: targetDeviceId, pulse: pulseB64, blob: '', keys: {} }
+      : { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
+    // Attach a pending push preview (broadcast messages only) to this same
+    // envelope so the head's push manager reaches offline devices — no separate
+    // raw send. Consume it so it rides exactly one frame.
+    if (!targetDeviceId && this.pendingPushPreview) {
+      envelope.pushPreview = this.pendingPushPreview;
+      this.pendingPushPreview = undefined;
+    }
+    this.ws.send(JSON.stringify(envelope));
+  }
+
+  /** A reliable consumer message was delivered in order by pulse (arm→tentacle),
+   *  OR a plaintext head-originated control message ({from:'@head'} — presence).
+   *  `payloadJson` is a JSON string of either shape; dispatch accordingly. */
+  private handlePulseDelivered(payloadJson: string): void {
+    if (!this.keyManager || !this.authInfo) return;
+    let parsed: { from?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
+    try {
+      parsed = JSON.parse(payloadJson);
+    } catch (err) {
+      logger.error({ err }, 'Pulse delivered payload parse failed');
+      return;
+    }
+    // Head-originated plaintext control (device_joined/left/removed, etc.): route
+    // back through the normal presence handling in handleMessage. This is
+    // load-bearing — device_joined registers the app's consumer key.
+    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
+      this.handleMessage(parsed.msg);
+      return;
+    }
+    try {
+      const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
+      const decrypted = decryptFromBlob(
+        { blob, keys },
+        this.authInfo.deviceId,
+        this.keyManager.getKeyPair().privateKey,
+      );
+      this.handleConsumerMessage(JSON.parse(decrypted) as ConsumerMessage);
+    } catch (err) {
+      logger.error({ err }, 'Pulse delivered payload decrypt failed');
+    }
+  }
+
+  /** Build the encrypted push preview for a notification-worthy message, or
+   *  undefined if the message isn't one. The preview rides the SAME pulse
+   *  envelope as the reliable message (attached by sendPulseEnvelope), so the
+   *  head's push manager can notify offline devices without a separate raw send. */
+  private buildPushPreview(
+    msg: Partial<ProducerMessage>,
+    recipients: RecipientKey[],
+  ): { blob: string; keys: Record<string, string> } | undefined {
+    let previewSummary: string | undefined;
+    if (msg.type === 'permission') {
+      previewSummary = (msg.payload as Record<string, unknown>).description as string;
+    } else if (msg.type === 'question') {
+      previewSummary = (msg.payload as Record<string, unknown>).question as string;
+    } else if (msg.type === 'idle') {
+      previewSummary = this.lastAgentContent.get(msg.sessionId as string);
+    }
+    if (!previewSummary) return undefined;
+    try {
+      const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
+      const previewBlob = encryptToBlob(preview, recipients);
+      return { blob: previewBlob.blob, keys: previewBlob.keys };
+    } catch (err) {
+      logger.debug({ err }, 'Pulse push-preview build failed');
+      return undefined;
+    }
+  }
+
   /**
-   * Encrypt and send a message to a single device as a UnicastEnvelope.
+   * Reliable per-app send over pulse. Encrypts `msg` for exactly one app, then
+   * hands the {blob,keys} to the pulse endpoint addressed to that app (head
+   * forwards it over the second pulse hop). Non-durable by default — sync
+   * snapshots (session_list, greeting) self-heal on reconnect, so we don't
+   * persist them in head's offline outbox.
    */
-  private sendUnicastTo(targetDeviceId: string, compactPubKey: string, msg: Record<string, unknown>): void {
+  private sendReliableUnicastTo(
+    targetDeviceId: string,
+    compactPubKey: string,
+    msg: Record<string, unknown>,
+    durable = false,
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
     try {
       const recipientPubKey = importPublicKey(compactPubKey);
-      const plaintext = JSON.stringify(msg);
-      const { blob, keys } = encryptToBlob(plaintext, [
+      const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
         { deviceId: targetDeviceId, publicKey: recipientPubKey },
       ]);
-
-      const envelope: UnicastEnvelope = {
-        type: 'unicast',
-        to: targetDeviceId,
-        blob,
-        keys,
-      };
-
-      this.ws.send(JSON.stringify(this.withAck(envelope as unknown as Record<string, unknown>)));
+      this.pulse.send(JSON.stringify({ blob, keys }), targetDeviceId, durable);
     } catch (err) {
-      logger.error({ err, targetDeviceId }, 'Encrypted unicast failed');
+      logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
   }
 
@@ -2147,7 +2144,7 @@ export class RelayClient {
         version: this.options.version,
       },
     };
-    this.sendUnicastTo(targetDeviceId, compactPubKey, greeting);
+    this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
   }
 
   /**
@@ -2260,6 +2257,8 @@ export class RelayClient {
     this.staleCheckLastTickAt = 0;
     this.staleCheckTimer = setInterval(() => {
       const now = Date.now();
+      // Drive pulse heartbeat + liveness (5s tick, finer than 15s heartbeat).
+      this.pulse.tick();
       // Tick instrumentation: detect timer drift / event-loop block
       if (this.staleCheckLastTickAt > 0) {
         const tickDrift = now - this.staleCheckLastTickAt - RelayClient.STALE_CHECK_INTERVAL;

@@ -5,10 +5,12 @@ import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
 import type {
   AuthMessage, AuthErrorCode, AuthMethod,
-  UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
-  VoiceResource, VoiceCapability,
+  DeviceSummary, DeviceRole, DeviceKind,
+  VoiceResource, VoiceCapability, BlobPayload,
 } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { PulseHub } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
@@ -25,21 +27,6 @@ function verifySignature(nonce: string, signature: string, publicKeyPem: string)
   const verify = createVerify('SHA256');
   verify.update(nonce);
   return verify.verify(publicKeyPem, signature, 'base64');
-}
-
-interface InFlightEntry {
-  relaySeq: number;
-  /** Pre-serialized JSON payload, ready to re-send. */
-  payload: string;
-  /** Date.now() when first sent. Updated on each retry. */
-  sentAt: number;
-  retries: number;
-  /** True once retries are exhausted. Head stops re-sending this entry but
-   *  keeps it in the buffer; a future ack will still prune it cleanly. The
-   *  message bytes may or may not have reached the peer — recovery is
-   *  delegated to application-level per-session replay if the content is
-   *  actually missing. */
-  giveUp?: boolean;
 }
 
 interface ClientState {
@@ -63,26 +50,6 @@ interface ClientState {
   lastPingSentAt?: number;
   /** Diagnostic: last time we received a pong from this client (ms epoch). */
   lastPongRecvAt?: number;
-
-  // ── Delivery assurance (per-connection, head→peer direction) ──
-  /** Monotonic counter for relaySeq head stamps on outbound tracked sends. */
-  relaySeqCounter: number;
-  /** In-flight buffer: messages sent but not yet acked by this peer. */
-  inFlight: InFlightEntry[];
-  /** Highest relaySeq this peer has acknowledged. */
-  lastAckedSeq: number;
-  /** Set true once peer demonstrates ack support by sending an `ack` field. */
-  ackSupported: boolean;
-  /** Last `now` value when retry pass ran for this client (for debug only). */
-  lastRetryAt?: number;
-
-  // ── Delivery assurance (per-connection, peer→head direction) ──
-  /** Highest relaySeq head has received from this peer. Sent back as `ack`
-   *  in outbound messages so the peer can prune its own in-flight buffer. */
-  lastReceivedRelaySeq: number;
-  /** Set of recently-processed peer relaySeqs (bounded ~MAX_IN_FLIGHT) so head
-   *  silently drops duplicate retries from the peer. */
-  seenRelaySeqs: Set<number>;
 }
 
 interface PairingToken {
@@ -133,17 +100,10 @@ const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 
-// ── Delivery assurance tuning ──────────────────────────────
-/** Max in-flight (unacked) messages per connection before forcing reconnect. */
-const MAX_IN_FLIGHT = 200;
-/** How long to wait for an ack before re-sending a message (ms). */
-const RETRY_AFTER_MS = 5_000;
-/** Max retries before closing the connection (forces clean reconnect). */
-const MAX_RETRIES = 3;
-/** How often the retry pass runs (ms). Independent of the slower 30s ping timer
- *  so detection latency tracks the recipient's ping cadence (~10s), not the
- *  liveness check cadence. */
-const RETRY_CHECK_INTERVAL_MS = 2_500;
+/** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
+ *  device_pending detection latency tracks the recipient's ping cadence
+ *  (~10s), not the slower liveness check cadence. */
+const LIVENESS_SWEEP_INTERVAL_MS = 2_500;
 /** Grace period after ping before broadcasting device_pending (ms).
  *  Overridable via PONG_GRACE_MS environment variable. */
 const PONG_GRACE_MS = Math.max(1_000, parseInt(process.env.PONG_GRACE_MS ?? '8000', 10) || 8_000);
@@ -165,16 +125,6 @@ function isValidAuth(msg: Record<string, unknown>): boolean {
   return true;
 }
 
-function isValidUnicast(msg: Record<string, unknown>): boolean {
-  return msg.type === 'unicast' && typeof msg.to === 'string'
-    && typeof msg.blob === 'string' && typeof msg.keys === 'object' && msg.keys !== null;
-}
-
-function isValidBroadcast(msg: Record<string, unknown>): boolean {
-  return msg.type === 'broadcast'
-    && typeof msg.blob === 'string' && typeof msg.keys === 'object' && msg.keys !== null;
-}
-
 export class HeadServer {
   private wss: WebSocketServer;
   private storage: Storage;
@@ -188,7 +138,10 @@ export class HeadServer {
   private userByDevice = new Map<string, string>();
   private clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private retryTimer: ReturnType<typeof setInterval> | null = null;
+  private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
+  private pulseHub!: PulseHub;
+  private pulseTickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
     this.storage = storage;
@@ -199,13 +152,18 @@ export class HeadServer {
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.startPingInterval();
-    this.startRetryInterval();
+    this.startLivenessSweep();
 
-    // Expire old pending messages on startup
-    const expired = this.storage.expirePending();
-    if (expired > 0) {
-      getLogger().info('Expired pending messages on startup', { count: expired });
-    }
+    // Pulse per-hop reliable delivery. Shares the Storage SQLite file.
+    this.pulseHub = new PulseHub(this.storage.rawDb, {
+      now: () => Date.now(),
+      sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
+      broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
+      onDeliverToSelf: (fromDevice, payload) => this.deliverPulseToSelf(fromDevice, payload),
+    });
+    this.pulseHub.recoverOnBoot();
+    // Drive pulse heartbeat/liveness/durable-expiry every 5s.
+    this.pulseTickTimer = setInterval(() => this.pulseHub.tick(), 5_000);
   }
 
   private startPingInterval(): void {
@@ -229,13 +187,8 @@ export class HeadServer {
         try {
           if (ws.readyState === WebSocket.OPEN) {
             ws.ping(); // protocol-level ping (browsers auto-respond)
-            // JSON ping for proxy keepalive — include ack so the peer can
-            // prune its in-flight buffer even when no other traffic flows.
-            const pingMsg: Record<string, unknown> = { type: 'ping' };
-            if (state && state.lastReceivedRelaySeq > 0) {
-              pingMsg.ack = state.lastReceivedRelaySeq;
-            }
-            ws.send(JSON.stringify(pingMsg));
+            // JSON ping for proxy keepalive.
+            ws.send(JSON.stringify({ type: 'ping' }));
             if (state) {
               state.pongOverdueAt = now + PONG_GRACE_MS;
               state.pendingLivenessBroadcast = false;
@@ -262,182 +215,21 @@ export class HeadServer {
     }, HeadServer.PING_INTERVAL);
   }
 
-  // ── Delivery assurance ───────────────────────────────────
+  // ── Liveness sweep ───────────────────────────────────────
 
-  /** Run the retry pass at a fixed cadence, independent of the slower liveness
-   *  ping. Detection latency for a dropped message is bounded by the recipient's
-   *  ping cadence (~10s) + this interval. */
-  private startRetryInterval(): void {
-    this.retryTimer = setInterval(() => {
-      this.runRetryPass();
-    }, RETRY_CHECK_INTERVAL_MS);
+  /** Run the liveness sweep at a fixed cadence, independent of the slower
+   *  30s ping timer. Broadcasts device_pending when a peer's pong is overdue
+   *  so other devices see the "maybe offline" state quickly. */
+  private startLivenessSweep(): void {
+    this.livenessTimer = setInterval(() => {
+      this.runLivenessSweep();
+    }, LIVENESS_SWEEP_INTERVAL_MS);
   }
 
-  /** Stamp a message with relaySeq, buffer for retry, and send. Use this for
-   *  any post-auth message head expects the peer to receive reliably. Skip for
-   *  pings, pongs, errors, and pre-auth handshake messages.
-   *
-   *  If the message has incoming `relaySeq`/`ack` fields from another hop
-   *  (e.g. a forwarded unicast/broadcast), they are stripped — these are
-   *  per-hop and not end-to-end. */
-  private trackedSend(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
-    if (ws.readyState !== WebSocket.OPEN) return;
-
-    state.relaySeqCounter += 1;
-    const relaySeq = state.relaySeqCounter;
-    // Strip any per-hop tracking fields from the source message, then stamp ours.
-    const { relaySeq: _ignoredSeq, ack: _ignoredAck, ...rest } = msg as Record<string, unknown>;
-    const stamped: Record<string, unknown> = { ...rest, relaySeq };
-    // Piggyback our own ack of what we've received from this peer on this connection.
-    if (state.lastReceivedRelaySeq > 0) {
-      stamped.ack = state.lastReceivedRelaySeq;
-    }
-    const payload = JSON.stringify(stamped);
-
-    // Buffer full: evict the oldest entry silently and continue.
-    // Connection is NOT killed — peer may simply be temporarily throttled
-    // (e.g. backgrounded browser tab). The 30s protocol-level ping/pong is
-    // the source of truth for liveness, not delivery exhaustion.
-    if (state.inFlight.length >= MAX_IN_FLIGHT) {
-      getLogger().warn('In-flight buffer full, evicting oldest entry', {
-        deviceId: state.deviceId,
-        inFlight: state.inFlight.length,
-      });
-      state.inFlight.shift();
-    }
-
-    state.inFlight.push({
-      relaySeq,
-      payload,
-      sentAt: Date.now(),
-      retries: 0,
-    });
-
-    try {
-      ws.send(payload);
-    } catch {
-      // Send failed — connection is likely dead. Drop the connection so
-      // the client can reconnect cleanly. Retry pass will not re-send to
-      // a dead connection.
-      if (state.deviceId) this.removeConnection(state.deviceId);
-    }
-  }
-
-  /** Track an incoming relaySeq from peer. Returns true if message is a
-   *  duplicate that should be dropped silently. */
-  private trackInboundRelaySeq(state: ClientState, msg: Record<string, unknown>): boolean {
-    if (!('relaySeq' in msg)) return false;
-    const seq = msg.relaySeq;
-    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return false;
-
-    if (state.seenRelaySeqs.has(seq)) {
-      return true; // duplicate
-    }
-
-    // Bound the set so it doesn't grow unbounded. Drop the oldest tracked
-    // ack window when full — at this point any duplicate older than the
-    // window would have been delivered long ago.
-    if (state.seenRelaySeqs.size >= MAX_IN_FLIGHT) {
-      const iter = state.seenRelaySeqs.values().next();
-      if (!iter.done) state.seenRelaySeqs.delete(iter.value);
-    }
-    state.seenRelaySeqs.add(seq);
-    if (seq > state.lastReceivedRelaySeq) {
-      state.lastReceivedRelaySeq = seq;
-    }
-    return false;
-  }
-
-  /** Process an incoming ack field from any message type. Prunes the in-flight
-   *  buffer and flips ackSupported on first sighting. */
-  private processAck(state: ClientState, msg: Record<string, unknown>): void {
-    if (!('ack' in msg)) return;
-    const ack = msg.ack;
-    if (typeof ack !== 'number' || !Number.isFinite(ack)) return;
-
-    // Presence of the field at all marks the peer as ack-capable, even if
-    // ack: 0. Once flipped, it stays true for the lifetime of the connection.
-    state.ackSupported = true;
-
-    if (ack > state.lastAckedSeq) {
-      state.lastAckedSeq = ack;
-      // Prune everything ≤ ack from the in-flight buffer.
-      if (state.inFlight.length > 0) {
-        let firstUnacked = 0;
-        while (firstUnacked < state.inFlight.length && state.inFlight[firstUnacked].relaySeq <= ack) {
-          firstUnacked += 1;
-        }
-        if (firstUnacked > 0) {
-          state.inFlight.splice(0, firstUnacked);
-        }
-      }
-    }
-  }
-
-  /** Walk all connections; re-send unacked messages that have aged past
-   *  RETRY_AFTER_MS. When MAX_RETRIES is exceeded, mark the entry giveUp
-   *  but keep the connection alive — liveness is decided by the 30s
-   *  protocol-level ping/pong, not by delivery-retry exhaustion. */
-  private runRetryPass(): void {
-    const logger = getLogger();
+  /** Broadcast device_pending for any authenticated connection whose pong has
+   *  gone overdue (and we haven't already broadcast for this ping cycle). */
+  private runLivenessSweep(): void {
     const now = Date.now();
-
-    for (const [deviceId, ws] of this.connections) {
-      const state = this.clients.get(ws);
-      if (!state) continue;
-      if (!state.ackSupported) continue; // Old client — skip retry
-      if (state.inFlight.length === 0) continue;
-      if (ws.readyState !== WebSocket.OPEN) continue;
-
-      state.lastRetryAt = now;
-      let sendFailed = false;
-
-      for (const entry of state.inFlight) {
-        if (entry.giveUp) continue;
-        // Already acked? (Shouldn't normally happen — processAck prunes —
-        // but guard against races.)
-        if (entry.relaySeq <= state.lastAckedSeq) continue;
-        if (now - entry.sentAt < RETRY_AFTER_MS) continue;
-
-        if (entry.retries >= MAX_RETRIES) {
-          // Give up retrying this entry. Don't kill the connection — the
-          // peer may just be temporarily throttled (e.g. backgrounded
-          // browser tab). If the peer later catches up and acks, this
-          // entry is pruned normally. If the bytes were truly lost, the
-          // application layer's per-session replay handles content recovery.
-          logger.debug('Giving up retries for entry', {
-            deviceId,
-            relaySeq: entry.relaySeq,
-            retries: entry.retries,
-          });
-          entry.giveUp = true;
-          continue;
-        }
-
-        entry.retries += 1;
-        entry.sentAt = now;
-        try {
-          ws.send(entry.payload);
-          logger.debug('Retried unacked message', {
-            deviceId,
-            relaySeq: entry.relaySeq,
-            attempt: entry.retries,
-          });
-        } catch {
-          // ws.send threw — the underlying socket is dead. Close it so the
-          // close handler can clean up. This is a transport failure, not a
-          // delivery-retry failure.
-          sendFailed = true;
-          break;
-        }
-      }
-
-      if (sendFailed) {
-        this.removeConnection(deviceId);
-      }
-    }
-
-    // ── Liveness uncertainty: broadcast device_pending when pong is overdue ──
     for (const [deviceId, ws] of this.connections) {
       const state = this.clients.get(ws);
       if (!state?.authenticated || !state.userId) continue;
@@ -451,7 +243,12 @@ export class HeadServer {
     }
   }
 
-  // ── End delivery assurance ──────────────────────────────
+  /** Test hook: force a liveness sweep without waiting for the timer. */
+  forceLivenessSweep(): void {
+    this.runLivenessSweep();
+  }
+
+  // ── End liveness sweep ──────────────────────────────────
 
   // --- Auth provider helpers ---
 
@@ -527,12 +324,6 @@ export class HeadServer {
       ip,
       pongOverdueAt: null,
       pendingLivenessBroadcast: false,
-      relaySeqCounter: 0,
-      inFlight: [],
-      lastAckedSeq: 0,
-      ackSupported: false,
-      lastReceivedRelaySeq: 0,
-      seenRelaySeqs: new Set(),
     };
     const logger = getLogger();
 
@@ -569,6 +360,7 @@ export class HeadServer {
           try { this.storage.touchDeviceLastSeen(disconnectedDeviceId); } catch { /* storage may be closed */ }
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
+          this.pulseHub.onDeviceDisconnected(disconnectedDeviceId);
           logger.info('Device disconnected', {
             deviceId: disconnectedDeviceId,
             closeCode: code,
@@ -603,15 +395,6 @@ export class HeadServer {
   }
 
   private async onMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): Promise<void> {
-    // Process ack field on every incoming message (post or pre-auth, doesn't matter —
-    // ack just prunes our outbound buffer for this peer).
-    this.processAck(state, msg);
-
-    // Track inbound relaySeq for sending acks back. Duplicates are dropped silently.
-    if (this.trackInboundRelaySeq(state, msg)) {
-      return;
-    }
-
     // One-shot pairing token request — before auth
     if (msg.type === 'request_pairing_token') {
       await this.handleRequestPairingToken(ws, state, msg as { token?: string });
@@ -670,65 +453,37 @@ export class HeadServer {
     }
 
     if (msg.type === 'unicast') {
-      if (!isValidUnicast(msg)) {
-        this.sendError(ws, 'Invalid unicast: to, blob, keys required');
+      // The hub (a pulse endpoint on each hop) handles reliable delivery + durable
+      // store-and-forward. The envelope MUST carry a pulse frame — the head is
+      // pulse-only; there is no raw-WS relay path.
+      if (typeof msg.pulse === 'string' && state.deviceId) {
+        this.pulseHub.onPulseEnvelope(state.deviceId, {
+          pulse: msg.pulse as string,
+          to: msg.to as string,
+        });
         return;
       }
-      this.handleUnicast(ws, state, msg as unknown as UnicastEnvelope);
+      this.sendError(ws, 'unicast requires a pulse frame');
       return;
     }
 
     if (msg.type === 'broadcast') {
-      if (!isValidBroadcast(msg)) {
-        this.sendError(ws, 'Invalid broadcast: blob, keys required');
+      // Pulse broadcast frames (control: hello/ack/heartbeat) are addressed to a
+      // specific hop via the hub too; a producer fans out per-device unicasts.
+      if (typeof msg.pulse === 'string' && state.deviceId) {
+        // A pushPreview may ride the same pulse envelope — fire it for offline
+        // devices (the reliable message itself is delivered by the hub).
+        if (msg.pushPreview) this.firePushPreview(state, msg.pushPreview as BlobPayload);
+        this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
         return;
       }
-      this.handleBroadcast(state, msg as unknown as BroadcastEnvelope);
+      this.sendError(ws, 'broadcast requires a pulse frame');
       return;
     }
 
-    if (msg.type === 'update_preferences') {
-      if (state.userId) {
-        const prefs = msg.preferences as Record<string, unknown> | undefined;
-        if (prefs && typeof prefs === 'object') {
-          this.storage.updatePreferences(state.userId, prefs);
-          // Read back the full merged preferences
-          const fullUser = this.storage.getUser(state.userId);
-          const merged = fullUser?.preferences ?? prefs;
-          const confirmation = { type: 'preferences_updated', preferences: merged };
-          // Send confirmation to sender (tracked — peer should see it)
-          this.trackedSend(ws, state, confirmation);
-          // Broadcast to all other devices of the same user
-          const userDevices = (() => {
-            try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
-          })();
-          for (const d of userDevices) {
-            if (d.id === state.deviceId) continue;
-            const other = this.connections.get(d.id);
-            if (!other || other.readyState !== WebSocket.OPEN) continue;
-            const otherState = this.clients.get(other);
-            if (!otherState) continue;
-            this.trackedSend(other, otherState, confirmation);
-          }
-        }
-      }
-      return;
-    }
-
-    if (msg.type === 'remove_device') {
-      this.handleRemoveDevice(ws, state, msg.deviceId as string);
-      return;
-    }
-
-    if (msg.type === 'register_push_token') {
-      this.handleRegisterPushToken(ws, state, msg);
-      return;
-    }
-
-    if (msg.type === 'unregister_push_token') {
-      this.handleUnregisterPushToken(ws, state, msg);
-      return;
-    }
+    // Relay-terminated control ops (update_preferences / remove_device /
+    // (un)register_push_token). Arrive via pulse deliver-to-self (deliverPulseToSelf).
+    if (this.handleControlMessage(ws, state, msg)) return;
 
     if (msg.type === 'request_voice_lease') {
       this.handleRequestVoiceLease(ws, state, msg);
@@ -736,11 +491,7 @@ export class HeadServer {
     }
 
     if (msg.type === 'ping') {
-      const pongMsg: Record<string, unknown> = { type: 'pong' };
-      if (state.lastReceivedRelaySeq > 0) {
-        pongMsg.ack = state.lastReceivedRelaySeq;
-      }
-      ws.send(JSON.stringify(pongMsg));
+      ws.send(JSON.stringify({ type: 'pong' }));
       return;
     }
 
@@ -773,11 +524,11 @@ export class HeadServer {
 
     const issuer = this.options.leaseIssuer;
     if (!issuer) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'not_entitled',
         detail: 'Voice lease issuance is not enabled on this head',
-      }));
+      });
       return;
     }
 
@@ -785,30 +536,30 @@ export class HeadServer {
     const requestedDeviceId = typeof msg.deviceId === 'string' ? msg.deviceId : undefined;
     const requestedResource = typeof msg.resource === 'string' ? (msg.resource as VoiceResource) : undefined;
     if (!requestedDeviceId || !requestedResource) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'Missing deviceId or resource',
-      }));
+      });
       return;
     }
 
     // Lease may only be requested for the authenticated device — no proxying.
     if (requestedDeviceId !== deviceId) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'deviceId does not match authenticated device',
-      }));
+      });
       return;
     }
 
     if (!VALID_VOICE_RESOURCES.has(requestedResource)) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: `Unknown resource: ${String(requestedResource)}`,
-      }));
+      });
       return;
     }
 
@@ -822,11 +573,11 @@ export class HeadServer {
       logger.info('Voice lease denied: daily quota exhausted', {
         userId, deviceId, issuedToday, quotaPerLease, dailyCap,
       });
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'quota_exhausted',
         detail: `Daily quota reached (${issuedToday}/${dailyCap}s)`,
-      }));
+      });
       return;
     }
 
@@ -853,11 +604,11 @@ export class HeadServer {
       logger.error('Voice lease persist failed', {
         userId, deviceId, jti: lease.payload.jti, error: (err as Error).message,
       });
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'Lease persistence failed',
-      }));
+      });
       return;
     }
 
@@ -865,70 +616,118 @@ export class HeadServer {
       userId, deviceId, jti: lease.payload.jti,
       quotaSeconds: quotaPerLease, ttlSec: ttl,
     });
-    ws.send(JSON.stringify({ type: 'voice_lease_grant', lease }));
+    this.sendControlToDevice(deviceId, { type: 'voice_lease_grant', lease });
   }
 
   // --- Routing ---
 
-  private handleUnicast(ws: WebSocket, state: ClientState, msg: UnicastEnvelope): void {
-    const logger = getLogger();
-    const senderUserId = state.userId;
-    if (!senderUserId || !state.deviceId) return;
-
-    // Verify target belongs to same user
-    const targetDevice = this.storage.getDevice(msg.to);
-    if (!targetDevice || targetDevice.userId !== senderUserId) {
-      logger.warn('Unicast rejected: target not found or wrong user', { from: state.deviceId, to: msg.to });
-      ws.send(JSON.stringify({ type: 'server_error', message: 'Target device not found or offline', ref: msg.ref }));
-      return;
-    }
-
-    const targetWs = this.connections.get(msg.to);
-    if (!targetWs) {
-      // Target offline — queue for delivery on reconnect.
-      // Strip per-hop tracking fields before persisting so the queued payload
-      // doesn't carry stale relaySeq/ack from this sender→head hop.
-      const { relaySeq: _s, ack: _a, ...clean } = msg as unknown as Record<string, unknown>;
-      this.storage.insertPending(msg.to, senderUserId, JSON.stringify(clean));
-      logger.debug('Unicast queued for offline device', { from: state.deviceId, to: msg.to });
-      return;
-    }
-
-    const targetState = this.clients.get(targetWs);
-    if (!targetState) return;
-
-    // Forward via tracked path so we retry if the recipient doesn't ack.
-    this.trackedSend(targetWs, targetState, msg as unknown as Record<string, unknown>);
+  /** Send a pulse frame (control or forwarded data) to a device's socket, as a
+   *  minimal unicast envelope carrying only the `pulse` field. Returns true if
+   *  the device is online. Used by the PulseHub to reach endpoints. */
+  private sendPulseFrameTo(deviceId: string, pulseB64: string): boolean {
+    const ws = this.connections.get(deviceId);
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    // `to` lets the receiver's own pulse layer know which stream this is; blob
+    // is empty because the payload (if any) is inside the pulse frame.
+    ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
+    return true;
   }
 
-  private handleBroadcast(state: ClientState, msg: BroadcastEnvelope): void {
-    const logger = getLogger();
+  /** Send a head-ORIGINATED control message to a device reliably over pulse
+   *  (presence, preferences confirmation, voice responses). These are plaintext
+   *  head↔device control (the head has no E2E on them), so the payload is
+   *  wrapped as `{from:'@head', msg}` — the receiver's pulse layer recognizes the
+   *  `@head` marker and dispatches `msg` WITHOUT decrypting. Non-durable:
+   *  presence/prefs are ephemeral. */
+  private sendControlToDevice(deviceId: string, msg: Record<string, unknown>): void {
+    const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
+    this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
+  }
+
+  /** A pulse frame addressed to HEAD_PULSE_TARGET was delivered in-order by the
+   *  source device's endpoint. The payload is PLAINTEXT control JSON. Resolve the
+   *  originating authenticated connection and route it through the SAME control
+   *  handlers the raw-WS path uses, so auth context (state.userId/deviceId) and
+   *  responses (over ws) are identical. */
+  private deliverPulseToSelf(fromDevice: string, payload: Uint8Array): void {
+    const ws = this.connections.get(fromDevice);
+    if (!ws) return; // device vanished — the control op is moot
+    const state = this.clients.get(ws);
+    if (!state?.authenticated) return;
+    let msg: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(Buffer.from(payload).toString('utf8'));
+      if (!isValidMessage(parsed)) return;
+      msg = parsed;
+    } catch {
+      return; // malformed → drop
+    }
+    // handleControlMessage whitelists the 4 relay-terminated types and returns
+    // false for anything else, so the self-channel cannot tunnel unicast/auth/etc.
+    this.handleControlMessage(ws, state, msg);
+  }
+
+  /** The relay-terminated control ops, callable from BOTH the raw-WS dispatch
+   *  (onMessage) and the pulse deliver-to-self path. Returns true if handled. */
+  private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
+    switch (msg.type) {
+      case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
+      case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
+      case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
+      case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
+      default: return false;
+    }
+  }
+
+  /** Persist a preferences update and echo the merged result to the sender + the
+   *  user's other online devices. */
+  private handleUpdatePreferences(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
+    if (!state.userId) return;
+    const prefs = msg.preferences as Record<string, unknown> | undefined;
+    if (!prefs || typeof prefs !== 'object') return;
+    this.storage.updatePreferences(state.userId, prefs);
+    // Read back the full merged preferences
+    const fullUser = this.storage.getUser(state.userId);
+    const merged = fullUser?.preferences ?? prefs;
+    const confirmation = { type: 'preferences_updated', preferences: merged };
+    // Confirm to the sender + fan out to the user's other devices — all over pulse.
+    if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
+    const userDevices = (() => {
+      try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
+    })();
+    for (const d of userDevices) {
+      if (d.id === state.deviceId) continue;
+      const other = this.connections.get(d.id);
+      if (!other || other.readyState !== WebSocket.OPEN) continue;
+      this.sendControlToDevice(d.id, confirmation);
+    }
+  }
+
+  /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER devices
+   *  of the same user (the online ones the hub can forward to). */
+  private pulseBroadcastTargets(fromDevice: string): string[] {
+    const userId = this.userByDevice.get(fromDevice);
+    if (!userId) return [];
+    const targets: string[] = [];
+    for (const device of this.storage.getDevicesByUser(userId)) {
+      if (device.id !== fromDevice) targets.push(device.id);
+    }
+    return targets;
+  }
+
+  /** Notify offline devices from a pushPreview side-channel. The preview rides the
+   *  same pulse broadcast envelope as the reliable message. */
+  private firePushPreview(state: ClientState, pushPreview: BlobPayload | undefined): void {
     const senderUserId = state.userId;
     const senderDeviceId = state.deviceId;
-    if (!senderUserId || !senderDeviceId) return;
-
-    // Find all other connected devices for this user
-    const userDevices = this.storage.getDevicesByUser(senderUserId);
+    if (!senderUserId || !senderDeviceId || !pushPreview || !this.options.pushManager) return;
     const onlineDeviceIds: string[] = [senderDeviceId];
-
-    for (const device of userDevices) {
+    for (const device of this.storage.getDevicesByUser(senderUserId)) {
       if (device.id === senderDeviceId) continue;
-
-      const targetWs = this.connections.get(device.id);
-      if (!targetWs) continue;
-
-      onlineDeviceIds.push(device.id);
-      const targetState = this.clients.get(targetWs);
-      if (!targetState) continue;
-
-      this.trackedSend(targetWs, targetState, msg as unknown as Record<string, unknown>);
+      if (this.connections.get(device.id)) onlineDeviceIds.push(device.id);
     }
-
-    // Send push notifications to offline devices with registered tokens
-    if (msg.pushPreview && this.options.pushManager) {
-      this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, msg.pushPreview)
-        .catch(err => logger.warn('Push notification send failed', { error: (err as Error).message }));
-    }
+    this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, pushPreview)
+      .catch(err => getLogger().warn('Push notification send failed', { error: (err as Error).message }));
   }
 
   private removeConnection(deviceId: string): void {
@@ -1170,6 +969,7 @@ export class HeadServer {
     state.userId = user.userId;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
+    this.pulseHub.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
@@ -1207,6 +1007,7 @@ export class HeadServer {
     state.userId = result.userId;
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
+    this.pulseHub.onDeviceConnected(result.deviceId);
 
     logger.info('Device authenticated (via backend)', {
       deviceId: result.deviceId,
@@ -1242,7 +1043,6 @@ export class HeadServer {
       user: result.user,
       authMethod: result.authMethod,
       devices: result.devices,
-      backendPendingMessages: result.pendingMessages,
       githubClientId: result.githubClientId,
       vapidPublicKey: result.vapidPublicKey,
     });
@@ -1290,10 +1090,6 @@ export class HeadServer {
       /** Devices list to include in auth_ok. If omitted, derived from local storage.
        *  Edge mode supplies this from the remote backend's view. */
       devices?: DeviceSummary[];
-      /** Pending messages forwarded by a remote auth backend, if any. Merged with
-       *  the local edge's own pending_messages table (which the head queued when
-       *  unicasts arrived for this device while it was offline). */
-      backendPendingMessages?: UnicastEnvelope[];
       /** Override of `getGitHubClientId()` (used when delegated). */
       githubClientId?: string;
       /** Override of `getVapidPublicKey()` (used when delegated). */
@@ -1316,16 +1112,6 @@ export class HeadServer {
       preferences: fullUser?.preferences ?? params.user.preferences,
     };
 
-    // Flush locally-queued pending messages — every auth path that lands here
-    // means a device is reconnecting, and any unicasts queued for it locally
-    // (via handleUnicast → storage.insertPending) should be delivered now.
-    // Combined with whatever the remote backend forwarded, if applicable.
-    const localPending = this.flushPendingEnvelopes(params.deviceId);
-    const pendingMessages = [
-      ...(params.backendPendingMessages ?? []),
-      ...localPending,
-    ];
-
     // Devices list. If the caller provided one (edge mode), recompute online
     // status against our current connections map. Otherwise derive locally.
     const devices = params.devices
@@ -1341,7 +1127,6 @@ export class HeadServer {
       githubClientId: params.githubClientId ?? this.getGitHubClientId(),
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
-      ...(pendingMessages.length > 0 && { pendingMessages }),
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
@@ -1379,6 +1164,7 @@ export class HeadServer {
     state.userId = user.id;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
+    this.pulseHub.onDeviceConnected(deviceId);
 
     logger.info('Device authenticated', {
       deviceId,
@@ -1527,7 +1313,6 @@ export class HeadServer {
     }
 
     this.storage.deleteDevice(targetDeviceId);
-    this.storage.deletePendingForDevice(targetDeviceId);
     this.storage.deletePushTokensForDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
 
@@ -1567,7 +1352,9 @@ export class HeadServer {
     }
 
     logger.info('Push token registered', { deviceId: state.deviceId, provider: payload.provider });
-    ws.send(JSON.stringify({ type: 'push_token_registered', payload: { provider: payload.provider } }));
+    if (state.deviceId) {
+      this.sendControlToDevice(state.deviceId, { type: 'push_token_registered', payload: { provider: payload.provider } });
+    }
   }
 
   private handleUnregisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
@@ -1595,9 +1382,7 @@ export class HeadServer {
     for (const d of userDevices) {
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.trackedSend(ws, targetState, { type: 'device_removed', deviceId: removedDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
     }
   }
 
@@ -1628,9 +1413,7 @@ export class HeadServer {
       if (d.id === newDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.trackedSend(ws, targetState, { type: 'device_joined', device: summary });
+      this.sendControlToDevice(d.id, { type: 'device_joined', device: summary });
     }
   }
 
@@ -1643,9 +1426,7 @@ export class HeadServer {
       if (d.id === leftDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.trackedSend(ws, targetState, { type: 'device_left', deviceId: leftDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
     }
   }
 
@@ -1658,9 +1439,7 @@ export class HeadServer {
       if (d.id === pendingDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.trackedSend(ws, targetState, { type: 'device_pending', deviceId: pendingDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
     }
   }
 
@@ -1712,24 +1491,6 @@ export class HeadServer {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'server_error', message }));
     }
-  }
-
-  /** Flush pending messages from SQLite, parse into envelope objects. */
-  private flushPendingEnvelopes(deviceId: string): UnicastEnvelope[] {
-    const logger = getLogger();
-    const rows = this.storage.flushPending(deviceId);
-    if (rows.length === 0) return [];
-
-    const envelopes: UnicastEnvelope[] = [];
-    for (const raw of rows) {
-      try {
-        envelopes.push(JSON.parse(raw));
-      } catch {
-        logger.warn('Failed to parse pending message', { deviceId });
-      }
-    }
-    logger.info('Flushed pending messages', { deviceId, count: envelopes.length });
-    return envelopes;
   }
 
   getStats(): {
@@ -1828,34 +1589,6 @@ export class HeadServer {
     };
   }
 
-  /** Test hook: inspect delivery state for an online device. Not used in prod. */
-  getDeliveryState(deviceId: string): {
-    inFlightCount: number;
-    givenUpCount: number;
-    relaySeqCounter: number;
-    lastAckedSeq: number;
-    ackSupported: boolean;
-    lastReceivedRelaySeq: number;
-  } | undefined {
-    const ws = this.connections.get(deviceId);
-    if (!ws) return undefined;
-    const state = this.clients.get(ws);
-    if (!state) return undefined;
-    return {
-      inFlightCount: state.inFlight.length,
-      givenUpCount: state.inFlight.filter(e => e.giveUp).length,
-      relaySeqCounter: state.relaySeqCounter,
-      lastAckedSeq: state.lastAckedSeq,
-      ackSupported: state.ackSupported,
-      lastReceivedRelaySeq: state.lastReceivedRelaySeq,
-    };
-  }
-
-  /** Test hook: force a retry pass without waiting for the timer. */
-  forceRetryPass(): void {
-    this.runRetryPass();
-  }
-
   /** Test hook: run the ping pass (set isAlive=false, send ping, start grace timer). */
   forcePingPass(): void {
     for (const [deviceId, ws] of this.connections) {
@@ -1869,11 +1602,7 @@ export class HeadServer {
       try {
         if (ws.readyState === WebSocket.OPEN) {
           ws.ping();
-          const pingMsg: Record<string, unknown> = { type: 'ping' };
-          if (state && state.lastReceivedRelaySeq > 0) {
-            pingMsg.ack = state.lastReceivedRelaySeq;
-          }
-          ws.send(JSON.stringify(pingMsg));
+          ws.send(JSON.stringify({ type: 'ping' }));
           if (state) {
             state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
             state.pendingLivenessBroadcast = false;
@@ -1900,7 +1629,7 @@ export class HeadServer {
   }
 
   /** Test hook: expire the pong grace timer for a specific device so the next
-   *  retry pass will broadcast device_pending immediately. */
+   *  liveness sweep will broadcast device_pending immediately. */
   expirePongGrace(deviceId: string): void {
     const ws = this.connections.get(deviceId);
     if (!ws) return;
@@ -1916,9 +1645,13 @@ export class HeadServer {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
-    if (this.retryTimer) {
-      clearInterval(this.retryTimer);
-      this.retryTimer = null;
+    if (this.livenessTimer) {
+      clearInterval(this.livenessTimer);
+      this.livenessTimer = null;
+    }
+    if (this.pulseTickTimer) {
+      clearInterval(this.pulseTickTimer);
+      this.pulseTickTimer = null;
     }
     for (const ws of this.clients.keys()) {
       ws.close();

@@ -101,6 +101,13 @@ const SCHEMA_VERSION = 8;
 export class Storage {
   private db: Database.Database;
 
+  /** Raw SQLite handle for adjacent subsystems (e.g. the pulse hub's own
+   *  tables). Same file + connection, so writes are transactionally consistent
+   *  with the users/devices/pending tables. */
+  get rawDb(): Database.Database {
+    return this.db;
+  }
+
   private static hashSecret(secret: string): string {
     return createHash('sha256').update(secret).digest('hex');
   }
@@ -159,16 +166,11 @@ export class Storage {
     }
 
     if (currentVersion < 3) {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS pending_messages (
-          id                INTEGER PRIMARY KEY AUTOINCREMENT,
-          target_device_id  TEXT NOT NULL,
-          user_id           TEXT NOT NULL,
-          envelope          TEXT NOT NULL,
-          created_at        TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_pending_target ON pending_messages(target_device_id);
-      `);
+      // Historically created the `pending_messages` table (offline unicast
+      // queue). That mechanism is superseded by the pulse durable outbox and
+      // has been removed. The migration step is kept (not decremented) so the
+      // version ladder stays aligned for DBs that upgraded through it; the
+      // table, if present in an old DB, is simply unused.
     }
 
     if (currentVersion < 4) {
@@ -516,61 +518,6 @@ export class Storage {
   deleteDevice(id: string): boolean {
     const result = this.db.prepare('DELETE FROM devices WHERE id = ?').run(id);
     return result.changes > 0;
-  }
-
-  // --- Pending messages ---
-
-  private static readonly MAX_PENDING_PER_DEVICE = 200;
-  private static readonly PENDING_TTL_DAYS = 30;
-
-  /** Queue a unicast envelope for an offline device. */
-  insertPending(targetDeviceId: string, userId: string, envelope: string): void {
-    // Enforce per-device cap — drop oldest if at limit
-    const count = (this.db.prepare(
-      'SELECT COUNT(*) as cnt FROM pending_messages WHERE target_device_id = ?'
-    ).get(targetDeviceId) as { cnt: number }).cnt;
-
-    if (count >= Storage.MAX_PENDING_PER_DEVICE) {
-      const excess = count - Storage.MAX_PENDING_PER_DEVICE + 1;
-      this.db.prepare(`
-        DELETE FROM pending_messages WHERE id IN (
-          SELECT id FROM pending_messages WHERE target_device_id = ? ORDER BY id ASC LIMIT ?
-        )
-      `).run(targetDeviceId, excess);
-    }
-
-    this.db.prepare(
-      'INSERT INTO pending_messages (target_device_id, user_id, envelope) VALUES (?, ?, ?)'
-    ).run(targetDeviceId, userId, envelope);
-  }
-
-  /** Retrieve and delete all pending messages for a device. Returns JSON envelope strings. */
-  flushPending(targetDeviceId: string): string[] {
-    const rows = this.db.prepare(
-      'SELECT id, envelope FROM pending_messages WHERE target_device_id = ? ORDER BY id ASC'
-    ).all(targetDeviceId) as Array<{ id: number; envelope: string }>;
-
-    if (rows.length === 0) return [];
-
-    const ids = rows.map(r => r.id);
-    this.db.prepare(
-      `DELETE FROM pending_messages WHERE id IN (${ids.map(() => '?').join(',')})`
-    ).run(...ids);
-
-    return rows.map(r => r.envelope);
-  }
-
-  /** Delete all pending messages for a device (used on device removal). */
-  deletePendingForDevice(targetDeviceId: string): void {
-    this.db.prepare('DELETE FROM pending_messages WHERE target_device_id = ?').run(targetDeviceId);
-  }
-
-  /** Drop pending messages older than TTL. */
-  expirePending(): number {
-    const result = this.db.prepare(
-      `DELETE FROM pending_messages WHERE created_at < datetime('now', '-${Storage.PENDING_TTL_DAYS} days')`
-    ).run();
-    return result.changes;
   }
 
   // --- Device activity ---
