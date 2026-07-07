@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../hooks/useStore';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
-import type { PendingPermission, PendingQuestion, ChatMessage } from '../types/store';
+import type { ChatMessage } from '../types/store';
 
 // Helper to reset store before each test
 beforeEach(() => {
@@ -55,21 +55,21 @@ const mockMessage: ChatMessage = {
   payload: { content: 'Hello from agent' },
 } as ChatMessage;
 
-const mockPermission: PendingPermission = {
+const mockPermissionAction = {
+  kind: 'permission' as const,
   id: 'perm-1',
-  sessionId: 'sess-1',
+  headline: 'Run shell',
   toolName: 'shell',
   args: { command: 'ls' },
   description: 'List files',
-  timestamp: new Date().toISOString(),
 };
 
-const mockQuestion: PendingQuestion = {
+const mockQuestionAction = {
+  kind: 'question' as const,
   id: 'q-1',
-  sessionId: 'sess-1',
+  headline: 'Pick DB',
   question: 'Which DB?',
   choices: ['sqlite', 'postgres'],
-  timestamp: new Date().toISOString(),
 };
 
 // --- Tests ---
@@ -380,79 +380,46 @@ describe('useStore', () => {
     });
   });
 
-  describe('streaming deltas', () => {
-    it('appendDelta accumulates content', () => {
-      useStore.getState().appendDelta('sess-1', 'Hello ');
-      useStore.getState().appendDelta('sess-1', 'world');
-      expect(useStore.getState().streamingContent.get('sess-1')).toBe('Hello world');
+  describe('server-owned cards', () => {
+    it('applyCardMessage accumulates content', () => {
+      useStore.getState().applyCardMessage('sess-1', 'Hello ');
+      useStore.getState().applyCardMessage('sess-1', 'world');
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('Hello world');
     });
 
-    it('appendDelta starts empty for new session', () => {
-      useStore.getState().appendDelta('sess-new', 'first');
-      expect(useStore.getState().streamingContent.get('sess-new')).toBe('first');
+    it('applyCardMessage reset replaces content', () => {
+      useStore.getState().applyCardMessage('sess-1', 'old');
+      useStore.getState().applyCardMessage('sess-1', 'new', true);
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('new');
     });
 
-    it('flushDelta removes streaming content', () => {
-      useStore.getState().appendDelta('sess-1', 'some content');
-      useStore.getState().flushDelta('sess-1');
-      expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
+    it('setCardAction preserves text', () => {
+      useStore.getState().applyCardMessage('sess-1', 'working');
+      useStore.getState().setCardAction('sess-1', mockPermissionAction);
+      const card = useStore.getState().cards.get('sess-1');
+      expect(card?.text).toBe('working');
+      expect(card?.action).toEqual(mockPermissionAction);
     });
 
-    it('flushDelta is safe for non-existing session', () => {
-      useStore.getState().flushDelta('sess-nonexistent');
-      expect(useStore.getState().streamingContent.has('sess-nonexistent')).toBe(false);
-    });
-  });
-
-  describe('pending permissions', () => {
-    it('addPermission stores permission', () => {
-      useStore.getState().addPermission(mockPermission);
-      expect(useStore.getState().pendingPermissions.size).toBe(1);
-      expect(useStore.getState().pendingPermissions.get('perm-1')).toEqual(mockPermission);
+    it('setCardAction creates a card if needed', () => {
+      useStore.getState().setCardAction('sess-new', mockQuestionAction);
+      expect(useStore.getState().cards.get('sess-new')).toEqual({ text: '', action: mockQuestionAction });
     });
 
-    it('removePermission removes permission', () => {
-      useStore.getState().addPermission(mockPermission);
-      useStore.getState().removePermission('perm-1');
-      expect(useStore.getState().pendingPermissions.size).toBe(0);
+    it('clearCard removes a card', () => {
+      useStore.getState().applyCardMessage('sess-1', 'some content');
+      useStore.getState().clearCard('sess-1');
+      expect(useStore.getState().cards.has('sess-1')).toBe(false);
     });
 
-    it('removePermission is safe for non-existing id', () => {
-      useStore.getState().removePermission('perm-nonexistent');
-      expect(useStore.getState().pendingPermissions.size).toBe(0);
+    it('clearCard is safe for non-existing session', () => {
+      useStore.getState().clearCard('sess-nonexistent');
+      expect(useStore.getState().cards.has('sess-nonexistent')).toBe(false);
     });
 
-    it('multiple permissions can coexist', () => {
-      useStore.getState().addPermission(mockPermission);
-      useStore.getState().addPermission({ ...mockPermission, id: 'perm-2' });
-      expect(useStore.getState().pendingPermissions.size).toBe(2);
-    });
-  });
-
-  describe('pending questions', () => {
-    it('addQuestion stores question', () => {
-      useStore.getState().addQuestion(mockQuestion);
-      expect(useStore.getState().pendingQuestions.size).toBe(1);
-      expect(useStore.getState().pendingQuestions.get('q-1')).toEqual(mockQuestion);
-    });
-
-    it('removeQuestion removes question', () => {
-      useStore.getState().addQuestion(mockQuestion);
-      useStore.getState().removeQuestion('q-1');
-      expect(useStore.getState().pendingQuestions.size).toBe(0);
-    });
-
-    it('question with choices stored correctly', () => {
-      useStore.getState().addQuestion(mockQuestion);
-      const stored = useStore.getState().pendingQuestions.get('q-1');
-      expect(stored?.choices).toEqual(['sqlite', 'postgres']);
-    });
-
-    it('question without choices stored correctly', () => {
-      const noChoices = { ...mockQuestion, id: 'q-2', choices: undefined };
-      useStore.getState().addQuestion(noChoices);
-      const stored = useStore.getState().pendingQuestions.get('q-2');
-      expect(stored?.choices).toBeUndefined();
+    it('stores question choices in card action', () => {
+      useStore.getState().setCardAction('sess-1', mockQuestionAction);
+      expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockQuestionAction);
     });
   });
 
@@ -464,9 +431,8 @@ describe('useStore', () => {
       useStore.getState().setSessions([mockSession]);
       useStore.getState().setDevices([mockDevice]);
       useStore.getState().appendMessage('sess-1', mockMessage);
-      useStore.getState().appendDelta('sess-1', 'content');
-      useStore.getState().addPermission(mockPermission);
-      useStore.getState().addQuestion(mockQuestion);
+      useStore.getState().applyCardMessage('sess-1', 'content');
+      useStore.getState().setCardAction('sess-1', mockPermissionAction);
       useStore.getState().setSessionMode('sess-1', 'execute');
 
       // Reset
@@ -478,9 +444,7 @@ describe('useStore', () => {
       expect(state.sessions.size).toBe(0);
       expect(state.devices.size).toBe(0);
       expect(state.messages.size).toBe(0);
-      expect(state.streamingContent.size).toBe(0);
-      expect(state.pendingPermissions.size).toBe(0);
-      expect(state.pendingQuestions.size).toBe(0);
+      expect(state.cards.size).toBe(0);
       expect(state.sessionModes.size).toBe(0);
     });
   });

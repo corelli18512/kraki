@@ -31,6 +31,10 @@ export interface SessionSummary {
   messageCount: number;
   /** Origin of this session. Absent for sessions created natively in Kraki. */
   source?: LocalSessionSource | 'imported';
+  /** Open ask_user questions blocking the current turn (see SessionDigest).
+   *  Seeds the "pending" status for sessions not yet opened after a reload;
+   *  superseded by live question / question_resolved once connected. */
+  pendingQuestions?: number;
 }
 
 /** Sidebar preview — last meaningful message for list display and sort. */
@@ -62,6 +66,12 @@ export interface SessionDigest {
   source?: LocalSessionSource | 'imported';
   /** Sidebar preview computed by tentacle from the last few messages. */
   preview?: SessionPreviewDigest;
+  /** Count of open ask_user questions blocking this session's current turn.
+   *  Present (and > 0) only while the session is "pending" — a running turn
+   *  waiting on human input. Lets a freshly reloaded arm render the pending
+   *  status for sessions it hasn't opened yet (before per-session replay).
+   *  Optional + additive so older/other clients (e.g. iOS) simply ignore it. */
+  pendingQuestions?: number;
 }
 
 // ------------------------------------------------------------

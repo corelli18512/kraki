@@ -7,9 +7,8 @@
  */
 
 import { getStore } from './store-adapter';
-import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { createLogger } from './logger';
-import type { ChatMessage, PendingPermission, PendingQuestion, SessionPreview } from '../types/store';
+import type { ChatMessage, SessionPreview } from '../types/store';
 
 const logger = createLogger('msg-provider');
 
@@ -91,90 +90,6 @@ function rebuildPreview(sessionId: string): void {
   }
 }
 
-/**
- * Scan replayed messages for pending permissions/questions.
- */
-function processReplayedActions(sessionId: string, messages: ChatMessage[]): void {
-  const store = getStore();
-
-  const resolvedPermIds = new Set<string>();
-  const resolvedQuestionIds = new Set<string>();
-  const permResolutions = new Map<string, 'approved' | 'denied' | 'always_allowed' | 'cancelled'>();
-  const questionAnswers = new Map<string, string>();
-
-  for (const msg of messages) {
-    switch (msg.type) {
-      case 'approve':
-        resolvedPermIds.add(msg.payload?.permissionId);
-        permResolutions.set(msg.payload?.permissionId, 'approved');
-        break;
-      case 'deny':
-        resolvedPermIds.add(msg.payload?.permissionId);
-        permResolutions.set(msg.payload?.permissionId, 'denied');
-        break;
-      case 'always_allow':
-        resolvedPermIds.add(msg.payload?.permissionId);
-        permResolutions.set(msg.payload?.permissionId, 'always_allowed');
-        break;
-      case 'permission_resolved':
-        resolvedPermIds.add(msg.payload?.permissionId);
-        permResolutions.set(msg.payload?.permissionId, msg.payload?.resolution);
-        break;
-      case 'answer':
-        if (msg.payload?.questionId) {
-          resolvedQuestionIds.add(msg.payload.questionId);
-          questionAnswers.set(msg.payload.questionId, msg.payload?.answer as string);
-        }
-        break;
-      case 'question_resolved':
-        if (msg.payload?.questionId) {
-          resolvedQuestionIds.add(msg.payload.questionId);
-          questionAnswers.set(msg.payload.questionId, msg.payload?.answer as string);
-        }
-        break;
-    }
-  }
-
-  for (const msg of messages) {
-    if (msg.type === 'permission' && !resolvedPermIds.has(msg.payload?.id)) {
-      if (!store.pendingPermissions.has(msg.payload.id)) {
-        const perm: PendingPermission = {
-          id: msg.payload.id,
-          sessionId,
-          toolName: msg.payload.toolName,
-          args: (msg.payload.args ?? {}) as Record<string, unknown>,
-          description: msg.payload.description,
-          timestamp: msg.timestamp,
-        };
-        store.addPermission(perm);
-        logger.info('restored pending permission from replay', { sessionId, permissionId: perm.id });
-      }
-    }
-    if (msg.type === 'question' && !resolvedQuestionIds.has(msg.payload?.id)) {
-      if (!store.pendingQuestions.has(msg.payload.id)) {
-        const q: PendingQuestion = {
-          id: msg.payload.id,
-          sessionId,
-          question: msg.payload.question,
-          choices: msg.payload.choices,
-          timestamp: msg.timestamp,
-        };
-        store.addQuestion(q);
-        logger.info('restored pending question from replay', { sessionId, questionId: q.id });
-      }
-    }
-  }
-
-  for (const [permId, resolution] of permResolutions) {
-    resolvePermissionMessage(sessionId, permId, resolution);
-    store.removePermission(permId);
-  }
-  for (const [qId, answer] of questionAnswers) {
-    resolveQuestionMessage(sessionId, qId, answer);
-    store.removeQuestion(qId);
-  }
-}
-
 interface PendingRequest {
   sessionId: string;
   resolve: (messages: ChatMessage[]) => void;
@@ -191,6 +106,10 @@ class MessageProvider {
   private pendingRequests = new Map<string, PendingRequest>();
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
+  /** Turn-trace pulls already issued, keyed `${sessionId}:${bubbleSeq}`.
+   *  Prevents re-pulling the same concluded turn's TRACE on every render. */
+  private tracePulled = new Set<string>();
+  private cardRequested = new Set<string>();
 
   setSend(fn: (msg: Record<string, unknown>) => void): void {
     this.sendFn = fn;
@@ -349,7 +268,6 @@ class MessageProvider {
     // No pending request — direct batch (e.g. from a concurrent path)
     if (messages.length > 0) {
       getStore().prependMessages(sessionId, messages);
-      processReplayedActions(sessionId, messages);
       rebuildPreview(sessionId);
     }
     this.loadingSessions.delete(sessionId);
@@ -366,6 +284,100 @@ class MessageProvider {
     this.tentacleLastSeq.clear();
     this.tentacleDeviceMap.clear();
     this.loadingSessions.clear();
+    this.tracePulled.clear();
+    this.cardRequested.clear();
+  }
+
+  requestCard(sessionId: string): void {
+    if (this.cardRequested.has(sessionId)) return;
+    const store = getStore();
+    // Prefer the live session_list mapping, but fall back to the store's session
+    // record (hydrated from IDB on reload before session_list lands) so a
+    // mid-turn reconnect can still pull the card snapshot.
+    const tentacleDeviceId =
+      this.tentacleDeviceMap.get(sessionId) ?? store.sessions.get(sessionId)?.deviceId;
+    if (!tentacleDeviceId || !this.sendFn) return;
+    const targetDev = store.devices.get(tentacleDeviceId);
+    if (!(targetDev?.encryptionKey ?? targetDev?.publicKey)) return;
+    this.cardRequested.add(sessionId);
+    this.sendFn({
+      type: 'request_card',
+      deviceId: store.deviceId ?? '',
+      payload: { sessionId, targetDeviceId: tentacleDeviceId },
+    });
+    logger.info('requested card snapshot', { sessionId });
+  }
+
+  /**
+   * Pull the TRACE (tool_start/tool_complete detail) for the turn concluding at
+   * `bubbleSeq`. Fire-and-forget: the tentacle answers with a `turn_trace_batch`
+   * routed back into `handleTurnTraceBatch`, which injects the steps via
+   * `store.setTurnSteps`. Deduped per `${sessionId}:${bubbleSeq}` so a concluded
+   * turn is only pulled once (a live turn already has its steps from broadcasts;
+   * an `idle` clears the key so the authoritative list is pulled once).
+   */
+  requestTurnTrace(sessionId: string, bubbleSeq: number): void {
+    const key = `${sessionId}:${bubbleSeq}`;
+    if (this.tracePulled.has(key)) return;
+    const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
+    if (!tentacleDeviceId || !this.sendFn) {
+      logger.warn('cannot request turn trace', {
+        sessionId, bubbleSeq, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId,
+      });
+      return;
+    }
+    const store = getStore();
+    // A turn-trace pull is a best-effort background reconcile. If the tentacle
+    // device has no known encryption key yet (offline / no key exchange this
+    // session), the encrypted-send path would surface a user-facing
+    // "Cannot send: target device has no encryption key" banner — wrong for a
+    // silent background operation. Skip without marking as pulled so it retries
+    // once the key arrives.
+    const targetDev = store.devices.get(tentacleDeviceId);
+    if (!(targetDev?.encryptionKey ?? targetDev?.publicKey)) {
+      logger.debug('skip turn trace pull — tentacle not encryptable yet', {
+        sessionId, bubbleSeq, tentacleDeviceId,
+      });
+      return;
+    }
+    this.tracePulled.add(key);
+    this.sendFn({
+      type: 'request_turn_trace',
+      deviceId: store.deviceId ?? '',
+      payload: { sessionId, bubbleSeq, targetDeviceId: tentacleDeviceId },
+    });
+    logger.info('requested turn trace', { sessionId, bubbleSeq });
+  }
+
+  /**
+   * Force a re-pull of a turn's trace on the next `requestTurnTrace` (e.g. on
+   * `idle`, to reconcile the live-broadcast steps against the authoritative
+   * persisted list).
+   */
+  invalidateTurnTrace(sessionId: string, bubbleSeq: number): void {
+    this.tracePulled.delete(`${sessionId}:${bubbleSeq}`);
+  }
+
+  /**
+   * Handle a `turn_trace_batch` from the tentacle: inject the pulled steps into
+   * the concluding turn. If the turn is still running (`complete === false`),
+   * allow a later re-pull so the final list can be reconciled.
+   */
+  handleTurnTraceBatch(
+    sessionId: string,
+    bubbleSeq: number,
+    entries: unknown[],
+    complete: boolean,
+  ): void {
+    const list = (entries ?? []) as ChatMessage[];
+    logger.info('handleTurnTraceBatch received', {
+      sessionId, bubbleSeq, count: list.length, complete,
+    });
+    getStore().setTurnSteps(sessionId, bubbleSeq, list);
+    if (!complete) {
+      // Turn not finished — let a subsequent pull (e.g. at idle) refresh it.
+      this.tracePulled.delete(`${sessionId}:${bubbleSeq}`);
+    }
   }
 
   /**
@@ -414,7 +426,6 @@ class MessageProvider {
   private deliverMessages(sessionId: string, messages: ChatMessage[], initial?: boolean): void {
     if (messages.length > 0) {
       getStore().prependMessages(sessionId, messages);
-      processReplayedActions(sessionId, messages);
       if (initial) {
         const existingPreview = getStore().sessionPreviews.get(sessionId);
         rebuildPreview(sessionId);

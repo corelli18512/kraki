@@ -204,7 +204,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await app.waitFor("session_created");
 
     adapter.simulatePermissionRequest(sessionId, "perm_1", "shell", "Run npm test");
-    await app.waitFor("permission");
+    const ca = await app.waitFor("card_action");
+    expect((ca.payload as { action: { kind: string; id: string } }).action.kind).toBe("permission");
+    expect((ca.payload as { action: { id: string } }).action.id).toBe("perm_1");
 
     const tentacleId = relay.getAuthInfo()!.deviceId;
     app.sendUnicast(tentacleId, {
@@ -229,8 +231,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await app.waitFor("session_created");
 
     adapter.simulateQuestion(sessionId, "q_1", "Which DB?", ["Postgres", "SQLite"]);
-    const q = await app.waitFor("question");
-    expect(q.payload.choices).toEqual(["Postgres", "SQLite"]);
+    const q = await app.waitFor("card_action");
+    expect((q.payload as { action: { kind: string } }).action.kind).toBe("question");
+    expect((q.payload as { action: { choices: string[] } }).action.choices).toEqual(["Postgres", "SQLite"]);
 
     const tentacleId = relay.getAuthInfo()!.deviceId;
     app.sendUnicast(tentacleId, {
@@ -255,8 +258,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await app.waitFor("session_created");
 
     adapter.simulatePermissionRequest(sessionId, "perm_2", "write_file", "Write app.js");
-    const perm = await app.waitFor("permission");
-    expect(perm.payload.id).toBe("perm_2");
+    const perm = await app.waitFor("card_action");
+    expect((perm.payload as { action: { id: string } }).action.id).toBe("perm_2");
 
     const tentacleId = relay.getAuthInfo()!.deviceId;
     app.sendUnicast(tentacleId, {
@@ -269,9 +272,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 
-  // ── 6. Streaming (agent_message_delta) ───────────────
+  // ── 6. Streaming (card_message draft) ────────────────
 
-  it("6. agent_message_delta broadcasts arrive at app (coalesced within debounce window)", async () => {
+  it("6. card_message draft broadcasts arrive at app (coalesced within debounce window)", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();
 
@@ -279,19 +282,19 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await app.waitFor("session_created");
 
     // Burst within the debounce window — tentacle coalesces these into
-    // one merged delta to amortize per-recipient RSA encryption cost.
+    // one merged card_message to amortize per-recipient RSA encryption cost.
     adapter.simulateAgentDelta(sessionId, "hel");
     adapter.simulateAgentDelta(sessionId, "lo");
 
-    const merged = await app.waitFor("agent_message_delta");
-    expect(merged.payload.content).toBe("hello");
+    const merged = await app.waitFor("card_message");
+    expect((merged.payload as { content: string }).content).toBe("hello");
 
     // A delta sent after the debounce window flushes flows through as a
     // separate message, confirming the buffer is per-window not per-session.
     await waitMs(80);
     adapter.simulateAgentDelta(sessionId, " world");
-    const second = await app.waitFor("agent_message_delta");
-    expect(second.payload.content).toBe(" world");
+    const second = await app.waitFor("card_message");
+    expect((second.payload as { content: string }).content).toBe(" world");
 
     app.close();
   });
@@ -1110,9 +1113,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     });
 
     // App should receive the permission via WS (it's online)
-    const perm = await app.waitFor("permission");
-    expect(perm.type).toBe("permission");
-    expect((perm.payload as Record<string, unknown>).id).toBe("perm-1");
+    const perm = await app.waitFor("card_action");
+    expect(perm.type).toBe("card_action");
+    expect((perm.payload as { action: { id: string } }).action.id).toBe("perm-1");
 
     app.close();
   });
@@ -1132,7 +1135,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       description: "Run shell command: npm test",
     });
 
-    await app.waitFor("permission");
+    await app.waitFor("card_action");
 
     // The pushPreview rides the same pulse envelope the tentacle sends to the
     // head; the head consumes that envelope and fires the preview at its push
@@ -1228,7 +1231,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       description: longDescription,
     });
 
-    await app.waitFor("permission");
+    await app.waitFor("card_action");
 
     // Observe the preview at the head's push layer (see note above).
     const preview = await env.pushSpy.waitForPreview();

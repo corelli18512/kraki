@@ -7,14 +7,9 @@
  *    child. True isolation — one crash never touches another. Memory is
  *    bounded by killing idle children; pi re-resumes from its jsonl on the
  *    next message (lazy resume).
- *  - **permission = per-call gating**: a bridge extension (loaded in ALL modes)
- *    intercepts every tool_call and asks the host to confirm. The adapter
- *    applies a copilot-aligned policy on that request — execute/delegate run
- *    everything; discuss gates only file writes (reads/shell run freely,
- *    plan.md is allowed); safe gates every tool. No respawn on mode change.
- *  - **capability tools**: the same extension registers kraki_get_mode /
- *    kraki_ask / kraki_show_image, bridged to the operator via the extension-UI
- *    channel and the shared attachment pipeline.
+ *  - **permission = tool gating**: discuss → read-only tool set; execute /
+ *    delegate → full tools; safe → read-only (writes blocked). No per-call
+ *    UI round-trip — mode is a spawn-time tool restriction.
  *  - native fork/tree via pi's `fork` / `get_tree` RPC commands.
  */
 
@@ -33,7 +28,7 @@ import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
-import type { AttachmentStore } from '../attachment-store.js';
+import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -71,14 +66,12 @@ export interface PiRpcOptions {
   appendSystemPrompt?: string;
   /** Thinking level: off|minimal|low|medium|high|xhigh (xhigh = max). */
   thinking?: string;
-  /** Path to a pi extension loaded via `--extension`. Kraki uses this to
-   *  install the bridge extension (permission gate + kraki_* capability tools).
-   *  Loaded in ALL modes — mode is enforced by adapter policy, not by presence. */
+  /** Path to a pi extension loaded via `--extension`. Kraki always loads its
+   *  tools extension (finalize_reply / ask_user + permission gate). */
   extensionPath?: string;
-  /** Absolute path to the adapter meta sidecar, exported to the child as
-   *  `KRAKI_META_FILE` so the bridge extension's kraki_get_mode can read the
-   *  live permission mode. */
-  krakiMetaFile?: string;
+  /** Extra environment for the child. Kraki sets `KRAKI_META_FILE` here so the
+   *  extension's kraki_get_mode can read the live permission mode. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Bounds short control commands; prompts run fire-and-forget. */
@@ -108,22 +101,17 @@ class PiRpcProcess {
     // the precise jsonl instead. The absolute path also survives a cwd change.
     if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
-    // Bridge extension (permission gate + kraki_* capability tools). Loaded in
-    // ALL modes because rpc mode has no built-in tool-approval round-trip; its
-    // ctx.ui.confirm surfaces as an extension_ui_request the adapter maps to a
-    // Kraki permission card (and the adapter's policy decides silent-approve vs
-    // card). Loading unconditionally means a mode change never respawns pi.
+    // Kraki tools extension (finalize_reply / ask_user / show_image /
+    // kraki_get_mode + permission gate), always loaded. rpc mode has no built-in
+    // tool-approval round-trip, so the gate's ctx.ui.confirm surfaces as an
+    // extension_ui_request the adapter maps to a Kraki permission card (or
+    // silently auto-approves per its mode policy). Loading unconditionally means
+    // a mode change never respawns pi — the policy is enforced by the adapter.
     if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
-
-    // Export the meta sidecar path so the bridge extension's kraki_get_mode can
-    // read the live permission mode (the adapter is the source of truth).
-    const env = this.opts.krakiMetaFile
-      ? { ...process.env, KRAKI_META_FILE: this.opts.krakiMetaFile }
-      : process.env;
 
     this.child = spawn(this.opts.cliPath, args, {
       cwd: this.opts.cwd ?? process.cwd(),
-      env,
+      env: this.opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -212,7 +200,7 @@ class PiRpcProcess {
 //  Section 2 — adapter: pools one PiRpcProcess per Kraki session
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
+type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
 const MUTATING_DEFAULT_MODE: Mode = 'discuss';
 
 /** Files that may be written without approval in discuss mode (mirrors the
@@ -240,6 +228,13 @@ export function shouldAutoApprove(mode: Mode, toolName: string, input: Record<st
   }
   // safe → everything gates
   return false;
+}
+
+function toolsForMode(_mode: Mode): string[] | undefined {
+  // Full tool set in every mode (undefined = pi default set). Mutating calls in
+  // discuss/safe are gated per-call by the permission-gate extension instead of
+  // being stripped, so pi can still write/bash after the user approves.
+  return undefined;
 }
 
 /** Map a pi tool name + JSON-encoded input (as delivered by the permission-gate
@@ -298,51 +293,129 @@ interface PiSession {
   usage: SessionUsage;
   lastActivity: number;
   /** Outstanding per-call permission requests (permissionId → pi's UI request
-   *  id). Cleared when answered or when the child dies so the arm's card doesn't
-   *  dangle. */
+   *  id). Cleared when answered or when the child is killed/respawned so the
+   *  arm's card doesn't dangle. */
   pendingPerms: Map<string, string>;
-  /** Outstanding kraki_ask question requests (the pi extension_ui_request id).
-   *  Answered via respondToQuestion → extension_ui_response{value}. */
-  pendingQuestions: Set<string>;
+  /** Outstanding ask_user questions (questionId → pi's UI request id). Mirrors
+   *  pendingPerms — cleared on answer / kill / respawn. */
+  pendingQuestions: Map<string, string>;
+  /** Number of narration segments (non-empty assistant prose at message_end)
+   *  produced since the current user message. Drives the skip-finalize rule:
+   *  a turn with exactly ONE narration segment and no tool after it is already a
+   *  clean trailing reply, so no finalize round is needed. */
+  narrationSegments: number;
+  /** True once a real tool ran AFTER the most recent narration segment (reset to
+   *  false whenever a narration finalizes). If the turn ends on a tool, the last
+   *  narration isn't a trailing reply → finalize. */
+  toolSinceLastNarration: boolean;
+  /** The most recent narration segment's finalized prose — the kept "draft" text
+   *  (keep-last). Seeds the finalize prompt and is the fallback reply. */
+  lastNarration: string;
+  /** True while the injected finalize round is in flight (between sending the
+   *  finalize prompt and the following agent_end). During it, ordinary narration
+   *  is suppressed so the draft stays frozen at `lastNarration`. */
+  finalizing: boolean;
+  /** True once finalize_reply was called in the finalize round (so agent_end
+   *  doesn't fall back to a generated reply). */
+  finalizeResolved: boolean;
+  /** Fallback prose captured during the finalize round (the model's message_end
+   *  text) in case it ends the round without calling finalize_reply. */
+  finalizeNarration: string;
+  /** Live-streaming state for a finalize_reply.text (resummarize): the tool-call
+   *  id currently streaming and how many chars of its `text` arg we've emitted as
+   *  onFinalizeDelta deltas, so the resummarize streams into the draft bubble. */
+  finalizeStreamId?: string;
+  finalizeStreamLen: number;
 }
 
 const DEFAULT_PROVIDER = 'github-copilot';
 const DEFAULT_MODEL = 'github-copilot/claude-opus-4.8';
+
+/** Minimal shape of pi's streamed `assistantMessageEvent` (message_update RPC).
+ *  `partial` carries the accumulating AssistantMessage; for a streaming tool
+ *  call, pi incrementally parses `arguments` so `content[contentIndex]` exposes
+ *  the tool name + partially-parsed args (e.g. finalize_reply's `text`). */
+interface AssistantStreamEvent {
+  type: string;
+  delta?: string;
+  contentIndex?: number;
+  partial?: {
+    content?: Array<{
+      type?: string;
+      id?: string;
+      name?: string;
+      arguments?: { text?: unknown };
+    }>;
+  };
+}
 const EVICTION_INTERVAL_MS = 5 * 60_000;
 const IDLE_TTL_MS = 30 * 60_000;
 
+/** Describes the Kraki UI to the model so it narrates naturally instead of
+ *  tagging its own messages. Appended to pi's system prompt on every spawn. */
+const KRAKI_SYSTEM_PROMPT =
+  'You are operating inside Kraki, a remote-control harness. Communicate with the ' +
+  'human by writing ordinary assistant prose — it IS your reply and is shown to ' +
+  'them directly. You do NOT need any special tool to "send" a message; just ' +
+  'write. Narrate preamble, thinking, and progress as prose while you work, and ' +
+  'end your turn with a short, self-contained final answer. Kraki takes care of ' +
+  'settling that final message into the chat, so you never manage bubbles ' +
+  'yourself. To get a decision or missing information from the human, call the ' +
+  'ask_user tool (it blocks and returns their answer). To visually show the human ' +
+  'an image (a screenshot, diagram, chart, or generated graphic they cannot ' +
+  'already see), call the show_image tool with the file path. Do NOT call ' +
+  'finalize_reply on your own — Kraki will ask you to when it needs you to ' +
+  'conclude a turn.';
+
+/** Injected at the end of a turn whose intermediate narration was dropped, so
+ *  the model settles a clean final reply. Seeded with the kept draft line. */
+function finalizePrompt(draft: string): string {
+  const quoted = draft.trim()
+    ? `Your current draft closing line is:\n\n"""${draft.trim()}"""\n\n`
+    : 'You have no drafted closing line yet.\n\n';
+  return (
+    '[Kraki] Your turn is ending. Settle the final message shown to the human by ' +
+    'calling finalize_reply exactly once. ' +
+    quoted +
+    'If that line is already a good, self-contained final answer, call ' +
+    'finalize_reply({ resummarize: false }). Otherwise call finalize_reply({ ' +
+    'resummarize: true, text: "<a short, self-contained, plain-text final ' +
+    'message>" }). Do not run any other tool or add prose — just call finalize_reply.'
+  );
+}
+
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
-  private attachmentStore?: AttachmentStore;
+  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private sessions = new Map<string, PiSession>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
-  /** Lazily-materialized path to the bridge extension. */
-  private bridgeExtPath: string | null = null;
-  /** Edge-triggered mode-change signals, held at the ADAPTER level (survives
-   *  idle-eviction, which replaces the PiSession object). Prepended once to the
-   *  next user message, then cleared — mirrors the claude adapter. */
+  /** Lazily-materialized path to the always-loaded Kraki tools extension. */
+  private toolsExtPath: string | null = null;
+  /** Edge-triggered mode-change signals, held at the ADAPTER level so they
+   *  survive across turns: prepended as a one-shot marker to the next user
+   *  message (the meta sidecar / kraki_get_mode stays the source of truth). */
   private pendingModeSignals = new Map<string, Mode>();
 
-  constructor(opts: { cliPath: string; attachmentStore?: AttachmentStore }) {
+  constructor(opts: { cliPath: string; attachmentStore?: import('../attachment-store.js').AttachmentStore }) {
     super();
     this.cliPath = opts.cliPath;
     this.attachmentStore = opts.attachmentStore;
   }
 
-  /** Write the embedded bridge extension to a stable on-disk path and return it.
-   *  The source is inlined in the tentacle SEA bundle, so it can't be referenced
-   *  from a repo path at runtime — we materialize it once (rewriting on every
-   *  daemon start so upgrades ship the current source). */
-  private ensureBridgeExtension(): string {
-    if (this.bridgeExtPath) return this.bridgeExtPath;
+  /** Write the embedded Kraki tools extension to a stable on-disk path and
+   *  return it. The source is inlined in the tentacle SEA bundle, so it can't be
+   *  referenced from a repo path at runtime — we materialize it once (rewriting
+   *  on every daemon start so upgrades ship the current source). */
+  private ensureToolsExtension(): string {
+    if (this.toolsExtPath) return this.toolsExtPath;
     const dir = join(getConfigDir(), 'pi-extensions');
-    const path = join(dir, 'kraki-bridge-extension.ts');
+    const path = join(dir, 'kraki-tools.ts');
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path, PI_BRIDGE_EXTENSION_SOURCE, 'utf8');
-      this.bridgeExtPath = path;
+      writeFileSync(path, PI_KRAKI_TOOLS_SOURCE, 'utf8');
+      this.toolsExtPath = path;
     } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'failed to materialize pi bridge extension');
+      logger.warn({ err: (err as Error).message }, 'failed to materialize pi tools extension');
     }
     return path;
   }
@@ -413,44 +486,60 @@ export class PiAdapter extends AgentAdapter {
 
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
     const [provider, modelId] = model.includes('/') ? model.split('/') : [DEFAULT_PROVIDER, model];
+    // Export the meta sidecar path so the extension's kraki_get_mode reads the
+    // live permission mode (the adapter, via persistMeta, is the source of truth).
+    // The gate itself is loaded in every mode; the adapter decides silent-approve
+    // vs card per shouldAutoApprove, so a mode change never respawns pi.
+    const env = { ...process.env, KRAKI_META_FILE: this.sidecarPath(sessionId) };
     const proc = new PiRpcProcess({
       cliPath: this.cliPath,
       cwd,
       provider,
       model: modelId,
+      tools: toolsForMode(mode),
       sessionFile,
       thinking,
-      // Bridge extension is loaded in EVERY mode (mode is enforced by adapter
-      // policy on the confirm request, not by the extension's presence).
-      extensionPath: this.ensureBridgeExtension(),
-      krakiMetaFile: this.sidecarPath(sessionId),
+      appendSystemPrompt: KRAKI_SYSTEM_PROMPT,
+      extensionPath: this.ensureToolsExtension(),
+      env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Set() };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Clear the active
       // spinner so the session doesn't hang "active" forever, then evict.
-      this.clearPending(sessionId);
+      this.clearPendingPerms(sessionId);
+      this.clearPendingQuestions(sessionId);
+      this.pendingModeSignals.delete(sessionId);
       this.onIdle?.(sessionId);
       this.onSessionEvicted?.(sessionId);
     };
     proc.start();
     this.sessions.set(sessionId, sess);
+    // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
+    // (kraki_get_mode reads it) before the first turn runs.
+    this.persistMeta(sessionId, sess);
     return sess;
   }
 
-  /** Drop any outstanding permission cards AND question cards for a session
-   *  (child died / evicted) so the arm doesn't wait on a decision that can never
-   *  reach pi. */
-  private clearPending(sessionId: string): void {
+  /** Drop any outstanding permission cards for a session (child died / respawn)
+   *  so the arm doesn't wait on a decision that can never reach pi. */
+  private clearPendingPerms(sessionId: string): void {
     const s = this.sessions.get(sessionId);
-    if (!s) return;
+    if (!s || s.pendingPerms.size === 0) return;
     for (const permId of s.pendingPerms.keys()) {
       this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
     }
     s.pendingPerms.clear();
-    for (const qId of s.pendingQuestions) {
-      this.onQuestionAutoResolved?.(sessionId, qId);
+  }
+
+  /** Drop any outstanding ask_user questions (child died / respawn) so the arm's
+   *  question card doesn't dangle on a pi that can never answer it. */
+  private clearPendingQuestions(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.pendingQuestions.size === 0) return;
+    for (const questionId of s.pendingQuestions.keys()) {
+      this.onQuestionAutoResolved?.(sessionId, questionId);
     }
     s.pendingQuestions.clear();
   }
@@ -465,17 +554,47 @@ export class PiAdapter extends AgentAdapter {
     this.touch(sessionId);
     switch (e.type) {
       case 'agent_start':
+      case 'agent_start':
         break;
       case 'message_update': {
-        const am = (e as { assistantMessageEvent?: { type: string; delta?: string } }).assistantMessageEvent;
+        const s = this.sessions.get(sessionId);
+        const am = (e as { assistantMessageEvent?: AssistantStreamEvent }).assistantMessageEvent;
         if (am?.type === 'text_delta' && typeof am.delta === 'string') {
-          this.onMessageDelta?.(sessionId, { content: am.delta });
+          // During the injected finalize round the draft bubble must stay FROZEN
+          // at the kept closing line (lastNarration) — any pre-thinking prose the
+          // model emits before calling finalize_reply is suppressed so the draft
+          // doesn't churn. Outside the finalize round, narration streams normally.
+          if (!s?.finalizing) this.onMessageDelta?.(sessionId, { content: am.delta });
+          break;
+        }
+        // finalize_reply streams its `text` arg like prose: pi parses the partial
+        // tool args incrementally (arguments.text grows as a prefix), so we diff
+        // against what we've already emitted and forward the new suffix as an
+        // onFinalizeDelta. This streams the resummarized closing line live into
+        // the draft bubble (replacing the frozen narration) so it morphs
+        // seamlessly into the final reply instead of popping in whole.
+        if (am?.type === 'toolcall_delta' || am?.type === 'toolcall_start') {
+          const ci = am.contentIndex;
+          const tc = typeof ci === 'number' ? am.partial?.content?.[ci] : undefined;
+          if (tc && tc.type === 'toolCall' && tc.name === 'finalize_reply' && s) {
+            if (s.finalizeStreamId !== tc.id) {
+              s.finalizeStreamId = tc.id;
+              s.finalizeStreamLen = 0;
+            }
+            const txt = typeof tc.arguments?.text === 'string' ? tc.arguments.text : '';
+            if (txt.length > s.finalizeStreamLen) {
+              const suffix = txt.slice(s.finalizeStreamLen);
+              s.finalizeStreamLen = txt.length;
+              this.onFinalizeDelta?.(sessionId, { content: suffix });
+            }
+          }
         }
         break;
       }
       case 'message_end': {
         const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
         if (m?.role === 'assistant') {
+          const s = this.sessions.get(sessionId);
           // A backend failure (bad model, 400, quota, rate-limit) surfaces here
           // as stopReason:'error' with an empty content[] and an errorMessage.
           // Without this the session would just go idle with no response — the
@@ -484,49 +603,117 @@ export class PiAdapter extends AgentAdapter {
           if (m.stopReason === 'error' && m.errorMessage) {
             this.onError?.(sessionId, { message: m.errorMessage });
           }
-          const text = (m.content ?? []).filter((c) => c.type === 'text' && c.text).map((c) => c.text).join('');
-          if (text) this.onMessage?.(sessionId, { content: text });
+          const prose = (m.content ?? [])
+            .filter((c) => c.type === 'text' && typeof c.text === 'string')
+            .map((c) => c.text as string)
+            .join('')
+            .trim();
+          if (m.stopReason !== 'error' && prose) {
+            if (s?.finalizing) {
+              // In the finalize round: keep the model's prose ONLY as a fallback
+              // reply (used if it ends the round without calling finalize_reply).
+              // Do NOT trace it or reset the draft — the draft is frozen.
+              s.finalizeNarration = prose;
+            } else if (s) {
+              // Ordinary NARRATION: streams live to the draft bubble (see
+              // message_update) and is the agent's reply. The finalized prose is
+              // kept (keep-last) as the draft/fallback and mirrored to the TRACE
+              // axis (agent_narration) for the lazy "Steps" history. Tracked for
+              // the skip-finalize rule: count segments, remember it, and note that
+              // no tool has run since (so a trailing narration counts as a reply).
+              this.onNarration?.(sessionId, { content: prose });
+              s.narrationSegments += 1;
+              s.lastNarration = prose;
+              s.toolSinceLastNarration = false;
+            }
+          }
           void this.refreshUsage(sessionId);
         }
         break;
       }
-      case 'tool_execution_start':
+      case 'tool_execution_start': {
+        const toolName = String(e.toolName ?? 'tool');
+        if (toolName === 'finalize_reply') {
+          // The turn-conclusion tool — never a TRACE step. Only meaningful during
+          // the injected finalize round; crystallize the settled final reply here.
+          const s = this.sessions.get(sessionId);
+          if (s?.finalizing) {
+            const args = (e.args as { resummarize?: unknown; text?: unknown }) ?? {};
+            const resummarize = args.resummarize === true;
+            const text = typeof args.text === 'string' ? args.text.trim() : '';
+            s.finalizeResolved = true;
+            const reply = resummarize && text ? text : s.lastNarration.trim();
+            if (reply) {
+              // For resummarize the streamed text already replaced the draft; for
+              // keep (resummarize:false) the draft is still the frozen narration.
+              // onMessage clears the draft and lands the permanent bubble in place.
+              this.onMessage?.(sessionId, { content: reply });
+            } else {
+              this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+            }
+          }
+          break;
+        }
+        // ask_user surfaces via extension_ui_request (→ question card), not as a
+        // TRACE step — swallow its tool_* so it doesn't leak into the trace.
+        if (toolName === 'ask_user') break;
+        // A real tool ran — mark that the current narration (if any) is no longer
+        // the trailing reply, so the skip-finalize rule requires a finalize round.
+        const s = this.sessions.get(sessionId);
+        if (s) s.toolSinceLastNarration = true;
         this.onToolStart?.(sessionId, {
-          toolName: String(e.toolName ?? 'tool'),
+          toolName,
           args: (e.args as Record<string, unknown>) ?? {},
           toolCallId: e.toolCallId as string | undefined,
         });
         break;
+      }
       case 'tool_execution_end': {
         const toolName = String(e.toolName ?? 'tool');
-        const toolCallId = e.toolCallId as string | undefined;
-        let attachments: import('@kraki/protocol').Attachment[] | undefined;
-        let result: string;
-
-        if (toolName === 'kraki_show_image') {
-          // The bridge extension returned an AgentToolResult { content:[...] }
-          // with an ImageContent block. Extract the image into the shared
-          // attachment pipeline (mirrors copilot show_image) and keep a compact
-          // text result out of the transcript instead of dumping base64.
-          const { refs, caption } = this.extractShowImage(sessionId, e.result);
-          if (refs.length > 0) attachments = refs;
-          result = caption ?? (refs.length > 0 ? 'Displayed image to operator.' : 'kraki_show_image produced no image.');
+        // finalize_reply / ask_user are human-interaction tools, not TRACE.
+        if (toolName === 'finalize_reply' || toolName === 'ask_user') break;
+        // pi tool results are `{ content: [TextContent|ImageContent], details }`.
+        // Extract text for the trace and externalize any image blocks (e.g. from
+        // the show_image tool) into the attachment store so their bytes reach
+        // connected devices — mirrors the claude/copilot outbound image path.
+        const imageAttachments: import('@kraki/protocol').Attachment[] = [];
+        let resultText: string;
+        const raw = e.result as unknown;
+        const blocks =
+          raw && typeof raw === 'object' && Array.isArray((raw as { content?: unknown }).content)
+            ? ((raw as { content: Array<Record<string, unknown>> }).content)
+            : null;
+        if (blocks) {
+          resultText = blocks
+            .filter(c => c.type === 'text' && typeof c.text === 'string')
+            .map(c => c.text as string)
+            .join('\n');
+          if (this.attachmentStore) {
+            for (const c of blocks) {
+              if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
+                try {
+                  const bytes = Buffer.from(c.data, 'base64');
+                  const ref = this.attachmentStore.put(sessionId, bytes, c.mimeType, {});
+                  imageAttachments.push(ref);
+                } catch (err) {
+                  logger.warn({ err, sessionId }, 'failed to store pi image attachment');
+                }
+              }
+            }
+          }
         } else {
-          result = typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '');
+          resultText = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
         }
-
+        if (imageAttachments.length > 0 && !resultText) resultText = 'Displayed image.';
         this.onToolComplete?.(sessionId, {
           toolName,
-          result,
-          toolCallId,
+          result: resultText,
+          toolCallId: e.toolCallId as string | undefined,
           success: e.isError !== true,
-          attachments,
+          ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
         });
-
-        // After tool_complete, fire the bytes broadcast so RelayClient can stream
-        // attachment_data chunks to all connected devices.
-        if (attachments && attachments.length > 0) {
-          const refs = attachments.filter(
+        if (imageAttachments.length > 0) {
+          const refs = imageAttachments.filter(
             (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
           );
           if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs });
@@ -544,6 +731,50 @@ export class PiAdapter extends AgentAdapter {
         // pi fires agent_end again after an auto-retry/compaction continuation;
         // willRetry === true means "not actually done" — skip the premature idle.
         if (e.willRetry === true) break;
+        const s = this.sessions.get(sessionId);
+        if (!s) {
+          this.onIdle?.(sessionId);
+          break;
+        }
+        if (s.finalizing) {
+          // The injected finalize round just ended. If the model called
+          // finalize_reply, the reply was already crystallized. Otherwise fall
+          // back to its finalize-round prose, then the kept draft, then a notice.
+          if (!s.finalizeResolved) {
+            const fallback = (s.finalizeNarration || s.lastNarration).trim();
+            if (fallback) this.onMessage?.(sessionId, { content: fallback });
+            else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+          }
+          s.finalizing = false;
+          this.onIdle?.(sessionId);
+          break;
+        }
+        // Skip-finalize rule: a turn with EXACTLY ONE narration segment and no
+        // tool after it is already a clean trailing reply (e.g. "ran git → one
+        // explanation", or a pure one-line chat) — graduate that draft directly,
+        // no finalize round. Any other shape (multi-segment where keep-last
+        // dropped earlier prose, ends-on-tool, or zero narration) needs the model
+        // to settle a single clean closing message via finalize_reply.
+        const skip = s.narrationSegments === 1 && !s.toolSinceLastNarration;
+        if (skip) {
+          const reply = s.lastNarration.trim();
+          if (reply) this.onMessage?.(sessionId, { content: reply });
+          this.onIdle?.(sessionId);
+          break;
+        }
+        if (s.proc.alive) {
+          s.finalizing = true;
+          s.finalizeResolved = false;
+          s.finalizeNarration = '';
+          s.finalizeStreamId = undefined;
+          s.finalizeStreamLen = 0;
+          logger.debug({ sessionId, segments: s.narrationSegments }, 'injecting finalize round');
+          s.proc.send('prompt', { message: finalizePrompt(s.lastNarration) });
+          break;
+        }
+        // Process gone before we could finalize — best-effort crystallize.
+        const fallback = s.lastNarration.trim();
+        if (fallback) this.onMessage?.(sessionId, { content: fallback });
         this.onIdle?.(sessionId);
         break;
       }
@@ -551,88 +782,53 @@ export class PiAdapter extends AgentAdapter {
         this.onSessionEnded?.(sessionId, { reason: 'pi shutdown' });
         break;
       case 'extension_ui_request': {
-        // The bridge extension drives three UI methods over this channel:
-        //  - confirm: the permission gate before each tool. Apply the copilot
-        //    policy on our in-memory mode → auto-approve silently OR raise a card.
-        //  - select / input: a kraki_ask question → a Kraki question card.
-        // Other methods (notify/status/…) are unused and need no reply.
         if (typeof e.id !== 'string') break;
         const s = this.sessions.get(sessionId);
         if (!s) break;
-        const reqId = e.id;
-
-        if (e.method === 'confirm') {
-          const toolName = String(e.title ?? 'tool');
-          const inputJson = typeof e.message === 'string' ? e.message : '';
-          let input: Record<string, unknown> = {};
-          try {
-            const parsed = inputJson ? JSON.parse(inputJson) : {};
-            if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
-          } catch { /* leave empty */ }
-
-          if (shouldAutoApprove(s.mode, toolName, input)) {
-            // Silent approve — no card. Respond immediately so the tool runs.
-            s.proc.sendRaw({ type: 'extension_ui_response', id: reqId, confirmed: true });
-            logger.debug({ sessionId, toolName, mode: s.mode }, 'pi tool auto-approved');
-            break;
-          }
-          s.pendingPerms.set(reqId, reqId);
-          const { toolArgs, description } = parsePiPermission(toolName, inputJson);
-          logger.debug({ sessionId, permId: reqId, toolName: toolArgs.toolName }, 'pi permission requested');
-          this.onPermissionRequest?.(sessionId, { id: reqId, toolArgs, description });
-          break;
-        }
-
+        // ask_user surfaces via ctx.ui.select (choices) / ctx.ui.input (free-form)
+        // → a Kraki question card. The arm's answer returns via respondToQuestion
+        // → the matching extension_ui_response.
         if (e.method === 'select' || e.method === 'input') {
-          s.pendingQuestions.add(reqId);
-          const choices = e.method === 'select' && Array.isArray(e.options)
-            ? (e.options as string[]) : undefined;
-          logger.debug({ sessionId, questionId: reqId, method: e.method }, 'pi question requested');
+          const qid = e.id;
+          s.pendingQuestions.set(qid, qid);
+          const choices = Array.isArray(e.options) ? (e.options as string[]) : undefined;
           this.onQuestionRequest?.(sessionId, {
-            id: reqId,
-            question: String(e.title ?? ''),
+            id: qid,
+            question: String(e.title ?? 'The agent has a question'),
             choices,
-            allowFreeform: true,
+            allowFreeform: e.method === 'input',
           });
           break;
         }
+        // The permission-gate extension asks ctx.ui.confirm(toolName, inputJson)
+        // before every non-capability tool → the adapter applies its mode policy:
+        // auto-approve silently (no card) OR raise a Kraki permission card whose
+        // decision returns via respondToPermission → extension_ui_response. Other
+        // UI methods (notify/status/…) are unused and need no reply.
+        if (e.method !== 'confirm') break;
+        const permId = e.id;
+        const toolName = String(e.title ?? 'tool');
+        const inputJson = typeof e.message === 'string' ? e.message : '';
+        let input: Record<string, unknown> = {};
+        try {
+          const parsed = inputJson ? JSON.parse(inputJson) : {};
+          if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
+        } catch { /* leave input empty on malformed JSON */ }
+        if (shouldAutoApprove(s.mode, toolName, input)) {
+          // Silent approve — no card. Respond immediately so the tool runs.
+          s.proc.sendRaw({ type: 'extension_ui_response', id: permId, confirmed: true });
+          logger.debug({ sessionId, toolName, mode: s.mode }, 'pi tool auto-approved');
+          break;
+        }
+        s.pendingPerms.set(permId, permId);
+        const { toolArgs, description } = parsePiPermission(toolName, inputJson);
+        logger.debug({ sessionId, permId, toolName: toolArgs.toolName }, 'pi permission requested');
+        this.onPermissionRequest?.(sessionId, { id: permId, toolArgs, description });
         break;
       }
       default:
         break;
     }
-  }
-
-  /** Pull ImageContent blocks out of a kraki_show_image tool result and store
-   *  them in the attachment pipeline, returning content refs + any caption. The
-   *  pi result is an AgentToolResult: { content: [{type:'image',data,mimeType}],
-   *  details: { caption } }. */
-  private extractShowImage(sessionId: string, rawResult: unknown): {
-    refs: import('@kraki/protocol').ContentRef[];
-    caption?: string;
-  } {
-    const refs: import('@kraki/protocol').ContentRef[] = [];
-    if (!this.attachmentStore || !rawResult || typeof rawResult !== 'object') return { refs };
-    const r = rawResult as { content?: unknown; details?: unknown };
-    const details = (r.details && typeof r.details === 'object') ? r.details as Record<string, unknown> : {};
-    const caption = typeof details.caption === 'string' && details.caption.trim() ? details.caption.trim() : undefined;
-    const name = typeof details.path === 'string' ? details.path.split('/').pop() : undefined;
-    if (!Array.isArray(r.content)) return { refs, caption };
-    for (const block of r.content as Array<Record<string, unknown>>) {
-      if (block && block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
-        try {
-          const bytes = Buffer.from(block.data, 'base64');
-          const ref = this.attachmentStore.put(sessionId, bytes, block.mimeType, {
-            ...(name && { name }),
-            ...(caption && { caption }),
-          });
-          refs.push(ref);
-        } catch (err) {
-          logger.warn({ err: (err as Error).message, sessionId }, 'failed to store show_image attachment');
-        }
-      }
-    }
-    return { refs, caption };
   }
 
   /** Pull authoritative cumulative usage from pi (get_session_stats) and map
@@ -678,6 +874,8 @@ export class PiAdapter extends AgentAdapter {
   async resumeSession(sessionId: string, _ctx?: SessionContext): Promise<{ sessionId: string }> {
     const existing = this.sessions.get(sessionId);
     if (existing?.proc.alive) return { sessionId };
+    // A fresh spawn adopts the persisted mode, so drop any stale mode signal.
+    this.pendingModeSignals.delete(sessionId);
     // In-memory entry survives idle-eviction (sweepIdle keeps the map entry),
     // but a daemon restart wipes the map. Fall back to the on-disk sidecar so
     // the conversation (cwd + jsonl) is restored instead of starting blank.
@@ -709,19 +907,29 @@ export class PiAdapter extends AgentAdapter {
     return { sessionId };
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
+  async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
     const s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
     this.touch(sessionId);
     // Edge-triggered mode signal: if the mode changed since the last message,
-    // prepend a one-shot marker so the model knows its new permission envelope
-    // (mirrors the claude adapter). The meta file (kraki_get_mode) stays the
-    // source of truth; this is just an inline heads-up.
+    // prepend a one-shot marker so the model knows its new permission envelope.
+    // The meta sidecar (kraki_get_mode) stays the source of truth; this is just
+    // an inline heads-up (mirrors the claude/copilot adapters).
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
       this.pendingModeSignals.delete(sessionId);
       text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
     }
+    // A new user message opens a fresh logical turn: reset the finalize/skip
+    // tracking so the skip-finalize rule and finalize round apply per user message.
+    s.narrationSegments = 0;
+    s.toolSinceLastNarration = false;
+    s.lastNarration = '';
+    s.finalizing = false;
+    s.finalizeResolved = false;
+    s.finalizeNarration = '';
+    s.finalizeStreamId = undefined;
+    s.finalizeStreamLen = 0;
     // The `prompt` RPC resolves as soon as pi accepts the run (it streams
     // asynchronously and ends with agent_end); backend failures surface
     // in-stream as message_end{stopReason:'error'} -> onError. The await here
@@ -729,7 +937,14 @@ export class PiAdapter extends AgentAdapter {
     // (stdin closed, process gone, command timeout) there will be no agent_end,
     // so emit error + idle to avoid hanging the session "active" forever.
     try {
-      await s.proc.request('prompt', { message: text });
+      // pi's RPC `prompt` natively accepts image attachments as ImageContent
+      // blocks ({type:'image', data:base64, mimeType}) — a 1:1 match with
+      // Kraki's ImageAttachment. Non-image attachments (ContentRef handles)
+      // can't be inlined into a prompt, so they're dropped.
+      const images = (attachments ?? [])
+        .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
+        .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+      await s.proc.request('prompt', { message: text, ...(images.length > 0 && { images }) });
     } catch (err) {
       const message = (err as Error).message;
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
@@ -764,14 +979,15 @@ export class PiAdapter extends AgentAdapter {
       logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
       return;
     }
-    // Answer the extension's ctx.ui.select / ctx.ui.input — its promise resolves
-    // with this value, which kraki_ask returns to the model as the tool result.
+    // Echo the pi UI request id verbatim; `value` resolves ctx.ui.select/input in
+    // the ask_user tool, which returns the answer to the model as the tool result.
     s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: answer });
     logger.debug({ sessionId, questionId }, 'pi question answered');
   }
 
   async killSession(sessionId: string): Promise<void> {
-    this.clearPending(sessionId);
+    this.clearPendingPerms(sessionId);
+    this.clearPendingQuestions(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessions.get(sessionId)?.proc.kill();
     this.sessions.delete(sessionId);
@@ -803,22 +1019,22 @@ export class PiAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode === mode) return;
     s.mode = mode;
-    // Persist the new mode so it survives a daemon restart AND so the bridge
-    // extension's kraki_get_mode (which reads KRAKI_META_FILE) sees it live.
+    // No respawn: the gate is loaded in every mode and the adapter applies the
+    // policy per-call, so the mode change takes effect immediately WITHOUT
+    // killing the in-flight turn. Persist the new mode so it survives a daemon
+    // restart AND so the extension's kraki_get_mode (KRAKI_META_FILE) reads it live.
     this.persistMeta(sessionId, s);
     // Edge-triggered: prepend a one-shot marker to the next user message.
     this.pendingModeSignals.set(sessionId, mode);
-    // If a turn is streaming/compacting right now, also nudge the model mid-run
-    // via steer so it doesn't act on a stale envelope before the next message.
-    // The nudge is MODE-AGNOSTIC: pi's steer queue is one-at-a-time, so a
-    // concrete value could go stale; kraki_get_mode reads the live truth.
+    // If a turn is streaming right now, also nudge the model mid-run via steer so
+    // it re-checks its permission envelope before acting on a stale one.
     void this.steerModeNudge(sessionId);
     logger.debug({ sessionId, mode }, 'pi session mode changed');
   }
 
   /** Steer a mode-agnostic nudge into an active turn so the model re-checks its
-   *  permission envelope. No-op when the session is idle (the prepend on the
-   *  next message covers that). Active state is read from pi's get_state
+   *  permission envelope. No-op when the session is idle (the prepend on the next
+   *  message covers that). Active state is read from pi's get_state
    *  (isStreaming/isCompacting) rather than a hand-tracked flag, because pi's
    *  auto-retry and compaction continuations run AFTER agent_end. */
   private async steerModeNudge(sessionId: string): Promise<void> {
@@ -883,164 +1099,3 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Section 3 — embedded "kraki bridge" pi extension source
-//
-//  pi has no built-in per-call tool-approval round-trip in `--mode rpc`, no way
-//  for the model to surface a question card to the operator, and no way to push
-//  an image to the operator's device. This one extension bridges all three by
-//  riding pi's extension-UI channel and its `registerTool` API — so the pi
-//  adapter can offer the same capabilities the claude/copilot adapters do.
-//
-//  It provides:
-//   1. A permission GATE — intercepts every (non-capability) tool_call and asks
-//      the host via `ctx.ui.confirm(toolName, inputJson)`. In rpc mode that
-//      surfaces as an `extension_ui_request{method:"confirm"}` the adapter maps
-//      to a Kraki permission card. The extension is deliberately THIN: it does
-//      NOT decide policy. The adapter applies the copilot-aligned policy on the
-//      request (auto-approve silently vs. show a card) using its in-memory mode.
-//   2. `kraki_get_mode` — returns the live permission mode, read from the meta
-//      sidecar the adapter keeps at env `KRAKI_META_FILE`. The mode is the source
-//      of truth; the model calls this before irreversible actions.
-//   3. `kraki_ask` — asks the operator a question (choices or freeform) via
-//      `ctx.ui.select` / `ctx.ui.input`, surfaced as a Kraki question card.
-//   4. `kraki_show_image` — returns an ImageContent block; the adapter extracts
-//      it into the shared attachment pipeline and pushes it to the device.
-//
-//  Loaded UNCONDITIONALLY in every mode (mode is enforced by the adapter policy,
-//  not by adding/removing the extension), so a mode change never respawns pi.
-//
-//  Kept as a string constant (not a separate asset) so it survives the tentacle
-//  SEA bundle — esbuild inlines it and the adapter materializes it to disk at
-//  runtime. pi's jiti loader aliases `typebox` / `@earendil-works/*` to pi's own
-//  node_modules, so the imports below resolve regardless of the file's location.
-// ─────────────────────────────────────────────────────────────────────────────
-const PI_BRIDGE_EXTENSION_SOURCE = String.raw`// AUTO-GENERATED by the Kraki pi adapter. Do not edit by hand.
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
-import { Type } from "typebox";
-
-// The extension's own capability tools never go through the permission gate —
-// they carry their own operator interaction (or are read-only introspection).
-const CAPABILITY_TOOLS = new Set(["kraki_get_mode", "kraki_ask", "kraki_show_image"]);
-
-export default function krakiBridge(pi) {
-  // ── 1. Permission gate ──────────────────────────────────────────────────
-  // Ask the host to confirm every non-capability tool. The ADAPTER decides
-  // whether to auto-approve silently or raise a card, based on mode + tool kind.
-  pi.on("tool_call", async (event, ctx) => {
-    const toolName = event && event.toolName;
-    if (!toolName || CAPABILITY_TOOLS.has(toolName)) return;
-    // No dialog channel (shouldn't happen in rpc mode). Fail OPEN so the session
-    // isn't wedged waiting on a prompt that can never be answered.
-    if (!ctx || !ctx.hasUI) return;
-    let message;
-    try {
-      message = JSON.stringify((event && event.input) || {});
-    } catch (_err) {
-      message = "{}";
-    }
-    const approved = await ctx.ui.confirm(toolName, message);
-    if (!approved) {
-      return { block: true, reason: "Denied by operator \u2014 " + toolName + " was not run (kraki permission)." };
-    }
-  });
-
-  // ── 2. kraki_get_mode ───────────────────────────────────────────────────
-  pi.registerTool({
-    name: "kraki_get_mode",
-    label: "Get Kraki mode",
-    description:
-      "Return the current Kraki permission mode (safe|discuss|execute|delegate). " +
-      "safe = every tool needs operator approval; discuss = only file writes need " +
-      "approval (reads/shell run freely, writes to plan.md are allowed); execute/" +
-      "delegate = all tools run without approval. Call this before irreversible actions.",
-    promptGuidelines: [
-      "Call kraki_get_mode before irreversible or destructive actions (deleting files, force-pushing, destructive shell) to confirm the operator has granted you permission to act.",
-    ],
-    parameters: Type.Object({}),
-    async execute() {
-      let mode = "discuss";
-      try {
-        const p = process.env.KRAKI_META_FILE;
-        if (p) {
-          const meta = JSON.parse(readFileSync(p, "utf8"));
-          if (meta && typeof meta.mode === "string") mode = meta.mode;
-        }
-      } catch (_err) {
-        // fall back to the default on any read/parse failure
-      }
-      return { content: [{ type: "text", text: mode }], details: { mode } };
-    },
-  });
-
-  // ── 3. kraki_ask ────────────────────────────────────────────────────────
-  pi.registerTool({
-    name: "kraki_ask",
-    label: "Ask operator",
-    description:
-      "Ask the human operator a question and wait for their answer. Provide " +
-      "'choices' for a multiple-choice question, or omit them for a freeform " +
-      "answer. Use for decisions, clarifications, or approvals you cannot infer.",
-    parameters: Type.Object({
-      question: Type.String({ description: "The question to ask the operator." }),
-      choices: Type.Optional(
-        Type.Array(Type.String(), { description: "Optional multiple-choice options." }),
-      ),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!ctx || !ctx.hasUI) {
-        return { content: [{ type: "text", text: "Error: UI not available (non-interactive mode)." }], details: {} };
-      }
-      const choices = Array.isArray(params.choices)
-        ? params.choices.filter((c) => typeof c === "string" && c.length > 0)
-        : [];
-      let answer;
-      if (choices.length > 0) {
-        answer = await ctx.ui.select(params.question, choices);
-      } else {
-        answer = await ctx.ui.input(params.question);
-      }
-      if (answer === undefined || answer === null) {
-        return { content: [{ type: "text", text: "The operator cancelled the question." }], details: { cancelled: true } };
-      }
-      return { content: [{ type: "text", text: String(answer) }], details: { answer: String(answer) } };
-    },
-  });
-
-  // ── 4. kraki_show_image ─────────────────────────────────────────────────
-  pi.registerTool({
-    name: "kraki_show_image",
-    label: "Show image",
-    description:
-      "Display an image file to the operator on their device. Use for " +
-      "screenshots, diagrams, charts, or generated graphics the operator cannot " +
-      "otherwise see. Supported formats: PNG, JPEG, WebP, GIF.",
-    parameters: Type.Object({
-      path: Type.String({ description: "Absolute path to the image file on disk." }),
-      caption: Type.Optional(Type.String({ description: "Optional caption shown with the image." })),
-    }),
-    async execute(_toolCallId, params) {
-      let bytes;
-      try {
-        bytes = readFileSync(params.path);
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: "Error reading image: " + (err && err.message ? err.message : String(err)) }],
-          details: { error: true },
-        };
-      }
-      const ext = (basename(params.path).split(".").pop() || "").toLowerCase();
-      const mimeType =
-        ext === "jpg" || ext === "jpeg" ? "image/jpeg"
-        : ext === "webp" ? "image/webp"
-        : ext === "gif" ? "image/gif"
-        : "image/png";
-      const content = [{ type: "image", data: bytes.toString("base64"), mimeType }];
-      if (params.caption) content.push({ type: "text", text: params.caption });
-      return { content, details: { path: params.path, caption: params.caption, shown: true } };
-    },
-  });
-}
-`;

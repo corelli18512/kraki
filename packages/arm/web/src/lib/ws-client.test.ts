@@ -261,12 +261,12 @@ describe('KrakiWSClient', () => {
       expect((msgs![0] as Record<string, unknown> & { payload: { content: string } }).payload.content).toBe('Hello!');
     });
 
-    it('routes agent_message_delta to streaming content', async () => {
+    it('routes card_message append and reset to cards', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
       receiveInner({
-        type: 'agent_message_delta',
+        type: 'card_message',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -274,32 +274,43 @@ describe('KrakiWSClient', () => {
         payload: { content: 'Hel' },
       });
       receiveInner({
-        type: 'agent_message_delta',
+        type: 'card_message',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
         payload: { content: 'lo!' },
       });
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('Hello!');
 
-      expect(useStore.getState().streamingContent.get('sess-1')).toBe('Hello!');
-    });
-
-    it('flushes delta on agent_message', async () => {
-      const client = new KrakiWSClient('ws://localhost:9999');
-      await connectAndAuth(client);
-
-      useStore.getState().appendDelta('sess-1', 'streaming...');
       receiveInner({
-        type: 'agent_message',
+        type: 'card_message',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
-        payload: { content: 'Final message' },
+        payload: { content: 'Reset', reset: true },
       });
 
-      expect(useStore.getState().streamingContent.has('sess-1')).toBe(false);
+      expect(useStore.getState().cards.get('sess-1')?.text).toBe('Reset');
+    });
+
+    it('clears the pendingQuestions hint on idle', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'pi', state: 'active', messageCount: 0, pendingQuestions: 2,
+      });
+
+      receiveInner({
+        type: 'idle', deviceId: 'dev-1', seq: 9,
+        timestamp: new Date().toISOString(), sessionId: 'sess-1', payload: {},
+      });
+
+      const s = useStore.getState().sessions.get('sess-1');
+      expect(s?.state).toBe('idle');
+      expect(s?.pendingQuestions).toBe(0);
     });
 
     it('handles session_messages_range_batch without incrementing unread', async () => {
@@ -404,51 +415,57 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().sessions.get('sess-1')?.state).toBe('ended');
     });
 
-    it('routes permission request and stores it', async () => {
+    it('routes permission card action and stores it', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
       receiveInner({
-        type: 'permission',
+        type: 'card_action',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
         payload: {
-          id: 'perm-abc',
-          toolName: 'shell',
-          args: { command: 'rm -rf' },
-          description: 'Delete files',
+          action: {
+            kind: 'permission',
+            id: 'perm-abc',
+            headline: 'Delete files',
+            toolName: 'shell',
+            args: { command: 'rm -rf' },
+            description: 'Delete files',
+          },
         },
       });
 
-      expect(useStore.getState().pendingPermissions.size).toBe(1);
-      const perm = useStore.getState().pendingPermissions.get('perm-abc');
-      expect(perm?.toolName).toBe('shell');
-      expect(perm?.description).toBe('Delete files');
+      const action = useStore.getState().cards.get('sess-1')?.action;
+      expect(action?.kind).toBe('permission');
+      expect(action?.id).toBe('perm-abc');
     });
 
-    it('routes question request and stores it', async () => {
+    it('routes question card action and stores it', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
       receiveInner({
-        type: 'question',
+        type: 'card_action',
         deviceId: 'dev-1',
         seq: 4,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
         payload: {
-          id: 'q-abc',
-          question: 'Which framework?',
-          choices: ['React', 'Vue'],
+          action: {
+            kind: 'question',
+            id: 'q-abc',
+            headline: 'Question',
+            question: 'Which framework?',
+            choices: ['React', 'Vue'],
+          },
         },
       });
 
-      expect(useStore.getState().pendingQuestions.size).toBe(1);
-      const q = useStore.getState().pendingQuestions.get('q-abc');
-      expect(q?.question).toBe('Which framework?');
-      expect(q?.choices).toEqual(['React', 'Vue']);
+      const action = useStore.getState().cards.get('sess-1')?.action;
+      expect(action?.kind).toBe('question');
+      expect(action && 'choices' in action ? action.choices : undefined).toEqual(['React', 'Vue']);
     });
 
     it('routes idle message and updates session state', async () => {
@@ -495,55 +512,36 @@ describe('KrakiWSClient', () => {
       expect(sent.payload.text).toBe('Hello agent');
     });
 
-    it('approve sends correct message and removes permission', async () => {
+    it('approve sends correct message', async () => {
       const client = await setupClient();
-      useStore.getState().addPermission({
-        id: 'perm-1', sessionId: 'sess-1', toolName: 'shell',
-        args: { command: 'ls' }, description: 'List', timestamp: '',
-      });
 
       client.approve('perm-1', 'sess-1');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('approve');
       expect(sent.payload.permissionId).toBe('perm-1');
-      expect(useStore.getState().pendingPermissions.size).toBe(0);
     });
 
-    it('deny sends correct message and removes permission', async () => {
+    it('deny sends correct message', async () => {
       const client = await setupClient();
-      useStore.getState().addPermission({
-        id: 'perm-1', sessionId: 'sess-1', toolName: 'shell',
-        args: { command: 'rm' }, description: 'Delete', timestamp: '',
-      });
 
       client.deny('perm-1', 'sess-1');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('deny');
-      expect(useStore.getState().pendingPermissions.size).toBe(0);
     });
 
-    it('alwaysAllow sends correct message and removes permission', async () => {
+    it('alwaysAllow sends correct message', async () => {
       const client = await setupClient();
-      useStore.getState().addPermission({
-        id: 'perm-1', sessionId: 'sess-1', toolName: 'shell',
-        args: { command: 'ls' }, description: 'List', timestamp: '',
-      });
 
       client.alwaysAllow('perm-1', 'sess-1');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('always_allow');
-      expect(useStore.getState().pendingPermissions.size).toBe(0);
     });
 
-    it('answer sends correct message and removes question', async () => {
+    it('answer sends correct message', async () => {
       const client = await setupClient();
-      useStore.getState().addQuestion({
-        id: 'q-1', sessionId: 'sess-1', question: 'Which?',
-        choices: ['A', 'B'], timestamp: '',
-      });
 
       client.answer('q-1', 'sess-1', 'A');
 
@@ -551,7 +549,6 @@ describe('KrakiWSClient', () => {
       expect(sent.type).toBe('answer');
       expect(sent.payload.questionId).toBe('q-1');
       expect(sent.payload.answer).toBe('A');
-      expect(useStore.getState().pendingQuestions.size).toBe(0);
     });
 
     it('killSession sends correct message', async () => {
@@ -1083,7 +1080,7 @@ describe('KrakiWSClient', () => {
     });
   });
 
-  describe('tool_complete with toolCallId', () => {
+  describe('retired live tool broadcasts', () => {
     async function connectAndAuth(client: KrakiWSClient) {
       client.connect();
       await vi.waitFor(() => {
@@ -1100,7 +1097,7 @@ describe('KrakiWSClient', () => {
       });
     }
 
-    it('keeps both tool_start and tool_complete in message array', async () => {
+    it('ignores tool_start and tool_complete live broadcasts', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1125,14 +1122,11 @@ describe('KrakiWSClient', () => {
       });
 
       const messages = useStore.getState().messages.get('sess-1') ?? [];
-      // Both stay in the array — merge happens at render time in useTurns
       const toolMsgs = messages.filter((m: Record<string, unknown>) => m.type === 'tool_start' || m.type === 'tool_complete');
-      expect(toolMsgs).toHaveLength(2);
-      expect(toolMsgs[0].type).toBe('tool_start');
-      expect(toolMsgs[1].type).toBe('tool_complete');
+      expect(toolMsgs).toHaveLength(0);
     });
 
-    it('does not merge tool_complete without toolCallId', async () => {
+    it('ignores tool_complete without toolCallId', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1156,8 +1150,7 @@ describe('KrakiWSClient', () => {
 
       const messages = useStore.getState().messages.get('sess-1') ?? [];
       const toolMsgs = messages.filter((m: Record<string, unknown>) => m.type === 'tool_start' || m.type === 'tool_complete');
-      // No merge — both should be separate
-      expect(toolMsgs).toHaveLength(2);
+      expect(toolMsgs).toHaveLength(0);
     });
   });
 
@@ -1249,6 +1242,33 @@ describe('KrakiWSClient', () => {
       expect(preview).toBeTruthy();
       expect(preview!.text).toBe('Hello world');
       expect(preview!.type).toBe('agent');
+    });
+
+    it('passes the pendingQuestions digest hint through to the store session', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      receiveInner({
+        type: 'session_list',
+        deviceId: 'dev-t1',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: {
+          sessions: [{
+            id: 'sess-pending',
+            agent: 'pi',
+            state: 'active',
+            mode: 'execute',
+            lastSeq: 5,
+            readSeq: 5,
+            messageCount: 5,
+            createdAt: new Date().toISOString(),
+            pendingQuestions: 2,
+          }],
+        },
+      });
+
+      expect(useStore.getState().sessions.get('sess-pending')?.pendingQuestions).toBe(2);
     });
 
     it('only warms up sessions within 24h or active/pinned', async () => {

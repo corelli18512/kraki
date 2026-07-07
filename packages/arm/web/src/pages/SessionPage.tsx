@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { ChatView } from '../components/chat/ChatView';
 import { agentInfo } from '../lib/format';
+import { getSessionStatus, countPendingQuestions } from '../lib/session-status';
 import { AgentAvatar } from '../components/common/AgentAvatar';
 import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 import { messageProvider } from '../lib/message-provider';
@@ -37,6 +38,8 @@ export function SessionPage() {
   const deviceModelDetails = deviceAgent?.modelDetails;
 
   const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
+  const livePending = useStore((s) => sessionId ? countPendingQuestions(sessionId, s.cards) : 0);
+  const sessionStatus = session ? getSessionStatus(session, livePending) : 'idle';
 
   // Navigate home when session is deleted (removed from store while viewing)
   // but not if it's a pending session (optimistic open before session_created)
@@ -142,12 +145,18 @@ export function SessionPage() {
                 <span
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     !isDeviceOnline ? 'bg-slate-400'
-                    : session.state === 'active' ? 'bg-blue-400 animate-pulse'
+                    : sessionStatus === 'pending' ? 'bg-amber-400 animate-pulse'
+                    : sessionStatus === 'working' ? 'bg-blue-400 animate-pulse'
                     : 'bg-emerald-400'
                   }`}
                 />
                 <span className="text-[10px] text-text-muted">{session.deviceName}</span>
               </>
+            )}
+            {isDeviceOnline && sessionStatus === 'pending' && (
+              <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
+                waiting for you{livePending > 1 ? ` · ${livePending}` : ''}
+              </span>
             )}
             {session.deviceName && session.model && (
               <span className="text-[10px] text-text-muted">·</span>

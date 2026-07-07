@@ -425,6 +425,12 @@ export class CopilotAdapter extends AgentAdapter {
    *  to stop, so producing no output is the expected outcome, not a failure. */
   private cycleUserAborted = new Map<string, boolean>();
   /**
+   * Buffered assistant prose for the current turn (draft-bubble model).
+   * Accumulates assistant.message content; flushed as narration when a tool
+   * follows, or as the single conclusion bubble (onMessage) when the turn ends.
+   */
+  private pendingNarration = new Map<string, string>();
+  /**
    * Grace period (ms) after assistant.turn_end before firing a fallback idle.
    * The Copilot CLI has a known bug where session.idle is sometimes not emitted
    * after abort-during-tool-execution (github/copilot-sdk#794, #558, #1057).
@@ -1025,6 +1031,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.cycleHasOutput.set(sessionId, false);
     this.turnErrorReported.set(sessionId, false);
     this.cycleUserAborted.delete(sessionId);
+    this.pendingNarration.delete(sessionId);
     this.touchSession(sessionId);
 
     // Prepend mode-switch signal if mode changed since last message
@@ -1325,6 +1332,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
     this.cycleUserAborted.delete(sessionId);
+    this.pendingNarration.delete(sessionId);
     const inflight = this.sessionToolCallIds.get(sessionId);
     if (inflight) {
       for (const id of inflight) {
@@ -1568,6 +1576,26 @@ export class CopilotAdapter extends AgentAdapter {
 
   // ── SDK → callback wiring ─────────────────────────
 
+  /**
+   * Flush buffered assistant prose as intermediate narration (draft/status,
+   * NOT a permanent spine bubble). Called when a tool follows the prose.
+   */
+  private flushNarration(sessionId: string): void {
+    const text = (this.pendingNarration.get(sessionId) ?? '').trim();
+    this.pendingNarration.delete(sessionId);
+    if (text) this.onNarration?.(sessionId, { content: text });
+  }
+
+  /**
+   * Flush buffered assistant prose as the turn's single conclusion bubble
+   * (onMessage → permanent spine bubble). Called at turn end / idle.
+   */
+  private flushConclusion(sessionId: string): void {
+    const text = (this.pendingNarration.get(sessionId) ?? '').trim();
+    this.pendingNarration.delete(sessionId);
+    if (text) this.onMessage?.(sessionId, { content: text });
+  }
+
   private wireEvents(sessionId: string, session: CopilotSession): void {
     // Initialize per-cycle state for this session. Without this, resumed/forked
     // sessions (where sendMessage hasn't been called yet) would have undefined
@@ -1589,7 +1617,12 @@ export class CopilotAdapter extends AgentAdapter {
         this.turnHasOutput.set(sessionId, true);
         this.cycleHasOutput.set(sessionId, true);
         this.touchSession(sessionId);
-        this.onMessage?.(sessionId, { content: event.data.content });
+        // Draft-bubble model: buffer prose instead of graduating each message
+        // to its own permanent bubble. Accumulate consecutive messages so a
+        // multi-part answer isn't lost. Flushed as narration (if a tool
+        // follows) or as the single conclusion bubble (at turn end/idle).
+        const prev = this.pendingNarration.get(sessionId);
+        this.pendingNarration.set(sessionId, prev ? `${prev}\n${event.data.content}` : event.data.content);
       }
     });
 
@@ -1597,6 +1630,8 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as unknown as Record<string, unknown>;
       // report_intent is a UI hint only — drop it from the message stream.
       if (data.toolName === 'report_intent') return;
+      // A tool follows any buffered prose → that prose was narration.
+      this.flushNarration(sessionId);
       this.turnHasOutput.set(sessionId, true);
       this.cycleHasOutput.set(sessionId, true);
       this.touchSession(sessionId);
@@ -1745,6 +1780,9 @@ export class CopilotAdapter extends AgentAdapter {
       // but clearing here keeps state tidy if no new sendMessage follows.
       this.cycleUserAborted.delete(sessionId);
 
+      // Flush any buffered prose as the turn's single conclusion bubble
+      // before going idle (draft-bubble model).
+      this.flushConclusion(sessionId);
       this.onIdle?.(sessionId);
       this.signalFlushComplete(sessionId);
     });
@@ -1799,6 +1837,8 @@ export class CopilotAdapter extends AgentAdapter {
       this.onError?.(sessionId, {
         message: `${requested} is currently unavailable. Session paused — send a message to retry.`,
       });
+      // Discard any buffered prose — the turn is being torn down, not concluded.
+      this.pendingNarration.delete(sessionId);
       this.onIdle?.(sessionId);
       this.signalFlushComplete(sessionId);
       this.cleanupSessionPermissions(sessionId);
@@ -1844,6 +1884,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.idleTimers.set(sessionId, setTimeout(() => {
         this.idleTimers.delete(sessionId);
         logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
+        this.flushConclusion(sessionId);
         this.onIdle?.(sessionId);
         this.signalFlushComplete(sessionId);
       }, CopilotAdapter.IDLE_FALLBACK_MS));

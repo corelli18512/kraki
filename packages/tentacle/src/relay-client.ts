@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
+  BroadcastEnvelope, UnicastEnvelope, CardActionState,
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -27,6 +28,7 @@ import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
 import { TentaclePulse } from './tentacle-pulse.js';
+import { CardManager } from './card-manager.js';
 
 const logger = createLogger('relay-client');
 /** Pulse-trace is OFF by default. Enable with env `KRAKI_TRACE_PULSE=1`
@@ -79,20 +81,32 @@ export class RelayClient {
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
   /** Message types that write to events.jsonl and should be persisted to messages.jsonl.
-   *  New types default to NOT persisting/pausing the watcher — safer than the inverse. */
+   *  New types default to NOT persisting/pausing the watcher — safer than the inverse.
+   *
+   *  Three-axis redesign: `tool_start`/`tool_complete` were removed. Tool
+   *  activity keeps flowing live as a transient broadcast (like
+   *  agent_message_delta) but no longer occupies a per-session spine seq nor
+   *  persists here — it is mirrored to `trace.jsonl` and pulled on demand via
+   *  `turn_trace_batch`, keyed by the concluding bubble's seq. */
   private static readonly PERSISTENT_TYPES = new Set([
     'session_created',
     'agent_message',
     'user_message',
-    'permission',
-    'permission_resolved',
-    'question',
-    'question_resolved',
-    'tool_start',
-    'tool_complete',
     'error',
+    'system_message',
     'session_ended',
     'idle',
+  ]);
+  /** Tool/narration steps of the in-progress turn. No longer broadcast live —
+   *  the tentacle folds them into the server-owned status card (see
+   *  {@link CardManager}) and mirrors the raw step to `trace.jsonl` for the
+   *  lazy "Steps" history (pulled per-turn via `request_turn_trace`). Permission
+   *  and question prompts likewise no longer persist to the spine — they surface
+   *  only as the card's action slot and vanish on resolve. */
+  private static readonly TRACE_TYPES = new Set([
+    'tool_start',
+    'tool_complete',
+    'agent_narration',
   ]);
   /** Global seq counter for envelope ordering (not used for replay — per-session seq handles that). */
   private seqCounter = 0;
@@ -126,10 +140,16 @@ export class RelayClient {
   // payload roughly drops main-thread crypto work proportionally without
   // changing the on-the-wire content seen by arms.
   private static readonly DELTA_DEBOUNCE_MS = 40;
-  private deltaBuffers = new Map<string, { content: string; timer: ReturnType<typeof setTimeout> }>();
+  private deltaBuffers = new Map<string, { content: string; reset: boolean; timer: ReturnType<typeof setTimeout> }>();
   /** Sessions currently inside flushDelta — prevents the recursive send()
    *  from re-buffering the already-merged delta. */
   private flushingDeltas = new Set<string>();
+
+  /** Owns the server-formed status card ({message, action}) per session. The
+   *  tentacle is the sole authority for what the card shows; arms render it
+   *  verbatim. Broadcasts route back through {@link send} (which coalesces the
+   *  `card_message` text deltas). */
+  private card = new CardManager((msg) => this.send(msg as Partial<ProducerMessage>));
 
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
@@ -206,6 +226,42 @@ export class RelayClient {
    *  in the Copilot adapter; same fix here). */
   private sessionToolCallIds = new Map<string, Set<string>>();
 
+  /** Open ask_user question ids per session. A session with a non-empty set is
+   *  "pending" — its current turn is blocked waiting on human input. Populated
+   *  on onQuestionRequest, drained on answer / auto-resolve, cleared when the
+   *  turn ends (idle/abort/kill/respawn). Used to enrich session_list digests
+   *  with a `pendingQuestions` count so reloading arms can render the pending
+   *  status for sessions they haven't opened yet. */
+  private openQuestions = new Map<string, Set<string>>();
+
+  /** Record a newly-opened question for a session. */
+  private addOpenQuestion(sessionId: string, questionId: string): void {
+    let set = this.openQuestions.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.openQuestions.set(sessionId, set);
+    }
+    set.add(questionId);
+  }
+
+  /** Drop a resolved/cancelled question for a session. */
+  private removeOpenQuestion(sessionId: string, questionId: string): void {
+    const set = this.openQuestions.get(sessionId);
+    if (!set) return;
+    set.delete(questionId);
+    if (set.size === 0) this.openQuestions.delete(sessionId);
+  }
+
+  /** Clear all open questions for a session (turn ended / session gone). */
+  private clearOpenQuestions(sessionId: string): void {
+    this.openQuestions.delete(sessionId);
+  }
+
+  /** Number of open (human-blocking) questions for a session. */
+  private openQuestionCount(sessionId: string): number {
+    return this.openQuestions.get(sessionId)?.size ?? 0;
+  }
+
   /** Build a ContentRef for the args JSON if the serialized size exceeds the
    *  inline floor. Returns undefined when args are trivially small. */
   private offloadArgs(
@@ -262,6 +318,7 @@ export class RelayClient {
    *  `lastArgs*` maps would leak entries for any tool call that didn't
    *  receive a matching `tool_complete` before the session went away. */
   private purgeSessionToolState(sessionId: string): void {
+    this.clearOpenQuestions(sessionId);
     const inflight = this.sessionToolCallIds.get(sessionId);
     if (!inflight) return;
     for (const id of inflight) {
@@ -468,6 +525,10 @@ export class RelayClient {
           this.sendGreetingTo(device.id, key);
           // Send session list so the app can sync
           this.sendSessionListTo(device.id, key);
+          // Push any active card snapshots so a mid-turn reconnect re-seeds its
+          // status card immediately, using the fresh key we just learned (avoids
+          // a client-pull race where request_card outruns key sync on reload).
+          this.sendCardSnapshotsTo(device.id, key);
         }
       }
       return;
@@ -582,6 +643,20 @@ export class RelayClient {
       return;
     }
 
+    // request_turn_trace — pull one turn's tool trace (TRACE axis), keyed by
+    // the concluding bubble's spine seq.
+    if (msg.type === 'request_turn_trace') {
+      this.handleTurnTrace(msg.deviceId, msg.payload.sessionId, msg.payload.bubbleSeq);
+      return;
+    }
+
+    // request_card — pull the current status-card snapshot (message + action)
+    // for a session, used to seed a (re)joining client mid-turn.
+    if (msg.type === 'request_card') {
+      this.handleRequestCard(msg.deviceId, msg.payload.sessionId);
+      return;
+    }
+
     // request_replay — replay buffered messages to the requesting device
     // request_session_replay — replay buffered messages for a specific session
     if (msg.type === 'request_session_replay') {
@@ -680,6 +755,7 @@ export class RelayClient {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
             });
+          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
@@ -690,6 +766,7 @@ export class RelayClient {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
             });
+          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
           break;
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
@@ -700,8 +777,10 @@ export class RelayClient {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
             });
+          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
           break;
         case 'answer':
+          this.removeOpenQuestion(sessionId, msg.payload.questionId);
           this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, msg.payload.wasFreeform ?? false)
             .then(() => {
               this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
@@ -710,6 +789,7 @@ export class RelayClient {
               logger.error({ err, sessionId }, 'respondToQuestion failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
             });
+          this.card.resolvePrompt(sessionId, msg.payload.questionId, { answer: msg.payload.answer });
           break;
         case 'kill_session':
           this.adapter.killSession(sessionId)
@@ -718,6 +798,8 @@ export class RelayClient {
         case 'abort_session':
           this.adapter.abortSession(sessionId)
             .then(() => {
+              this.clearOpenQuestions(sessionId);
+              this.card.clear(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
             })
@@ -1145,6 +1227,11 @@ export class RelayClient {
     };
 
     this.adapter.onMessage = (sessionId, event) => {
+      // Clear the server-side draft state FIRST so a reconnect snapshot doesn't
+      // re-seed a stale draft; arms clear the live draft in the SAME store update
+      // that lands this permanent bubble (no double-render flash). onBubble does
+      // NOT broadcast an empty reset (that clear-then-re-add was the flicker).
+      this.card.onBubble(sessionId);
       this.send({
         type: 'agent_message',
         sessionId,
@@ -1157,53 +1244,61 @@ export class RelayClient {
     };
 
     this.adapter.onMessageDelta = (sessionId, event) => {
-      this.send({
-        type: 'agent_message_delta',
-        sessionId,
-        payload: { content: event.content },
-      });
+      // Streaming narration/progress prose → the draft bubble (coalesced in
+      // send()). Rendered as a clean in-flow spine bubble, kept-last per segment.
+      this.card.onDelta(sessionId, event.content);
+    };
+
+    // Streaming finalize_reply.text (resummarize) → the draft bubble, replacing
+    // the frozen final narration in place so it morphs seamlessly into the final
+    // reply. Finalizes into the agent_message spine bubble at idle.
+    this.adapter.onFinalizeDelta = (sessionId, event) => {
+      this.card.onDelta(sessionId, event.content);
+    };
+
+    // Finalized narration prose → TRACE axis only: mirrored to trace.jsonl for
+    // the lazy "Steps" history and marked as the end of the draft's current
+    // segment (the next delta starts fresh). Never broadcast standalone.
+    this.adapter.onNarration = (sessionId, event) => {
+      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
+      this.card.onNarrationFinal(sessionId, event.content);
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
-      this.send({
-        type: 'permission',
-        sessionId,
-        payload: {
-          id: event.id,
-          toolName: event.toolArgs.toolName,
-          args: event.toolArgs.args as Record<string, unknown>,
-          description: event.description,
-        },
+      const toolName = event.toolArgs.toolName;
+      const args = event.toolArgs.args as Record<string, unknown> | undefined;
+      // Permission args stay inline (they're what the human is approving — a
+      // command, a path — and must render without a lazy round-trip).
+      this.card.onPrompt(sessionId, {
+        kind: 'permission',
+        id: event.id,
+        headline: event.description || toolName,
+        description: event.description,
+        toolName,
+        ...(args ? { args } : {}),
       });
     };
 
-    // When a permission is auto-resolved (e.g. by Always Allow), notify relay
-    // so the web app can remove the blocking card
-    this.adapter.onPermissionAutoResolved = (sessionId, permissionId, resolution) => {
-      this.send({
-        type: 'permission_resolved',
-        sessionId,
-        payload: { permissionId, resolution },
-      });
+    // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
+    this.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
+      this.card.resolvePrompt(sessionId, permissionId, { decision: 'approve' });
     };
 
+    // Auto-resolved (e.g. cancelled/aborted) — no answer, clear the slot.
     this.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
-      this.send({
-        type: 'question_resolved',
-        sessionId,
-        payload: { questionId, answer: '', cancelled: true },
-      });
+      this.removeOpenQuestion(sessionId, questionId);
+      this.card.resolvePrompt(sessionId, questionId);
     };
 
     this.adapter.onQuestionRequest = (sessionId, event) => {
-      this.send({
-        type: 'question',
-        sessionId,
-        payload: {
-          id: event.id,
-          question: event.question,
-          choices: event.choices,
-        },
+      this.addOpenQuestion(sessionId, event.id);
+      this.card.onPrompt(sessionId, {
+        kind: 'question',
+        id: event.id,
+        headline: event.question,
+        question: event.question,
+        ...(event.choices ? { choices: event.choices } : {}),
+        ...(event.allowFreeform !== undefined ? { allowFreeform: event.allowFreeform } : {}),
       });
     };
 
@@ -1222,7 +1317,7 @@ export class RelayClient {
         }
         inflight.add(event.toolCallId);
       }
-      this.send({
+      const toolStartMsg = {
         type: 'tool_start',
         sessionId,
         payload: {
@@ -1232,6 +1327,18 @@ export class RelayClient {
           ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
         },
+      };
+      // Off-spine: mirror to trace.jsonl for the lazy "Steps" history, and fold
+      // into the card's action slot — no live standalone broadcast.
+      this.recordTrace(toolStartMsg);
+      this.card.onToolStart(sessionId, {
+        kind: 'tool',
+        id: event.toolCallId ?? headline,
+        headline,
+        status: 'running',
+        toolName: event.toolName,
+        ...(argsRef && { argsRef }),
+        ...(inlineArgs && { args: inlineArgs }),
       });
       if (argsRef) {
         this.broadcastAttachmentBytes(sessionId, argsRef).catch((err) => {
@@ -1271,7 +1378,7 @@ export class RelayClient {
           if (inflight.size === 0) this.sessionToolCallIds.delete(sessionId);
         }
       }
-      this.send({
+      const toolCompleteMsg = {
         type: 'tool_complete',
         sessionId,
         payload: {
@@ -1284,6 +1391,18 @@ export class RelayClient {
           ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
+      };
+      this.recordTrace(toolCompleteMsg);
+      this.card.onToolComplete(sessionId, {
+        kind: 'tool',
+        id: event.toolCallId ?? headline,
+        headline,
+        status: event.success === false ? 'failure' : 'success',
+        toolName: event.toolName,
+        ...(argsRef && { argsRef }),
+        ...(inlineArgs && { args: inlineArgs }),
+        ...(resultRef && { resultRef }),
+        ...(event.attachments?.length && { attachments: event.attachments }),
       });
       if (resultRef) {
         this.broadcastAttachmentBytes(sessionId, resultRef).catch((err) => {
@@ -1305,6 +1424,8 @@ export class RelayClient {
     };
 
     this.adapter.onIdle = (sessionId) => {
+      this.clearOpenQuestions(sessionId);
+      this.card.clear(sessionId);
       this.sessionManager.markIdle(sessionId);
       const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
       if (usage) this.sessionManager.setUsage(sessionId, usage);
@@ -1328,6 +1449,17 @@ export class RelayClient {
       });
     };
 
+    // Kraki-originated spine notice (not the agent's words). Persisted like a
+    // bubble so the turn — which produced no final reply — still has an
+    // anchor for its "Steps" history.
+    this.adapter.onSystemMessage = (sessionId, event) => {
+      this.send({
+        type: 'system_message',
+        sessionId,
+        payload: { kind: event.kind, content: event.content },
+      });
+    };
+
     this.adapter.onSessionEnded = (sessionId, event) => {
       this.sessionManager.endSession(sessionId, event.reason);
       this.turnCounts.delete(sessionId);
@@ -1335,6 +1467,7 @@ export class RelayClient {
       this.lastAgentContent.delete(sessionId);
       this.purgeSessionToolState(sessionId);
       this.broadcastedAttachmentIds.delete(sessionId);
+      this.card.delete(sessionId);
       this.send({
         type: 'session_ended',
         sessionId,
@@ -1348,6 +1481,7 @@ export class RelayClient {
     // through ensureSessionResumed and lazy-loads transparently.
     this.adapter.onSessionEvicted = (sessionId) => {
       this.sessionManager.markDisconnected(sessionId);
+      this.card.delete(sessionId);
     };
 
     // SDK title fallback — use as fast placeholder while LLM generation runs
@@ -1474,7 +1608,7 @@ export class RelayClient {
    * Send the session_list to a specific device (used on device_joined).
    */
   private sendSessionListTo(targetDeviceId: string, compactPubKey: string): void {
-    const sessions = this.sessionManager.getSessionList();
+    const sessions = this.enrichSessionList(this.sessionManager.getSessionList());
     const msg = {
       type: 'session_list',
       deviceId: this.authInfo?.deviceId ?? '',
@@ -1489,7 +1623,7 @@ export class RelayClient {
    * Broadcast session_list to all connected apps (used on auth_ok).
    */
   private broadcastSessionList(): void {
-    const sessions = this.sessionManager.getSessionList();
+    const sessions = this.enrichSessionList(this.sessionManager.getSessionList());
     this.sendEncrypted({
       type: 'session_list',
       deviceId: this.authInfo?.deviceId ?? '',
@@ -1497,6 +1631,16 @@ export class RelayClient {
       timestamp: new Date().toISOString(),
       payload: { sessions },
     } as ProducerMessage);
+  }
+
+  /** Attach the live `pendingQuestions` count (open ask_user questions) to each
+   *  digest so reloading arms can render the "pending" status for sessions they
+   *  haven't opened yet. Only added when > 0 to keep the digest lean. */
+  private enrichSessionList<T extends { id: string }>(sessions: T[]): T[] {
+    return sessions.map((s) => {
+      const count = this.openQuestionCount(s.id);
+      return count > 0 ? { ...s, pendingQuestions: count } : s;
+    });
   }
 
   /**
@@ -1736,7 +1880,85 @@ export class RelayClient {
     this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
-  // ── Attachment bytes ────────────────────────────────
+  /**
+   * Reply to `request_turn_trace` — the tool trace for one turn, read from
+   * `trace.jsonl` and keyed by the concluding bubble's spine seq. Unicast the
+   * `turn_trace_batch` back to the requester.
+   */
+  private handleTurnTrace(
+    requesterDeviceId: string,
+    sessionId: string,
+    bubbleSeq: number,
+  ): void {
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Turn trace requested but no encryption key for requester');
+      return;
+    }
+
+    const meta = this.sessionManager.getMeta(sessionId);
+    let entries: unknown[] = [];
+    let complete = false;
+    if (meta) {
+      const result = this.sessionManager.readTurnTrace(sessionId, Math.floor(bubbleSeq));
+      entries = result.entries;
+      complete = result.complete;
+    }
+
+    const batchMsg = {
+      type: 'turn_trace_batch',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { sessionId, bubbleSeq, entries, complete },
+    };
+    logger.info({ requesterDeviceId, sessionId, bubbleSeq, count: entries.length, complete }, 'Replied to turn trace request');
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+  }
+
+  /** Mirror an off-spine step (tool_start / tool_complete / agent_narration) to
+   *  the session's `trace.jsonl` without broadcasting it live — the live view
+   *  is served by the status card; this is only for the lazy "Steps" history. */
+  private recordTrace(msg: { type: string; sessionId: string; payload: unknown }): void {
+    const enriched = { ...msg, timestamp: new Date().toISOString() };
+    this.sessionManager.appendTrace(msg.sessionId, msg.type, JSON.stringify(enriched));
+  }
+
+  /** Reply to `request_card` — unicast the session's current card snapshot
+   *  (card_message full text + current card_action) to the requester. */
+  private handleRequestCard(requesterDeviceId: string, sessionId: string): void {
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId }, 'Card requested but no encryption key for requester');
+      return;
+    }
+    for (const snap of this.card.snapshot(sessionId)) {
+      const enriched = {
+        ...snap,
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+      };
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, enriched);
+    }
+  }
+
+  /** Push the current card snapshot for every session with active card state to
+   *  a freshly-joined consumer. Called from `device_joined` (fresh key in hand)
+   *  so a reconnecting arm re-seeds its status card without a pull round-trip. */
+  private sendCardSnapshotsTo(deviceId: string, key: string): void {
+    for (const sessionId of this.card.activeSessions()) {
+      for (const snap of this.card.snapshot(sessionId)) {
+        const enriched = {
+          ...snap,
+          deviceId: this.authInfo?.deviceId ?? '',
+          seq: ++this.seqCounter,
+          timestamp: new Date().toISOString(),
+        };
+        this.sendReliableUnicastTo(deviceId, key, enriched);
+      }
+    }
+  }
 
   /** Plaintext chunk budget for `attachment_data` envelopes.
    *  Stays under the relay's 10 MB frame cap after base64 + envelope. */
@@ -1881,17 +2103,27 @@ export class RelayClient {
   private send(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    // Coalesce streaming deltas to amortize per-recipient RSA cost.
-    // Skip the buffer when we're already inside a flush (the recursive
-    // send below) — otherwise the merged delta would just be re-buffered.
+    // Coalesce streaming card text deltas to amortize per-recipient RSA cost.
+    // Skip the buffer when we're already inside a flush (the recursive send
+    // below) — otherwise the merged delta would just be re-buffered. Non-empty
+    // deltas are coalesced; a reset boundary flushes the prior segment first,
+    // and an empty-content reset (card clear) is emitted immediately.
     if (
-      msg.type === 'agent_message_delta'
+      msg.type === 'card_message'
       && msg.sessionId
       && !this.flushingDeltas.has(msg.sessionId)
     ) {
-      const content = (msg.payload as { content?: string } | undefined)?.content ?? '';
-      this.bufferDelta(msg.sessionId, content);
-      return;
+      const p = msg.payload as { content?: string; reset?: boolean } | undefined;
+      const content = p?.content ?? '';
+      const reset = p?.reset ?? false;
+      if (reset && this.deltaBuffers.has(msg.sessionId)) {
+        this.flushDelta(msg.sessionId);
+      }
+      if (content !== '') {
+        this.bufferDelta(msg.sessionId, content, reset);
+        return;
+      }
+      // empty reset (clear) falls through to send immediately below
     }
 
     traceLog.info({
@@ -1903,9 +2135,9 @@ export class RelayClient {
       clientId: (msg.payload as { clientId?: string } | undefined)?.clientId,
     });
 
-    // Any non-delta message for a session with pending deltas must
-    // flush first so the merged delta arrives before the subsequent
-    // agent_message / tool_start / idle / etc.
+    // Any non-card_message for a session with pending card deltas must flush
+    // first so the merged text arrives before the subsequent card_action /
+    // agent_message / idle / etc.
     if (msg.sessionId && this.deltaBuffers.has(msg.sessionId)) {
       this.flushDelta(msg.sessionId);
     }
@@ -1934,6 +2166,10 @@ export class RelayClient {
     const sessionId = enriched.sessionId as string | undefined;
     if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
+    } else if (sessionId && RelayClient.TRACE_TYPES.has(type)) {
+      // Off-spine tool activity: mirror to trace.jsonl (keyed to the current
+      // turn) and keep broadcasting transiently below. No per-session seq.
+      this.sessionManager.appendTrace(sessionId, type, JSON.stringify(enriched));
     }
 
     // Advance the events watcher past any events the adapter just wrote,
@@ -1966,13 +2202,15 @@ export class RelayClient {
     }
   }
 
-  /** Append to a session's delta buffer, arming a flush timer on first append. */
-  private bufferDelta(sessionId: string, content: string): void {
+  /** Append to a session's card-text buffer, arming a flush timer on first
+   *  append. `reset` marks the buffered segment as a new narrative segment. */
+  private bufferDelta(sessionId: string, content: string, reset: boolean): void {
     if (!content) return;
     let entry = this.deltaBuffers.get(sessionId);
     if (!entry) {
       entry = {
         content: '',
+        reset,
         timer: setTimeout(() => this.flushDelta(sessionId), RelayClient.DELTA_DEBOUNCE_MS),
       };
       this.deltaBuffers.set(sessionId, entry);
@@ -1980,8 +2218,8 @@ export class RelayClient {
     entry.content += content;
   }
 
-  /** Emit one merged delta for a session and drop its buffer. Safe to call
-   *  from a timer or synchronously before another send. */
+  /** Emit one merged card_message for a session and drop its buffer. Safe to
+   *  call from a timer or synchronously before another send. */
   private flushDelta(sessionId: string): void {
     const entry = this.deltaBuffers.get(sessionId);
     if (!entry) return;
@@ -1991,9 +2229,9 @@ export class RelayClient {
     this.flushingDeltas.add(sessionId);
     try {
       this.send({
-        type: 'agent_message_delta',
+        type: 'card_message',
         sessionId,
-        payload: { content: entry.content },
+        payload: { content: entry.content, reset: entry.reset },
       });
     } finally {
       this.flushingDeltas.delete(sessionId);
@@ -2146,17 +2384,28 @@ export class RelayClient {
     msg: Partial<ProducerMessage>,
     recipients: RecipientKey[],
   ): { blob: string; keys: Record<string, string> } | undefined {
+    let previewType: string | undefined;
     let previewSummary: string | undefined;
-    if (msg.type === 'permission') {
-      previewSummary = (msg.payload as Record<string, unknown>).description as string;
-    } else if (msg.type === 'question') {
-      previewSummary = (msg.payload as Record<string, unknown>).question as string;
+    if (msg.type === 'card_action') {
+      // Permission/question actions warrant an offline push — a human must act
+      // on them. Tool/tool_batch actions are ambient progress (no push). Skip
+      // already-resolved prompts (decision/answer set): the push is for the
+      // initial ask only, not the resolved read-only echo.
+      const action = (msg.payload as { action?: CardActionState | null } | undefined)?.action;
+      if (action?.kind === 'permission' && action.decision === undefined) {
+        previewType = 'permission';
+        previewSummary = action.description || action.headline;
+      } else if (action?.kind === 'question' && action.answer === undefined) {
+        previewType = 'question';
+        previewSummary = action.question || action.headline;
+      }
     } else if (msg.type === 'idle') {
+      previewType = 'idle';
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);
     }
-    if (!previewSummary) return undefined;
+    if (!previewType || !previewSummary) return undefined;
     try {
-      const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
+      const preview = JSON.stringify({ type: previewType, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
       const previewBlob = encryptToBlob(preview, recipients);
       return { blob: previewBlob.blob, keys: previewBlob.keys };
     } catch (err) {

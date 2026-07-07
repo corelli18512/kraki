@@ -1,33 +1,19 @@
-import { memo, useRef, useMemo, useCallback } from 'react';
+import { memo, useRef, useMemo, useCallback, useEffect } from 'react';
 import { useParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
-import { useShallow } from 'zustand/shallow';
 import { MessageBubble } from './MessageBubble';
-import { ThinkingBox } from './ThinkingBox';
+import { LiveAgentBubble } from './LiveAgentBubble';
 import { MessageInput } from './MessageInput';
-import { PermissionInput } from '../actions/PermissionInput';
-import { QuestionInput } from '../actions/QuestionInput';
-import { useTurns } from '../../hooks/useTurns';
 import { useScrollController } from '../../hooks/useScrollController';
+import { messageProvider } from '../../lib/message-provider';
+import { getSessionStatus } from '../../lib/session-status';
 import type { ChatMessage } from '../../types/store';
-import type { Attachment } from '@kraki/protocol';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
-/** Collect image attachments from tool_complete messages in a turn's thinking. */
-function collectTurnImages(thinkingMessages: ChatMessage[]): Attachment[] {
-  const images: Attachment[] = [];
-  for (const m of thinkingMessages) {
-    if (m.type === 'tool_complete' && Array.isArray(m.payload?.attachments)) {
-      for (const att of m.payload.attachments) {
-        if (att.type === 'image' || att.type === 'content_ref') {
-          images.push(att as Attachment);
-        }
-      }
-    }
-  }
-  return images;
-}
+/** TRACE / transient activity types — never on the spine; they live in the
+ *  live bubble (live) or the Steps modal (pulled history). */
+const TRACE_TYPES = new Set(['tool_start', 'tool_complete', 'agent_narration', 'active']);
 
 /** Extract seq from a message, returning 0 for non-sequenced messages. */
 function getSeq(m: ChatMessage): number {
@@ -37,8 +23,8 @@ function getSeq(m: ChatMessage): number {
 export const ChatView = memo(function ChatView() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
-  const streaming = useStore((s) => sessionId ? s.streamingContent.get(sessionId) : undefined);
   const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
+  const card = useStore((s) => sessionId ? s.cards.get(sessionId) : undefined);
   const storeUnread = useStore((s) => sessionId ? (s.unreadCount.get(sessionId) ?? 0) : 0);
 
   // Scoped selectors — only re-render when THIS session's data changes
@@ -46,75 +32,110 @@ export const ChatView = memo(function ChatView() {
   const isDeviceOnline = useStore(
     useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
   );
-
-  // Session-scoped pending permission IDs (sorted array for shallow stability)
-  const pendingPermIds = useStore(
-    useShallow((s) => {
-      const ids: string[] = [];
-      for (const p of s.pendingPermissions.values()) {
-        if (p.sessionId === sessionId) ids.push(p.id);
-      }
-      return ids.sort();
-    }),
+  // Whether the tentacle device is encryptable yet — a `request_card` snapshot
+  // pull needs its key, which may arrive AFTER this view first mounts (fresh
+  // reload). Gate + re-trigger the seed effect on this so the pull isn't lost.
+  const isTentacleEncryptable = useStore(
+    useCallback((s) => {
+      const d = deviceId ? s.devices.get(deviceId) : undefined;
+      return !!(d?.encryptionKey ?? d?.publicKey);
+    }, [deviceId]),
   );
 
-  // Session-scoped permissions and questions lists
-  const permissions = useStore(
-    useShallow((s) => [...s.pendingPermissions.values()].filter((p) => p.sessionId === sessionId)),
-  );
-  const questions = useStore(
-    useShallow((s) => [...s.pendingQuestions.values()].filter((q) => q.sessionId === sessionId)),
-  );
-
-  // Filter out pending permission bubbles — the blocking card handles them.
-  const filteredMessages = useMemo(
+  // ── SPINE ─────────────────────────────────────────────
+  // Persistent, replayed bubbles rendered directly in seq order. Excludes the
+  // transient TRACE/activity axis (tool_start/tool_complete/agent_narration/
+  // active), which is shown only from the Steps popover.
+  const spine = useMemo(
     () => messages.filter((msg) => {
-      if (msg.type === 'permission' && pendingPermIds.includes(msg.payload.id)) return false;
+      if (TRACE_TYPES.has(msg.type)) return false;
       return true;
     }),
-    [messages, pendingPermIds],
+    [messages],
   );
+
+  // Derived human-facing status decides card visibility.
+  const cardAction = card?.action;
+  // What the live bubble's lower ACTION section shows — driven purely by what
+  // is in the slot, NOT by a generic "working" status:
+  //   • a running tool / concurrent batch (in-flight work), or
+  //   • a COMPLETED tool / RESOLVED prompt that is the most recent activity — the
+  //     tentacle retires it from the slot the instant narration resumes, so its
+  //     presence means "the latest thing that happened was this action", or
+  //   • an unresolved permission / question (a blocking human affordance).
+  // A decided permission / answered question therefore keeps the bubble pinned
+  // (showing its read-only outcome) only until the agent narrates again.
+  const actionLive =
+    cardAction?.kind === 'tool' ||
+    (cardAction?.kind === 'tool_batch' && cardAction.running > 0) ||
+    cardAction?.kind === 'permission' ||
+    cardAction?.kind === 'question';
+  const livePending =
+    (cardAction?.kind === 'question' && cardAction.answer === undefined) ||
+    (cardAction?.kind === 'permission' && !cardAction.decision)
+      ? 1
+      : 0;
+  const status = useMemo(
+    () => session ? getSessionStatus(session, livePending) : 'idle',
+    [session, livePending],
+  );
+  // The whole in-progress turn renders as ONE live agent bubble (LiveAgentBubble):
+  // its top part streams the draft narration, its darker bottom part carries the
+  // live status (Working…/Waiting) + a Steps entry + the CURRENT live action.
+  // It shows while the session is non-idle AND there is something live to show —
+  // streaming draft text OR a live action. The moment the concluding
+  // agent_message lands on the spine (the draft clears) and no action is live,
+  // this bubble drops and the concluded spine bubble takes over in place, so
+  // there is no card↔bubble morph and no lingering "answered" card.
+  const draft = card?.text ?? '';
+  const cardEligible = status === 'working' || status === 'pending';
+  const showLive = cardEligible && !!card && (draft.length > 0 || actionLive);
 
   // First seq for prepend tracking (passed to scroll controller)
   const firstSeq = useMemo(() => {
-    const seqs = filteredMessages.map(getSeq).filter(s => s > 0);
+    const seqs = spine.map(getSeq).filter(s => s > 0);
     return seqs.length > 0 ? seqs[0] : 0;
-  }, [filteredMessages]);
+  }, [spine]);
 
-  const rawGrouped = useTurns(filteredMessages);
+  // Reload mid-turn seed: the server owns the card, so request a snapshot when
+  // opening a non-idle session without local card state. Gated on the tentacle
+  // being encryptable (its key may arrive after mount) and re-runs when it does.
+  useEffect(() => {
+    if (!sessionId || !cardEligible || card) return;
+    if (!isTentacleEncryptable) return;
+    messageProvider.requestCard(sessionId);
+  }, [sessionId, cardEligible, card, isTentacleEncryptable]);
 
-  const sessionIdle = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].type === 'idle';
+  // `idle` here is the message-level marker (last spine entry is an idle
+  // event), used by the scroll controller for the working→idle reposition. It
+  // is distinct from the derived `status`.
+  const sessionIdle = spine.length > 0 && spine[spine.length - 1].type === 'idle';
 
-  // Ensure streaming always attaches to a turn group
-  const grouped = useMemo(() => {
-    if (!streaming) return rawGrouped;
-    const last = rawGrouped[rawGrouped.length - 1];
-    if (last && last.type === 'turn' && !last.turn.finalMessage) return rawGrouped;
-    return [...rawGrouped, { type: 'turn' as const, turn: { thinkingMessages: [] as ChatMessage[], finalMessage: null } }];
-  }, [rawGrouped, streaming]);
-
-  // Index of the element to scroll to when entering an unread session.
-  // Priority: pending question > last user message (if idle) > last agent turn.
+  // Index (into spine) of the element to scroll to when entering an unread
+  // session. Priority: last user message (if idle) > last concluded agent
+  // bubble. A pending ask_user question now lives in the live bubble at the
+  // bottom (auto-followed by the scroll controller), so it needs no spine
+  // scroll target.
   const scrollTargetIdx = useMemo(() => {
-    for (let i = grouped.length - 1; i >= 0; i--) {
-      const g = grouped[i];
-      if (g.type === 'standalone' && g.message.type === 'question') {
-        const payload = g.message.payload as Record<string, unknown> | undefined;
-        if (!payload?.answer) return i;
-      }
-    }
     if (sessionIdle) {
-      for (let i = grouped.length - 1; i >= 0; i--) {
-        const g = grouped[i];
-        if (g.type === 'standalone' && (g.message.type === 'user_message' || g.message.type === 'send_input')) return i;
+      for (let i = spine.length - 1; i >= 0; i--) {
+        const msg = spine[i];
+        if (msg.type === 'user_message' || msg.type === 'send_input') return i;
       }
     }
-    for (let i = grouped.length - 1; i >= 0; i--) {
-      const g = grouped[i];
-      if (g.type === 'turn' && g.turn.finalMessage) return i;
+    for (let i = spine.length - 1; i >= 0; i--) {
+      if (spine[i].type === 'agent_message') return i;
     }
     return -1;
-  }, [grouped, sessionIdle]);
+  }, [spine, sessionIdle]);
+
+  // The scroll controller tracks content growth. Include the live draft bubble
+  // and card action so new narration deltas / tool steps drive auto-follow just
+  // like spine bubbles.
+  const scrollList = useMemo(
+    () => (card && showLive ? [...spine, { _draft: draft, _act: card.action?.id } as unknown as ChatMessage] : spine),
+    [showLive, spine, card, draft],
+  );
 
   // ── Scroll controller (all scroll logic lives here) ───
 
@@ -122,8 +143,8 @@ export const ChatView = memo(function ChatView() {
 
   const { showScrollBtn, unreadCount, scrollToBottom, handleScroll, hasOlderMessages } = useScrollController(
     scrollRef,
-    grouped,
-    streaming,
+    scrollList,
+    card?.text,
     sessionId,
     sessionIdle,
     storeUnread,
@@ -158,49 +179,20 @@ export const ChatView = memo(function ChatView() {
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
               </div>
             )}
-            {grouped.map((item, idx) => {
-              if (item.type === 'standalone') {
-                const msg = item.message;
-                return (
-                  <div key={`g-${idx}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
-                    <MessageBubble
-                      message={msg}
-                      agent={session.agent}
-                      sessionId={sessionId}
-                    />
-                  </div>
-                );
-              }
-
-              const { turn } = item;
-              const isLastTurn = idx === grouped.length - 1;
-              const hasStreaming = isLastTurn && !!streaming;
-              const isActive = isLastTurn && !sessionIdle && (!turn.finalMessage || hasStreaming);
-
-              return (
-                <div key={`turn-${idx}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
-                  {(turn.thinkingMessages.length > 0 || hasStreaming) && (
-                    <ThinkingBox
-                      messages={turn.thinkingMessages}
-                      isActive={isActive}
-                      aborted={turn.aborted}
-                      agent={session.agent}
-                      sessionId={sessionId}
-                      streamingText={hasStreaming ? streaming : undefined}
-                    />
-                  )}
-                  {turn.finalMessage && !hasStreaming && (
-                    <MessageBubble message={turn.finalMessage} agent={session.agent} sessionId={sessionId} turnImages={collectTurnImages(turn.thinkingMessages)} />
-                  )}
-                </div>
-              );
-            })}
+            {spine.map((msg, idx) => (
+              <div key={`b-${getSeq(msg) || idx}-${msg.type}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
+                <MessageBubble message={msg} agent={session.agent} sessionId={sessionId} />
+              </div>
+            ))}
+            {showLive && card && (
+              <LiveAgentBubble
+                sessionId={sessionId}
+                agent={session.agent}
+                card={card}
+              />
+            )}
           </div>
         </div>
-
-        {(permissions.length > 0 || questions.length > 0) && (
-          <div className="pointer-events-none absolute inset-0 bg-black/5 dark:bg-black/15 transition-opacity" />
-        )}
 
         {showScrollBtn && (
           <button
@@ -219,19 +211,7 @@ export const ChatView = memo(function ChatView() {
         )}
       </div>
 
-      {isDeviceOnline && (
-        permissions.length > 0 ? (
-          <div className="flex max-h-[40vh] flex-col overflow-y-auto">
-            {permissions.map((perm) => (
-              <PermissionInput key={perm.id} permission={perm} />
-            ))}
-          </div>
-        ) : questions.length > 0 ? (
-          <QuestionInput question={questions[0]} sessionId={sessionId} />
-        ) : (
-          <MessageInput sessionId={sessionId} />
-        )
-      )}
+      {isDeviceOnline && <MessageInput sessionId={sessionId} />}
     </div>
   );
 });

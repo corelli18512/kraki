@@ -1,5 +1,4 @@
-import type { PermissionRequest, QuestionRequest } from '@kraki/protocol';
-import { getStore, setStoreState } from './store-adapter';
+import { getStore } from './store-adapter';
 
 /** Instance-scoped tracking for create_session requests. */
 export class CommandState {
@@ -108,52 +107,6 @@ export function sendInput(
   });
 }
 
-/** Stamp a resolution on the matching permission chat message. */
-export function resolvePermissionMessage(
-  sessionId: string,
-  permissionId: string,
-  resolution: 'approved' | 'denied' | 'always_allowed' | 'cancelled',
-): void {
-  const store = getStore();
-  const msgs = store.messages.get(sessionId);
-  if (!msgs) return;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.type === 'permission' && (m as PermissionRequest).payload?.id === permissionId) {
-      const permMsg = m as PermissionRequest;
-      const updated = [...msgs];
-      updated[i] = { ...permMsg, payload: { ...permMsg.payload, resolution } } as typeof permMsg & { payload: typeof permMsg.payload & { resolution: string } };
-      const next = new Map(store.messages);
-      next.set(sessionId, updated);
-      setStoreState({ messages: next });
-      return;
-    }
-  }
-}
-
-/** Stamp the user's answer on the matching question chat message. */
-export function resolveQuestionMessage(
-  sessionId: string,
-  questionId: string,
-  answerText: string,
-): void {
-  const store = getStore();
-  const msgs = store.messages.get(sessionId);
-  if (!msgs) return;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.type === 'question' && (m as QuestionRequest).payload?.id === questionId) {
-      const qMsg = m as QuestionRequest;
-      const updated = [...msgs];
-      updated[i] = { ...qMsg, payload: { ...qMsg.payload, answer: answerText } } as typeof qMsg & { payload: typeof qMsg.payload & { answer: string } };
-      const next = new Map(store.messages);
-      next.set(sessionId, updated);
-      setStoreState({ messages: next });
-      return;
-    }
-  }
-}
-
 export function approve(
   permissionId: string,
   sessionId: string,
@@ -164,8 +117,6 @@ export function approve(
     sessionId,
     payload: { permissionId },
   });
-  getStore().removePermission(permissionId);
-  resolvePermissionMessage(sessionId, permissionId, 'approved');
 }
 
 export function deny(
@@ -178,8 +129,6 @@ export function deny(
     sessionId,
     payload: { permissionId },
   });
-  getStore().removePermission(permissionId);
-  resolvePermissionMessage(sessionId, permissionId, 'denied');
 }
 
 export function alwaysAllow(
@@ -193,8 +142,6 @@ export function alwaysAllow(
     sessionId,
     payload: { permissionId, toolKind },
   });
-  getStore().removePermission(permissionId);
-  resolvePermissionMessage(sessionId, permissionId, 'always_allowed');
 }
 
 export function answer(
@@ -209,8 +156,6 @@ export function answer(
     sessionId,
     payload: { questionId, answer: answerText, wasFreeform },
   });
-  getStore().removeQuestion(questionId);
-  resolveQuestionMessage(sessionId, questionId, answerText);
   // Update preview optimistically so the question badge clears immediately
   if (answerText) {
     const timestamp = new Date().toISOString();
@@ -255,50 +200,6 @@ export function setSessionMode(
   const store = getStore();
   store.setSessionMode(sessionId, mode);
 
-  // Auto-approve pending permissions based on mode rules
-  if (mode === 'execute' || mode === 'delegate') {
-    // Execute/Delegate: approve all pending permissions
-    const pending = [...store.pendingPermissions.values()].filter(
-      (p) => p.sessionId === sessionId,
-    );
-    for (const perm of pending) {
-      send({
-        type: 'approve',
-        sessionId,
-        payload: { permissionId: perm.id },
-      });
-      store.removePermission(perm.id);
-      resolvePermissionMessage(sessionId, perm.id, 'approved');
-    }
-  } else if (mode === 'discuss') {
-    // Plan: approve non-write pending permissions, deny write
-    const pending = [...store.pendingPermissions.values()].filter(
-      (p) => p.sessionId === sessionId,
-    );
-    for (const perm of pending) {
-      const isWrite = perm.toolName === 'write' || perm.toolName === 'write_file' ||
-        perm.toolName === 'create' || perm.toolName === 'edit';
-      const filePath = (perm.args.path ?? '') as string;
-      const isPlanMd = filePath.endsWith('/plan.md') || filePath === 'plan.md';
-      if (!isWrite || isPlanMd) {
-        send({
-          type: 'approve',
-          sessionId,
-          payload: { permissionId: perm.id },
-        });
-        store.removePermission(perm.id);
-        resolvePermissionMessage(sessionId, perm.id, 'approved');
-      } else {
-        send({
-          type: 'deny',
-          sessionId,
-          payload: { permissionId: perm.id },
-        });
-        store.removePermission(perm.id);
-        resolvePermissionMessage(sessionId, perm.id, 'denied');
-      }
-    }
-  }
 }
 
 export function setSessionModel(
