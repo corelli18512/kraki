@@ -29,7 +29,16 @@ import { makeHeadline } from './tool-headline.js';
 import { TentaclePulse } from './tentacle-pulse.js';
 
 const logger = createLogger('relay-client');
-const traceLog = createLogger('pulse-trace');
+/** Pulse-trace is OFF by default. Enable with env `KRAKI_TRACE_PULSE=1`
+ *  before daemon start. See tentacle-pulse.ts for why (event-loop
+ *  starvation via pino sync-fsync under stream storms). */
+const TRACE_ENABLED = process.env.KRAKI_TRACE_PULSE === '1';
+const traceLogger = createLogger('pulse-trace');
+const traceLog = {
+  info: TRACE_ENABLED
+    ? (obj: Record<string, unknown>) => traceLogger.info(obj)
+    : (_obj: Record<string, unknown>) => { /* no-op */ },
+};
 
 export interface RelayClientOptions {
   /** Relay WebSocket URL (e.g., wss://relay.kraki.chat) */

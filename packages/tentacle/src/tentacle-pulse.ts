@@ -19,10 +19,21 @@ import { createLogger } from './logger.js';
 const logger = createLogger('pulse');
 const tracer = createLogger('pulse-trace');
 
+/** Trace is OFF by default. Set env `KRAKI_TRACE_PULSE=1` before daemon start
+ *  to enable it (writes ~/.kraki/logs/pulse-trace.log). Left always-on it
+ *  emits 4-8 pino info lines per pulse frame, which — under an agent's
+ *  streaming delta storm (100+ frames/s) — grows the log to hundreds of MB
+ *  per hour and the resulting sync fsync blocks the daemon event loop for
+ *  seconds at a time, tripping the relay-client stale-check and knocking
+ *  arms offline. */
+const TRACE_ENABLED = process.env.KRAKI_TRACE_PULSE === '1';
+
 /** Trace event schema: one JSONL line per pulse boundary crossing at the
  *  tentacle. Match across processes by (comp, evt, seq, len). ns is
- *  monotonic-clock nanoseconds since process start. */
+ *  monotonic-clock nanoseconds since process start. No-op unless
+ *  KRAKI_TRACE_PULSE=1 (see TRACE_ENABLED comment). */
 function trace(evt: string, seq: bigint | number, len: number, extra: Record<string, unknown> = {}): void {
+  if (!TRACE_ENABLED) return;
   tracer.info({
     ns: process.hrtime.bigint().toString(),
     comp: 'tentacle',
