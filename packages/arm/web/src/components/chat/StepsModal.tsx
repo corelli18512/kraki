@@ -82,6 +82,11 @@ interface StepsButtonProps {
   /** Live/in-progress turn: resolve the target to the current turn's leading
    *  user_message and re-pull on every open so the running steps stay fresh. */
   live?: boolean;
+  /** Replay-visible step count from the bubble's `payload.steps` (stamped by the
+   *  tentacle). When `> 0` the button shows even before the (transient) trace is
+   *  pulled into the store — the click then lazily pulls it. Lets Steps survive a
+   *  page reload / history load, where the store holds no trace entries yet. */
+  stepHint?: number;
 }
 
 /**
@@ -91,7 +96,7 @@ interface StepsButtonProps {
  * which the tentacle resolves for both finished and running turns) and shows the
  * interleaved narration + tool chips in a full-screen modal.
  */
-export function StepsButton({ sessionId, agent, bubbleSeq, live }: StepsButtonProps) {
+export function StepsButton({ sessionId, agent, bubbleSeq, live, stepHint }: StepsButtonProps) {
   const [open, setOpen] = useState(false);
   const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq);
 
@@ -105,9 +110,13 @@ export function StepsButton({ sessionId, agent, bubbleSeq, live }: StepsButtonPr
     setOpen(true);
   }, [sessionId, targetSeq, live]);
 
-  // No trace steps yet (e.g. the opening narration before any tool runs) → no
-  // affordance at all, rather than a dead button that opens an empty modal.
-  if (steps.length === 0) return null;
+  // Show the affordance when EITHER the store already has this turn's trace
+  // steps (live turns, or a turn pulled earlier) OR the bubble's replay hint
+  // says it has steps (`stepHint > 0`) — the latter survives a reload where the
+  // transient trace isn't in the store yet; the click lazily pulls it. Hide only
+  // when we're confident the turn has no steps (e.g. an opening bubble before any
+  // tool ran), rather than showing a dead button that opens an empty modal.
+  if (steps.length === 0 && (stepHint ?? 0) <= 0) return null;
 
   return (
     <>

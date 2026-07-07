@@ -56,20 +56,22 @@ const mockMessage: ChatMessage = {
 } as ChatMessage;
 
 const mockPermissionAction = {
-  kind: 'permission' as const,
-  id: 'perm-1',
-  headline: 'Run shell',
-  toolName: 'shell',
-  args: { command: 'ls' },
-  description: 'List files',
+  type: 'permission' as const,
+  payload: {
+    id: 'perm-1',
+    toolName: 'shell',
+    args: { command: 'ls' },
+    description: 'List files',
+  },
 };
 
 const mockQuestionAction = {
-  kind: 'question' as const,
-  id: 'q-1',
-  headline: 'Pick DB',
-  question: 'Which DB?',
-  choices: ['sqlite', 'postgres'],
+  type: 'question' as const,
+  payload: {
+    id: 'q-1',
+    question: 'Which DB?',
+    choices: ['sqlite', 'postgres'],
+  },
 };
 
 // --- Tests ---

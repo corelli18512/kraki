@@ -1,4 +1,4 @@
-import type { SessionSummary } from '@kraki/protocol';
+import type { CardActionState, SessionSummary } from '@kraki/protocol';
 import type { SessionCard } from '../types/store';
 
 /**
@@ -11,10 +11,30 @@ import type { SessionCard } from '../types/store';
  * - `ended`   — session closed.
  *
  * Derived on the client from the session's wire state plus the live card action.
- * `session.pendingQuestions` remains a reload-seed hint from the tentacle digest
- * for sessions not yet opened.
+ * For sessions not yet opened after a reload, the tentacle surfaces an open
+ * `ask_user` question by overriding the digest `preview` with a `question`
+ * entry — so `previewType === 'question'` seeds the pending status until the
+ * live card arrives.
  */
 export type SessionStatus = 'idle' | 'working' | 'pending' | 'ended';
+
+/** A stable identity for a card action — changes when the slot's meaningful
+ *  state changes (tool start/complete, prompt open/resolve, batch count). Used
+ *  both to gate trace re-pulls and to drive scroll auto-follow. */
+export function cardActionKey(a: CardActionState | null): string {
+  if (!a) return 'none';
+  switch (a.type) {
+    case 'tool_start':
+    case 'tool_complete':
+      return `${a.type}:${a.payload.toolCallId ?? a.payload.headline}`;
+    case 'tool_batch':
+      return `batch:${a.payload.running}`;
+    case 'permission':
+      return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
+    case 'question':
+      return `q:${a.payload.id}:${a.payload.answer === undefined ? 'pending' : 'answered'}`;
+  }
+}
 
 /** Count an open (unanswered) question for a session from the card map. */
 export function countPendingQuestions(
@@ -22,15 +42,16 @@ export function countPendingQuestions(
   cards: Map<string, SessionCard>,
 ): number {
   const action = cards.get(sessionId)?.action;
-  return action?.kind === 'question' && action.answer === undefined ? 1 : 0;
+  return action?.type === 'question' && action.payload.answer === undefined ? 1 : 0;
 }
 
 export function getSessionStatus(
-  session: Pick<SessionSummary, 'state'> & { pendingQuestions?: number },
+  session: Pick<SessionSummary, 'state'>,
   livePendingCount: number,
+  previewType?: string,
 ): SessionStatus {
   if ((session.state as string) === 'ended') return 'ended';
-  if (livePendingCount > 0 || (session.pendingQuestions ?? 0) > 0) return 'pending';
   if (session.state === 'idle') return 'idle';
+  if (livePendingCount > 0 || previewType === 'question') return 'pending';
   return 'working';
 }

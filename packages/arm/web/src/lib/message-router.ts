@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, CardMessage, CardAction } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -22,7 +22,6 @@ function truncPreview(s: string): string {
 export const UNREAD_CANDIDATE_TYPES = new Set(['error', 'idle']);
 
 const RETIRED_LIVE_TYPES = new Set([
-  'agent_message_delta',
   'agent_narration',
   'tool_start',
   'tool_complete',
@@ -84,13 +83,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
-  // card_message / card_action — status-card stream + action slot. Routed
-  // before the session-existence check (like turn_trace_batch) because a
+  // agent_message_delta / card_action — status-card draft stream + action slot.
+  // Routed before the session-existence check (like turn_trace_batch) because a
   // reconnect push/snapshot can arrive before session_list hydrates the store;
   // applyCardMessage/setCardAction key purely by sessionId and don't need the
   // session record to exist yet.
-  if (msg.type === 'card_message') {
-    const cardMsg = msg as CardMessage;
+  if (msg.type === 'agent_message_delta') {
+    const cardMsg = msg as AgentMessageDelta;
     store.applyCardMessage(
       cardMsg.sessionId,
       cardMsg.payload.content,
@@ -227,7 +226,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'idle': {
       const idled = store.sessions.get(sid);
-      if (idled) store.upsertSession({ ...idled, state: 'idle', pendingQuestions: 0 });
+      if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.appendMessage(sid, msg);
       // Extract usage from idle payload
       const idlePayload = (msg as IdleMessage).payload;

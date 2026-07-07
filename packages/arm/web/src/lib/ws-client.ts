@@ -416,7 +416,6 @@ export class KrakiWSClient {
         autoTitle: ts.autoTitle,
         state: ts.state as 'active' | 'idle',
         messageCount: ts.messageCount,
-        pendingQuestions: (ts as { pendingQuestions?: number }).pendingQuestions,
       });
 
       if (ts.mode) {

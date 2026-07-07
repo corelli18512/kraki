@@ -136,11 +136,13 @@ wss.on('connection', (ws) => {
         setTimeout(() => {
           send(ws, envelope('card_action', msg.sessionId as string, {
             action: {
-              kind: 'tool',
-              id: 'tc-approved',
-              toolName: 'shell',
-              headline: 'echo "done"',
-              status: 'success',
+              type: 'tool_complete',
+              payload: {
+                toolCallId: 'tc-approved',
+                toolName: 'shell',
+                headline: 'echo "done"',
+                success: true,
+              },
             },
           }));
         }, 1000);
@@ -162,7 +164,7 @@ wss.on('connection', (ws) => {
         break;
 
       case 'request_card':
-        send(ws, envelope('card_message', (msg.payload as Record<string, unknown>)?.sessionId as string, {
+        send(ws, envelope('agent_message_delta', (msg.payload as Record<string, unknown>)?.sessionId as string, {
           content: 'Resuming current work…',
           reset: true,
         }));
@@ -275,7 +277,7 @@ function startSimulation(ws: WebSocket) {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       setTimeout(() => {
-        send(ws, envelope('card_message', 'sess-1', { content: chunk, reset: i === 0 }));
+        send(ws, envelope('agent_message_delta', 'sess-1', { content: chunk, reset: i === 0 }));
       }, delay);
       delay += 150 + Math.random() * 200;
     }
@@ -287,17 +289,32 @@ function startSimulation(ws: WebSocket) {
     }, delay + 100);
   }, 3000);
 
+  // Scenario 1b: After 5s, a running tool occupies the card slot
+  setTimeout(() => {
+    send(ws, envelope('card_action', 'sess-1', {
+      action: {
+        type: 'tool_start',
+        payload: {
+          toolCallId: 'tc-live-1',
+          toolName: 'bash',
+          headline: 'npm test -- --grep "auth"',
+        },
+      },
+    }));
+  }, 5000);
+
   // Scenario 2: After 6s, a permission request
   setTimeout(() => {
     const permId = 'perm-' + randomUUID().slice(0, 8);
     send(ws, envelope('card_action', 'sess-1', {
       action: {
-        kind: 'permission',
-        id: permId,
-        headline: 'Install dependencies',
-        toolName: 'shell',
-        args: { command: 'npm install --save-dev @types/node@latest' },
-        description: 'Install updated TypeScript Node.js type definitions',
+        type: 'permission',
+        payload: {
+          id: permId,
+          toolName: 'shell',
+          args: { command: 'npm install --save-dev @types/node@latest' },
+          description: 'Install updated TypeScript Node.js type definitions',
+        },
       },
     }));
   }, 8000);
@@ -307,11 +324,13 @@ function startSimulation(ws: WebSocket) {
     const qId = 'q-' + randomUUID().slice(0, 8);
     send(ws, envelope('card_action', 'sess-1', {
       action: {
-        kind: 'question',
-        id: qId,
-        headline: 'Choose a database driver',
-        question: 'Which database driver should I use for the migration?',
-        choices: ['better-sqlite3', 'pg (PostgreSQL)', 'mysql2'],
+        type: 'question',
+        payload: {
+          id: qId,
+          question: 'Which database driver should I use for the migration?',
+          choices: ['better-sqlite3', 'pg (PostgreSQL)', 'mysql2'],
+          allowFreeform: true,
+        },
       },
     }));
   }, 14000);
@@ -373,7 +392,7 @@ function simulateAgentResponse(ws: WebSocket, sessionId: string) {
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     setTimeout(() => {
-      send(ws, envelope('card_message', sessionId, { content: word, reset: i === 0 }));
+      send(ws, envelope('agent_message_delta', sessionId, { content: word, reset: i === 0 }));
     }, delay);
     accumulated += word;
     delay += 30 + Math.random() * 60;

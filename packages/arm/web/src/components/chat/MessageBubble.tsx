@@ -80,7 +80,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
                   {formatTime(message.timestamp)}
                 </p>
                 {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
-                  <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} />
+                  <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={message.payload.steps} />
                 )}
               </div>
             </div>
@@ -104,7 +104,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
             <div className="mt-1 flex items-center gap-2">
               <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
               {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
-                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} />
+                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={message.payload.steps} />
               )}
             </div>
           </div>

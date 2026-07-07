@@ -6,7 +6,7 @@ import { LiveAgentBubble } from './LiveAgentBubble';
 import { MessageInput } from './MessageInput';
 import { useScrollController } from '../../hooks/useScrollController';
 import { messageProvider } from '../../lib/message-provider';
-import { getSessionStatus } from '../../lib/session-status';
+import { getSessionStatus, cardActionKey } from '../../lib/session-status';
 import type { ChatMessage } from '../../types/store';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -25,6 +25,7 @@ export const ChatView = memo(function ChatView() {
   const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
   const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
   const card = useStore((s) => sessionId ? s.cards.get(sessionId) : undefined);
+  const sessionPreview = useStore((s) => sessionId ? s.sessionPreviews.get(sessionId) : undefined);
   const storeUnread = useStore((s) => sessionId ? (s.unreadCount.get(sessionId) ?? 0) : 0);
 
   // Scoped selectors — only re-render when THIS session's data changes
@@ -66,18 +67,19 @@ export const ChatView = memo(function ChatView() {
   // A decided permission / answered question therefore keeps the bubble pinned
   // (showing its read-only outcome) only until the agent narrates again.
   const actionLive =
-    cardAction?.kind === 'tool' ||
-    (cardAction?.kind === 'tool_batch' && cardAction.running > 0) ||
-    cardAction?.kind === 'permission' ||
-    cardAction?.kind === 'question';
+    cardAction?.type === 'tool_start' ||
+    cardAction?.type === 'tool_complete' ||
+    (cardAction?.type === 'tool_batch' && cardAction.payload.running > 0) ||
+    cardAction?.type === 'permission' ||
+    cardAction?.type === 'question';
   const livePending =
-    (cardAction?.kind === 'question' && cardAction.answer === undefined) ||
-    (cardAction?.kind === 'permission' && !cardAction.decision)
+    (cardAction?.type === 'question' && cardAction.payload.answer === undefined) ||
+    (cardAction?.type === 'permission' && !cardAction.payload.decision)
       ? 1
       : 0;
   const status = useMemo(
-    () => session ? getSessionStatus(session, livePending) : 'idle',
-    [session, livePending],
+    () => session ? getSessionStatus(session, livePending, sessionPreview?.type) : 'idle',
+    [session, livePending, sessionPreview?.type],
   );
   // The whole in-progress turn renders as ONE live agent bubble (LiveAgentBubble):
   // its top part streams the draft narration, its darker bottom part carries the
@@ -133,7 +135,7 @@ export const ChatView = memo(function ChatView() {
   // and card action so new narration deltas / tool steps drive auto-follow just
   // like spine bubbles.
   const scrollList = useMemo(
-    () => (card && showLive ? [...spine, { _draft: draft, _act: card.action?.id } as unknown as ChatMessage] : spine),
+    () => (card && showLive ? [...spine, { _draft: draft, _act: cardActionKey(card.action) } as unknown as ChatMessage] : spine),
     [showLive, spine, card, draft],
   );
 

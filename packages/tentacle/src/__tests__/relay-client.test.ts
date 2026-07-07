@@ -1024,6 +1024,119 @@ describe('RelayClient tool message lazy-load shape', () => {
   });
 });
 
+describe('RelayClient turn step counter (payload.steps hint)', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildCounterClient() {
+    const tmp = mkdtempSync(join(tmpdir(), 'kraki-steps-test-'));
+    const store = new AttachmentStore(tmp);
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, createKeyManager(), store);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+    })));
+    return { adapter, sm, client, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
+  }
+
+  // Read the `payload.steps` stamped on the Nth agent_message/system_message
+  // that flowed through appendMessage.
+  const bubbleSteps = (sm: Record<string, unknown>, type: string) =>
+    (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => c[0] === 'sess_1' && c[1] === type)
+      .map((c) => JSON.parse(c[2] as string).payload.steps);
+
+  const toolStart = (adapter: Record<string, unknown>, id: string) =>
+    (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+      toolName: 'bash', args: { command: 'echo ' + id }, toolCallId: id,
+    });
+  const narrate = (adapter: Record<string, unknown>, content: string) =>
+    (adapter.onNarration as ((sid: string, e: { content: string }) => void))('sess_1', { content });
+  const conclude = (adapter: Record<string, unknown>, content: string) =>
+    (adapter.onMessage as ((sid: string, e: { content: string }) => void))('sess_1', { content });
+  const userMsg = (client: RelayClient) =>
+    (client as unknown as { send: (m: unknown) => void }).send({
+      type: 'user_message', sessionId: 'sess_1', payload: { content: 'go' },
+    });
+
+  it('stamps the running tool_start + agent_narration count on the concluding bubble', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');   // step 1
+      narrate(adapter, 'thinking'); // step 2
+      toolStart(adapter, 'tc2');   // step 3
+      conclude(adapter, 'done');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([3]);
+    } finally { cleanup(); }
+  });
+
+  it('does NOT count tool_complete (merges into its tool_start chip)', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash', result: 'ok', toolCallId: 'tc1',
+      });
+      conclude(adapter, 'done');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1]);
+    } finally { cleanup(); }
+  });
+
+  it('resets the counter on each user_message (new turn)', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      conclude(adapter, 'turn 1');
+      userMsg(client);            // reset
+      narrate(adapter, 'thinking');
+      conclude(adapter, 'turn 2');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1, 1]);
+    } finally { cleanup(); }
+  });
+
+  it('gives each bubble of a multi-bubble turn the cumulative count', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      conclude(adapter, 'first');  // steps=1
+      toolStart(adapter, 'tc2');
+      narrate(adapter, 'more');
+      conclude(adapter, 'second'); // steps=3 (cumulative within the turn)
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1, 3]);
+    } finally { cleanup(); }
+  });
+
+  it('stamps a system_message (no_reply) bubble too', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      (adapter.onSystemMessage as ((sid: string, e: { kind: string; content?: string }) => void))(
+        'sess_1', { kind: 'no_reply' });
+      expect(bubbleSteps(sm, 'system_message')).toEqual([1]);
+    } finally { cleanup(); }
+  });
+});
+
 describe('RelayClient delta debounce', () => {
   beforeEach(() => {
     sockets.length = 0;
@@ -1073,12 +1186,12 @@ describe('RelayClient delta debounce', () => {
     onDelta('s1', { content: 'world!' });
 
     // Nothing on the wire yet — buffered.
-    expect(decodePulseSends(sockets[0].sent).filter(m => m.type === 'card_message')).toHaveLength(0);
+    expect(decodePulseSends(sockets[0].sent).filter(m => m.type === 'agent_message_delta')).toHaveLength(0);
 
     vi.advanceTimersByTime(40);
 
     const deltas = decodePulseSends(sockets[0].sent)
-      .filter(m => m.type === 'card_message');
+      .filter(m => m.type === 'agent_message_delta');
     expect(deltas).toHaveLength(1);
     expect(deltas[0].payload.content).toBe('Hello, world!');
     expect(deltas[0].sessionId).toBe('s1');
@@ -1096,7 +1209,7 @@ describe('RelayClient delta debounce', () => {
 
     const decoded = decodePulseSends(sockets[0].sent);
     const types = decoded.map(m => m.type);
-    const deltaIdx = types.indexOf('card_message');
+    const deltaIdx = types.indexOf('agent_message_delta');
     const finalIdx = types.indexOf('agent_message');
     expect(deltaIdx).toBeGreaterThanOrEqual(0);
     expect(finalIdx).toBeGreaterThan(deltaIdx);
@@ -1116,7 +1229,7 @@ describe('RelayClient delta debounce', () => {
     vi.advanceTimersByTime(40);
 
     const deltas = decodePulseSends(sockets[0].sent)
-      .filter(m => m.type === 'card_message');
+      .filter(m => m.type === 'agent_message_delta');
     const bySession = new Map(deltas.map(d => [d.sessionId, d.payload.content]));
     expect(bySession.get('s1')).toBe('aa');
     expect(bySession.get('s2')).toBe('b');
@@ -1136,7 +1249,7 @@ describe('RelayClient delta debounce', () => {
     // No socket traffic for the cleared delta after timer would have fired.
     vi.advanceTimersByTime(50);
     const deltasAfter = decodePulseSends(sockets[0].sent)
-      .filter(m => m.type === 'card_message');
+      .filter(m => m.type === 'agent_message_delta');
     expect(deltasAfter).toHaveLength(0);
   });
 });
@@ -1576,9 +1689,9 @@ describe('RelayClient trace mirroring (off-spine)', () => {
       // Final card_action reflects the completed tool.
       const actions = decodePulseSends(ws.sent).filter(m => m.type === 'card_action');
       const last = actions[actions.length - 1].payload.action;
-      expect(last.kind).toBe('tool');
-      expect(last.id).toBe('tc1');
-      expect(last.status).toBe('success');
+      expect(last.type).toBe('tool_complete');
+      expect(last.payload.toolCallId).toBe('tc1');
+      expect(last.payload.success).not.toBe(false);
     } finally { cleanup(); }
   });
 });
@@ -1633,46 +1746,47 @@ describe('RelayClient pending-question digest', () => {
       }
       return undefined;
     };
-    return { adapter, sm, ws, askQ, answerQ, digest };
+    const preview = () => digest()?.preview as { type: string; text: string } | undefined;
+    return { adapter, sm, ws, askQ, answerQ, preview };
   }
 
-  it('adds pendingQuestions count to the digest while a question is open', () => {
-    const { askQ, digest } = buildClient();
-    expect(digest()?.pendingQuestions).toBeUndefined();
+  it('overrides the digest preview with the open question while it is pending', () => {
+    const { askQ, preview } = buildClient();
+    expect(preview()?.type).not.toBe('question');
     askQ('q1');
-    expect(digest()?.pendingQuestions).toBe(1);
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q1' });
   });
 
-  it('counts concurrent open questions', () => {
-    const { askQ, digest } = buildClient();
+  it('keeps a question preview while any question stays open (newest wins)', () => {
+    const { askQ, preview } = buildClient();
     askQ('q1');
     askQ('q2');
-    expect(digest()?.pendingQuestions).toBe(2);
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q2' });
   });
 
-  it('drops the count as questions are answered (answering one leaves the rest)', () => {
-    const { askQ, answerQ, digest } = buildClient();
+  it('reverts the preview as questions are answered (answering one leaves the rest)', () => {
+    const { askQ, answerQ, preview } = buildClient();
     askQ('q1');
     askQ('q2');
-    answerQ('q1');
-    expect(digest()?.pendingQuestions).toBe(1);
     answerQ('q2');
-    expect(digest()?.pendingQuestions).toBeUndefined();
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q1' });
+    answerQ('q1');
+    expect(preview()?.type).not.toBe('question');
   });
 
-  it('clears pending on idle', () => {
-    const { adapter, askQ, digest } = buildClient();
+  it('clears the question preview on idle', () => {
+    const { adapter, askQ, preview } = buildClient();
     askQ('q1');
     askQ('q2');
     (adapter.onIdle as (sid: string) => void)('sess_1');
-    expect(digest()?.pendingQuestions).toBeUndefined();
+    expect(preview()?.type).not.toBe('question');
   });
 
-  it('drops the count when a question is auto-resolved (cancelled)', () => {
-    const { adapter, askQ, digest } = buildClient();
+  it('reverts the preview when a question is auto-resolved (cancelled)', () => {
+    const { adapter, askQ, preview } = buildClient();
     askQ('q1');
     (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
-    expect(digest()?.pendingQuestions).toBeUndefined();
+    expect(preview()?.type).not.toBe('question');
   });
 
   it('pushes the active card snapshot to a freshly-joined device', () => {
@@ -1687,8 +1801,8 @@ describe('RelayClient pending-question digest', () => {
     const action = inners.find((m) => m.type === 'card_action');
     expect(action).toBeDefined();
     expect(action.sessionId).toBe('sess_1');
-    expect(action.payload.action).toMatchObject({ kind: 'question', id: 'q1' });
-    expect(inners.some((m) => m.type === 'card_message' && m.sessionId === 'sess_1')).toBe(true);
+    expect(action.payload.action).toMatchObject({ type: 'question', payload: { id: 'q1' } });
+    expect(inners.some((m) => m.type === 'agent_message_delta' && m.sessionId === 'sess_1')).toBe(true);
   });
 
   it('does not push a card snapshot for sessions with no active card', () => {
@@ -1699,6 +1813,6 @@ describe('RelayClient pending-question digest', () => {
       device: { id: 'app-fresh-2', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
     })));
     const inners = decodePulseSends(ws.sent);
-    expect(inners.some((m) => m.type === 'card_action' || m.type === 'card_message')).toBe(false);
+    expect(inners.some((m) => m.type === 'card_action' || m.type === 'agent_message_delta')).toBe(false);
   });
 });

@@ -10,7 +10,8 @@ import { StepsButton, useTurnSteps } from './StepsModal';
 import { markdownComponents } from './MessageBubble';
 import { messageProvider } from '../../lib/message-provider';
 import { formatTime } from '../../lib/format';
-import type { CardActionState, SessionCard } from '../../types/store';
+import { cardActionKey } from '../../lib/session-status';
+import type { SessionCard } from '../../types/store';
 
 /** Lazy attachment pull for tool args/result refs rendered in the status
  *  section (mirrors MessageBubble's ATTACHMENT_PULL). */
@@ -19,23 +20,6 @@ const ATTACHMENT_PULL = (sid: string, id: string): void => {
     wsClient.requestAttachment(sid, id);
   });
 };
-
-/** A stable identity string for an action slot — changes only at a genuine step
- *  boundary (tool start/complete, prompt open/resolve, batch count), so it can
- *  drive a trace re-pull without reacting to per-token narration updates. */
-function actionIdentity(a: CardActionState | null): string {
-  if (!a) return 'none';
-  switch (a.kind) {
-    case 'tool':
-      return `tool:${a.id}:${a.status}`;
-    case 'tool_batch':
-      return `batch:${a.running}`;
-    case 'permission':
-      return `perm:${a.id}:${a.decision ?? 'pending'}`;
-    case 'question':
-      return `q:${a.id}:${a.answer === undefined ? 'pending' : 'answered'}`;
-  }
-}
 
 
 interface LiveAgentBubbleProps {
@@ -69,17 +53,17 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
   const hasContent = draft.length > 0;
   const a = card.action;
 
-  const runningTool = a?.kind === 'tool' && a.status === 'running' ? a : null;
-  const completedTool = a?.kind === 'tool' && a.status !== 'running' ? a : null;
+  const runningTool = a?.type === 'tool_start' ? a : null;
+  const completedTool = a?.type === 'tool_complete' ? a : null;
   const tool = runningTool ?? completedTool;
-  const batchRunning = a?.kind === 'tool_batch' ? a.running : 0;
+  const batchRunning = a?.type === 'tool_batch' ? a.payload.running : 0;
   // Both PENDING and RESOLVED prompts render: a pending one is the live blocking
   // affordance; a resolved one (decided permission / answered question) shows its
   // read-only outcome as the latest activity until narration resumes (the
   // tentacle retires it from the slot the instant it does — same rule as a
   // completed tool). The input components render their own resolved read-only view.
-  const permission = a?.kind === 'permission' ? a : null;
-  const question = a?.kind === 'question' ? a : null;
+  const permission = a?.type === 'permission' ? a : null;
+  const question = a?.type === 'question' ? a : null;
   const hasAction = !!tool || batchRunning > 0 || !!permission || !!question;
 
   const { steps, targetSeq } = useTurnSteps(sessionId, true);
@@ -91,7 +75,7 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
   // reality and the Steps footer self-hides only while the turn genuinely has no
   // steps yet. Keyed off the action identity — NOT card.text — so a narration
   // token stream doesn't spam pulls. The Steps modal re-pulls fresh on open.
-  const actionKey = useMemo(() => actionIdentity(card.action), [card.action]);
+  const actionKey = useMemo(() => cardActionKey(card.action), [card.action]);
   useEffect(() => {
     if (targetSeq < 0) return;
     messageProvider.invalidateTurnTrace(sessionId, targetSeq);
@@ -133,11 +117,11 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
             {tool && (
               <ToolActivity
                 type={runningTool ? 'start' : 'complete'}
-                toolName={tool.toolName}
-                headline={tool.headline ?? ''}
-                argsRef={tool.argsRef}
-                resultRef={completedTool?.resultRef}
-                success={completedTool ? completedTool.status === 'success' : undefined}
+                toolName={tool.payload.toolName}
+                headline={tool.payload.headline ?? ''}
+                argsRef={tool.payload.argsRef}
+                resultRef={completedTool?.payload.resultRef}
+                success={completedTool ? completedTool.payload.success !== false : undefined}
                 sessionId={sessionId}
                 requestPull={ATTACHMENT_PULL}
               />

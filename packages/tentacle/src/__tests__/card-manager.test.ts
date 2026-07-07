@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import { CardManager, type CardBroadcast } from '../card-manager.js';
+import type { CardActionState } from '@kraki/protocol';
+
+type RunningTool = Extract<CardActionState, { type: 'tool_start' }>;
+type CompletedTool = Extract<CardActionState, { type: 'tool_complete' }>;
+type PromptAction = Extract<CardActionState, { type: 'permission' | 'question' }>;
+
+// ── Action factories: build the reused message-shaped card slots ──
+const tool = (toolCallId: string, headline: string): RunningTool => ({
+  type: 'tool_start',
+  payload: { toolName: 'bash', headline, toolCallId },
+});
+const toolDone = (toolCallId: string, headline: string, success = true): CompletedTool => ({
+  type: 'tool_complete',
+  payload: { toolName: 'bash', headline, toolCallId, success },
+});
+const question = (id: string, q: string): PromptAction => ({
+  type: 'question',
+  payload: { id, question: q },
+});
+const permission = (id: string, description = 'x', toolName = 'bash'): PromptAction => ({
+  type: 'permission',
+  payload: { toolName, args: {}, id, description },
+});
 
 function setup() {
   const sent: CardBroadcast[] = [];
@@ -8,7 +31,7 @@ function setup() {
 }
 
 const msgs = (sent: CardBroadcast[]) =>
-  sent.filter((s) => s.type === 'card_message').map((s) => s.payload as { content: string; reset?: boolean });
+  sent.filter((s) => s.type === 'agent_message_delta').map((s) => s.payload as { content: string; reset?: boolean });
 const actions = (sent: CardBroadcast[]) =>
   sent.filter((s) => s.type === 'card_action').map((s) => (s.payload as { action: unknown }).action);
 
@@ -78,19 +101,19 @@ describe('CardManager draft bubble', () => {
 
   it('onBubble leaves the action slot untouched (a tool may still resolve)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
     card.onDelta('s1', 'draft');
     sent.length = 0;
     card.onBubble('s1');
     // No action broadcast — the running tool stays in the slot.
     expect(actions(sent)).toHaveLength(0);
-    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ id: 'tc1' });
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ payload: { toolCallId: 'tc1' } });
   });
 
   it('onBubble promptly clears a slot holding only a COMPLETED tool (land-and-clear, no lag)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'success' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
     sent.length = 0;
     card.onBubble('s1');
     // Nothing live remains → the stale completed-tool slot is retired at once,
@@ -101,20 +124,20 @@ describe('CardManager draft bubble', () => {
 
   it('onBubble keeps the slot when a tool is STILL running in parallel', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 'slow', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 'slow'));
     sent.length = 0;
     card.onBubble('s1');
     expect(actions(sent)).toHaveLength(0);
-    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ id: 'tc1' });
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ payload: { toolCallId: 'tc1' } });
   });
 
   it('onBubble keeps the slot when an UNRESOLVED prompt occupies it', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onPrompt('s1', question('q1', 'a?'));
     sent.length = 0;
     card.onBubble('s1');
     expect(actions(sent)).toHaveLength(0);
-    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ id: 'q1' });
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toMatchObject({ payload: { id: 'q1' } });
   });
 
   it('ignores empty deltas', () => {
@@ -128,7 +151,7 @@ describe('CardManager draft bubble', () => {
     card.onDelta('s1', 'abc');
     card.onDelta('s1', 'def');
     const snap = card.snapshot('s1');
-    expect(snap[0]).toMatchObject({ type: 'card_message', payload: { content: 'abcdef', reset: true } });
+    expect(snap[0]).toMatchObject({ type: 'agent_message_delta', payload: { content: 'abcdef', reset: true } });
     expect(snap[1]).toMatchObject({ type: 'card_action', payload: { action: null } });
   });
 });
@@ -136,17 +159,17 @@ describe('CardManager draft bubble', () => {
 describe('CardManager action part', () => {
   it('shows a running tool then its completion', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'success' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
     const a = actions(sent);
-    expect(a[0]).toMatchObject({ kind: 'tool', id: 'tc1', status: 'running' });
-    expect(a[1]).toMatchObject({ kind: 'tool', id: 'tc1', status: 'success' });
+    expect(a[0]).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc1' } });
+    expect(a[1]).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc1', success: true } });
   });
 
   it('retires a COMPLETED tool from the slot when narration resumes (latest≠tool)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'success' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
     sent.length = 0;
     // A narration delta after the tool completed → the completed tool is no
     // longer the latest activity, so the slot clears to null.
@@ -157,19 +180,19 @@ describe('CardManager action part', () => {
 
   it('does NOT retire a RUNNING tool when narration streams in parallel', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 'slow', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 'slow'));
     sent.length = 0;
     // Agent narrates while the tool is still in flight — the running tool stays.
     card.onDelta('s1', 'meanwhile, some progress');
     expect(actions(sent)).toEqual([]);
-    expect((card.snapshot('s1')[1].payload as { action: { status: string } }).action)
-      .toMatchObject({ kind: 'tool', status: 'running' });
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
+      .toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc1' } });
   });
 
   it('onNarrationFinal also retires a completed tool (segment with no delta)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'success' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
     sent.length = 0;
     card.onNarrationFinal('s1', 'done');
     expect(actions(sent)).toEqual([null]);
@@ -177,7 +200,7 @@ describe('CardManager action part', () => {
 
   it('retires an ANSWERED question from the slot when narration resumes', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onPrompt('s1', question('q1', 'a?'));
     card.resolvePrompt('s1', 'q1', { answer: '面条' });
     sent.length = 0;
     // Once the agent narrates again the answered question is settled → slot clears.
@@ -188,7 +211,7 @@ describe('CardManager action part', () => {
 
   it('retires a DECIDED permission from the slot on onNarrationFinal', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'permission', id: 'p1', headline: 'x', description: 'x', toolName: 'bash' });
+    card.onPrompt('s1', permission('p1'));
     card.resolvePrompt('s1', 'p1', { decision: 'approve' });
     sent.length = 0;
     card.onNarrationFinal('s1', 'ran it');
@@ -197,70 +220,70 @@ describe('CardManager action part', () => {
 
   it('does NOT retire an UNRESOLVED prompt when narration streams in parallel', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onPrompt('s1', question('q1', 'a?'));
     sent.length = 0;
     // A pending (unanswered) question stays put even as the agent narrates.
     card.onDelta('s1', 'while you decide, here is context');
     expect(actions(sent)).toEqual([]);
-    expect((card.snapshot('s1')[1].payload as { action: { kind: string; answer?: unknown } }).action)
-      .toMatchObject({ kind: 'question', id: 'q1' });
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
+      .toMatchObject({ type: 'question', payload: { id: 'q1' } });
   });
 
   it('a later prompt takes over the slot from a running tool (last-write-wins)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 'wf', status: 'running' });
-    card.onPrompt('s1', { kind: 'permission', id: 'p1', headline: 'write?', description: 'write?', toolName: 'write_file' });
+    card.onToolStart('s1', tool('tc1', 'wf'));
+    card.onPrompt('s1', permission('p1', 'write?', 'write_file'));
     const a = actions(sent);
-    expect(a[a.length - 1]).toMatchObject({ kind: 'permission', id: 'p1' });
+    expect(a[a.length - 1]).toMatchObject({ type: 'permission', payload: { id: 'p1' } });
   });
 
   it('two parallel tools collapse into a tool_batch count', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 'a', status: 'running' });
-    card.onToolStart('s1', { kind: 'tool', id: 'tc2', headline: 'b', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 'a'));
+    card.onToolStart('s1', tool('tc2', 'b'));
     const a = actions(sent);
-    expect(a[0]).toMatchObject({ kind: 'tool', id: 'tc1' });
-    expect(a[a.length - 1]).toEqual({ kind: 'tool_batch', running: 2 });
+    expect(a[0]).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc1' } });
+    expect(a[a.length - 1]).toEqual({ type: 'tool_batch', payload: { running: 2 } });
   });
 
   it('three parallel tools report running:3; completing one drops to a batch of 2, then the last standalone', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 'a', status: 'running' });
-    card.onToolStart('s1', { kind: 'tool', id: 'tc2', headline: 'b', status: 'running' });
-    card.onToolStart('s1', { kind: 'tool', id: 'tc3', headline: 'c', status: 'running' });
-    expect(actions(sent).at(-1)).toEqual({ kind: 'tool_batch', running: 3 });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: 'a', status: 'success' });
+    card.onToolStart('s1', tool('tc1', 'a'));
+    card.onToolStart('s1', tool('tc2', 'b'));
+    card.onToolStart('s1', tool('tc3', 'c'));
+    expect(actions(sent).at(-1)).toEqual({ type: 'tool_batch', payload: { running: 3 } });
+    card.onToolComplete('s1', toolDone('tc1', 'a'));
     // Two still in flight → batch of 2 (NOT the just-completed tool).
-    expect(actions(sent).at(-1)).toEqual({ kind: 'tool_batch', running: 2 });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc2', headline: 'b', status: 'success' });
+    expect(actions(sent).at(-1)).toEqual({ type: 'tool_batch', payload: { running: 2 } });
+    card.onToolComplete('s1', toolDone('tc2', 'b'));
     // One left in flight → show that single remaining running tool.
-    expect(actions(sent).at(-1)).toMatchObject({ kind: 'tool', id: 'tc3', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc3', headline: 'c', status: 'success' });
+    expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc3' } });
+    card.onToolComplete('s1', toolDone('tc3', 'c'));
     // None left → land the just-completed tool as the last state.
-    expect(actions(sent).at(-1)).toMatchObject({ kind: 'tool', id: 'tc3', status: 'success' });
+    expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc3', success: true } });
   });
 
   it('resolving a question updates it IN PLACE to show the answer (no fallback)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'success' });
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onToolStart('s1', tool('tc1', 't'));
+    card.onPrompt('s1', question('q1', 'a?'));
     card.resolvePrompt('s1', 'q1', { answer: '面条' });
     const a = actions(sent);
-    expect(a[a.length - 1]).toMatchObject({ kind: 'question', id: 'q1', answer: '面条' });
+    expect(a[a.length - 1]).toMatchObject({ type: 'question', payload: { id: 'q1', answer: '面条' } });
   });
 
   it('resolving a permission updates it IN PLACE with the decision (no fallback to tool)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
-    card.onPrompt('s1', { kind: 'permission', id: 'p1', headline: 'x', description: 'x', toolName: 'bash' });
+    card.onToolStart('s1', tool('tc1', 't'));
+    card.onPrompt('s1', permission('p1'));
     card.resolvePrompt('s1', 'p1', { decision: 'approve' });
     const a = actions(sent);
-    expect(a[a.length - 1]).toMatchObject({ kind: 'permission', id: 'p1', decision: 'approve' });
+    expect(a[a.length - 1]).toMatchObject({ type: 'permission', payload: { id: 'p1', decision: 'approve' } });
   });
 
   it('resolving without a resolution (auto-cancel) clears the slot', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onPrompt('s1', question('q1', 'a?'));
     card.resolvePrompt('s1', 'q1');
     const a = actions(sent);
     expect(a[a.length - 1]).toBeNull();
@@ -268,29 +291,29 @@ describe('CardManager action part', () => {
 
   it('an UNRESOLVED prompt blocks a subsequent tool from taking the slot', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'a?', question: 'a?' });
+    card.onPrompt('s1', question('q1', 'a?'));
     sent.length = 0;
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 't'));
     // Tool is suppressed while the human hasn't answered — slot still holds q1.
     expect(actions(sent)).toHaveLength(0);
   });
 
   it('a RESOLVED prompt IS superseded by later tool activity (fix #1)', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', { kind: 'permission', id: 'p1', headline: 'x', description: 'x', toolName: 'bash' });
+    card.onPrompt('s1', permission('p1'));
     card.resolvePrompt('s1', 'p1', { decision: 'approve' });
     sent.length = 0;
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'running' });
-    card.onToolComplete('s1', { kind: 'tool', id: 'tc1', headline: '$ echo', status: 'success' });
+    card.onToolStart('s1', tool('tc1', '$ echo'));
+    card.onToolComplete('s1', toolDone('tc1', '$ echo'));
     const a = actions(sent);
-    expect(a[0]).toMatchObject({ kind: 'tool', id: 'tc1', status: 'running' });
-    expect(a[a.length - 1]).toMatchObject({ kind: 'tool', id: 'tc1', status: 'success' });
+    expect(a[0]).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc1' } });
+    expect(a[a.length - 1]).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc1', success: true } });
   });
 
   it('deduplicates redundant action broadcasts (same tool + status)', () => {
     const { card, sent } = setup();
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 't'));
+    card.onToolStart('s1', tool('tc1', 't'));
     expect(actions(sent)).toHaveLength(1);
   });
 });
@@ -299,7 +322,7 @@ describe('CardManager lifecycle', () => {
   it('clear() broadcasts an empty message and null action', () => {
     const { card, sent } = setup();
     card.onDelta('s1', 'draft');
-    card.onToolStart('s1', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
+    card.onToolStart('s1', tool('tc1', 't'));
     sent.length = 0;
     card.clear('s1');
     expect(msgs(sent)).toContainEqual({ content: '', reset: true });
@@ -332,8 +355,8 @@ describe('CardManager.activeSessions', () => {
 
   it('lists sessions with an active action (prompt or tool)', () => {
     const { card } = setup();
-    card.onPrompt('s1', { kind: 'question', id: 'q1', headline: 'h', question: 'q?' });
-    card.onToolStart('s2', { kind: 'tool', id: 'tc1', headline: 't', status: 'running' });
+    card.onPrompt('s1', question('q1', 'q?'));
+    card.onToolStart('s2', tool('tc1', 't'));
     expect(card.activeSessions().sort()).toEqual(['s1', 's2']);
   });
 

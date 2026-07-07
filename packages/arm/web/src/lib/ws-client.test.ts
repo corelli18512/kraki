@@ -261,12 +261,12 @@ describe('KrakiWSClient', () => {
       expect((msgs![0] as Record<string, unknown> & { payload: { content: string } }).payload.content).toBe('Hello!');
     });
 
-    it('routes card_message append and reset to cards', async () => {
+    it('routes agent_message_delta append and reset to cards', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
       receiveInner({
-        type: 'card_message',
+        type: 'agent_message_delta',
         deviceId: 'dev-1',
         seq: 1,
         timestamp: new Date().toISOString(),
@@ -274,7 +274,7 @@ describe('KrakiWSClient', () => {
         payload: { content: 'Hel' },
       });
       receiveInner({
-        type: 'card_message',
+        type: 'agent_message_delta',
         deviceId: 'dev-1',
         seq: 2,
         timestamp: new Date().toISOString(),
@@ -284,7 +284,7 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().cards.get('sess-1')?.text).toBe('Hello!');
 
       receiveInner({
-        type: 'card_message',
+        type: 'agent_message_delta',
         deviceId: 'dev-1',
         seq: 3,
         timestamp: new Date().toISOString(),
@@ -295,12 +295,12 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().cards.get('sess-1')?.text).toBe('Reset');
     });
 
-    it('clears the pendingQuestions hint on idle', async () => {
+    it('transitions the session to idle on an idle message', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
       useStore.getState().upsertSession({
         id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
-        agent: 'pi', state: 'active', messageCount: 0, pendingQuestions: 2,
+        agent: 'pi', state: 'active', messageCount: 0,
       });
 
       receiveInner({
@@ -310,7 +310,6 @@ describe('KrakiWSClient', () => {
 
       const s = useStore.getState().sessions.get('sess-1');
       expect(s?.state).toBe('idle');
-      expect(s?.pendingQuestions).toBe(0);
     });
 
     it('handles session_messages_range_batch without incrementing unread', async () => {
@@ -427,19 +426,20 @@ describe('KrakiWSClient', () => {
         sessionId: 'sess-1',
         payload: {
           action: {
-            kind: 'permission',
-            id: 'perm-abc',
-            headline: 'Delete files',
-            toolName: 'shell',
-            args: { command: 'rm -rf' },
-            description: 'Delete files',
+            type: 'permission',
+            payload: {
+              id: 'perm-abc',
+              toolName: 'shell',
+              args: { command: 'rm -rf' },
+              description: 'Delete files',
+            },
           },
         },
       });
 
       const action = useStore.getState().cards.get('sess-1')?.action;
-      expect(action?.kind).toBe('permission');
-      expect(action?.id).toBe('perm-abc');
+      expect(action?.type).toBe('permission');
+      expect(action?.type === 'permission' ? action.payload.id : undefined).toBe('perm-abc');
     });
 
     it('routes question card action and stores it', async () => {
@@ -454,18 +454,19 @@ describe('KrakiWSClient', () => {
         sessionId: 'sess-1',
         payload: {
           action: {
-            kind: 'question',
-            id: 'q-abc',
-            headline: 'Question',
-            question: 'Which framework?',
-            choices: ['React', 'Vue'],
+            type: 'question',
+            payload: {
+              id: 'q-abc',
+              question: 'Which framework?',
+              choices: ['React', 'Vue'],
+            },
           },
         },
       });
 
       const action = useStore.getState().cards.get('sess-1')?.action;
-      expect(action?.kind).toBe('question');
-      expect(action && 'choices' in action ? action.choices : undefined).toEqual(['React', 'Vue']);
+      expect(action?.type).toBe('question');
+      expect(action?.type === 'question' ? action.payload.choices : undefined).toEqual(['React', 'Vue']);
     });
 
     it('routes idle message and updates session state', async () => {
@@ -1244,7 +1245,7 @@ describe('KrakiWSClient', () => {
       expect(preview!.type).toBe('agent');
     });
 
-    it('passes the pendingQuestions digest hint through to the store session', async () => {
+    it('applies an open-question digest preview to the store session preview', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1263,12 +1264,12 @@ describe('KrakiWSClient', () => {
             readSeq: 5,
             messageCount: 5,
             createdAt: new Date().toISOString(),
-            pendingQuestions: 2,
+            preview: { type: 'question', text: 'Which DB?', timestamp: new Date().toISOString() },
           }],
         },
       });
 
-      expect(useStore.getState().sessions.get('sess-pending')?.pendingQuestions).toBe(2);
+      expect(useStore.getState().sessionPreviews.get('sess-pending')?.type).toBe('question');
     });
 
     it('only warms up sessions within 24h or active/pinned', async () => {

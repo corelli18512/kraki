@@ -5,8 +5,8 @@ import { wsClient } from '../../lib/ws-client';
 import type { CardActionState } from '@kraki/protocol';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
-export function QuestionInput({ action, sessionId }: { action: Extract<CardActionState, { kind: 'question' }>; sessionId: string }) {
-  const { id, question: text, choices, answer } = action;
+export function QuestionInput({ action, sessionId }: { action: Extract<CardActionState, { type: 'question' }>; sessionId: string }) {
+  const { id, question: text, choices, answer } = action.payload;
   const [freeform, setFreeform] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const shouldAutoFocus = shouldAutoFocusTextInput();

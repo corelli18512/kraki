@@ -1,12 +1,25 @@
 import type { CardActionState } from '@kraki/protocol';
 
+/** A running tool step occupying (or eligible to occupy) the slot. */
+type RunningTool = Extract<CardActionState, { type: 'tool_start' }>;
+/** A finished tool step. */
+type CompletedTool = Extract<CardActionState, { type: 'tool_complete' }>;
+/** A prompt step (permission or question). */
+type PromptAction = Extract<CardActionState, { type: 'permission' | 'question' }>;
+
+/** Stable per-tool key: the tool call id, falling back to its headline when the
+ *  adapter didn't supply one. */
+function toolKey(a: RunningTool | CompletedTool): string {
+  return a.payload.toolCallId ?? a.payload.headline;
+}
+
 /**
  * A partial card broadcast — the tentacle's {@link RelayClient.send} enriches
- * it with envelope fields (seq/timestamp/deviceId) and, for `card_message`,
+ * it with envelope fields (seq/timestamp/deviceId) and, for `agent_message_delta`,
  * runs it through the streaming-delta coalescer.
  */
 export interface CardBroadcast {
-  type: 'card_message' | 'card_action';
+  type: 'agent_message_delta' | 'card_action';
   sessionId: string;
   payload: unknown;
 }
@@ -30,7 +43,7 @@ interface CardState {
    *  in insertion order. The agent runs tools in PARALLEL, so this can hold
    *  several at once; it is the source of truth for the concurrency count (and
    *  for deciding, at turn end, whether the card still has live tool work). */
-  runningTools: Map<string, Extract<CardActionState, { kind: 'tool' }>>;
+  runningTools: Map<string, RunningTool>;
   /** Signature of the last broadcast action, to suppress redundant sends. */
   lastActionKey: string;
 }
@@ -45,7 +58,7 @@ export type PromptResolution =
  * all arms.
  *
  * Two independently-broadcast parts:
- *  - **draft** (`card_message`): the agent's streaming words — narration /
+ *  - **draft** (`agent_message_delta`): the agent's streaming words — narration /
  *    progress / conclusion. Rendered by arms as a clean in-flow spine bubble
  *    (NOT inside the pinned card). Incremental deltas with a `reset` boundary;
  *    keep-last (each new segment resets). Graduates to a permanent
@@ -80,8 +93,8 @@ export class CardManager {
   private slotBlocksTool(c: CardState): boolean {
     const a = c.action;
     return (
-      (a?.kind === 'permission' && !a.decision) ||
-      (a?.kind === 'question' && a.answer === undefined)
+      (a?.type === 'permission' && !a.payload.decision) ||
+      (a?.type === 'question' && a.payload.answer === undefined)
     );
   }
 
@@ -94,18 +107,20 @@ export class CardManager {
   private isSettledTail(c: CardState): boolean {
     const a = c.action;
     return (
-      (a?.kind === 'tool' && c.runningTools.size === 0) ||
-      (a?.kind === 'permission' && !!a.decision) ||
-      (a?.kind === 'question' && a.answer !== undefined)
+      ((a?.type === 'tool_start' || a?.type === 'tool_complete') && c.runningTools.size === 0) ||
+      (a?.type === 'permission' && !!a.payload.decision) ||
+      (a?.type === 'question' && a.payload.answer !== undefined)
     );
   }
 
   private actionKey(a: CardActionState | null): string {
     if (!a) return 'null';
-    if (a.kind === 'tool') return `tool:${a.id}:${a.status}`;
-    if (a.kind === 'tool_batch') return `batch:${a.running}`;
-    if (a.kind === 'permission') return `permission:${a.id}:${a.decision ?? ''}`;
-    return `question:${a.id}:${a.answer !== undefined ? '1' : '0'}`;
+    if (a.type === 'tool_start' || a.type === 'tool_complete') {
+      return `${a.type}:${a.payload.toolCallId ?? a.payload.headline}`;
+    }
+    if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
+    if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.decision ?? ''}`;
+    return `question:${a.payload.id}:${a.payload.answer !== undefined ? '1' : '0'}`;
   }
 
   /** The action a session's live tools should occupy the slot with, derived from
@@ -115,7 +130,7 @@ export class CardManager {
     const n = c.runningTools.size;
     if (n === 0) return null;
     if (n === 1) return c.runningTools.values().next().value ?? null;
-    return { kind: 'tool_batch', running: n };
+    return { type: 'tool_batch', payload: { running: n } };
   }
 
   /** Broadcast the current action if it changed since last send. */
@@ -155,7 +170,7 @@ export class CardManager {
     } else {
       c.draftText += content;
     }
-    this.broadcast({ type: 'card_message', sessionId, payload: { content, reset } });
+    this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content, reset } });
   }
 
   /** A narration segment finalized (message_end). `content` is the AUTHORITATIVE
@@ -181,7 +196,7 @@ export class CardManager {
     }
     if (content) {
       if (content !== c.draftText) {
-        this.broadcast({ type: 'card_message', sessionId, payload: { content, reset: true } });
+        this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content, reset: true } });
       }
       c.draftText = content;
     }
@@ -216,9 +231,9 @@ export class CardManager {
   /** A tool started — track it as in-flight and (unless a pending prompt owns the
    *  slot) show the derived tool action: the single tool, or a `tool_batch` count
    *  when others are already running in parallel. */
-  onToolStart(sessionId: string, action: Extract<CardActionState, { kind: 'tool' }>): void {
+  onToolStart(sessionId: string, action: RunningTool): void {
     const c = this.get(sessionId);
-    c.runningTools.set(action.id, action);
+    c.runningTools.set(toolKey(action), action);
     if (this.slotBlocksTool(c)) return;
     c.action = this.toolActionFor(c);
     this.syncAction(sessionId, c);
@@ -230,15 +245,15 @@ export class CardManager {
    *  last state. A still-pending prompt owns the slot and is left untouched; a
    *  RESOLVED prompt IS superseded (e.g. after approval the gated tool takes the
    *  slot rather than the slot staying stuck on the resolved permission). */
-  onToolComplete(sessionId: string, action: Extract<CardActionState, { kind: 'tool' }>): void {
+  onToolComplete(sessionId: string, action: CompletedTool): void {
     const c = this.get(sessionId);
-    c.runningTools.delete(action.id);
+    c.runningTools.delete(toolKey(action));
     if (this.slotBlocksTool(c)) return;
     c.action = c.runningTools.size > 0 ? this.toolActionFor(c) : action;
     this.syncAction(sessionId, c);
   }
 
-  onPrompt(sessionId: string, action: Extract<CardActionState, { kind: 'permission' | 'question' }>): void {
+  onPrompt(sessionId: string, action: PromptAction): void {
     const c = this.get(sessionId);
     c.action = action;
     this.syncAction(sessionId, c);
@@ -251,11 +266,11 @@ export class CardManager {
   resolvePrompt(sessionId: string, id: string, resolution?: PromptResolution): void {
     const c = this.cards.get(sessionId);
     const a = c?.action;
-    if (!c || !a || a.kind === 'tool_batch' || a.id !== id) return;
-    if (a.kind === 'permission' && resolution && 'decision' in resolution) {
-      c.action = { ...a, decision: resolution.decision };
-    } else if (a.kind === 'question' && resolution && 'answer' in resolution) {
-      c.action = { ...a, answer: resolution.answer };
+    if (!c || !a || (a.type !== 'permission' && a.type !== 'question') || a.payload.id !== id) return;
+    if (a.type === 'permission' && resolution && 'decision' in resolution) {
+      c.action = { ...a, payload: { ...a.payload, decision: resolution.decision } };
+    } else if (a.type === 'question' && resolution && 'answer' in resolution) {
+      c.action = { ...a, payload: { ...a.payload, answer: resolution.answer } };
     } else {
       c.action = null;
     }
@@ -269,7 +284,7 @@ export class CardManager {
     this.cards.set(sessionId, {
       draftText: '', resetNext: false, action: null, runningTools: new Map(), lastActionKey: 'null',
     });
-    this.broadcast({ type: 'card_message', sessionId, payload: { content: '', reset: true } });
+    this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content: '', reset: true } });
     this.broadcast({ type: 'card_action', sessionId, payload: { action: null } });
   }
 
@@ -282,7 +297,7 @@ export class CardManager {
   snapshot(sessionId: string): CardBroadcast[] {
     const c = this.cards.get(sessionId);
     return [
-      { type: 'card_message', sessionId, payload: { content: c?.draftText ?? '', reset: true } },
+      { type: 'agent_message_delta', sessionId, payload: { content: c?.draftText ?? '', reset: true } },
       { type: 'card_action', sessionId, payload: { action: c?.action ?? null } },
     ];
   }

@@ -69,8 +69,8 @@ describe('ChatView', () => {
     ]);
     useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', online: true }]);
     useStore.getState().setCardAction('s1', {
-      kind: 'permission', id: 'p1', headline: 'Shell', toolName: 'shell',
-      args: { command: 'ls' }, description: 'List files',
+      type: 'permission',
+      payload: { id: 'p1', toolName: 'shell', args: { command: 'ls' }, description: 'List files' },
     });
     renderChatView('s1');
     expect(screen.getByText('Permission Required')).toBeInTheDocument();
@@ -83,8 +83,8 @@ describe('ChatView', () => {
     ]);
     useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', online: true }]);
     useStore.getState().setCardAction('s1', {
-      kind: 'permission', id: 'p1', headline: 'Shell', toolName: 'shell',
-      args: { command: 'ls' }, description: 'List files',
+      type: 'permission',
+      payload: { id: 'p1', toolName: 'shell', args: { command: 'ls' }, description: 'List files' },
     });
     renderChatView('s1');
     // Permission renders in the transient card…
@@ -129,7 +129,8 @@ describe('ChatView', () => {
       payload: { content: 'do it' },
     } as ChatMessage);
     useStore.getState().setCardAction('s1', {
-      kind: 'tool', id: 't1', headline: 'Shell', status: 'running', toolName: 'shell', args: { command: 'ls' },
+      type: 'tool_start',
+      payload: { toolCallId: 't1', headline: 'Shell', toolName: 'shell', argsRef: undefined },
     });
     renderChatView('s1');
     expect(screen.getByText('shell')).toBeInTheDocument();
@@ -162,8 +163,8 @@ describe('ChatView', () => {
     ]);
     useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', online: true }]);
     useStore.getState().setCardAction('s1', {
-      kind: 'question', id: 'q1', headline: 'Choose DB', question: 'Which DB?',
-      choices: ['sqlite', 'postgres'],
+      type: 'question',
+      payload: { id: 'q1', question: 'Which DB?', choices: ['sqlite', 'postgres'] },
     });
     const { container } = renderChatView('s1');
     // Prompt text + choice buttons live inside the single live bubble.
@@ -198,8 +199,8 @@ describe('ChatView', () => {
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 0 },
     ]);
     useStore.getState().setCardAction('s2', {
-      kind: 'permission', id: 'p1', headline: 'Other', toolName: 'shell',
-      args: {}, description: 'Other session perm',
+      type: 'permission',
+      payload: { id: 'p1', toolName: 'shell', args: {}, description: 'Other session perm' },
     });
     renderChatView('s1');
     expect(screen.queryByText('Other session perm')).not.toBeInTheDocument();

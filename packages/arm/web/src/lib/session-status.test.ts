@@ -16,8 +16,8 @@ function cardMap(entries: Array<{ sessionId: string; kind: 'question' | 'permiss
     m.set(e.sessionId, {
       text: '',
       action: e.kind === 'question'
-        ? { kind: 'question', id: `q-${e.sessionId}`, headline: 'Question', question: 'q' }
-        : { kind: 'permission', id: `p-${e.sessionId}`, headline: 'Permission', toolName: 'shell', description: 'Run shell' },
+        ? { type: 'question', payload: { id: `q-${e.sessionId}`, question: 'q' } }
+        : { type: 'permission', payload: { id: `p-${e.sessionId}`, toolName: 'shell', args: {}, description: 'Run shell' } },
     });
   }
   return m;
@@ -48,19 +48,25 @@ describe('getSessionStatus', () => {
     expect(getSessionStatus(session({ state: 'active' }), 1)).toBe('pending');
   });
 
-  it('pending via digest hint when no live questions yet (reload seed)', () => {
-    expect(getSessionStatus(session({ state: 'active', pendingQuestions: 2 }), 0)).toBe('pending');
+  it('pending via preview hint when no live questions yet (reload seed)', () => {
+    expect(getSessionStatus(session({ state: 'active' }), 0, 'question')).toBe('pending');
   });
 
   it('live count takes priority — still pending', () => {
-    expect(getSessionStatus(session({ state: 'active', pendingQuestions: 0 }), 3)).toBe('pending');
+    expect(getSessionStatus(session({ state: 'active' }), 3, 'agent')).toBe('pending');
   });
 
   it('ended overrides everything', () => {
     expect(getSessionStatus(session({ state: 'ended' as SessionSummary['state'] }), 5)).toBe('ended');
   });
 
-  it('idle wins over a stale/zero hint', () => {
-    expect(getSessionStatus(session({ state: 'idle', pendingQuestions: 0 }), 0)).toBe('idle');
+  it('idle wins over a stale/absent hint', () => {
+    expect(getSessionStatus(session({ state: 'idle' }), 0, 'agent')).toBe('idle');
+  });
+
+  it('an idle session is never pending even with a stale question preview', () => {
+    // A pending turn is by definition running; once idle the turn concluded, so
+    // a not-yet-refreshed 'question' preview must not resurrect the pending badge.
+    expect(getSessionStatus(session({ state: 'idle' }), 0, 'question')).toBe('idle');
   });
 });

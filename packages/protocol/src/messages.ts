@@ -199,13 +199,40 @@ export interface AgentMessage extends BaseEnvelope {
   payload: {
     content: string;
     attachments?: Attachment[];
+    /** Number of TRACE steps (tool_start + agent_narration) recorded for this
+     *  turn up to and including this bubble. Stamped by the tentacle at emit
+     *  time from a running per-turn counter. Lets a concluded bubble show its
+     *  "Steps" affordance from replay alone — WITHOUT first pulling the trace —
+     *  so the button no longer depends on the (transient, non-persisted) trace
+     *  being present in the client's store. `> 0` ⇒ the turn has steps to pull.
+     *  Absent on pre-0.18 sessions (backfilled by scripts/backfill-trace.mjs). */
+    steps?: number;
   };
 }
 
+/**
+ * The streaming DRAFT BUBBLE for the in-progress turn — the assistant's live
+ * words (narration / progress / conclusion). It is NOT shown inside the status
+ * card; arms render it as a clean in-flow spine bubble that graduates to a
+ * permanent {@link AgentMessage} at turn end. Keep-last semantics: each new
+ * narration segment (or a finalize resummarize) `reset`s the draft, so only the
+ * latest text shows. The tentacle owns and accumulates the full text; on the
+ * wire it streams incrementally: each chunk is a `content` delta the client
+ * APPENDS, unless `reset` is set (start of a new segment, a resummarize, or a
+ * reconnect snapshot) in which case the client REPLACES the current text with
+ * `content` first. Never persisted to the spine; the finalized prose lives in
+ * `trace.jsonl` and is pulled per-turn for the "Steps" history.
+ */
 export interface AgentMessageDelta extends BaseEnvelope {
   type: 'agent_message_delta';
   payload: {
+    /** Delta chunk to append (or the full text when `reset` is true). */
     content: string;
+    /** When true, replace the current draft text with `content` before
+     *  rendering (new narrative segment, a resummarize, or a reconnect push).
+     *  Additive: legacy clients that ignore it fall back to append-only
+     *  streaming (their original behavior). */
+    reset?: boolean;
   };
 }
 
@@ -214,6 +241,12 @@ export interface PermissionRequest extends BaseEnvelope {
   payload: ToolArgs & {
     id: string;
     description: string;
+    /** Only set when this request occupies a RESOLVED card slot (read-only
+     *  view showing the outcome). Never present on a live/pending request —
+     *  permission/question no longer broadcast standalone, so their payload's
+     *  sole live home is the {@link CardActionState} slot. Absent on old-session
+     *  spine records. */
+    decision?: 'approve' | 'deny' | 'always_allow';
   };
 }
 
@@ -223,6 +256,11 @@ export interface QuestionRequest extends BaseEnvelope {
     id: string;
     question: string;
     choices?: string[];
+    /** Whether the human may type a freeform answer in addition to `choices`. */
+    allowFreeform?: boolean;
+    /** Only set when this request occupies a RESOLVED card slot — see
+     *  {@link PermissionRequest} `decision`. */
+    answer?: string;
   };
 }
 
@@ -286,7 +324,7 @@ export interface ToolCompleteMessage extends BaseEnvelope {
 /**
  * Finalized assistant NARRATION prose for one step of a turn — mirrored to the
  * TRACE axis for the lazy "Steps" history. The live draft bubble is streamed via
- * {@link CardMessage}; at `message_end` the finalized prose is ALSO emitted as
+ * {@link AgentMessageDelta}; at `message_end` the finalized prose is ALSO emitted as
  * this trace step (broadcast live + mirrored to `trace.jsonl`, never the spine).
  * Pulled per-turn via {@link TurnTraceBatchMessage}, interleaved with tool steps
  * in append order.
@@ -310,82 +348,37 @@ export interface AgentNarrationMessage extends BaseEnvelope {
  * card clears.
  *
  * The agent may run tool calls in PARALLEL. A single running tool occupies the
- * slot as `kind:'tool'`; two-or-more concurrent tools collapse into
- * `kind:'tool_batch'` carrying only the count (the per-tool detail lives on the
- * TRACE/"Steps" axis, keeping the live card a fixed-size single slot). When the
- * concurrency drops back to one, the slot returns to that single `kind:'tool'`.
+ * slot as the tool's `tool_start`/`tool_complete` step; two-or-more concurrent
+ * tools collapse into `tool_batch` carrying only the count (the per-tool detail
+ * lives on the TRACE/"Steps" axis, keeping the live card a fixed-size single
+ * slot). When the concurrency drops back to one, the slot returns to that
+ * single tool step.
+ *
+ * DESIGN: a card action is just "the current step" — and a step already has a
+ * wire type. Rather than redefine parallel `tool`/`permission`/`question`
+ * shapes, each variant REUSES the existing message's `type` + `payload`
+ * verbatim (minus the envelope): a running tool is a {@link ToolStartMessage},
+ * a finished tool a {@link ToolCompleteMessage}, an open prompt a
+ * {@link PermissionRequest}/{@link QuestionRequest}. The slot's discriminant is
+ * therefore the message's own `type`; clients render it with the SAME code they
+ * use for the live/trace step. A resolved prompt stays in the slot with its
+ * payload's `decision`/`answer` set. `tool_batch` is the sole synthetic variant
+ * (a concurrency count with no standalone message).
  */
 export type CardActionState =
+  | Pick<ToolStartMessage, 'type' | 'payload'>
+  | Pick<ToolCompleteMessage, 'type' | 'payload'>
   | {
-      kind: 'tool';
-      /** toolCallId */
-      id: string;
-      headline: string;
-      status: 'running' | 'success' | 'failure';
-      toolName: string;
-      /** Small args inline; large args ride `argsRef` — genuinely either/or. */
-      args?: unknown;
-      argsRef?: ContentRef;
-      /** Present only after completion. */
-      resultRef?: ContentRef;
-      attachments?: Attachment[];
+      type: 'tool_batch';
+      payload: {
+        /** How many tools are running CONCURRENTLY right now (always >= 2). Only
+         *  the count is transmitted — the expandable per-tool detail comes from
+         *  the TRACE/"Steps" axis, so the live card stays a fixed-size slot. */
+        running: number;
+      };
     }
-  | {
-      kind: 'tool_batch';
-      /** How many tools are running CONCURRENTLY right now (always >= 2). Only
-       *  the count is transmitted — the expandable per-tool detail comes from the
-       *  TRACE/"Steps" axis, so the live card stays a fixed-size single slot. */
-      running: number;
-    }
-  | {
-      kind: 'permission';
-      /** permissionId */
-      id: string;
-      headline: string;
-      description: string;
-      toolName: string;
-      args?: unknown;
-      argsRef?: ContentRef;
-      /** Set once the human (or an always-allow rule) resolves it — the slot then
-       *  shows a read-only resolved view instead of the approve/deny buttons. */
-      decision?: 'approve' | 'deny' | 'always_allow';
-    }
-  | {
-      kind: 'question';
-      /** questionId */
-      id: string;
-      headline: string;
-      question: string;
-      choices?: string[];
-      allowFreeform?: boolean;
-      /** Set once the human answers it — the slot then shows the chosen answer
-       *  read-only instead of the input controls. */
-      answer?: string;
-    };
-
-/**
- * The streaming DRAFT BUBBLE for the in-progress turn — the assistant's live
- * words (narration / progress / conclusion). It is NOT shown inside the status
- * card; arms render it as a clean in-flow spine bubble that graduates to a
- * permanent {@link AgentMessage} at turn end. Keep-last semantics: each new
- * narration segment (or a finalize resummarize) `reset`s the draft, so only the
- * latest text shows. The tentacle owns and accumulates the full text; on the
- * wire it streams incrementally: each chunk is a `content` delta the client
- * APPENDS, unless `reset` is set (start of a new segment, a resummarize, or a
- * reconnect snapshot) in which case the client REPLACES the current text with
- * `content` first. Never persisted to the spine; the finalized prose lives in
- * `trace.jsonl` and is pulled per-turn for the "Steps" history.
- */
-export interface CardMessage extends BaseEnvelope {
-  type: 'card_message';
-  payload: {
-    /** Delta chunk to append (or the full text when `reset` is true). */
-    content: string;
-    /** When true, replace the current draft text with `content` before
-     *  rendering (new narrative segment, a resummarize, or a reconnect push). */
-    reset?: boolean;
-  };
-}
+  | Pick<PermissionRequest, 'type' | 'payload'>
+  | Pick<QuestionRequest, 'type' | 'payload'>;
 
 /**
  * The ACTION part of the server-owned status card — the single active
@@ -441,6 +434,9 @@ export interface SystemMessage extends BaseEnvelope {
   payload: {
     kind: 'no_reply' | (string & {});
     content?: string;
+    /** See {@link AgentMessage.payload.steps}. A `no_reply` notice also anchors
+     *  a turn's Steps history, so it carries the same running step count. */
+    steps?: number;
   };
 }
 
@@ -630,8 +626,8 @@ export interface RequestTurnTraceMessage extends BaseEnvelope {
 /**
  * app → tentacle (unicast): asks for the current status-card snapshot of a
  * session. Sent on session-open / reconnect when the session is not idle, so a
- * client that missed the live card_message/card_action broadcasts can seed its
- * card. The tentacle replies by unicasting the current `card_message`
+ * client that missed the live agent_message_delta/card_action broadcasts can seed
+ * its card. The tentacle replies by unicasting the current `agent_message_delta`
  * (reset:true, full text) + `card_action` (current action or null).
  */
 export interface RequestCardMessage extends BaseEnvelope {
@@ -750,7 +746,6 @@ export type ProducerMessage =
   | ToolStartMessage
   | ToolCompleteMessage
   | AgentNarrationMessage
-  | CardMessage
   | CardAction
   | TurnTraceBatchMessage
   | IdleMessage

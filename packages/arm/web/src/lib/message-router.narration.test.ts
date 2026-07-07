@@ -23,7 +23,7 @@ import type { InnerMessage } from '@kraki/protocol';
 
 function cardMessage(sessionId: string, seq: number, content: string, reset?: boolean): InnerMessage {
   return {
-    type: 'card_message',
+    type: 'agent_message_delta',
     deviceId: 'dev-tentacle',
     seq,
     timestamp: new Date().toISOString(),
@@ -45,7 +45,7 @@ describe('handleDataMessage card messages', () => {
     });
   };
 
-  it('routes card_message into the server-owned card text', () => {
+  it('routes agent_message_delta into the server-owned card text', () => {
     seedSession('s1');
     handleDataMessage(cardMessage('s1', 5, 'thinking '), {
       cmdState: new CommandState(),
@@ -56,7 +56,7 @@ describe('handleDataMessage card messages', () => {
     expect(useStore.getState().cards.get('s1')?.text).toBe('thinking about it');
   });
 
-  it('honors card_message reset', () => {
+  it('honors agent_message_delta reset', () => {
     seedSession('s1');
     handleDataMessage(cardMessage('s1', 5, 'old'), {
       cmdState: new CommandState(),
@@ -77,16 +77,17 @@ describe('handleDataMessage card messages', () => {
       sessionId: 's1',
       payload: {
         action: {
-          kind: 'question',
-          id: 'q1',
-          headline: 'Question',
-          question: 'Proceed?',
+          type: 'question',
+          payload: {
+            id: 'q1',
+            question: 'Proceed?',
+          },
         },
       },
     } as unknown as InnerMessage, {
       cmdState: new CommandState(),
     });
-    expect(useStore.getState().cards.get('s1')?.action?.kind).toBe('question');
+    expect(useStore.getState().cards.get('s1')?.action?.type).toBe('question');
   });
 
   it('keeps card updates out of IndexedDB', async () => {
@@ -96,6 +97,6 @@ describe('handleDataMessage card messages', () => {
     });
     await new Promise((r) => setTimeout(r, 5));
     const persistedTypes = putMessage.mock.calls.map((c) => (c[1] as { type: string }).type);
-    expect(persistedTypes).not.toContain('card_message');
+    expect(persistedTypes).not.toContain('agent_message_delta');
   });
 });

@@ -24,9 +24,9 @@ function getArgsSummary(toolName: string, args: Record<string, unknown>): string
   }
 }
 
-export function PermissionInput({ action, sessionId }: { action: Extract<CardActionState, { kind: 'permission' }>; sessionId: string }) {
-  const { id, toolName, description, decision } = action;
-  const args = (action.args ?? {}) as Record<string, unknown>;
+export function PermissionInput({ action, sessionId }: { action: Extract<CardActionState, { type: 'permission' }>; sessionId: string }) {
+  const { id, toolName, description, decision } = action.payload;
+  const args = (action.payload.args ?? {}) as Record<string, unknown>;
   const argsSummary = getArgsSummary(toolName, args);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss');
   const isWriteInDiscuss = sessionMode === 'discuss' && ['write_file', 'edit_file', 'create_file', 'write', 'edit', 'create'].includes(toolName);

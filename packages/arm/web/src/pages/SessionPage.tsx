@@ -39,7 +39,8 @@ export function SessionPage() {
 
   const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
   const livePending = useStore((s) => sessionId ? countPendingQuestions(sessionId, s.cards) : 0);
-  const sessionStatus = session ? getSessionStatus(session, livePending) : 'idle';
+  const sessionPreviewType = useStore((s) => sessionId ? s.sessionPreviews.get(sessionId)?.type : undefined);
+  const sessionStatus = session ? getSessionStatus(session, livePending, sessionPreviewType) : 'idle';
 
   // Navigate home when session is deleted (removed from store while viewing)
   // but not if it's a pending session (optimistic open before session_created)

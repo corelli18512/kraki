@@ -52,7 +52,7 @@ describe('LiveAgentBubble action section', () => {
   it('renders an unresolved question with its input controls', () => {
     renderLive({
       text: '',
-      action: { kind: 'question', id: 'q1', headline: 'q', question: 'pick', allowFreeform: true },
+      action: { type: 'question', payload: { id: 'q1', question: 'pick', allowFreeform: true } },
     });
     expect(screen.getByText('pick')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Type your answer…')).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe('LiveAgentBubble action section', () => {
   it('renders a resolved (answered) question read-only until narration retires it', () => {
     renderLive({
       text: '',
-      action: { kind: 'question', id: 'q1', headline: '晚餐?', question: '晚餐想吃什么?', choices: ['面条', '米饭'], answer: '面条' },
+      action: { type: 'question', payload: { id: 'q1', question: '晚餐想吃什么?', choices: ['面条', '米饭'], answer: '面条' } },
     });
     expect(screen.getByText('晚餐想吃什么?')).toBeInTheDocument();
     expect(screen.getByText(/Answered/)).toBeInTheDocument();
@@ -73,7 +73,7 @@ describe('LiveAgentBubble action section', () => {
   it('renders a resolved permission decision read-only until narration retires it', () => {
     renderLive({
       text: '',
-      action: { kind: 'permission', id: 'p1', headline: 'run', description: 'Run bash', toolName: 'bash', decision: 'approve' },
+      action: { type: 'permission', payload: { id: 'p1', description: 'Run bash', toolName: 'bash', args: {}, decision: 'approve' } },
     });
     expect(screen.getByText(/Approved/)).toBeInTheDocument();
     // Read-only: no approve/deny buttons once decided.
@@ -83,13 +83,13 @@ describe('LiveAgentBubble action section', () => {
   it('renders an unresolved permission with its approve/deny buttons', () => {
     renderLive({
       text: '',
-      action: { kind: 'permission', id: 'p1', headline: 'run', description: 'Run bash', toolName: 'bash' },
+      action: { type: 'permission', payload: { id: 'p1', description: 'Run bash', toolName: 'bash', args: {} } },
     });
     expect(screen.getByText('Run bash')).toBeInTheDocument();
   });
 
   it('renders a tool_batch as a parallel-running count, without a "Working…" header', () => {
-    renderLive({ text: '', action: { kind: 'tool_batch', running: 3 } });
+    renderLive({ text: '', action: { type: 'tool_batch', payload: { running: 3 } } });
     expect(screen.getByText(/3 个工具并行运行中/)).toBeInTheDocument();
     expect(screen.queryByText('Working…')).not.toBeInTheDocument();
   });
@@ -97,7 +97,7 @@ describe('LiveAgentBubble action section', () => {
   it('renders a running tool in the action section', () => {
     renderLive({
       text: 'working on it',
-      action: { kind: 'tool', id: 't1', headline: 'ls -la', status: 'running', toolName: 'bash' },
+      action: { type: 'tool_start', payload: { toolCallId: 't1', headline: 'ls -la', toolName: 'bash' } },
     });
     expect(screen.getByText('bash')).toBeInTheDocument();
     expect(screen.getByText('ls -la')).toBeInTheDocument();
@@ -106,7 +106,7 @@ describe('LiveAgentBubble action section', () => {
   it('renders the most-recent COMPLETED tool (latest activity is a tool, not narration)', () => {
     renderLive({
       text: '',
-      action: { kind: 'tool', id: 't1', headline: 'ls -la', status: 'success', toolName: 'bash' },
+      action: { type: 'tool_complete', payload: { toolCallId: 't1', headline: 'ls -la', success: true, toolName: 'bash' } },
     });
     expect(screen.getByText('bash')).toBeInTheDocument();
     expect(screen.getByText('ls -la')).toBeInTheDocument();
