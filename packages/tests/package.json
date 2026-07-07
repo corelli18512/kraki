@@ -10,7 +10,7 @@
     "test:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.1.2",
+    "@coinfra/pulse": "^0.2.0",
     "@kraki/crypto": "workspace:*",
     "@kraki/head": "workspace:*",
     "@kraki/protocol": "workspace:*",

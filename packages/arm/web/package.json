@@ -1,6 +1,6 @@
 {
   "name": "@kraki/arm-web",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "Kraki web receiver — view and control your agents from any browser",
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.1.2",
+    "@coinfra/pulse": "^0.2.0",
     "@kraki/protocol": "workspace:*",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",

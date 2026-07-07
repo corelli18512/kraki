@@ -1,6 +1,6 @@
 {
   "name": "@kraki/head",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "Kraki relay server — the brain that routes messages between tentacles and apps",
   "repository": {
     "type": "git",
@@ -32,7 +32,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.1.2",
+    "@coinfra/pulse": "^0.2.0",
     "@kraki/crypto": "workspace:*",
     "@kraki/protocol": "workspace:*",
     "better-sqlite3": "^11.0.0",

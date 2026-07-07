@@ -24,6 +24,30 @@
 import type Database from 'better-sqlite3';
 import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
+import { getLogger } from './logger.js';
+
+/** GC policy — how aggressively the hub reclaims per-device outbox memory
+ *  for peers that stay disconnected. Zero disables that step. Defaults tuned
+ *  for a store-and-forward hub with many long-lived-but-often-offline peers
+ *  (browser tabs closed, phones off, iPad in a drawer). See spec §11. */
+export interface PulseHubGcConfig {
+  /** After this many ms Disconnected, drop the endpoint's non-durable outbox
+   *  (via `endpoint.purgeNonDurable`). Durable entries survive; they persist
+   *  in `pulse_meta` via `snapshotDurable`. Default 5 * 60_000 (5 min). */
+  purgeNonDurableAfterMs?: number;
+  /** After this many ms Disconnected, drop the endpoint entirely from memory.
+   *  Durable snapshot remains in SQLite so a future reconnect can rebuild it
+   *  via `ep()`. Default 24 * 3600_000 (24 h). */
+  evictEndpointAfterMs?: number;
+  /** How often the GC scan runs. Default 60_000 (1 min). */
+  intervalMs?: number;
+}
+
+const DEFAULT_GC: Required<PulseHubGcConfig> = {
+  purgeNonDurableAfterMs: 5 * 60_000,
+  evictEndpointAfterMs: 24 * 3600_000,
+  intervalMs: 60_000,
+};
 
 /** How the hub reaches out: send bytes to a device, and resolve where a
  *  delivered payload should be forwarded. Injected so the hub stays decoupled
@@ -58,12 +82,17 @@ interface PerDevice {
 
 export class PulseHub {
   private readonly devices = new Map<string, PerDevice>();
+  private readonly gc: Required<PulseHubGcConfig>;
+  private gcTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly db: Database.Database,
     private readonly host: PulseHubHost,
+    gc?: PulseHubGcConfig,
   ) {
+    this.gc = { ...DEFAULT_GC, ...(gc ?? {}) };
     this.initSchema();
+    this.startGc();
   }
 
   private initSchema(): void {
@@ -209,9 +238,15 @@ export class PulseHub {
   private saveSnapshot(device: string): void {
     const d = this.devices.get(device);
     if (!d) return;
+    // Use snapshotDurable() (pulse §11.3) — persisting non-durable entries to
+    // disk both violates their "in-memory only, may be lost on restart"
+    // contract AND is the exact root cause of the 2026-07-07 head OOM
+    // (each save re-serialized an ever-growing in-memory outbox for offline
+    // peers). Durable entries (currently just delete_session in kraki) are
+    // preserved so a future reconnect delivers them.
     this.db
       .prepare('INSERT OR REPLACE INTO pulse_meta (device, snapshot) VALUES (?, ?)')
-      .run(device, JSON.stringify(d.endpoint.snapshot()));
+      .run(device, JSON.stringify(d.endpoint.snapshotDurable()));
   }
 
   private loadSnapshot(device: string): Snapshot | undefined {
@@ -234,6 +269,87 @@ export class PulseHub {
       .prepare('SELECT COUNT(*) AS n FROM pulse_outbox WHERE device = ?')
       .get(device) as { n: number };
     return row.n;
+  }
+
+  /** In-memory endpoint count. Test/introspection. */
+  endpointCount(): number {
+    return this.devices.size;
+  }
+
+  /** Stop the periodic GC scan. Call on shutdown. */
+  close(): void {
+    if (this.gcTimer) {
+      clearInterval(this.gcTimer);
+      this.gcTimer = null;
+    }
+  }
+
+  // ── GC scan (spec §11.4) ────────────────────────────────────────────────
+
+  private startGc(): void {
+    if (this.gc.intervalMs <= 0) return;
+    this.gcTimer = setInterval(() => {
+      try { this.gcTick(); } catch (err) {
+        getLogger().error('pulse-hub gc tick failed', { error: (err as Error).message });
+      }
+    }, this.gc.intervalMs);
+    if (this.gcTimer && typeof (this.gcTimer as unknown as { unref?: () => void }).unref === 'function') {
+      (this.gcTimer as unknown as { unref: () => void }).unref();
+    }
+  }
+
+  /**
+   * Two-tier GC per endpoint (see spec §11.4):
+   *
+   *   L1 (purgeNonDurableAfterMs, default 5 min)
+   *     Endpoint disconnected ≥ L1 → `purgeNonDurable()`. Streaming deltas,
+   *     idle markers, and other ephemera queued during the offline window
+   *     get dropped. Durable messages (delete_session) survive.
+   *
+   *   L2 (evictEndpointAfterMs, default 24 h)
+   *     Endpoint disconnected ≥ L2 → delete the in-memory endpoint entirely.
+   *     Durable outbox rows remain in SQLite (via `pulse_meta` from prior
+   *     `snapshotDurable` writes), so a future reconnect rebuilds the
+   *     endpoint via `ep()` and picks them up.
+   *
+   * Only Disconnected endpoints are candidates. Endpoints without a
+   * `disconnectedAtMs` (never disconnected in this run) are skipped.
+   */
+  gcTick(): void {
+    const now = this.host.now();
+    let purged = 0;
+    let evicted = 0;
+    for (const [deviceId, d] of this.devices) {
+      const disconnectedAt = d.endpoint.disconnectedAtMs;
+      if (d.endpoint.link !== 'disconnected' || disconnectedAt === null) continue;
+      const offlineMs = now - disconnectedAt;
+
+      if (this.gc.evictEndpointAfterMs > 0 && offlineMs >= this.gc.evictEndpointAfterMs) {
+        // L2: release the endpoint. Durable state stays in pulse_meta.
+        this.devices.delete(deviceId);
+        evicted += 1;
+        continue;
+      }
+      if (
+        this.gc.purgeNonDurableAfterMs > 0
+        && offlineMs >= this.gc.purgeNonDurableAfterMs
+        && d.endpoint.nonDurableCount > 0
+      ) {
+        // L1: drop non-durable outbox entries only.
+        const { droppedSeqs } = d.endpoint.purgeNonDurable('gc-idle');
+        if (droppedSeqs.length > 0) {
+          purged += droppedSeqs.length;
+          this.saveSnapshot(deviceId);
+        }
+      }
+    }
+    if (purged > 0 || evicted > 0) {
+      getLogger().info('pulse-hub gc', {
+        purgedSeqs: purged,
+        evictedEndpoints: evicted,
+        totalEndpoints: this.devices.size,
+      });
+    }
   }
 }
 
