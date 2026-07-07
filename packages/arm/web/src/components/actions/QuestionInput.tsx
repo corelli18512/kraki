@@ -1,31 +1,62 @@
 import { useState, useRef, useEffect } from 'react';
 import Markdown from 'react-markdown';
+import { HelpCircle } from 'lucide-react';
 import { wsClient } from '../../lib/ws-client';
-import type { PendingQuestion } from '../../types/store';
+import type { CardActionState } from '@kraki/protocol';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
-export function QuestionInput({ question, sessionId }: { question: PendingQuestion; sessionId: string }) {
-  const { id, question: text, choices } = question;
+export function QuestionInput({ action, sessionId }: { action: Extract<CardActionState, { type: 'question' }>; sessionId: string }) {
+  const { id, question: text, choices, answer } = action.payload;
   const [freeform, setFreeform] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const shouldAutoFocus = shouldAutoFocusTextInput();
 
   useEffect(() => {
-    if (!shouldAutoFocus) return;
+    if (!shouldAutoFocus || answer !== undefined) return;
     inputRef.current?.focus();
-  }, [id, shouldAutoFocus]);
+  }, [id, shouldAutoFocus, answer]);
 
-  const handleAnswer = (answer: string, wasFreeform: boolean) => {
-    wsClient.answer(id, sessionId, answer, wasFreeform);
+  const handleAnswer = (value: string, wasFreeform: boolean) => {
+    wsClient.answer(id, sessionId, value, wasFreeform);
     // On mobile, blur to dismiss the keyboard after answering
     if (!shouldAutoFocus) {
       inputRef.current?.blur();
     }
   };
 
+  // Resolved: read-only view showing the chosen answer, no input controls.
+  if (answer !== undefined) {
+    return (
+      <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
+        <div className="mx-auto max-w-3xl">
+          {text && (
+            <div className="mb-2 flex items-start gap-2">
+              <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
+              <div className="min-w-0 text-sm text-text-primary [&_p]:my-0 [&_p+p]:mt-1.5">
+                <Markdown>{text}</Markdown>
+              </div>
+            </div>
+          )}
+          <div className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-text-primary">
+            <span className="mr-1.5 text-xs font-semibold text-violet-600 dark:text-violet-400">✓ Answered</span>
+            <Markdown components={{ p: ({ children }) => <>{children}</> }}>{answer}</Markdown>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
       <div className="mx-auto max-w-3xl">
+        {text && (
+          <div className="mb-2.5 flex items-start gap-2">
+            <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" />
+            <div className="min-w-0 text-sm text-text-primary [&_p]:my-0 [&_p+p]:mt-1.5">
+              <Markdown>{text}</Markdown>
+            </div>
+          </div>
+        )}
         {choices && choices.length > 0 && (
           <div className="mb-2 space-y-1.5">
             {choices.map((choice, i) => (

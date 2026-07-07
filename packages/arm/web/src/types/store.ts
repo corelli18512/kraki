@@ -7,6 +7,7 @@ import type {
   ModelDetail,
   SessionUsage,
   LocalSession,
+  CardActionState,
 } from '@kraki/protocol';
 
 // --- Connection ---
@@ -32,23 +33,16 @@ export interface PendingInputMessage {
 
 export type ChatMessage = ProducerMessage | ConsumerMessage | PendingInputMessage;
 
-// --- Pending actions ---
+// --- Server-owned status card ---
 
-export interface PendingPermission {
-  id: string;
-  sessionId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  description: string;
-  timestamp: string;
-}
-
-export interface PendingQuestion {
-  id: string;
-  sessionId: string;
-  question: string;
-  choices?: string[];
-  timestamp: string;
+export interface SessionCard {
+  /** The live DRAFT text — the agent's streaming words for the current turn.
+   *  Rendered as a clean in-flow spine bubble (NOT the pinned working card) and
+   *  cleared when the turn's permanent `agent_message` bubble lands. */
+  text: string;
+  /** The single action slot (tool / permission / question). The ONLY thing the
+   *  pinned status card renders. */
+  action: CardActionState | null;
 }
 
 export interface SessionPreview {
@@ -73,11 +67,7 @@ export interface AppState {
   sessions: Map<string, SessionSummary>;
   devices: Map<string, DeviceSummary>;
   messages: Map<string, ChatMessage[]>;
-  pendingPermissions: Map<string, PendingPermission>;
-  pendingQuestions: Map<string, PendingQuestion>;
-
-  // Streaming deltas (partial agent messages being built up)
-  streamingContent: Map<string, string>;
+  cards: Map<string, SessionCard>;
 
   // Pinned sessions (stick to top of list)
   pinnedSessions: Set<string>;
@@ -157,12 +147,9 @@ export interface AppActions {
     clientId?: string,
     serverContent?: string,
   ) => boolean;
-  appendDelta: (sessionId: string, content: string) => void;
-  flushDelta: (sessionId: string) => void;
-  addPermission: (perm: PendingPermission) => void;
-  removePermission: (id: string) => void;
-  addQuestion: (q: PendingQuestion) => void;
-  removeQuestion: (id: string) => void;
+  applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;
+  setCardAction: (sessionId: string, action: CardActionState | null) => void;
+  clearCard: (sessionId: string) => void;
   togglePin: (sessionId: string) => void;
   setPinnedSessions: (pinned: Set<string>) => void;
   incrementUnread: (sessionId: string) => void;
@@ -190,6 +177,13 @@ export interface AppActions {
 
   // Pagination
   prependMessages: (sessionId: string, older: ChatMessage[]) => void;
+  /** Attach a turn's lazily-pulled trace (TRACE axis). Replaces any existing
+   *  tool_start/tool_complete/agent_narration for the turn concluding at
+   *  `bubbleSeq`, positioning the entries just before that bubble. When
+   *  `bubbleSeq` points at a user_message (an in-progress turn seeded on
+   *  reload), the entries are placed just AFTER it instead. In-memory only —
+   *  trace is never persisted to IndexedDB. */
+  setTurnSteps: (sessionId: string, bubbleSeq: number, entries: ChatMessage[]) => void;
 }
 
 export type Store = AppState & AppActions;

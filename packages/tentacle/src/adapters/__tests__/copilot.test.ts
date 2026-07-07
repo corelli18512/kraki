@@ -620,13 +620,42 @@ describe('CopilotAdapter', () => {
       expect(spy).toHaveBeenCalledWith(sessionId, { content: 'hello ' });
     });
 
-    it('wires assistant.message → onMessage', async () => {
-      const spy = vi.fn();
-      adapter.onMessage = spy;
+    it('buffers assistant.message and flushes as onMessage conclusion at idle', async () => {
+      const msgSpy = vi.fn();
+      const narrationSpy = vi.fn();
+      adapter.onMessage = msgSpy;
+      adapter.onNarration = narrationSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      // Draft-bubble model: a lone assistant.message is buffered, NOT graduated
+      // to a bubble immediately.
       mockSessions[0]._emit('assistant.message', { data: { content: 'Full response' } });
-      expect(spy).toHaveBeenCalledWith(sessionId, { content: 'Full response' });
+      expect(msgSpy).not.toHaveBeenCalled();
+      // At idle it flushes as the single conclusion bubble.
+      mockSessions[0]._emit('session.idle', {});
+      expect(msgSpy).toHaveBeenCalledWith(sessionId, { content: 'Full response' });
+      expect(narrationSpy).not.toHaveBeenCalled();
+    });
+
+    it('flushes buffered prose as onNarration when a tool follows', async () => {
+      const msgSpy = vi.fn();
+      const narrationSpy = vi.fn();
+      adapter.onMessage = msgSpy;
+      adapter.onNarration = narrationSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+      // Prose followed by a tool → the prose was narration (draft/status),
+      // not the conclusion, so it must NOT become a permanent bubble.
+      mockSessions[0]._emit('assistant.message', { data: { content: "I'll read the file." } });
+      mockSessions[0]._emit('tool.execution_start', {
+        data: { toolName: 'readFile', args: { path: 'foo.ts' } },
+      });
+      expect(narrationSpy).toHaveBeenCalledWith(sessionId, { content: "I'll read the file." });
+      expect(msgSpy).not.toHaveBeenCalled();
+      // A trailing conclusion after the tool still graduates at idle.
+      mockSessions[0]._emit('assistant.message', { data: { content: 'Done.' } });
+      mockSessions[0]._emit('session.idle', {});
+      expect(msgSpy).toHaveBeenCalledWith(sessionId, { content: 'Done.' });
     });
 
     it('wires tool.execution_start → onToolStart', async () => {

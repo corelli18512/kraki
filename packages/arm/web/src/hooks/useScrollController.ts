@@ -10,7 +10,6 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import type { RefObject } from 'react';
-import type { GroupedMessages } from './useTurns';
 import type { ChatMessage } from '../types/store';
 import { messageProvider } from '../lib/message-provider';
 import { createLogger } from '../lib/logger';
@@ -27,27 +26,25 @@ function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
 }
 
-function getLastSeq(grouped: GroupedMessages[]): number {
-  const last = grouped[grouped.length - 1];
-  if (!last) return 0;
-  if (last.type === 'standalone') return getSeq(last.message);
-  const deepest = last.turn.finalMessage ?? last.turn.thinkingMessages.at(-1);
-  return deepest ? getSeq(deepest) : 0;
+function getLastSeq(spine: ChatMessage[]): number {
+  const last = spine[spine.length - 1];
+  return last ? getSeq(last) : 0;
 }
 
-function lastGroupIsFromUser(grouped: GroupedMessages[]): boolean {
-  const last = grouped[grouped.length - 1];
-  return !!last && last.type === 'standalone' && (
-    last.message.type === 'user_message' ||
-    last.message.type === 'pending_input' ||
-    last.message.type === 'send_input' ||
-    last.message.type === 'answer'
+function lastIsFromUser(spine: ChatMessage[]): boolean {
+  const last = spine[spine.length - 1];
+  return !!last && (
+    last.type === 'user_message' ||
+    last.type === 'pending_input' ||
+    last.type === 'send_input' ||
+    last.type === 'answer'
   );
 }
 
-function lastGroupHasFinal(grouped: GroupedMessages[]): boolean {
-  const last = grouped[grouped.length - 1];
-  return !!(last?.type === 'turn' && last.turn.finalMessage);
+/** Whether the last spine bubble is a concluded agent_message. */
+function lastHasFinal(spine: ChatMessage[]): boolean {
+  const last = spine[spine.length - 1];
+  return !!last && last.type === 'agent_message';
 }
 
 /** Try to scroll a target element to the top of the container with 12px breathing room.
@@ -133,7 +130,7 @@ export interface ScrollController {
 
 export function useScrollController(
   scrollRef: RefObject<HTMLDivElement | null>,
-  grouped: GroupedMessages[],
+  spine: ChatMessage[],
   streaming: string | undefined,
   sessionId: string | undefined,
   sessionIdle: boolean,
@@ -172,7 +169,7 @@ export function useScrollController(
     // Only use unread entry path when messages are actually loaded AND store
     // reports unreads. Before session_list arrives, messages are empty and
     // storeUnread may be stale from localStorage — skip the unread path.
-    c.entryHadUnread = storeUnread > 0 && grouped.length > 0;
+    c.entryHadUnread = storeUnread > 0 && spine.length > 0;
   }
 
   // ── Prepend detection (inline, before effects) ────────
@@ -199,13 +196,13 @@ export function useScrollController(
 
     // ── Shared computations ─────────────────────────────
 
-    const curLastSeq = getLastSeq(grouped);
+    const curLastSeq = getLastSeq(spine);
     const curStreamLen = streaming?.length ?? 0;
-    const curHasFinal = lastGroupHasFinal(grouped);
-    const isFromUser = lastGroupIsFromUser(grouped);
+    const curHasFinal = lastHasFinal(spine);
+    const isFromUser = lastIsFromUser(spine);
 
     const contentChanged =
-      grouped.length > c.prevGroupLen ||
+      spine.length > c.prevGroupLen ||
       curLastSeq > c.prevLastSeq ||
       curStreamLen > c.prevStreamLen ||
       (curHasFinal && !c.prevHadFinal);
@@ -272,13 +269,13 @@ export function useScrollController(
   useEffect(() => {
     const c = ctx.current;
 
-    const curLastSeq = getLastSeq(grouped);
-    const curHasFinal = lastGroupHasFinal(grouped);
-    const isFromUser = lastGroupIsFromUser(grouped);
+    const curLastSeq = getLastSeq(spine);
+    const curHasFinal = lastHasFinal(spine);
+    const isFromUser = lastIsFromUser(spine);
 
-    const hasBubbleAtEnd = grouped.length > 0 && (
-      grouped[grouped.length - 1].type === 'standalone' || curHasFinal
-    );
+    // Every spine entry renders as a bubble (or a lifecycle marker); the last
+    // entry is always "the bubble at the end".
+    const hasBubbleAtEnd = spine.length > 0;
     const newBubbleAtEnd = hasBubbleAtEnd && (
       curLastSeq > c.prevLastSeq ||
       (curHasFinal && !c.prevHadFinal)
@@ -299,11 +296,11 @@ export function useScrollController(
 
     // Save prev* values here (not in Effect 2) so both effects
     // see the same "current vs previous" comparison per render.
-    c.prevGroupLen = grouped.length;
+    c.prevGroupLen = spine.length;
     c.prevLastSeq = curLastSeq;
     c.prevHadFinal = curHasFinal;
     c.prevStreamLen = streaming?.length ?? 0;
-  }, [grouped, streaming, sessionIdle]);
+  }, [spine, streaming, sessionIdle]);
 
   // ── Effect 4: Auto gap-load when content fits viewport ─
   // When all loaded messages fit on screen and older messages exist,
@@ -314,14 +311,14 @@ export function useScrollController(
     const el = scrollRef.current;
     if (!el || !sessionId || firstSeq <= 1) return;
     if (el.scrollHeight > el.clientHeight) return;
-    if (grouped.length === 0) return;
+    if (spine.length === 0) return;
     if (messageProvider.isLoading(sessionId)) return;
 
     const toSeq = firstSeq - 1;
     const fromSeq = Math.max(1, toSeq - 99);
     logger.info('scroll: auto gap-load (content fits)', { sessionId, fromSeq, toSeq });
     messageProvider.fetchRange(sessionId, fromSeq, toSeq);
-  }, [sessionId, firstSeq, grouped.length]);
+  }, [sessionId, firstSeq, spine.length]);
 
   // ── handleScroll (user gesture) ───────────────────────
 

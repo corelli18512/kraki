@@ -69,6 +69,13 @@ export interface ErrorEvent {
   message: string;
 }
 
+/** A Kraki-originated system notice (not the agent's words). See
+ *  protocol `SystemMessage`. First use: `kind: 'no_reply'`. */
+export interface SystemMessageEvent {
+  kind: string;
+  content?: string;
+}
+
 // ── Session configuration ───────────────────────────────
 
 export interface CreateSessionConfig {
@@ -108,6 +115,19 @@ export abstract class AgentAdapter {
   onSessionCreated: ((event: SessionCreatedEvent) => void) | null = null;
   onMessage: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onMessageDelta: ((sessionId: string, event: MessageDeltaEvent) => void) | null = null;
+  /** Streaming chunk of a FINALIZE resummarize (finalize_reply.text) — the
+   *  agent's rewritten closing message, streamed at the end of the turn so the
+   *  draft bubble morphs seamlessly into the final reply. Distinct from
+   *  onMessageDelta (ongoing working narration): this replaces the frozen draft
+   *  in place. Adapters that don't stream a resummarize leave this null and
+   *  crystallize the whole finalize text via onMessage instead. */
+  onFinalizeDelta: ((sessionId: string, event: MessageDeltaEvent) => void) | null = null;
+  /** Called at message_end with the FINALIZED assistant narration prose (private
+   *  reasoning). The streaming delta (onMessageDelta) is ephemeral/live-only;
+   *  this finalized text is persisted to the TRACE axis (trace.jsonl) as an
+   *  `agent_narration` step, interleaved with tool steps, so a turn's steps can
+   *  be pulled later. NEVER a spine bubble (that is the final reply only). */
+  onNarration: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onPermissionRequest: ((sessionId: string, event: PermissionRequestEvent) => void) | null = null;
   /** Called when a permission is auto-resolved (e.g. by "Always Allow" for same tool kind, or cancelled on cleanup) */
   onPermissionAutoResolved: ((sessionId: string, permissionId: string, resolution: 'approved' | 'cancelled') => void) | null = null;
@@ -123,6 +143,10 @@ export abstract class AgentAdapter {
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
+  /** Called when Kraki itself needs to leave a spine notice (not the agent's
+   *  words) — e.g. `kind: 'no_reply'` when a turn ends without any reply.
+   *  Rendered as a system-marked bubble that still anchors the turn's Steps. */
+  onSystemMessage: ((sessionId: string, event: SystemMessageEvent) => void) | null = null;
   onSessionEnded: ((sessionId: string, event: SessionEndedEvent) => void) | null = null;
   /** Called when a session is evicted from the in-memory adapter map to free
    *  runtime memory. The session is NOT ended — its on-disk state is intact

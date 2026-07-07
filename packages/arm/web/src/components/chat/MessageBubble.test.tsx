@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { MessageBubble } from './MessageBubble';
+import { messageProvider } from '../../lib/message-provider';
+import { useStore } from '../../hooks/useStore';
 import type { ChatMessage } from '../../types/store';
 
 function renderMsg(message: ChatMessage) {
@@ -20,7 +22,28 @@ function makeMsg(type: string, payload: Record<string, unknown>, extra?: Record<
   } as ChatMessage;
 }
 
+/** Seed a concluded turn ending at `bubbleSeq` with a prior user_message and a
+ *  trace step, so the bubble's "Steps" affordance has something to open. */
+function seedConcludedTurn(bubbleSeq: number) {
+  useStore.getState().appendMessage('sess-1', {
+    type: 'user_message', deviceId: 'dev-1', seq: bubbleSeq - 2, timestamp: '', sessionId: 'sess-1',
+    payload: { content: 'go' },
+  } as ChatMessage);
+  useStore.getState().appendMessage('sess-1', {
+    type: 'tool_start', deviceId: 'dev-1', seq: bubbleSeq - 1, timestamp: '', sessionId: 'sess-1',
+    payload: { toolName: 'bash', headline: 'ls' },
+  } as ChatMessage);
+  useStore.getState().appendMessage('sess-1', {
+    type: 'agent_message', deviceId: 'dev-1', seq: bubbleSeq, timestamp: '', sessionId: 'sess-1',
+    payload: { content: 'done' },
+  } as ChatMessage);
+}
+
 describe('MessageBubble', () => {
+  beforeEach(() => {
+    useStore.getState().reset();
+  });
+
   describe('user_message', () => {
     it('renders user message content', () => {
       renderMsg(makeMsg('user_message', { content: 'Hello agent!' }));
@@ -49,6 +72,46 @@ describe('MessageBubble', () => {
       const { container } = renderMsg(makeMsg('agent_message', { content: 'test' }));
       // AgentAvatar renders an SVG icon instead of emoji
       expect(container.querySelector('svg')).toBeTruthy();
+    });
+
+    it('shows an Open steps affordance and pulls the turn trace on click', () => {
+      const spy = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+      seedConcludedTurn(5);
+      render(
+        <MemoryRouter>
+          <MessageBubble message={makeMsg('agent_message', { content: 'done' }, { seq: 5 })} sessionId="sess-1" />
+        </MemoryRouter>,
+      );
+      const btn = screen.getByRole('button', { name: 'Open steps' });
+      fireEvent.click(btn);
+      expect(spy).toHaveBeenCalledWith('sess-1', 5);
+      spy.mockRestore();
+    });
+  });
+
+  describe('system_message', () => {
+    it('renders the default no_reply label, marked as Kraki', () => {
+      renderMsg(makeMsg('system_message', { kind: 'no_reply' }));
+      expect(screen.getByText('The agent ended this turn without a reply.')).toBeInTheDocument();
+      expect(screen.getByText('Kraki')).toBeInTheDocument();
+    });
+
+    it('renders custom content when provided', () => {
+      renderMsg(makeMsg('system_message', { kind: 'no_reply', content: 'Nothing to report.' }));
+      expect(screen.getByText('Nothing to report.')).toBeInTheDocument();
+    });
+
+    it('exposes the Steps affordance so the silent turn history is reachable', () => {
+      const spy = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+      seedConcludedTurn(7);
+      render(
+        <MemoryRouter>
+          <MessageBubble message={makeMsg('system_message', { kind: 'no_reply' }, { seq: 7 })} sessionId="sess-1" />
+        </MemoryRouter>,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Open steps' }));
+      expect(spy).toHaveBeenCalledWith('sess-1', 7);
+      spy.mockRestore();
     });
   });
 

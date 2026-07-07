@@ -158,6 +158,8 @@ function createSessionManager(): Record<string, unknown> {
     getSessionList: vi.fn(() => []),
     getMessagesAfterSeq: vi.fn(() => []),
     appendMessage: vi.fn(() => 1),
+    appendTrace: vi.fn(),
+    readTurnTrace: vi.fn(() => ({ entries: [], complete: false, turnStartSeq: 0 })),
     setUsage: vi.fn(),
     getAllLinks: vi.fn(() => []),
     getLink: vi.fn(() => null),
@@ -894,17 +896,21 @@ describe('RelayClient tool message lazy-load shape', () => {
     return { adapter, sm, client, ws: sockets[0], store, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
 
+  const traceEntries = (sm: Record<string, unknown>, type: string) =>
+    (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => c[1] === type)
+      .map((c) => JSON.parse(c[2] as string));
+
   it('tool_start carries headline + argsRef (when args ≥ floor), no inline args', () => {
-    const { adapter, ws, cleanup } = buildClientWithStore();
+    const { adapter, sm, cleanup } = buildClientWithStore();
     try {
-      ws.sent.length = 0;
       const bigArgs = { command: 'echo ' + 'x'.repeat(400) };
       (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
         toolName: 'bash',
         args: bigArgs,
         toolCallId: 'tc1',
       });
-      const start = decodePulseSends(ws.sent).find(m => m.type === 'tool_start');
+      const start = traceEntries(sm, 'tool_start')[0];
       expect(start).toBeDefined();
       expect(start.payload.toolName).toBe('bash');
       expect(start.payload.headline).toMatch(/^\$ echo/);
@@ -916,15 +922,14 @@ describe('RelayClient tool message lazy-load shape', () => {
   });
 
   it('tool_start with tiny args has headline and inline args but NO argsRef (below floor)', () => {
-    const { adapter, ws, cleanup } = buildClientWithStore();
+    const { adapter, sm, cleanup } = buildClientWithStore();
     try {
-      ws.sent.length = 0;
       (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
         toolName: 'view',
         args: { path: '/foo.ts' },
         toolCallId: 'tc1',
       });
-      const start = decodePulseSends(ws.sent).find(m => m.type === 'tool_start');
+      const start = traceEntries(sm, 'tool_start')[0];
       expect(start.payload.headline).toBe('/foo.ts');
       expect(start.payload.argsRef).toBeUndefined();
       expect(start.payload.args).toEqual({ path: '/foo.ts' });
@@ -932,15 +937,14 @@ describe('RelayClient tool message lazy-load shape', () => {
   });
 
   it('tool_complete always ships resultRef (even tiny results) and no inline result', () => {
-    const { adapter, ws, cleanup } = buildClientWithStore();
+    const { adapter, sm, cleanup } = buildClientWithStore();
     try {
-      ws.sent.length = 0;
       (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
         toolName: 'bash',
         result: 'ok',
         toolCallId: 'tc1',
       });
-      const complete = decodePulseSends(ws.sent).find(m => m.type === 'tool_complete');
+      const complete = traceEntries(sm, 'tool_complete')[0];
       expect(complete.payload.toolName).toBe('bash');
       expect(complete.payload.result).toBeUndefined();
       expect(complete.payload.resultRef).toBeDefined();
@@ -949,7 +953,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('tool_complete pushes attachment_data chunks for resultRef after the message', () => {
+  it('tool_complete pushes attachment_data chunks for resultRef', () => {
     const { adapter, ws, cleanup } = buildClientWithStore();
     try {
       ws.sent.length = 0;
@@ -959,12 +963,14 @@ describe('RelayClient tool message lazy-load shape', () => {
         toolCallId: 'tc1',
       });
       const sent = decodePulseSends(ws.sent);
-      const completeIdx = sent.findIndex(m => m.type === 'tool_complete');
+      // The tool no longer broadcasts a tool_complete — it surfaces via
+      // card_action — but its result bytes still stream as attachment_data.
+      const cardIdx = sent.findIndex(m => m.type === 'card_action');
       const chunkIdx = sent.findIndex(m => m.type === 'attachment_data');
-      expect(completeIdx).toBeGreaterThanOrEqual(0);
+      expect(cardIdx).toBeGreaterThanOrEqual(0);
       expect(chunkIdx).toBeGreaterThanOrEqual(0);
-      // Chunks ride after the tool_complete in send order
-      expect(chunkIdx).toBeGreaterThan(completeIdx);
+      // Chunks ride after the card_action in send order
+      expect(chunkIdx).toBeGreaterThan(cardIdx);
       const chunk = sent[chunkIdx];
       expect(chunk.payload.mimeType).toBe('text/plain');
       expect(Buffer.from(chunk.payload.data, 'base64').toString('utf-8')).toBe('hello world');
@@ -972,15 +978,14 @@ describe('RelayClient tool message lazy-load shape', () => {
   });
 
   it('tool_complete with no result has no resultRef', () => {
-    const { adapter, ws, cleanup } = buildClientWithStore();
+    const { adapter, sm, cleanup } = buildClientWithStore();
     try {
-      ws.sent.length = 0;
       (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
         toolName: 'noop',
         result: '',
         toolCallId: 'tc1',
       });
-      const complete = decodePulseSends(ws.sent).find(m => m.type === 'tool_complete');
+      const complete = traceEntries(sm, 'tool_complete')[0];
       expect(complete.payload.resultRef).toBeUndefined();
     } finally { cleanup(); }
   });
@@ -1015,6 +1020,119 @@ describe('RelayClient tool message lazy-load shape', () => {
       expect(c.lastArgsRefByToolCallId.size).toBe(0);
       expect(c.sessionToolCallIds.has('sess_1')).toBe(false);
       expect(c.broadcastedAttachmentIds.has('sess_1')).toBe(false);
+    } finally { cleanup(); }
+  });
+});
+
+describe('RelayClient turn step counter (payload.steps hint)', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildCounterClient() {
+    const tmp = mkdtempSync(join(tmpdir(), 'kraki-steps-test-'));
+    const store = new AttachmentStore(tmp);
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, createKeyManager(), store);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+    })));
+    return { adapter, sm, client, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
+  }
+
+  // Read the `payload.steps` stamped on the Nth agent_message/system_message
+  // that flowed through appendMessage.
+  const bubbleSteps = (sm: Record<string, unknown>, type: string) =>
+    (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => c[0] === 'sess_1' && c[1] === type)
+      .map((c) => JSON.parse(c[2] as string).payload.steps);
+
+  const toolStart = (adapter: Record<string, unknown>, id: string) =>
+    (adapter.onToolStart as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+      toolName: 'bash', args: { command: 'echo ' + id }, toolCallId: id,
+    });
+  const narrate = (adapter: Record<string, unknown>, content: string) =>
+    (adapter.onNarration as ((sid: string, e: { content: string }) => void))('sess_1', { content });
+  const conclude = (adapter: Record<string, unknown>, content: string) =>
+    (adapter.onMessage as ((sid: string, e: { content: string }) => void))('sess_1', { content });
+  const userMsg = (client: RelayClient) =>
+    (client as unknown as { send: (m: unknown) => void }).send({
+      type: 'user_message', sessionId: 'sess_1', payload: { content: 'go' },
+    });
+
+  it('stamps the running tool_start + agent_narration count on the concluding bubble', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');   // step 1
+      narrate(adapter, 'thinking'); // step 2
+      toolStart(adapter, 'tc2');   // step 3
+      conclude(adapter, 'done');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([3]);
+    } finally { cleanup(); }
+  });
+
+  it('does NOT count tool_complete (merges into its tool_start chip)', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      (adapter.onToolComplete as ((sid: string, e: Record<string, unknown>) => void))('sess_1', {
+        toolName: 'bash', result: 'ok', toolCallId: 'tc1',
+      });
+      conclude(adapter, 'done');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1]);
+    } finally { cleanup(); }
+  });
+
+  it('resets the counter on each user_message (new turn)', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      conclude(adapter, 'turn 1');
+      userMsg(client);            // reset
+      narrate(adapter, 'thinking');
+      conclude(adapter, 'turn 2');
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1, 1]);
+    } finally { cleanup(); }
+  });
+
+  it('gives each bubble of a multi-bubble turn the cumulative count', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      conclude(adapter, 'first');  // steps=1
+      toolStart(adapter, 'tc2');
+      narrate(adapter, 'more');
+      conclude(adapter, 'second'); // steps=3 (cumulative within the turn)
+      expect(bubbleSteps(sm, 'agent_message')).toEqual([1, 3]);
+    } finally { cleanup(); }
+  });
+
+  it('stamps a system_message (no_reply) bubble too', () => {
+    const { adapter, sm, client, cleanup } = buildCounterClient();
+    try {
+      userMsg(client);
+      toolStart(adapter, 'tc1');
+      (adapter.onSystemMessage as ((sid: string, e: { kind: string; content?: string }) => void))(
+        'sess_1', { kind: 'no_reply' });
+      expect(bubbleSteps(sm, 'system_message')).toEqual([1]);
     } finally { cleanup(); }
   });
 });
@@ -1059,7 +1177,7 @@ describe('RelayClient delta debounce', () => {
     return { adapter, sm, client };
   }
 
-  it('coalesces a burst of agent_message_delta into one merged send after the debounce window', () => {
+  it('coalesces a burst of card text deltas into one merged send after the debounce window', () => {
     const { adapter } = connectClient();
     const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
 
@@ -1079,7 +1197,7 @@ describe('RelayClient delta debounce', () => {
     expect(deltas[0].sessionId).toBe('s1');
   });
 
-  it('flushes pending deltas before a non-delta message for the same session', () => {
+  it('flushes pending card deltas before a non-card message for the same session', () => {
     const { adapter } = connectClient();
     const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
     const onMessage = adapter.onMessage as (sid: string, e: { content: string }) => void;
@@ -1130,8 +1248,7 @@ describe('RelayClient delta debounce', () => {
     expect(c.deltaBuffers.size).toBe(0);
     // No socket traffic for the cleared delta after timer would have fired.
     vi.advanceTimersByTime(50);
-    const deltasAfter = sockets[0].sent
-      .map(s => JSON.parse(s))
+    const deltasAfter = decodePulseSends(sockets[0].sent)
       .filter(m => m.type === 'agent_message_delta');
     expect(deltasAfter).toHaveLength(0);
   });
@@ -1246,7 +1363,28 @@ describe('RelayClient handleSessionMessagesRange', () => {
       return found;
     }
 
-    return { adapter, sm, client, ws, sendRangeRequest, lastRangeBatch };
+    /** Inject a `request_turn_trace` from the consumer. */
+    function sendTurnTraceRequest(sessionId: string, bubbleSeq: number): void {
+      ws.sent.length = 0;
+      const inner = JSON.stringify({
+        type: 'request_turn_trace',
+        deviceId: 'consumer-dev',
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        payload: { sessionId, bubbleSeq },
+      });
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'unicast', to: 'tentacle-dev', blob: inner, keys: {},
+      })));
+    }
+
+    /** Find the single turn_trace_batch reply produced by the last request. */
+    function lastTraceBatch(): { payload: { sessionId: string; bubbleSeq: number; entries: unknown[]; complete: boolean } } | undefined {
+      const found = decodePulseSends(ws.sent).find((m) => m.type === 'turn_trace_batch');
+      return found as { payload: { sessionId: string; bubbleSeq: number; entries: unknown[]; complete: boolean } } | undefined;
+    }
+
+    return { adapter, sm, client, ws, sendRangeRequest, lastRangeBatch, sendTurnTraceRequest, lastTraceBatch };
   }
 
   it('returns the requested inclusive seq range', () => {
@@ -1441,5 +1579,240 @@ describe('RelayClient handleSessionMessagesRange', () => {
     expect(smMock.getMessagesAfterSeq).toHaveBeenCalledWith('s1', 4);
     const batch = lastRangeBatch()!;
     expect(batch.payload.messages.map(m => m.seq)).toEqual([5, 6, 7]);
+  });
+
+  // ── request_turn_trace → turn_trace_batch ──────────────
+
+  it('replies to request_turn_trace with the turn\'s trace entries and complete flag', () => {
+    const { sm, sendTurnTraceRequest, lastTraceBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+    const traceEntries = [
+      { type: 'tool_start', sessionId: 's1', payload: { toolName: 'read_file', toolCallId: 'tc1' } },
+      { type: 'tool_complete', sessionId: 's1', payload: { toolName: 'read_file', toolCallId: 'tc1' } },
+    ];
+    smMock.readTurnTrace.mockReturnValue({ entries: traceEntries, complete: true, turnStartSeq: 3 });
+
+    sendTurnTraceRequest('s1', 42);
+    const batch = lastTraceBatch();
+
+    expect(smMock.readTurnTrace).toHaveBeenCalledWith('s1', 42);
+    expect(batch).toBeDefined();
+    expect(batch!.payload.sessionId).toBe('s1');
+    expect(batch!.payload.bubbleSeq).toBe(42);
+    expect(batch!.payload.entries).toEqual(traceEntries);
+    expect(batch!.payload.complete).toBe(true);
+  });
+
+  it('floors a fractional bubbleSeq before reading the trace', () => {
+    const { sm, sendTurnTraceRequest, lastTraceBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', lastSeq: 100 });
+
+    sendTurnTraceRequest('s1', 42.9);
+    lastTraceBatch();
+
+    expect(smMock.readTurnTrace).toHaveBeenCalledWith('s1', 42);
+  });
+
+  it('returns an empty trace batch for an unknown session', () => {
+    const { sm, sendTurnTraceRequest, lastTraceBatch } = connectWithConsumer();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue(null);
+
+    sendTurnTraceRequest('missing', 5);
+    const batch = lastTraceBatch()!;
+
+    expect(smMock.readTurnTrace).not.toHaveBeenCalled();
+    expect(batch.payload.entries).toHaveLength(0);
+    expect(batch.payload.complete).toBe(false);
+  });
+});
+
+describe('RelayClient trace mirroring (off-spine)', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildClient() {
+    const tmp = mkdtempSync(join(tmpdir(), 'kraki-trace-test-'));
+    const store = new AttachmentStore(tmp);
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000',
+      authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' },
+      reconnectDelay: 10,
+    }, createKeyManager(), store);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    // Register a consumer device so `consumerKeys` is populated — otherwise
+    // send() has no recipients and queues messages instead of broadcasting.
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+    })));
+    return { adapter, sm, ws: sockets[0], cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
+  }
+
+  it('mirrors tool_start/tool_complete to appendTrace (off-spine), broadcasts card_action not raw tool events', () => {
+    const { adapter, sm, ws, cleanup } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      ws.sent.length = 0;
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'view', args: { path: '/foo.ts' }, toolCallId: 'tc1',
+      });
+      (adapter.onToolComplete as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'view', result: 'ok', toolCallId: 'tc1',
+      });
+
+      // Off-spine: never persisted via appendMessage…
+      const appendMessageTypes = smMock.appendMessage.mock.calls.map(c => c[1]);
+      expect(appendMessageTypes).not.toContain('tool_start');
+      expect(appendMessageTypes).not.toContain('tool_complete');
+      // …mirrored to trace instead (for the lazy "Steps" history).
+      const traceTypes = smMock.appendTrace.mock.calls.map(c => c[1]);
+      expect(traceTypes).toEqual(['tool_start', 'tool_complete']);
+      // …and the raw tool events are NOT broadcast live — the server-owned card
+      // action carries them instead.
+      const broadcastTypes = decodePulseSends(ws.sent).map(m => m.type);
+      expect(broadcastTypes).not.toContain('tool_start');
+      expect(broadcastTypes).not.toContain('tool_complete');
+      expect(broadcastTypes).toContain('card_action');
+      // Final card_action reflects the completed tool.
+      const actions = decodePulseSends(ws.sent).filter(m => m.type === 'card_action');
+      const last = actions[actions.length - 1].payload.action;
+      expect(last.type).toBe('tool_complete');
+      expect(last.payload.toolCallId).toBe('tc1');
+      expect(last.payload.success).not.toBe(false);
+    } finally { cleanup(); }
+  });
+});
+
+describe('RelayClient pending-question digest', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function buildClient() {
+    const adapter = createAdapter();
+    const sm = {
+      ...createSessionManager(),
+      getSessionList: vi.fn(() => [{
+        id: 'sess_1', agent: 'pi', state: 'active', mode: 'execute',
+        lastSeq: 1, readSeq: 0, messageCount: 1, createdAt: '2024-01-01T00:00:00Z',
+      }]),
+    };
+    const client = new RelayClient(
+      adapter as unknown as Parameters<typeof RelayClient>[0],
+      sm as unknown as Parameters<typeof RelayClient>[1],
+      { relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10 },
+      createKeyManager() as unknown as Parameters<typeof RelayClient>[3],
+    );
+    client.connect();
+    const ws = sockets[0];
+    ws.emit('open');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    let seq = 100;
+    const askQ = (id: string) => (adapter.onQuestionRequest as (sid: string, e: Record<string, unknown>) => void)('sess_1', { id, question: `Q ${id}`, choices: ['a', 'b'] });
+    const answerQ = (id: string) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: ++seq,
+      timestamp: new Date().toISOString(), payload: { questionId: id, answer: 'a' },
+    })));
+    // Re-trigger a session_list unicast via device_joined (fresh app id + relaySeq
+    // each call to bypass inbound dedup) and read the digest out of the envelope blob.
+    const digest = () => {
+      ws.sent.length = 0;
+      const appId = `app-${++seq}`;
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'device_joined', relaySeq: seq,
+        device: { id: appId, name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+      })));
+      for (const inner of decodePulseSends(ws.sent)) {
+        if (inner.type === 'session_list') {
+          return (inner.payload as { sessions: Record<string, unknown>[] }).sessions[0];
+        }
+      }
+      return undefined;
+    };
+    const preview = () => digest()?.preview as { type: string; text: string } | undefined;
+    return { adapter, sm, ws, askQ, answerQ, preview };
+  }
+
+  it('overrides the digest preview with the open question while it is pending', () => {
+    const { askQ, preview } = buildClient();
+    expect(preview()?.type).not.toBe('question');
+    askQ('q1');
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q1' });
+  });
+
+  it('keeps a question preview while any question stays open (newest wins)', () => {
+    const { askQ, preview } = buildClient();
+    askQ('q1');
+    askQ('q2');
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q2' });
+  });
+
+  it('reverts the preview as questions are answered (answering one leaves the rest)', () => {
+    const { askQ, answerQ, preview } = buildClient();
+    askQ('q1');
+    askQ('q2');
+    answerQ('q2');
+    expect(preview()).toMatchObject({ type: 'question', text: 'Q q1' });
+    answerQ('q1');
+    expect(preview()?.type).not.toBe('question');
+  });
+
+  it('clears the question preview on idle', () => {
+    const { adapter, askQ, preview } = buildClient();
+    askQ('q1');
+    askQ('q2');
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(preview()?.type).not.toBe('question');
+  });
+
+  it('reverts the preview when a question is auto-resolved (cancelled)', () => {
+    const { adapter, askQ, preview } = buildClient();
+    askQ('q1');
+    (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
+    expect(preview()?.type).not.toBe('question');
+  });
+
+  it('pushes the active card snapshot to a freshly-joined device', () => {
+    const { askQ, ws } = buildClient();
+    askQ('q1');
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', relaySeq: 9001,
+      device: { id: 'app-fresh', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+    })));
+    const inners = decodePulseSends(ws.sent);
+    const action = inners.find((m) => m.type === 'card_action');
+    expect(action).toBeDefined();
+    expect(action.sessionId).toBe('sess_1');
+    expect(action.payload.action).toMatchObject({ type: 'question', payload: { id: 'q1' } });
+    expect(inners.some((m) => m.type === 'agent_message_delta' && m.sessionId === 'sess_1')).toBe(true);
+  });
+
+  it('does not push a card snapshot for sessions with no active card', () => {
+    const { ws } = buildClient();
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', relaySeq: 9002,
+      device: { id: 'app-fresh-2', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+    })));
+    const inners = decodePulseSends(ws.sent);
+    expect(inners.some((m) => m.type === 'card_action' || m.type === 'agent_message_delta')).toBe(false);
   });
 });

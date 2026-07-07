@@ -10,7 +10,6 @@ import { DeviceList } from '../components/sessions/DeviceList';
 import { NewSessionDialog } from '../components/sessions/NewSessionDialog';
 import type { ChatMessage } from '../types/store';
 import { EmptyState } from '../components/common/EmptyState';
-import { ActionQueue } from '../components/actions/ActionQueue';
 import { StreamingText } from '../components/chat/StreamingText';
 import { ToolActivity } from '../components/chat/ToolActivity';
 import { ProfileBar } from '../components/layout/ProfileBar';
@@ -268,66 +267,6 @@ describe('EmptyState', () => {
     expect(screen.getByText('◈')).toBeInTheDocument();
     expect(screen.getByText('No data')).toBeInTheDocument();
     expect(screen.getByText('Nothing to show')).toBeInTheDocument();
-  });
-});
-
-// ============================================================
-// ActionQueue
-// ============================================================
-
-describe('ActionQueue', () => {
-  it('renders nothing when no pending actions', () => {
-    const { container } = renderWithRouter(<ActionQueue />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('shows count for single pending permission', () => {
-    useStore.getState().addPermission({
-      id: 'p1', sessionId: 's1', toolName: 'shell',
-      args: { command: 'ls' }, description: 'List', timestamp: '',
-    });
-    renderWithRouter(<ActionQueue />);
-    expect(screen.getByText('1')).toBeInTheDocument();
-    expect(screen.getByText('1 action pending')).toBeInTheDocument();
-  });
-
-  it('shows plural count for multiple actions', () => {
-    useStore.getState().addPermission({
-      id: 'p1', sessionId: 's1', toolName: 'shell',
-      args: { command: 'ls' }, description: 'List', timestamp: '',
-    });
-    useStore.getState().addQuestion({
-      id: 'q1', sessionId: 's1', question: 'Which?', timestamp: '',
-    });
-    renderWithRouter(<ActionQueue />);
-    expect(screen.getByText('2')).toBeInTheDocument();
-    expect(screen.getByText(/2 actions pending/)).toBeInTheDocument();
-  });
-
-  it('shows multi-session indicator', () => {
-    useStore.getState().addPermission({
-      id: 'p1', sessionId: 's1', toolName: 'shell',
-      args: {}, description: '', timestamp: '',
-    });
-    useStore.getState().addPermission({
-      id: 'p2', sessionId: 's2', toolName: 'shell',
-      args: {}, description: '', timestamp: '',
-    });
-    renderWithRouter(<ActionQueue />);
-    expect(screen.getByText(/across 2 sessions/)).toBeInTheDocument();
-  });
-
-  it('shows View button for single session and navigates on click', async () => {
-    const user = userEvent.setup();
-    useStore.getState().addPermission({
-      id: 'p1', sessionId: 's1', toolName: 'shell',
-      args: {}, description: '', timestamp: '',
-    });
-    renderWithRouter(<ActionQueue />);
-    const viewBtn = screen.getByText('View →');
-    expect(viewBtn).toBeInTheDocument();
-    await user.click(viewBtn);
-    // Navigation triggered (doesn't throw)
   });
 });
 

@@ -43,6 +43,19 @@ export interface LoggedMessage {
   ts: string;
 }
 
+/**
+ * One line in a session's `trace.jsonl` — a tool_start/tool_complete broadcast
+ * mirrored off the spine. Tagged with the turn's start seq (the user_message
+ * that began the turn) so a turn's steps can be pulled by its bubble seq.
+ * `payload` is the full enriched wire message (same JSON that was broadcast).
+ */
+export interface TraceLine {
+  turnStartSeq: number;
+  type: string;
+  payload: string;
+  ts: string;
+}
+
 // ── Types ───────────────────────────────────────────────
 
 export interface SessionContext {
@@ -84,6 +97,11 @@ export interface SessionMeta {
   inlineImagesStripped?: boolean;
   /** Seq numbers of idle messages — used for turn-aligned pagination. */
   idleSeqs?: number[];
+  /** Spine seq of the user_message that began the current turn. Trace
+   *  entries (tool_start/tool_complete) are tagged with this so a turn's
+   *  steps can be pulled by its concluding bubble seq. Mid-turn spine
+   *  messages (permission/question) do NOT move it. */
+  currentTurnStartSeq?: number;
 }
 
 export interface RunRecord {
@@ -682,6 +700,12 @@ export class SessionManager {
       meta.idleSeqs.push(seq);
     }
 
+    // A user_message begins a new turn — remember its seq so trace entries
+    // recorded until the next user_message can be tagged to this turn.
+    if (type === 'user_message') {
+      meta.currentTurnStartSeq = seq;
+    }
+
     meta.lastSeq = seq;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
@@ -715,6 +739,9 @@ export class SessionManager {
       if (messages[i].type === 'idle') {
         if (!meta.idleSeqs) meta.idleSeqs = [];
         meta.idleSeqs.push(seq - messages.length + i + 1);
+      }
+      if (messages[i].type === 'user_message') {
+        meta.currentTurnStartSeq = seq - messages.length + i + 1;
       }
     }
 
@@ -753,6 +780,75 @@ export class SessionManager {
       }
     }
     return messages;
+  }
+
+  // ── Turn trace (TRACE axis) ─────────────────────────────
+
+  /**
+   * Mirror a tool_start/tool_complete broadcast to the session's `trace.jsonl`.
+   * These are NOT on the spine (no per-session seq); they are tagged with the
+   * current turn's start seq so {@link readTurnTrace} can slice them per turn.
+   */
+  appendTrace(sessionId: string, type: string, payload: string): void {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return;
+    const entry: TraceLine = {
+      turnStartSeq: meta.currentTurnStartSeq ?? 0,
+      type,
+      payload,
+      ts: new Date().toISOString(),
+    };
+    const tracePath = join(this.sessionDir(sessionId), 'trace.jsonl');
+    appendFileSync(tracePath, JSON.stringify(entry) + '\n', 'utf8');
+  }
+
+  /**
+   * Read one turn's tool trace, keyed by the concluding bubble's spine seq.
+   *
+   * The turn is resolved as "the greatest user_message seq <= bubbleSeq" —
+   * the user_message that began the turn — and all trace entries tagged with
+   * that start seq are returned in recorded order. `complete` is true once the
+   * turn has gone idle (an idle exists at/after the bubble); while still
+   * running it is false and the live client keeps appending from broadcasts.
+   */
+  readTurnTrace(sessionId: string, bubbleSeq: number): { entries: unknown[]; complete: boolean; turnStartSeq: number } {
+    const meta = this.readMeta(sessionId);
+    if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
+
+    // Resolve the turn start: greatest user_message seq <= bubbleSeq.
+    let turnStartSeq = 0;
+    for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
+      if (m.type === 'user_message' && m.seq <= bubbleSeq && m.seq > turnStartSeq) {
+        turnStartSeq = m.seq;
+      }
+    }
+
+    const complete = (meta.idleSeqs ?? []).some(s => s >= bubbleSeq);
+
+    const tracePath = join(this.sessionDir(sessionId), 'trace.jsonl');
+    if (turnStartSeq === 0 || !existsSync(tracePath)) {
+      return { entries: [], complete, turnStartSeq };
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(tracePath, 'utf8');
+    } catch {
+      return { entries: [], complete, turnStartSeq };
+    }
+
+    const entries: unknown[] = [];
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const t = JSON.parse(line) as TraceLine;
+        if (t.turnStartSeq !== turnStartSeq) continue;
+        entries.push(JSON.parse(t.payload));
+      } catch {
+        // Skip corrupted lines
+      }
+    }
+    return { entries, complete, turnStartSeq };
   }
 
   /**

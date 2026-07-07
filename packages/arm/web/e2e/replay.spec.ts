@@ -197,4 +197,43 @@ test.describe('Replay and chat history', () => {
     const chat = chatArea(page);
     await expect(chat.getByText('bash').or(chat.getByText('ls -la'))).toBeVisible({ timeout: 5000 });
   });
+
+  test('off-spine turn trace is injected and rendered (three-axis TRACE pull)', async ({ page }) => {
+    const ws = await setupAndOpenSession(page, server);
+
+    // Simulate a CONCLUDED turn whose tool steps are NOT on the spine — i.e.
+    // reloaded from history, where tool_start/tool_complete were never
+    // broadcast (they live in the tentacle's trace.jsonl). Use a known seq
+    // base so we can address the concluding bubble in the trace reply.
+    server.resetSeq(200);
+    server.sendMessage(ws, { type: 'user_message', sessionId: SESSION_ID, payload: { content: 'run the build' } });
+    server.sendMessage(ws, { type: 'agent_message', sessionId: SESSION_ID, payload: { content: 'Build finished' } });
+    const bubbleSeq = 201; // the agent_message's seq
+    server.sendMessage(ws, { type: 'idle', sessionId: SESSION_ID, payload: { reason: 'completed' } });
+
+    const chat = chatArea(page);
+    await expect(chat.getByText('Build finished')).toBeVisible({ timeout: 5000 });
+    // No ThinkingBox yet — the turn has no in-memory steps.
+    await expect(chat.getByText('compile.sh')).toHaveCount(0);
+
+    // Tentacle answers the ARM's `request_turn_trace` with the turn's tool
+    // trace (delivered here as an unsolicited batch — handleTurnTraceBatch
+    // injects it regardless, exercising the consume/injection path).
+    server.sendMessage(ws, {
+      type: 'turn_trace_batch',
+      sessionId: SESSION_ID,
+      payload: {
+        sessionId: SESSION_ID,
+        bubbleSeq,
+        complete: true,
+        entries: [
+          { type: 'tool_start', sessionId: SESSION_ID, seq: 9001, deviceId: DEVICE_ID, timestamp: new Date().toISOString(), payload: { toolCallId: 'tc-42', toolName: 'bash', headline: 'compile.sh', args: { command: './compile.sh' } } },
+          { type: 'tool_complete', sessionId: SESSION_ID, seq: 9002, deviceId: DEVICE_ID, timestamp: new Date().toISOString(), payload: { toolCallId: 'tc-42', toolName: 'bash', headline: 'compile.sh', result: 'ok' } },
+        ],
+      },
+    });
+
+    // The injected trace now surfaces as a ThinkingBox summary on the turn.
+    await expect(chat.getByText('compile.sh')).toBeVisible({ timeout: 5000 });
+  });
 });

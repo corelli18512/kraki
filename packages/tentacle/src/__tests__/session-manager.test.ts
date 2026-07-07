@@ -942,4 +942,139 @@ describe('SessionManager', () => {
       expect(JSON.parse(before).updatedAt).toBe(JSON.parse(after).updatedAt);
     });
   });
+
+  // ── Turn trace (TRACE axis) ────────────────────────────
+  //
+  // Under the three-axis model, tool_start/tool_complete no longer occupy a
+  // per-session spine seq. They are mirrored to trace.jsonl tagged with the
+  // seq of the user_message that began the turn (meta.currentTurnStartSeq),
+  // and pulled per-turn via readTurnTrace(bubbleSeq) where bubbleSeq is the
+  // concluding agent_message's spine seq.
+
+  describe('turn trace', () => {
+    // Helper: append a tool_start/tool_complete pair to the trace log.
+    const tool = (sm2: SessionManager, sid: string, toolCallId: string, toolName: string) => {
+      sm2.appendTrace(sid, 'tool_start', JSON.stringify({
+        type: 'tool_start', sessionId: sid, payload: { toolName, toolCallId, headline: toolName },
+      }));
+      sm2.appendTrace(sid, 'tool_complete', JSON.stringify({
+        type: 'tool_complete', sessionId: sid, payload: { toolName, toolCallId, headline: toolName },
+      }));
+    };
+
+    it('tracks currentTurnStartSeq on user_message', () => {
+      const { sessionId } = sm.createSession('copilot');
+      const u1 = sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'a' } }));
+      expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u1);
+      // A mid-turn permission (also persistent) must NOT move the turn start.
+      sm.appendMessage(sessionId, 'permission', JSON.stringify({ type: 'permission', payload: { id: 'p1' } }));
+      expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u1);
+      // Next user_message starts a new turn.
+      const u2 = sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'b' } }));
+      expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u2);
+    });
+
+    it('does NOT assign a spine seq to trace entries (messages.jsonl unchanged)', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'tc1', 'read_file');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: { content: 'done' } }));
+      // Spine has only user_message(1) and agent_message(2) — tools didn't consume seqs.
+      const spine = sm.getMessagesAfterSeq(sessionId, 0);
+      expect(spine.map(m => m.type)).toEqual(['user_message', 'agent_message']);
+      expect(bubble).toBe(2);
+      expect(sm.getMeta(sessionId)!.lastSeq).toBe(2);
+    });
+
+    it('returns a single turn\'s tools keyed by concluding bubble seq', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'tc1', 'read_file');
+      tool(sm, sessionId, 'tc2', 'edit');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: { content: 'done' } }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+
+      const { entries, complete } = sm.readTurnTrace(sessionId, bubble);
+      expect(entries.map((e) => (e as { type: string }).type))
+        .toEqual(['tool_start', 'tool_complete', 'tool_start', 'tool_complete']);
+      expect(entries.map((e) => (e as { payload: { toolCallId: string } }).payload.toolCallId))
+        .toEqual(['tc1', 'tc1', 'tc2', 'tc2']);
+      expect(complete).toBe(true);
+    });
+
+    it('isolates tools across multiple turns', () => {
+      const { sessionId } = sm.createSession('copilot');
+      // Turn 1
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'a1', 'read_file');
+      const bubble1 = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+      // Turn 2
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'b1', 'grep');
+      tool(sm, sessionId, 'b2', 'edit');
+      const bubble2 = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+
+      expect(sm.readTurnTrace(sessionId, bubble1).entries.map((e) => (e as { payload: { toolCallId: string } }).payload.toolCallId))
+        .toEqual(['a1', 'a1']);
+      expect(sm.readTurnTrace(sessionId, bubble2).entries.map((e) => (e as { payload: { toolCallId: string } }).payload.toolCallId))
+        .toEqual(['b1', 'b1', 'b2', 'b2']);
+    });
+
+    it('groups tools that ran across a mid-turn permission into the same turn', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'before', 'read_file');
+      // Permission is a spine message mid-turn; it must not split the trace turn.
+      sm.appendMessage(sessionId, 'permission', JSON.stringify({ type: 'permission', payload: { id: 'p1' } }));
+      sm.appendMessage(sessionId, 'permission_resolved', JSON.stringify({ type: 'permission_resolved', payload: { permissionId: 'p1' } }));
+      tool(sm, sessionId, 'after', 'edit');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+
+      expect(sm.readTurnTrace(sessionId, bubble).entries.map((e) => (e as { payload: { toolCallId: string } }).payload.toolCallId))
+        .toEqual(['before', 'before', 'after', 'after']);
+    });
+
+    it('reports complete=false while the turn is still running (no idle yet)', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'tc1', 'read_file');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      // No idle appended — turn hasn't concluded.
+      const { entries, complete } = sm.readTurnTrace(sessionId, bubble);
+      expect(entries).toHaveLength(2);
+      expect(complete).toBe(false);
+    });
+
+    it('returns empty for an unknown / out-of-range bubble seq', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'tc1', 'read_file');
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      const { entries } = sm.readTurnTrace(sessionId, 999);
+      // bubble 999 resolves to the latest user_message turn but with no idle;
+      // still, a session with no trace.jsonl at all returns empty cleanly.
+      expect(Array.isArray(entries)).toBe(true);
+    });
+
+    it('returns empty when the session has no trace log', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      expect(sm.readTurnTrace(sessionId, bubble).entries).toEqual([]);
+    });
+
+    it('persists trace across a SessionManager restart', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      tool(sm, sessionId, 'tc1', 'read_file');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+
+      const sm2 = new SessionManager(dir);
+      expect(sm2.readTurnTrace(sessionId, bubble).entries).toHaveLength(2);
+    });
+  });
 });

@@ -60,7 +60,10 @@ export interface SessionDigest {
   pinned?: boolean;
   /** Origin of this session. Absent for sessions created natively in Kraki. */
   source?: LocalSessionSource | 'imported';
-  /** Sidebar preview computed by tentacle from the last few messages. */
+  /** Sidebar preview computed by tentacle from the last few messages. An open
+   *  `ask_user` question overrides this with a `question`-typed entry (the
+   *  question no longer persists to the spine), letting a freshly reloaded arm
+   *  render the pending status for sessions it hasn't opened yet. */
   preview?: SessionPreviewDigest;
 }
 

@@ -1,6 +1,6 @@
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
-import type { PendingPermission } from '../../types/store';
+import type { CardActionState } from '@kraki/protocol';
 import { Lock } from 'lucide-react';
 
 function getArgsSummary(toolName: string, args: Record<string, unknown>): string {
@@ -24,11 +24,38 @@ function getArgsSummary(toolName: string, args: Record<string, unknown>): string
   }
 }
 
-export function PermissionInput({ permission }: { permission: PendingPermission }) {
-  const { id, sessionId, toolName, args, description } = permission;
+export function PermissionInput({ action, sessionId }: { action: Extract<CardActionState, { type: 'permission' }>; sessionId: string }) {
+  const { id, toolName, description, decision } = action.payload;
+  const args = (action.payload.args ?? {}) as Record<string, unknown>;
   const argsSummary = getArgsSummary(toolName, args);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss');
   const isWriteInDiscuss = sessionMode === 'discuss' && ['write_file', 'edit_file', 'create_file', 'write', 'edit', 'create'].includes(toolName);
+
+  // Resolved: read-only view showing the decision, no buttons.
+  if (decision) {
+    const label = decision === 'deny' ? 'Denied' : decision === 'always_allow' ? 'Always allowed' : 'Approved';
+    const denied = decision === 'deny';
+    return (
+      <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
+        <div className="mx-auto max-w-3xl">
+          <div className="flex items-start gap-2">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <div className="min-w-0">
+              <p className="text-sm text-text-primary">{description || `Run ${toolName}`}</p>
+              {argsSummary && (
+                <pre className="mt-1 max-h-20 overflow-auto rounded bg-surface-tertiary px-2 py-1 font-mono text-[11px] text-text-secondary">
+                  {argsSummary}
+                </pre>
+              )}
+              <p className={`mt-1.5 text-xs font-semibold ${denied ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                {denied ? '✗' : '✓'} {label}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">

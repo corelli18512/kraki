@@ -139,6 +139,12 @@ interface SessionEntry {
   consumerLoop: Promise<void>;
   /** Deferred config — used to lazily spawn query() on first sendMessage */
   deferredConfig?: CreateSessionConfig & { resume?: string; fork?: boolean };
+  /**
+   * Buffered assistant prose for the current turn (draft-bubble model).
+   * Accumulates text blocks; flushed as narration when a tool follows, or as
+   * the single conclusion bubble (onMessage) when the turn ends.
+   */
+  pendingText?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -701,6 +707,9 @@ export class ClaudeAdapter extends AgentAdapter {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
+    // Reset the draft-bubble prose buffer for the new turn.
+    entry.pendingText = '';
+
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
@@ -1056,6 +1065,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
 
       // Query completed normally
+      this.flushConclusion(sessionId);
       this.onIdle?.(sessionId);
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
@@ -1066,6 +1076,30 @@ export class ClaudeAdapter extends AgentAdapter {
       this.onError?.(sessionId, { message: getErrorMessage(err) });
       this.onSessionEnded?.(sessionId, { reason: 'error' });
     }
+  }
+
+  /**
+   * Flush buffered assistant prose as intermediate narration (draft/status,
+   * NOT a permanent spine bubble). Called when a tool follows the prose.
+   */
+  private flushNarration(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    const text = (entry.pendingText ?? '').trim();
+    entry.pendingText = '';
+    if (text) this.onNarration?.(sessionId, { content: text });
+  }
+
+  /**
+   * Flush buffered assistant prose as the turn's single conclusion bubble
+   * (onMessage → permanent spine bubble). Called at turn end.
+   */
+  private flushConclusion(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    const text = (entry.pendingText ?? '').trim();
+    entry.pendingText = '';
+    if (text) this.onMessage?.(sessionId, { content: text });
   }
 
   /**
@@ -1109,10 +1143,23 @@ export class ClaudeAdapter extends AgentAdapter {
         const betaMessage = assistantMsg.message;
         if (!betaMessage?.content) break;
 
+        const entry = this.sessions.get(sessionId);
         for (const block of betaMessage.content) {
           if (block.type === 'text' && (block as { text?: string }).text) {
-            this.onMessage?.(sessionId, { content: (block as { text: string }).text });
+            // Draft-bubble model: buffer prose instead of graduating each block
+            // to its own permanent bubble. Accumulate consecutive text blocks so
+            // multi-block answers aren't lost. Flushed as narration (if a tool
+            // follows) or as the single conclusion bubble (at turn end).
+            if (entry) {
+              const text = (block as { text: string }).text;
+              entry.pendingText = entry.pendingText ? `${entry.pendingText}\n${text}` : text;
+            } else {
+              // No session entry (shouldn't happen) — fall back to direct bubble.
+              this.onMessage?.(sessionId, { content: (block as { text: string }).text });
+            }
           } else if (block.type === 'tool_use') {
+            // A tool follows the buffered prose → that prose was narration.
+            this.flushNarration(sessionId);
             const toolBlock = block as { name: string; input?: Record<string, unknown>; id: string };
             const args = (toolBlock.input ?? {}) as Record<string, unknown>;
 
@@ -1182,6 +1229,9 @@ export class ClaudeAdapter extends AgentAdapter {
           this.onUsageUpdate?.(sessionId, updated);
         }
 
+        // Flush any buffered prose as the turn's single conclusion bubble
+        // before going idle (draft-bubble model).
+        this.flushConclusion(sessionId);
         this.onIdle?.(sessionId);
 
         // Poll for SDK-native title changes (the SDK auto-generates titles

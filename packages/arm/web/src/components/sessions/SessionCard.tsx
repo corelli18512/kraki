@@ -3,6 +3,7 @@ import { useState, useCallback } from 'react';
 import type { SessionSummary } from '@kraki/protocol';
 import { agentInfo, truncate, sessionTime } from '../../lib/format';
 import { useStore } from '../../hooks/useStore';
+import { getSessionStatus, countPendingQuestions } from '../../lib/session-status';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { wsClient } from '../../lib/ws-client';
 import { SwipeableCard } from './SwipeableCard';
@@ -38,6 +39,8 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
     : sessionPreview?.type === 'permission' ? 'permission' as const
     : undefined;
   const isDeviceOnline = device?.online ?? false;
+  const livePending = useStore((s) => countPendingQuestions(session.id, s.cards));
+  const status = getSessionStatus(session, livePending, sessionPreview?.type);
   const machineName = session.deviceName || device?.name;
 
   // Context menu (desktop right-click only, not mobile long-press)
@@ -121,11 +124,17 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
                 <span
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     !isDeviceOnline ? 'bg-slate-400'
-                    : session.state === 'active' ? 'bg-blue-400 animate-pulse'
+                    : status === 'pending' ? 'bg-amber-400 animate-pulse'
+                    : status === 'working' ? 'bg-blue-400 animate-pulse'
                     : 'bg-emerald-400'
                   }`}
                 />
                 <span className="text-[10px] text-text-muted">{machineName}</span>
+                {isDeviceOnline && status === 'pending' && (
+                  <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
+                    waiting{livePending > 1 ? ` ·${livePending}` : ''}
+                  </span>
+                )}
               </>
             )}
             {machineName && session.model && (

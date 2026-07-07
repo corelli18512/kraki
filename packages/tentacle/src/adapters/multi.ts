@@ -176,6 +176,8 @@ export class MultiAgentAdapter extends AgentAdapter {
           const { PiAdapter } = await import('./pi.js');
           const piPath = resolveCliPath('pi');
           if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); continue; }
+          // pi has no MCP; it only needs the attachment store to externalize
+          // image bytes from its show_image tool (krakiMcp is not applicable).
           adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
@@ -385,6 +387,8 @@ export class MultiAgentAdapter extends AgentAdapter {
     };
     adapter.onMessage = (sid, e) => this.onMessage?.(sid, e);
     adapter.onMessageDelta = (sid, e) => this.onMessageDelta?.(sid, e);
+    adapter.onFinalizeDelta = (sid, e) => this.onFinalizeDelta?.(sid, e);
+    adapter.onNarration = (sid, e) => this.onNarration?.(sid, e);
     adapter.onPermissionRequest = (sid, e) => this.onPermissionRequest?.(sid, e);
     adapter.onPermissionAutoResolved = (sid, pid, r) => this.onPermissionAutoResolved?.(sid, pid, r);
     adapter.onQuestionAutoResolved = (sid, qid) => this.onQuestionAutoResolved?.(sid, qid);
@@ -395,12 +399,17 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onIdle = (sid) => this.onIdle?.(sid);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);
+    adapter.onSystemMessage = (sid, e) => this.onSystemMessage?.(sid, e);
     adapter.onSessionEnded = (sid, e) => {
       this.sessionAgent.delete(sid);
       this.onSessionEnded?.(sid, e);
     };
     adapter.onSessionEvicted = (sid) => {
-      this.sessionAgent.delete(sid);
+      // Eviction frees the idle child process but the session persists on disk
+      // and can be lazily resumed by THIS adapter. Keep the agent mapping so
+      // later ops (fork/sendMessage/resume) route to the correct adapter rather
+      // than falling back to the first one. The mapping is dropped only on
+      // permanent end (onSessionEnded) or killSession.
       this.onSessionEvicted?.(sid);
     };
     adapter.onTitleChanged = (sid, t) => this.onTitleChanged?.(sid, t);

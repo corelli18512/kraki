@@ -131,30 +131,44 @@ wss.on('connection', (ws) => {
 
       case 'approve':
         logger.info(`Approved: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
-        send(ws, envelope('approve', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        send(ws, envelope('card_action', msg.sessionId as string, { action: null }));
         // Continue with tool complete
         setTimeout(() => {
-          send(ws, envelope('tool_complete', msg.sessionId as string, {
-            toolName: 'shell',
-            args: { command: 'echo "done"' },
-            result: 'done\n',
+          send(ws, envelope('card_action', msg.sessionId as string, {
+            action: {
+              type: 'tool_complete',
+              payload: {
+                toolCallId: 'tc-approved',
+                toolName: 'shell',
+                headline: 'echo "done"',
+                success: true,
+              },
+            },
           }));
         }, 1000);
         break;
 
       case 'deny':
         logger.info(`Denied: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
-        send(ws, envelope('deny', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        send(ws, envelope('card_action', msg.sessionId as string, { action: null }));
         break;
 
       case 'always_allow':
         logger.info(`Always allowed: ${(msg.payload as Record<string, unknown>)?.permissionId}`);
-        send(ws, envelope('always_allow', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        send(ws, envelope('card_action', msg.sessionId as string, { action: null }));
         break;
 
       case 'answer':
         logger.info(`Answer: ${(msg.payload as Record<string, unknown>)?.answer}`);
-        send(ws, envelope('answer', msg.sessionId as string, msg.payload as Record<string, unknown>, clientDeviceId));
+        send(ws, envelope('card_action', msg.sessionId as string, { action: null }));
+        break;
+
+      case 'request_card':
+        send(ws, envelope('agent_message_delta', (msg.payload as Record<string, unknown>)?.sessionId as string, {
+          content: 'Resuming current work…',
+          reset: true,
+        }));
+        send(ws, envelope('card_action', (msg.payload as Record<string, unknown>)?.sessionId as string, { action: null }));
         break;
 
       case 'kill_session':
@@ -260,9 +274,10 @@ function startSimulation(ws: WebSocket) {
       "Let me fix that now…",
     ];
     let delay = 0;
-    for (const chunk of chunks) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       setTimeout(() => {
-        send(ws, envelope('agent_message_delta', 'sess-1', { content: chunk }));
+        send(ws, envelope('agent_message_delta', 'sess-1', { content: chunk, reset: i === 0 }));
       }, delay);
       delay += 150 + Math.random() * 200;
     }
@@ -274,28 +289,49 @@ function startSimulation(ws: WebSocket) {
     }, delay + 100);
   }, 3000);
 
+  // Scenario 1b: After 5s, a running tool occupies the card slot
+  setTimeout(() => {
+    send(ws, envelope('card_action', 'sess-1', {
+      action: {
+        type: 'tool_start',
+        payload: {
+          toolCallId: 'tc-live-1',
+          toolName: 'bash',
+          headline: 'npm test -- --grep "auth"',
+        },
+      },
+    }));
+  }, 5000);
+
   // Scenario 2: After 6s, a permission request
   setTimeout(() => {
     const permId = 'perm-' + randomUUID().slice(0, 8);
-    send(ws, envelope('tool_start', 'sess-1', {
-      toolName: 'shell',
-      args: { command: 'npm install --save-dev @types/node@latest' },
-    }));
-    send(ws, envelope('permission', 'sess-1', {
-      id: permId,
-      toolName: 'shell',
-      args: { command: 'npm install --save-dev @types/node@latest' },
-      description: 'Install updated TypeScript Node.js type definitions',
+    send(ws, envelope('card_action', 'sess-1', {
+      action: {
+        type: 'permission',
+        payload: {
+          id: permId,
+          toolName: 'shell',
+          args: { command: 'npm install --save-dev @types/node@latest' },
+          description: 'Install updated TypeScript Node.js type definitions',
+        },
+      },
     }));
   }, 8000);
 
   // Scenario 3: After 12s, a question
   setTimeout(() => {
     const qId = 'q-' + randomUUID().slice(0, 8);
-    send(ws, envelope('question', 'sess-1', {
-      id: qId,
-      question: 'Which database driver should I use for the migration?',
-      choices: ['better-sqlite3', 'pg (PostgreSQL)', 'mysql2'],
+    send(ws, envelope('card_action', 'sess-1', {
+      action: {
+        type: 'question',
+        payload: {
+          id: qId,
+          question: 'Which database driver should I use for the migration?',
+          choices: ['better-sqlite3', 'pg (PostgreSQL)', 'mysql2'],
+          allowFreeform: true,
+        },
+      },
     }));
   }, 14000);
 
@@ -356,7 +392,7 @@ function simulateAgentResponse(ws: WebSocket, sessionId: string) {
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     setTimeout(() => {
-      send(ws, envelope('agent_message_delta', sessionId, { content: word }));
+      send(ws, envelope('agent_message_delta', sessionId, { content: word, reset: i === 0 }));
     }, delay);
     accumulated += word;
     delay += 30 + Math.random() * 60;

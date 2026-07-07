@@ -7,9 +7,10 @@ import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop, Copy } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy, Info } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
+import { StepsButton } from './StepsModal';
 
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
@@ -23,7 +24,7 @@ const ATTACHMENT_PULL = (sid: string, id: string): void => {
   });
 };
 
-const markdownComponents = {
+export const markdownComponents = {
   a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
   ),
@@ -74,13 +75,42 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
               </div>
               <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
               {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} sessionId={sessionId} />}
-              <p className="mt-1 text-[10px] text-text-muted">
-                {formatTime(message.timestamp)}
-              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <p className="text-[10px] text-text-muted">
+                  {formatTime(message.timestamp)}
+                </p>
+                {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
+                  <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={message.payload.steps} />
+                )}
+              </div>
             </div>
           </div>
         </CopyableBubble>
       );
+
+    case 'system_message': {
+      const noReply = message.payload.kind === 'no_reply';
+      const text =
+        message.payload.content ??
+        (noReply ? 'The agent ended this turn without a reply.' : 'System notice');
+      return (
+        <div className="flex gap-2">
+          <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-tertiary text-text-muted">
+            <Info className="size-3.5" />
+          </div>
+          <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md border border-dashed border-border-primary bg-surface-secondary px-4 py-2.5 sm:max-w-[70%]">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Kraki</p>
+            <p className="mt-0.5 text-sm italic leading-relaxed text-text-secondary">{text}</p>
+            <div className="mt-1 flex items-center gap-2">
+              <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
+              {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
+                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={message.payload.steps} />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     case 'session_created': {
       const { emoji, label } = agentInfo(message.payload.agent);

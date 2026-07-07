@@ -199,13 +199,40 @@ export interface AgentMessage extends BaseEnvelope {
   payload: {
     content: string;
     attachments?: Attachment[];
+    /** Number of TRACE steps (tool_start + agent_narration) recorded for this
+     *  turn up to and including this bubble. Stamped by the tentacle at emit
+     *  time from a running per-turn counter. Lets a concluded bubble show its
+     *  "Steps" affordance from replay alone — WITHOUT first pulling the trace —
+     *  so the button no longer depends on the (transient, non-persisted) trace
+     *  being present in the client's store. `> 0` ⇒ the turn has steps to pull.
+     *  Absent on pre-0.18 sessions (backfilled by scripts/backfill-trace.mjs). */
+    steps?: number;
   };
 }
 
+/**
+ * The streaming DRAFT BUBBLE for the in-progress turn — the assistant's live
+ * words (narration / progress / conclusion). It is NOT shown inside the status
+ * card; arms render it as a clean in-flow spine bubble that graduates to a
+ * permanent {@link AgentMessage} at turn end. Keep-last semantics: each new
+ * narration segment (or a finalize resummarize) `reset`s the draft, so only the
+ * latest text shows. The tentacle owns and accumulates the full text; on the
+ * wire it streams incrementally: each chunk is a `content` delta the client
+ * APPENDS, unless `reset` is set (start of a new segment, a resummarize, or a
+ * reconnect snapshot) in which case the client REPLACES the current text with
+ * `content` first. Never persisted to the spine; the finalized prose lives in
+ * `trace.jsonl` and is pulled per-turn for the "Steps" history.
+ */
 export interface AgentMessageDelta extends BaseEnvelope {
   type: 'agent_message_delta';
   payload: {
+    /** Delta chunk to append (or the full text when `reset` is true). */
     content: string;
+    /** When true, replace the current draft text with `content` before
+     *  rendering (new narrative segment, a resummarize, or a reconnect push).
+     *  Additive: legacy clients that ignore it fall back to append-only
+     *  streaming (their original behavior). */
+    reset?: boolean;
   };
 }
 
@@ -214,6 +241,12 @@ export interface PermissionRequest extends BaseEnvelope {
   payload: ToolArgs & {
     id: string;
     description: string;
+    /** Only set when this request occupies a RESOLVED card slot (read-only
+     *  view showing the outcome). Never present on a live/pending request —
+     *  permission/question no longer broadcast standalone, so their payload's
+     *  sole live home is the {@link CardActionState} slot. Absent on old-session
+     *  spine records. */
+    decision?: 'approve' | 'deny' | 'always_allow';
   };
 }
 
@@ -223,9 +256,24 @@ export interface QuestionRequest extends BaseEnvelope {
     id: string;
     question: string;
     choices?: string[];
+    /** Whether the human may type a freeform answer in addition to `choices`. */
+    allowFreeform?: boolean;
+    /** Only set when this request occupies a RESOLVED card slot — see
+     *  {@link PermissionRequest} `decision`. */
+    answer?: string;
   };
 }
 
+/**
+ * Live tool-lifecycle broadcast. Under the three-axis model these are no
+ * longer persisted to messages.jsonl nor assigned a per-session (spine)
+ * seq — they are removed from PERSISTENT_TYPES and instead mirrored to
+ * `trace.jsonl`. They REMAIN the live wire event for a streaming turn's
+ * steps: clients render them immediately and merge `tool_start` →
+ * `tool_complete` by `toolCallId`. History / on-idle refresh is pulled via
+ * {@link TurnTraceBatchMessage}, keyed by the concluding bubble's seq (no
+ * separate turn id — a turn is already identified by its spine bubble).
+ */
 export interface ToolStartMessage extends BaseEnvelope {
   type: 'tool_start';
   payload: {
@@ -245,6 +293,9 @@ export interface ToolStartMessage extends BaseEnvelope {
   };
 }
 
+/** Live tool-completion broadcast — see {@link ToolStartMessage}. Also
+ *  moved off the spine (transient broadcast + `trace.jsonl`), merged with
+ *  its matching `tool_start` by `toolCallId`. */
 export interface ToolCompleteMessage extends BaseEnvelope {
   type: 'tool_complete';
   payload: {
@@ -270,6 +321,80 @@ export interface ToolCompleteMessage extends BaseEnvelope {
   };
 }
 
+/**
+ * Finalized assistant NARRATION prose for one step of a turn — mirrored to the
+ * TRACE axis for the lazy "Steps" history. The live draft bubble is streamed via
+ * {@link AgentMessageDelta}; at `message_end` the finalized prose is ALSO emitted as
+ * this trace step (broadcast live + mirrored to `trace.jsonl`, never the spine).
+ * Pulled per-turn via {@link TurnTraceBatchMessage}, interleaved with tool steps
+ * in append order.
+ */
+export interface AgentNarrationMessage extends BaseEnvelope {
+  type: 'agent_narration';
+  payload: {
+    content: string;
+  };
+}
+
+/**
+ * The single "action slot" of the server-owned status card. tool, tool_batch,
+ * permission and question share this ONE slot on equal footing (last-write-wins
+ * by time) — there is no precedence between them. The tentacle owns the ENTIRE
+ * decision of what occupies the slot; clients render it verbatim and perform
+ * ZERO precedence/derivation logic. `id` is the round-trip handle: clients
+ * answer a permission/question by sending approve/deny/always_allow/answer with
+ * this id. When a permission/question is resolved it stays in the slot with its
+ * `decision`/`answer` set (read-only) until a newer action replaces it or the
+ * card clears.
+ *
+ * The agent may run tool calls in PARALLEL. A single running tool occupies the
+ * slot as the tool's `tool_start`/`tool_complete` step; two-or-more concurrent
+ * tools collapse into `tool_batch` carrying only the count (the per-tool detail
+ * lives on the TRACE/"Steps" axis, keeping the live card a fixed-size single
+ * slot). When the concurrency drops back to one, the slot returns to that
+ * single tool step.
+ *
+ * DESIGN: a card action is just "the current step" — and a step already has a
+ * wire type. Rather than redefine parallel `tool`/`permission`/`question`
+ * shapes, each variant REUSES the existing message's `type` + `payload`
+ * verbatim (minus the envelope): a running tool is a {@link ToolStartMessage},
+ * a finished tool a {@link ToolCompleteMessage}, an open prompt a
+ * {@link PermissionRequest}/{@link QuestionRequest}. The slot's discriminant is
+ * therefore the message's own `type`; clients render it with the SAME code they
+ * use for the live/trace step. A resolved prompt stays in the slot with its
+ * payload's `decision`/`answer` set. `tool_batch` is the sole synthetic variant
+ * (a concurrency count with no standalone message).
+ */
+export type CardActionState =
+  | Pick<ToolStartMessage, 'type' | 'payload'>
+  | Pick<ToolCompleteMessage, 'type' | 'payload'>
+  | {
+      type: 'tool_batch';
+      payload: {
+        /** How many tools are running CONCURRENTLY right now (always >= 2). Only
+         *  the count is transmitted — the expandable per-tool detail comes from
+         *  the TRACE/"Steps" axis, so the live card stays a fixed-size slot. */
+        running: number;
+      };
+    }
+  | Pick<PermissionRequest, 'type' | 'payload'>
+  | Pick<QuestionRequest, 'type' | 'payload'>;
+
+/**
+ * The ACTION part of the server-owned status card — the single active
+ * affordance, or `null` when the slot is empty. Broadcast whenever the slot
+ * changes (a tool starts/finishes, a permission/question opens, or an
+ * affordance is resolved). Replace semantics: the payload always carries the
+ * full current action state (or null), so reconnect = tentacle pushes the
+ * current snapshot.
+ */
+export interface CardAction extends BaseEnvelope {
+  type: 'card_action';
+  payload: {
+    action: CardActionState | null;
+  };
+}
+
 export interface IdleMessage extends BaseEnvelope {
   type: 'idle';
   payload: {
@@ -289,6 +414,29 @@ export interface ErrorMessage extends BaseEnvelope {
   type: 'error';
   payload: {
     message: string;
+  };
+}
+
+/**
+ * A Kraki-originated spine message — NOT the agent's words. Rendered like an
+ * `agent_message` (persistent bubble, anchors the turn's "Steps" history) but
+ * visually marked as a system notice so it's clear Kraki authored it.
+ *
+ * First use: `kind: 'no_reply'` — a turn ended without any `present_to_user`
+ * (even after the single nudge). Instead of a silent void, Kraki leaves this
+ * notice so the turn still has a bubble to hang its Steps off of.
+ *
+ * `content` is optional; when absent the client renders a default label keyed
+ * off `kind`.
+ */
+export interface SystemMessage extends BaseEnvelope {
+  type: 'system_message';
+  payload: {
+    kind: 'no_reply' | (string & {});
+    content?: string;
+    /** See {@link AgentMessage.payload.steps}. A `no_reply` notice also anchors
+     *  a turn's Steps history, so it carries the same running step count. */
+    steps?: number;
   };
 }
 
@@ -442,6 +590,68 @@ export interface SessionMessagesRangeBatchMessage extends BaseEnvelope {
   };
 }
 
+// ── Turn trace (TRACE axis) ─────────────────────────
+
+/** One recorded step in a turn's trace. These are exactly the live tool
+ *  broadcast messages, stored verbatim in `trace.jsonl`, so the client
+ *  merges them by `toolCallId` with the SAME code path it uses live. */
+export type TraceEntry = ToolStartMessage | ToolCompleteMessage | AgentNarrationMessage;
+
+/**
+ * app → tentacle: pull the tool trace for one turn from `trace.jsonl`.
+ *
+ * A turn is identified by its concluding bubble's spine seq — no separate
+ * turn id exists. The client sends the `agent_message` seq it wants to
+ * expand; the tentacle resolves the enclosing turn (the steps recorded
+ * between the previous spine message and this one) and returns them.
+ *
+ * Typical callers: (a) user expands a historical bubble's steps; (b) on
+ * `idle` the client pulls the just-finished turn's authoritative step list.
+ *
+ * Note the key is the *concluding* bubble's seq, so this only addresses
+ * turns that have ended. A still-running turn has no bubble seq yet — its
+ * steps are shown live from the ongoing tool broadcasts, and a client that
+ * joined mid-turn (and thus missed earlier steps) reconciles to the full
+ * list via the (b) pull once the turn goes idle.
+ */
+export interface RequestTurnTraceMessage extends BaseEnvelope {
+  type: 'request_turn_trace';
+  payload: {
+    sessionId: string;
+    /** Spine seq of the bubble (agent_message) whose steps to expand. */
+    bubbleSeq: number;
+  };
+}
+
+/**
+ * app → tentacle (unicast): asks for the current status-card snapshot of a
+ * session. Sent on session-open / reconnect when the session is not idle, so a
+ * client that missed the live agent_message_delta/card_action broadcasts can seed
+ * its card. The tentacle replies by unicasting the current `agent_message_delta`
+ * (reset:true, full text) + `card_action` (current action or null).
+ */
+export interface RequestCardMessage extends BaseEnvelope {
+  type: 'request_card';
+  payload: {
+    sessionId: string;
+  };
+}
+
+/** tentacle → requester (unicast): the turn's trace read from `trace.jsonl`. */
+export interface TurnTraceBatchMessage extends BaseEnvelope {
+  type: 'turn_trace_batch';
+  payload: {
+    sessionId: string;
+    /** Echoes the requested bubble seq. */
+    bubbleSeq: number;
+    /** In recorded order. Leaf args/result stay lazy via ContentRef. */
+    entries: TraceEntry[];
+    /** False when the turn is still running — the client keeps appending
+     *  from live tool broadcasts after applying this batch. True once ended. */
+    complete: boolean;
+  };
+}
+
 /** Sent by tentacle to app with metadata for all active sessions. */
 export interface SessionListMessage extends BaseEnvelope {
   type: 'session_list';
@@ -535,9 +745,13 @@ export type ProducerMessage =
   | QuestionRequest
   | ToolStartMessage
   | ToolCompleteMessage
+  | AgentNarrationMessage
+  | CardAction
+  | TurnTraceBatchMessage
   | IdleMessage
   | ActiveMessage
   | ErrorMessage
+  | SystemMessage
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
   | SessionModelSetMessage
@@ -786,6 +1000,8 @@ export type ConsumerMessage =
   | RequestSessionReplayMessage
   | RequestSessionMessagesMessage
   | RequestSessionMessagesRangeMessage
+  | RequestTurnTraceMessage
+  | RequestCardMessage
   | RenameSessionMessage
   | PinSessionMessage
   | RequestLocalSessionsMessage
