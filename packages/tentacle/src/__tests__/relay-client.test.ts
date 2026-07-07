@@ -291,6 +291,57 @@ describe('RelayClient auth negotiation', () => {
   });
 });
 
+describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  it('pre-registers agent mapping for every resumable session so multi-adapter routing survives daemon restart', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    // Three sessions with different agents — the mix we actually run in prod
+    // (copilot + claude + pi). Include all three resumable states so we know
+    // the pre-registration is unconditional on state.
+    (sm as Record<string, ReturnType<typeof vi.fn>>).getResumableSessions.mockReturnValue([
+      { id: 'sess-copilot-1', agent: 'copilot', state: 'active' },
+      { id: 'sess-claude-1', agent: 'claude', state: 'disconnected' },
+      { id: 'sess-pi-1', agent: 'pi', state: 'idle' },
+    ]);
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      null,
+    );
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+
+    // Regression: before this fix, MultiAgentAdapter had an empty sessionAgent
+    // map after a daemon restart. If arm sent send_input / approve / kill /
+    // set_session_mode to a claude or pi session before ensureSessionResumed
+    // ran, MultiAgentAdapter.resolveAdapter fell through to the default
+    // (copilot) adapter and every such call failed with "Session not found".
+    // The fix is to pre-register during resumeDisconnectedSessions.
+    expect(adapter.registerSessionAgent).toHaveBeenCalledTimes(3);
+    expect(adapter.registerSessionAgent).toHaveBeenCalledWith('sess-copilot-1', 'copilot');
+    expect(adapter.registerSessionAgent).toHaveBeenCalledWith('sess-claude-1', 'claude');
+    expect(adapter.registerSessionAgent).toHaveBeenCalledWith('sess-pi-1', 'pi');
+  });
+});
+
 describe('RelayClient title generation', () => {
   beforeEach(() => {
     sockets.length = 0;
