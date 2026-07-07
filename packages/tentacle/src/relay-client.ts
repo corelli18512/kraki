@@ -2006,8 +2006,23 @@ export class RelayClient {
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
+    // Encrypt for ONLINE consumers only. Offline consumers can't receive the
+    // message anyway (head filters broadcastTargets to online devices), and
+    // adding them here wastes CPU + bytes: each recipient costs one RSA-4096
+    // wrap (~15-30 ms) and adds a ~700-byte base64 RSA blob to the on-wire
+    // frame. For a user with N total registered devices (mostly stale web
+    // tabs), each broadcast frame was N × wrap + N × ~700 B ⇒ a 40 KB
+    // user_message echo on the wire even for a "OK" reply, and hundreds of
+    // ms of RSA CPU per streaming delta. Pushed E2E deltas to offline devices
+    // wouldn't decrypt anyway (offline endpoint state=disconnected on head
+    // side after v0.15.2), so the extra keys were pure overhead.
+    // The pushPreview side-channel (see buildPushPreview) still encrypts to
+    // offline devices with its own tiny AES key wrap — that's the correct
+    // place for offline delivery.
     const recipients: RecipientKey[] = [];
-    for (const [deviceId, compactKey] of this.consumerKeys) {
+    for (const deviceId of this.onlineConsumers) {
+      const compactKey = this.consumerKeys.get(deviceId);
+      if (!compactKey) continue;
       try {
         recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
       } catch (err) {
