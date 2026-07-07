@@ -1,6 +1,6 @@
 {
   "name": "@kraki/tentacle",
-  "version": "0.27.0",
+  "version": "0.27.1",
   "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
   "repository": {
     "type": "git",
@@ -36,12 +36,12 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.156",
+    "@coinfra/pulse": "^0.1.2",
     "@earendil-works/pi-coding-agent": "0.80.2",
     "@github/copilot-sdk": "^1.0.1",
     "@inquirer/prompts": "^8.3.2",
     "@kraki/crypto": "workspace:*",
     "@kraki/protocol": "workspace:*",
-    "@coinfra/pulse": "^0.1.1",
     "chalk": "^5.6.2",
     "ora": "^9.3.0",
     "pino": "^10.3.1",
