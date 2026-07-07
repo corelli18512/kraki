@@ -39,3 +39,5 @@ xcuserdata/
 *.bak
 .claude/
 .claude-worktrees
+packages/arm/web/probe-latency.mjs
+packages/arm/web/analyze-latency.mjs

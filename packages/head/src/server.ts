@@ -703,14 +703,28 @@ export class HeadServer {
     }
   }
 
-  /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER devices
-   *  of the same user (the online ones the hub can forward to). */
+  /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER
+   *  ONLINE devices of the same user. Offline devices are excluded because
+   *  broadcasts (user_message / agent_message / delta / active / idle /
+   *  session_title_updated / session_list) are all non-durable — enqueuing
+   *  them in an offline device's endpoint outbox would just grow memory +
+   *  SQLite writes without delivering anything, since offline endpoints are
+   *  in state=disconnected and their `send()` emits no `transmit` effect.
+   *  Each forward() call also does a `saveSnapshot` SQLite write; with N
+   *  registered devices of which most are offline, one broadcast becomes N
+   *  serialized SQLite writes and starves the head event loop (observed:
+   *  ~200ms per FORWARD × 65 devices ⇒ 13s per frame, causing the "every
+   *  streaming delta arrives 16s later than the previous" bug). Reconnecting
+   *  devices resync via session_messages_range instead. */
   private pulseBroadcastTargets(fromDevice: string): string[] {
     const userId = this.userByDevice.get(fromDevice);
     if (!userId) return [];
     const targets: string[] = [];
     for (const device of this.storage.getDevicesByUser(userId)) {
-      if (device.id !== fromDevice) targets.push(device.id);
+      if (device.id === fromDevice) continue;
+      // Only include devices currently connected — see comment above.
+      if (!this.connections.has(device.id)) continue;
+      targets.push(device.id);
     }
     return targets;
   }
