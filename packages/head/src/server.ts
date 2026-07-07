@@ -5,9 +5,10 @@ import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
 import type {
   AuthMessage, AuthErrorCode, AuthMethod,
-  UnicastEnvelope, BroadcastEnvelope, DeviceSummary, DeviceRole, DeviceKind,
-  VoiceResource, VoiceCapability,
+  DeviceSummary, DeviceRole, DeviceKind,
+  VoiceResource, VoiceCapability, BlobPayload,
 } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { PulseHub } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
@@ -124,16 +125,6 @@ function isValidAuth(msg: Record<string, unknown>): boolean {
   return true;
 }
 
-function isValidUnicast(msg: Record<string, unknown>): boolean {
-  return msg.type === 'unicast' && typeof msg.to === 'string'
-    && typeof msg.blob === 'string' && typeof msg.keys === 'object' && msg.keys !== null;
-}
-
-function isValidBroadcast(msg: Record<string, unknown>): boolean {
-  return msg.type === 'broadcast'
-    && typeof msg.blob === 'string' && typeof msg.keys === 'object' && msg.keys !== null;
-}
-
 export class HeadServer {
   private wss: WebSocketServer;
   private storage: Storage;
@@ -168,6 +159,7 @@ export class HeadServer {
       now: () => Date.now(),
       sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
       broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
+      onDeliverToSelf: (fromDevice, payload) => this.deliverPulseToSelf(fromDevice, payload),
     });
     this.pulseHub.recoverOnBoot();
     // Drive pulse heartbeat/liveness/durable-expiry every 5s.
@@ -461,8 +453,9 @@ export class HeadServer {
     }
 
     if (msg.type === 'unicast') {
-      // Pulse-framed envelope? The hub (a pulse endpoint on each hop) handles
-      // reliable delivery + durable store-and-forward. Legacy path untouched.
+      // The hub (a pulse endpoint on each hop) handles reliable delivery + durable
+      // store-and-forward. The envelope MUST carry a pulse frame — the head is
+      // pulse-only; there is no raw-WS relay path.
       if (typeof msg.pulse === 'string' && state.deviceId) {
         this.pulseHub.onPulseEnvelope(state.deviceId, {
           pulse: msg.pulse as string,
@@ -470,11 +463,7 @@ export class HeadServer {
         });
         return;
       }
-      if (!isValidUnicast(msg)) {
-        this.sendError(ws, 'Invalid unicast: to, blob, keys required');
-        return;
-      }
-      this.handleUnicast(ws, state, msg as unknown as UnicastEnvelope);
+      this.sendError(ws, 'unicast requires a pulse frame');
       return;
     }
 
@@ -482,59 +471,19 @@ export class HeadServer {
       // Pulse broadcast frames (control: hello/ack/heartbeat) are addressed to a
       // specific hop via the hub too; a producer fans out per-device unicasts.
       if (typeof msg.pulse === 'string' && state.deviceId) {
+        // A pushPreview may ride the same pulse envelope — fire it for offline
+        // devices (the reliable message itself is delivered by the hub).
+        if (msg.pushPreview) this.firePushPreview(state, msg.pushPreview as BlobPayload);
         this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
         return;
       }
-      if (!isValidBroadcast(msg)) {
-        this.sendError(ws, 'Invalid broadcast: blob, keys required');
-        return;
-      }
-      this.handleBroadcast(state, msg as unknown as BroadcastEnvelope);
+      this.sendError(ws, 'broadcast requires a pulse frame');
       return;
     }
 
-    if (msg.type === 'update_preferences') {
-      if (state.userId) {
-        const prefs = msg.preferences as Record<string, unknown> | undefined;
-        if (prefs && typeof prefs === 'object') {
-          this.storage.updatePreferences(state.userId, prefs);
-          // Read back the full merged preferences
-          const fullUser = this.storage.getUser(state.userId);
-          const merged = fullUser?.preferences ?? prefs;
-          const confirmation = { type: 'preferences_updated', preferences: merged };
-          // Send confirmation to sender (tracked — peer should see it)
-          this.sendJson(ws, state, confirmation);
-          // Broadcast to all other devices of the same user
-          const userDevices = (() => {
-            try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
-          })();
-          for (const d of userDevices) {
-            if (d.id === state.deviceId) continue;
-            const other = this.connections.get(d.id);
-            if (!other || other.readyState !== WebSocket.OPEN) continue;
-            const otherState = this.clients.get(other);
-            if (!otherState) continue;
-            this.sendJson(other, otherState, confirmation);
-          }
-        }
-      }
-      return;
-    }
-
-    if (msg.type === 'remove_device') {
-      this.handleRemoveDevice(ws, state, msg.deviceId as string);
-      return;
-    }
-
-    if (msg.type === 'register_push_token') {
-      this.handleRegisterPushToken(ws, state, msg);
-      return;
-    }
-
-    if (msg.type === 'unregister_push_token') {
-      this.handleUnregisterPushToken(ws, state, msg);
-      return;
-    }
+    // Relay-terminated control ops (update_preferences / remove_device /
+    // (un)register_push_token). Arrive via pulse deliver-to-self (deliverPulseToSelf).
+    if (this.handleControlMessage(ws, state, msg)) return;
 
     if (msg.type === 'request_voice_lease') {
       this.handleRequestVoiceLease(ws, state, msg);
@@ -575,11 +524,11 @@ export class HeadServer {
 
     const issuer = this.options.leaseIssuer;
     if (!issuer) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'not_entitled',
         detail: 'Voice lease issuance is not enabled on this head',
-      }));
+      });
       return;
     }
 
@@ -587,30 +536,30 @@ export class HeadServer {
     const requestedDeviceId = typeof msg.deviceId === 'string' ? msg.deviceId : undefined;
     const requestedResource = typeof msg.resource === 'string' ? (msg.resource as VoiceResource) : undefined;
     if (!requestedDeviceId || !requestedResource) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'Missing deviceId or resource',
-      }));
+      });
       return;
     }
 
     // Lease may only be requested for the authenticated device — no proxying.
     if (requestedDeviceId !== deviceId) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'deviceId does not match authenticated device',
-      }));
+      });
       return;
     }
 
     if (!VALID_VOICE_RESOURCES.has(requestedResource)) {
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: `Unknown resource: ${String(requestedResource)}`,
-      }));
+      });
       return;
     }
 
@@ -624,11 +573,11 @@ export class HeadServer {
       logger.info('Voice lease denied: daily quota exhausted', {
         userId, deviceId, issuedToday, quotaPerLease, dailyCap,
       });
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'quota_exhausted',
         detail: `Daily quota reached (${issuedToday}/${dailyCap}s)`,
-      }));
+      });
       return;
     }
 
@@ -655,11 +604,11 @@ export class HeadServer {
       logger.error('Voice lease persist failed', {
         userId, deviceId, jti: lease.payload.jti, error: (err as Error).message,
       });
-      ws.send(JSON.stringify({
+      this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'invalid_request',
         detail: 'Lease persistence failed',
-      }));
+      });
       return;
     }
 
@@ -667,7 +616,7 @@ export class HeadServer {
       userId, deviceId, jti: lease.payload.jti,
       quotaSeconds: quotaPerLease, ttlSec: ttl,
     });
-    ws.send(JSON.stringify({ type: 'voice_lease_grant', lease }));
+    this.sendControlToDevice(deviceId, { type: 'voice_lease_grant', lease });
   }
 
   // --- Routing ---
@@ -684,9 +633,78 @@ export class HeadServer {
     return true;
   }
 
+  /** Send a head-ORIGINATED control message to a device reliably over pulse
+   *  (presence, preferences confirmation, voice responses). These are plaintext
+   *  head↔device control (the head has no E2E on them), so the payload is
+   *  wrapped as `{from:'@head', msg}` — the receiver's pulse layer recognizes the
+   *  `@head` marker and dispatches `msg` WITHOUT decrypting. Non-durable:
+   *  presence/prefs are ephemeral. */
+  private sendControlToDevice(deviceId: string, msg: Record<string, unknown>): void {
+    const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
+    this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
+  }
+
+  /** A pulse frame addressed to HEAD_PULSE_TARGET was delivered in-order by the
+   *  source device's endpoint. The payload is PLAINTEXT control JSON. Resolve the
+   *  originating authenticated connection and route it through the SAME control
+   *  handlers the raw-WS path uses, so auth context (state.userId/deviceId) and
+   *  responses (over ws) are identical. */
+  private deliverPulseToSelf(fromDevice: string, payload: Uint8Array): void {
+    const ws = this.connections.get(fromDevice);
+    if (!ws) return; // device vanished — the control op is moot
+    const state = this.clients.get(ws);
+    if (!state?.authenticated) return;
+    let msg: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(Buffer.from(payload).toString('utf8'));
+      if (!isValidMessage(parsed)) return;
+      msg = parsed;
+    } catch {
+      return; // malformed → drop
+    }
+    // handleControlMessage whitelists the 4 relay-terminated types and returns
+    // false for anything else, so the self-channel cannot tunnel unicast/auth/etc.
+    this.handleControlMessage(ws, state, msg);
+  }
+
+  /** The relay-terminated control ops, callable from BOTH the raw-WS dispatch
+   *  (onMessage) and the pulse deliver-to-self path. Returns true if handled. */
+  private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
+    switch (msg.type) {
+      case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
+      case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
+      case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
+      case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
+      default: return false;
+    }
+  }
+
+  /** Persist a preferences update and echo the merged result to the sender + the
+   *  user's other online devices. */
+  private handleUpdatePreferences(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
+    if (!state.userId) return;
+    const prefs = msg.preferences as Record<string, unknown> | undefined;
+    if (!prefs || typeof prefs !== 'object') return;
+    this.storage.updatePreferences(state.userId, prefs);
+    // Read back the full merged preferences
+    const fullUser = this.storage.getUser(state.userId);
+    const merged = fullUser?.preferences ?? prefs;
+    const confirmation = { type: 'preferences_updated', preferences: merged };
+    // Confirm to the sender + fan out to the user's other devices — all over pulse.
+    if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
+    const userDevices = (() => {
+      try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
+    })();
+    for (const d of userDevices) {
+      if (d.id === state.deviceId) continue;
+      const other = this.connections.get(d.id);
+      if (!other || other.readyState !== WebSocket.OPEN) continue;
+      this.sendControlToDevice(d.id, confirmation);
+    }
+  }
+
   /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER devices
-   *  of the same user (the online ones the hub can forward to). Mirrors the
-   *  legacy handleBroadcast routing. */
+   *  of the same user (the online ones the hub can forward to). */
   private pulseBroadcastTargets(fromDevice: string): string[] {
     const userId = this.userByDevice.get(fromDevice);
     if (!userId) return [];
@@ -697,64 +715,19 @@ export class HeadServer {
     return targets;
   }
 
-  private handleUnicast(ws: WebSocket, state: ClientState, msg: UnicastEnvelope): void {
-    const logger = getLogger();
-    const senderUserId = state.userId;
-    if (!senderUserId || !state.deviceId) return;
-
-    // Verify target belongs to same user
-    const targetDevice = this.storage.getDevice(msg.to);
-    if (!targetDevice || targetDevice.userId !== senderUserId) {
-      logger.warn('Unicast rejected: target not found or wrong user', { from: state.deviceId, to: msg.to });
-      ws.send(JSON.stringify({ type: 'server_error', message: 'Target device not found or offline', ref: msg.ref }));
-      return;
-    }
-
-    const targetWs = this.connections.get(msg.to);
-    if (!targetWs) {
-      // Target offline. The legacy offline queue (pending_messages) has been
-      // removed — reliable delivery is now the pulse layer's job (durable
-      // outbox). A non-pulse unicast to an offline device is best-effort and
-      // simply dropped, as it was before the queue existed.
-      logger.debug('Unicast dropped for offline device (no pulse)', { from: state.deviceId, to: msg.to });
-      return;
-    }
-
-    const targetState = this.clients.get(targetWs);
-    if (!targetState) return;
-
-    // Forward via tracked path so we retry if the recipient doesn't ack.
-    this.sendJson(targetWs, targetState, msg as unknown as Record<string, unknown>);
-  }
-
-  private handleBroadcast(state: ClientState, msg: BroadcastEnvelope): void {
-    const logger = getLogger();
+  /** Notify offline devices from a pushPreview side-channel. The preview rides the
+   *  same pulse broadcast envelope as the reliable message. */
+  private firePushPreview(state: ClientState, pushPreview: BlobPayload | undefined): void {
     const senderUserId = state.userId;
     const senderDeviceId = state.deviceId;
-    if (!senderUserId || !senderDeviceId) return;
-
-    // Find all other connected devices for this user
-    const userDevices = this.storage.getDevicesByUser(senderUserId);
+    if (!senderUserId || !senderDeviceId || !pushPreview || !this.options.pushManager) return;
     const onlineDeviceIds: string[] = [senderDeviceId];
-
-    for (const device of userDevices) {
+    for (const device of this.storage.getDevicesByUser(senderUserId)) {
       if (device.id === senderDeviceId) continue;
-
-      const targetWs = this.connections.get(device.id);
-      if (!targetWs) continue;
-
-      onlineDeviceIds.push(device.id);
-      const targetState = this.clients.get(targetWs);
-      if (!targetState) continue;
-
-      this.sendJson(targetWs, targetState, msg as unknown as Record<string, unknown>);
+      if (this.connections.get(device.id)) onlineDeviceIds.push(device.id);
     }
-
-    // Send push notifications to offline devices with registered tokens
-    if (msg.pushPreview && this.options.pushManager) {
-      this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, msg.pushPreview)
-        .catch(err => logger.warn('Push notification send failed', { error: (err as Error).message }));
-    }
+    this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, pushPreview)
+      .catch(err => getLogger().warn('Push notification send failed', { error: (err as Error).message }));
   }
 
   private removeConnection(deviceId: string): void {
@@ -1379,7 +1352,9 @@ export class HeadServer {
     }
 
     logger.info('Push token registered', { deviceId: state.deviceId, provider: payload.provider });
-    ws.send(JSON.stringify({ type: 'push_token_registered', payload: { provider: payload.provider } }));
+    if (state.deviceId) {
+      this.sendControlToDevice(state.deviceId, { type: 'push_token_registered', payload: { provider: payload.provider } });
+    }
   }
 
   private handleUnregisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
@@ -1407,9 +1382,7 @@ export class HeadServer {
     for (const d of userDevices) {
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.sendJson(ws, targetState, { type: 'device_removed', deviceId: removedDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
     }
   }
 
@@ -1440,9 +1413,7 @@ export class HeadServer {
       if (d.id === newDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.sendJson(ws, targetState, { type: 'device_joined', device: summary });
+      this.sendControlToDevice(d.id, { type: 'device_joined', device: summary });
     }
   }
 
@@ -1455,9 +1426,7 @@ export class HeadServer {
       if (d.id === leftDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.sendJson(ws, targetState, { type: 'device_left', deviceId: leftDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
     }
   }
 
@@ -1470,9 +1439,7 @@ export class HeadServer {
       if (d.id === pendingDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      const targetState = this.clients.get(ws);
-      if (!targetState) continue;
-      this.sendJson(ws, targetState, { type: 'device_pending', deviceId: pendingDeviceId });
+      this.sendControlToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
     }
   }
 
@@ -1523,19 +1490,6 @@ export class HeadServer {
   private sendError(ws: WebSocket, message: string): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'server_error', message }));
-    }
-  }
-
-  /** Fire-and-forget JSON send to a peer. Reliable per-hop delivery (when
-   *  enabled) is handled by the pulse layer via `pulse`-carried envelopes;
-   *  this is the plain path for control/relay messages. Drops the connection
-   *  if the socket is already dead so the client can reconnect cleanly. */
-  private sendJson(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    try {
-      ws.send(JSON.stringify(msg));
-    } catch {
-      if (state.deviceId) this.removeConnection(state.deviceId);
     }
   }
 

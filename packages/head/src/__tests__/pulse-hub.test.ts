@@ -12,6 +12,7 @@
 import Database from 'better-sqlite3';
 import { decodeFrame, Endpoint, encodeFrame } from '@coinfra/pulse';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { PulseHub, type PulseHubHost } from '../pulse-hub.js';
 
 const ARM = 'arm-1';
@@ -30,12 +31,17 @@ class World {
   tentReceived: number[] = [];
   /** acked seqs the arm observed (i.e. head confirmed receipt). */
   armAcked: bigint[] = [];
+  /** Head-terminated payloads (deliver-to-self), decoded as UTF-8 strings. */
+  selfReceived: string[] = [];
 
   constructor(db: Database.Database) {
     const host: PulseHubHost = {
       now: () => this.now,
       sendPulseTo: (deviceId, pulseB64) => this.deliverToDevice(deviceId, pulseB64),
       broadcastTargets: () => [], // this test uses explicit `to` (unicast)
+      onDeliverToSelf: (_fromDevice, payload) => {
+        this.selfReceived.push(Buffer.from(payload).toString('utf8'));
+      },
     };
     this.hub = new PulseHub(db, host);
     this.arm = new Endpoint({ epoch: 'arm', random: () => 0.5 });
@@ -94,6 +100,17 @@ class World {
     this.pumpArm(this.arm.send(new Uint8Array([marker]), { durable }).effects);
   }
 
+  /** arm sends a HEAD-terminated control payload (addressed to '@head'). The
+   *  head consumes it via onDeliverToSelf instead of forwarding to a device. */
+  armSendToHead(text: string): void {
+    const { effects } = this.arm.send(new TextEncoder().encode(text), { durable: false });
+    for (const e of effects) {
+      if (e.t === 'transmit' && this.armOnline) {
+        this.hub.onPulseEnvelope(ARM, { pulse: b64(e.bytes), to: HEAD_PULSE_TARGET });
+      }
+    }
+  }
+
   advance(ms: number): void {
     const target = this.now + ms;
     while (this.now < target) {
@@ -125,6 +142,34 @@ describe('PulseHub: head as per-hop bridge', () => {
     expect(w.tentReceived).toContain(7);
     // arm learned head received it (hop-A ack)
     expect(w.armAcked.length).toBeGreaterThan(0);
+  });
+
+  it('deliver-to-self: a frame addressed to @head is consumed by head, NOT forwarded', () => {
+    const w = new World(db);
+    w.connectArm();
+    w.connectTentacle();
+    w.armSendToHead('{"type":"update_preferences","preferences":{"theme":"dark"}}');
+    w.advance(20_000);
+    // Head consumed the plaintext control payload...
+    expect(w.selfReceived).toEqual(['{"type":"update_preferences","preferences":{"theme":"dark"}}']);
+    // ...and did NOT forward it to the tentacle.
+    expect(w.tentReceived).toHaveLength(0);
+    // The source (arm) still got its hop-A ack — reliable like any other send.
+    expect(w.armAcked.length).toBeGreaterThan(0);
+  });
+
+  it('deliver-to-self: multiple head-bound frames each consumed once, in order', () => {
+    const w = new World(db);
+    w.connectArm();
+    w.connectTentacle();
+    w.armSendToHead('{"type":"remove_device","deviceId":"dev_x"}');
+    w.armSendToHead('{"type":"register_push_token","payload":{"provider":"web_push"}}');
+    w.advance(20_000);
+    expect(w.selfReceived).toEqual([
+      '{"type":"remove_device","deviceId":"dev_x"}',
+      '{"type":"register_push_token","payload":{"provider":"web_push"}}',
+    ]);
+    expect(w.tentReceived).toHaveLength(0);
   });
 
   it('persists a durable message while tentacle OFFLINE, delivers on reconnect', () => {

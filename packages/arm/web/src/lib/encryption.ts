@@ -1,5 +1,5 @@
 import type { Message, InnerMessage } from '@kraki/protocol';
-import type { AppKeyStore, RecipientKey } from './e2e';
+import type { AppKeyStore } from './e2e';
 import { createLogger } from './logger';
 import { getStore } from './store-adapter';
 import type { MessageHandler } from './transport';
@@ -25,97 +25,10 @@ export class EncryptionHandler {
     this.keyStore = keyStore;
   }
 
-  /**
-   * Encrypt an outbound message as a UnicastEnvelope (default) or BroadcastEnvelope.
-   * When broadcast=true, encrypts for ALL known devices.
-   */
-  async encryptOutbound(
-    msg: Record<string, unknown>,
-    send: (msg: Record<string, unknown>) => void,
-    options?: { broadcast?: boolean },
-  ): Promise<void> {
-    if (!this.keyStore.isReady()) {
-      logger.error('Cannot send — key store not ready');
-      return;
-    }
-
-    const store = getStore();
-
-    if (options?.broadcast) {
-      // Broadcast: encrypt for all known devices
-      const recipients: RecipientKey[] = [];
-      for (const [, dev] of store.devices) {
-        const key = dev.encryptionKey ?? dev.publicKey;
-        if (key && dev.id !== store.deviceId) {
-          recipients.push({ deviceId: dev.id, publicKeyBase64: key });
-        }
-      }
-      if (recipients.length === 0) {
-        logger.error('Cannot broadcast — no recipient devices');
-        return;
-      }
-      try {
-        const plaintext = JSON.stringify(msg);
-        const { blob, keys } = await this.keyStore.encryptToBlob(plaintext, recipients);
-        send({ type: 'broadcast', blob, keys });
-      } catch (err) {
-        logger.error('Outbound broadcast encryption failed:', err);
-      }
-      return;
-    }
-
-    // Unicast: determine the target tentacle device
-    let targetDeviceId: string | undefined;
-    const sessionId = msg.sessionId as string | undefined;
-    const payload = msg.payload as Record<string, unknown> | undefined;
-    if (payload?.targetDeviceId) {
-      targetDeviceId = payload.targetDeviceId as string;
-    } else if (sessionId) {
-      const session = store.sessions.get(sessionId);
-      targetDeviceId = session?.deviceId;
-    }
-
-    if (!targetDeviceId) {
-      logger.error('Cannot send — no target device for unicast');
-      getStore().setLastError('Cannot send: no target device found for this session. Try reconnecting.');
-      return;
-    }
-
-    // For unicast, only encrypt for the target device
-    const targetDev = store.devices.get(targetDeviceId);
-    const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
-    if (!targetKey) {
-      logger.error('Cannot send — no encryption key for target device');
-      getStore().setLastError('Cannot send: target device has no encryption key. Try reconnecting.');
-      return;
-    }
-    const recipients: RecipientKey[] = [{ deviceId: targetDeviceId, publicKeyBase64: targetKey }];
-
-    try {
-      const plaintext = JSON.stringify(msg);
-      const { blob, keys } = await this.keyStore.encryptToBlob(plaintext, recipients);
-      const envelope: Record<string, unknown> = {
-        type: 'unicast',
-        to: targetDeviceId,
-        blob,
-        keys,
-      };
-      // Set ref to requestId so relay echoes it back in server_error
-      if (msg.type === 'create_session') {
-        const payload = msg.payload as Record<string, unknown> | undefined;
-        if (payload?.requestId) {
-          envelope.ref = payload.requestId;
-        }
-      }
-      send(envelope);
-    } catch (err) {
-      logger.error('Outbound encryption failed:', err);
-    }
-  }
-
   /** Encrypt a message for its target tentacle and return the parts WITHOUT
-   *  sending — so the pulse layer can carry the blob. Mirrors the unicast branch
-   *  of encryptOutbound. Returns null if no target/key. */
+   *  sending — so the pulse layer can carry the blob. Resolves the target from
+   *  `payload.targetDeviceId` or the session's deviceId. Returns null if no
+   *  target/key. */
   async encryptForTarget(
     msg: Record<string, unknown>,
   ): Promise<{ blob: string; keys: Record<string, string>; to: string } | null> {

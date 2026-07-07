@@ -3,12 +3,34 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { generateKeyPairSync, createSign } from 'crypto';
+import { decodeFrame } from '@coinfra/pulse';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { HeadServer } from '../server.js';
 import { Storage } from '../storage.js';
 import { OpenAuthProvider, GitHubAuthProvider } from '../auth.js';
 import type { HeadServerOptions } from '../server.js';
 
 // --- Helpers ---
+
+/** Unwrap a head-originated pulse control frame back to its inner control
+ *  message. Head→device control (device_joined/left/pending, preferences_updated)
+ *  now rides pulse: the wire carries a `unicast` envelope whose `pulse` frame
+ *  wraps a plaintext `{from:'@head', msg}` payload. Returns the inner `msg` for
+ *  such frames, the raw message unchanged for non-pulse envelopes, or null for
+ *  pulse control frames that aren't head-control (HELLO/ACK/heartbeat). */
+function unwrapControlFrame(raw: Record<string, unknown>): Record<string, unknown> | null {
+  if (typeof raw.pulse !== 'string') return raw;
+  const frame = decodeFrame(new Uint8Array(Buffer.from(raw.pulse, 'base64')));
+  if (frame?.t === 'data') {
+    try {
+      const inner = JSON.parse(new TextDecoder().decode(frame.payload)) as {
+        from?: string; msg?: Record<string, unknown>;
+      };
+      if (inner.from === HEAD_PULSE_TARGET && inner.msg) return inner.msg;
+    } catch { /* fall through */ }
+  }
+  return null;
+}
 
 function mockFetch(status: number, body: Record<string, unknown>): typeof fetch {
   return async () => new Response(JSON.stringify(body), {
@@ -34,10 +56,11 @@ function mockGitHubFetcher(users: Record<string, { id: number | string; login: s
 function waitForMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     const handler = (data: Buffer) => {
-      const msg = JSON.parse(data.toString());
-      // Ignore pulse control frames (empty-blob envelope with a `pulse` field);
-      // a real client routes these to its pulse layer, not its message handlers.
-      if (typeof msg.pulse === 'string') return;
+      // Unwrap head-originated pulse control frames back to their inner message;
+      // ignore non-head pulse frames (HELLO/ACK/heartbeat) the way a real client's
+      // pulse layer keeps them off its message handlers.
+      const msg = unwrapControlFrame(JSON.parse(data.toString()));
+      if (msg === null) return;
       ws.off('message', handler);
       resolve(msg);
     };
@@ -52,8 +75,8 @@ function waitForMessageOfType(ws: WebSocket, type: string, timeout = 5000): Prom
       reject(new Error(`Timeout waiting for "${type}"`));
     }, timeout);
     const handler = (data: Buffer) => {
-      const msg = JSON.parse(data.toString());
-      if (typeof msg.pulse === 'string') return;
+      const msg = unwrapControlFrame(JSON.parse(data.toString()));
+      if (msg === null) return;
       if (msg.type === type) {
         clearTimeout(timer);
         ws.off('message', handler);
@@ -257,59 +280,9 @@ describe('HeadServer (thin relay)', () => {
 
   // ── Broadcast forwarding ──────────────────────────────
 
-  describe('broadcast forwarding', () => {
-    it('should forward broadcast to other connected devices of same user', async () => {
-      head = await createHead();
-      const { ws: tentacle } = await authConnect(head.port, 'Laptop', 'tentacle');
-      const { ws: app } = await authConnect(head.port, 'Phone', 'app');
-
-      const msgP = waitForMessageOfType(app, 'broadcast');
-      tentacle.send(JSON.stringify({
-        type: 'broadcast',
-        blob: 'encrypted_data',
-        keys: { phone: 'key1' },
-      }));
-      const received = await msgP;
-      expect(received.blob).toBe('encrypted_data');
-      expect(received.keys).toEqual({ phone: 'key1' });
-    });
-
-    it('should deliver broadcast to multiple apps', async () => {
-      head = await createHead();
-      const { ws: tentacle } = await authConnect(head.port, 'Laptop', 'tentacle');
-      const { ws: app1 } = await authConnect(head.port, 'Phone', 'app');
-      const { ws: app2 } = await authConnect(head.port, 'Browser', 'app');
-
-      const p1 = waitForMessageOfType(app1, 'broadcast');
-      const p2 = waitForMessageOfType(app2, 'broadcast');
-      tentacle.send(JSON.stringify({ type: 'broadcast', blob: 'data', keys: {} }));
-
-      const [m1, m2] = await Promise.all([p1, p2]);
-      expect(m1.blob).toBe('data');
-      expect(m2.blob).toBe('data');
-    });
-  });
-
   // ── Unicast forwarding ────────────────────────────────
 
   describe('unicast forwarding', () => {
-    it('should forward unicast to the target device', async () => {
-      head = await createHead();
-      const { ws: tentacle, authOk: tAuth } = await authConnect(head.port, 'Laptop', 'tentacle');
-      const { ws: app } = await authConnect(head.port, 'Phone', 'app');
-
-      const msgP = waitForMessageOfType(tentacle, 'unicast');
-      app.send(JSON.stringify({
-        type: 'unicast',
-        to: tAuth.deviceId,
-        blob: 'for_tentacle',
-        keys: { [tAuth.deviceId]: 'k' },
-      }));
-      const received = await msgP;
-      expect(received.to).toBe(tAuth.deviceId);
-      expect(received.blob).toBe('for_tentacle');
-    });
-
     it('should silently drop unicast to nonexistent device', async () => {
       head = await createHead();
       const { ws: app } = await authConnect(head.port, 'Phone', 'app');
@@ -538,32 +511,6 @@ describe('HeadServer (thin relay)', () => {
     });
   });
 
-  // ── Disconnect cleanup ────────────────────────────────
-
-  describe('disconnect cleanup', () => {
-    it('should stop delivering to disconnected device', async () => {
-      head = await createHead();
-      const { ws: tentacle } = await authConnect(head.port, 'Laptop', 'tentacle');
-      const { ws: app1 } = await authConnect(head.port, 'Phone', 'app');
-
-      // Broadcast reaches app1
-      const p1 = waitForMessageOfType(app1, 'broadcast');
-      tentacle.send(JSON.stringify({ type: 'broadcast', blob: 'before', keys: {} }));
-      await p1;
-
-      // Disconnect app1
-      app1.close();
-      await new Promise((r) => setTimeout(r, 100));
-
-      // New app connects
-      const { ws: app2 } = await authConnect(head.port, 'Browser', 'app');
-      const p2 = waitForMessageOfType(app2, 'broadcast');
-      tentacle.send(JSON.stringify({ type: 'broadcast', blob: 'after', keys: {} }));
-      const m = await p2;
-      expect(m.blob).toBe('after');
-    });
-  });
-
   // ── Edge cases ────────────────────────────────────────
 
   describe('edge cases', () => {
@@ -638,20 +585,20 @@ describe('HeadServer (thin relay)', () => {
       directStorage.close();
     });
 
-    it('should reject invalid broadcast (missing blob)', async () => {
+    it('should reject a broadcast with no pulse frame', async () => {
       head = await createHead();
       const { ws } = await authConnect(head.port, 'Laptop', 'tentacle');
       ws.send(JSON.stringify({ type: 'broadcast', keys: {} }));
       const res = await waitForMessageOfType(ws, 'server_error');
-      expect(res.message).toContain('blob');
+      expect(res.message).toContain('pulse');
     });
 
-    it('should reject invalid unicast (missing to)', async () => {
+    it('should reject a unicast with no pulse frame', async () => {
       head = await createHead();
       const { ws } = await authConnect(head.port, 'Laptop', 'tentacle');
-      ws.send(JSON.stringify({ type: 'unicast', blob: 'x', keys: {} }));
+      ws.send(JSON.stringify({ type: 'unicast', to: 'dev_x', blob: 'x', keys: {} }));
       const res = await waitForMessageOfType(ws, 'server_error');
-      expect(res.message).toContain('to');
+      expect(res.message).toContain('pulse');
     });
   });
 

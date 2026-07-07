@@ -45,6 +45,15 @@ export interface PulseFrameField {
   pulse?: string;
 }
 
+/** Reserved pulse routing target meaning "deliver to the head (relay) itself"
+ *  rather than forward to a device. A pulse frame addressed here carries
+ *  PLAINTEXT control JSON (update_preferences / remove_device /
+ *  (un)register_push_token) — the head is the legitimate recipient, so there is
+ *  no E2E on this hop and the payload is NOT an E2E {blob,keys}. The `@` prefix
+ *  cannot collide with a real deviceId (which are `dev_`/`app_`-prefixed or a
+ *  uuid, never `@`-prefixed). */
+export const HEAD_PULSE_TARGET = '@head';
+
 /** App → specific tentacle. Relay reads `to` for routing. */
 export interface UnicastEnvelope extends PulseFrameField {
   type: 'unicast';

@@ -47,6 +47,9 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
             <p className="text-[11px] text-text-muted">Toggle light and dark theme</p>
           </div>
           <button
+            aria-label="Toggle dark mode"
+            role="switch"
+            aria-checked={isDark}
             onClick={() => {
               const next = !isDark;
               toggleDark();
@@ -87,13 +90,13 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
                   if (pushEnabled) {
                     const ok = await unsubscribeFromPush();
                     if (ok) {
-                      wsClient.send({ type: 'unregister_push_token', payload: { provider: 'web_push' } });
+                      wsClient.unregisterPushToken({ provider: 'web_push' });
                       setPushEnabled(false);
                     }
                   } else {
                     const token = await subscribeToPush(vapidPublicKey);
                     if (token) {
-                      wsClient.send({ type: 'register_push_token', payload: { provider: 'web_push', token } });
+                      wsClient.registerPushToken({ provider: 'web_push', token });
                       setPushEnabled(true);
                     }
                   }

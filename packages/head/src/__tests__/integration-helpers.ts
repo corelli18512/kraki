@@ -6,11 +6,35 @@
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
+import { decodeFrame } from '@coinfra/pulse';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
 import { OpenAuthProvider } from '../auth.js';
 import type { AuthProvider } from '../auth.js';
 import type { HeadServerOptions } from '../server.js';
+
+/** Unwrap a head-originated pulse control frame back to its inner control
+ *  message. Head→device control (device_joined/left/pending, preferences, push
+ *  acks) now rides pulse: the wire carries a `unicast` envelope whose `pulse`
+ *  frame wraps a plaintext `{from:'@head', msg}` payload. Returns the inner
+ *  `msg` for such frames, the raw message unchanged for non-pulse envelopes
+ *  (auth_ok, broadcast, …), or null for pulse control frames that aren't
+ *  head-control (HELLO/ACK/heartbeat) — a real client hands those to its pulse
+ *  layer, not its message handlers. */
+function unwrapControlFrame(raw: Record<string, unknown>): Record<string, unknown> | null {
+  if (typeof raw.pulse !== 'string') return raw;
+  const frame = decodeFrame(new Uint8Array(Buffer.from(raw.pulse, 'base64')));
+  if (frame?.t === 'data') {
+    try {
+      const inner = JSON.parse(new TextDecoder().decode(frame.payload)) as {
+        from?: string; msg?: Record<string, unknown>;
+      };
+      if (inner.from === HEAD_PULSE_TARGET && inner.msg) return inner.msg;
+    } catch { /* fall through */ }
+  }
+  return null;
+}
 
 export interface TestEnv {
   port: number;
@@ -75,12 +99,16 @@ export async function connectDevice(
   });
 
   ws.on('message', (data) => {
-    const msg = JSON.parse(data.toString());
-    // Pulse control frames (HELLO/ACK/heartbeat) ride an envelope carrying a
-    // `pulse` field with an empty blob. A real client hands these to its pulse
-    // layer, not its message handlers — this bare mock has no pulse layer, so
-    // it ignores them the same way (they're not business messages).
-    if (typeof msg.pulse === 'string') return;
+    const raw = JSON.parse(data.toString());
+    // Head→device control (device_joined/left/pending, preferences, push acks)
+    // now rides pulse: the wire carries a `unicast` envelope wrapping a plaintext
+    // {from:'@head', msg} payload. Unwrap it back to `msg` so the mock's message
+    // handlers see the control message, exactly as a real client's pulse layer
+    // would deliver it. Non-head pulse frames (HELLO/ACK/heartbeat) unwrap to
+    // null and are ignored — a bare mock has no pulse layer to hand them to.
+    const msg = unwrapControlFrame(raw);
+    if (msg === null) return;
+
     messages.push(msg);
 
     for (const listener of listeners) {

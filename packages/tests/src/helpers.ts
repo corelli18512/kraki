@@ -10,7 +10,7 @@ import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
-import type { AuthProvider } from '@kraki/head';
+import type { AuthProvider, PushManager } from '@kraki/head';
 import { SessionManager, RelayClient, KeyManager } from '@kraki/tentacle';
 import type { AgentAdapter } from '@kraki/tentacle';
 import {
@@ -19,6 +19,8 @@ import {
 } from '@kraki/crypto';
 import type { KeyPair } from '@kraki/crypto';
 import { Endpoint } from '@coinfra/pulse';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
+import type { BlobPayload } from '@kraki/protocol';
 import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -71,21 +73,123 @@ export function createPulseAppLayer(
   };
 }
 
+/** Decode a pulse-delivered payload into the control message a real app would
+ *  dispatch. A delivered payload is one of two shapes:
+ *   - head-originated control: plaintext `{from:'@head', msg}` (device_joined/
+ *     left/pending, preferences_updated, push acks). Head↔device control has no
+ *     E2E — the app dispatches `msg` directly.
+ *   - E2E producer message: `{blob, keys}` addressed to this device — decrypt to
+ *     the inner message.
+ *  Returns the message to dispatch, or null if the payload isn't for us. */
+function decodePulsePayload(
+  payloadJson: string,
+  deviceId: string,
+  privateKey: string,
+): Record<string, unknown> | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(payloadJson) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  // Head-originated control frame — dispatch the inner message as-is.
+  if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
+    return parsed.msg as Record<string, unknown>;
+  }
+  // Otherwise an E2E {blob,keys} envelope — decrypt for this device.
+  try {
+    const { blob, keys } = parsed as unknown as { blob: string; keys: Record<string, string> };
+    const decrypted = decryptFromBlob({ blob, keys }, deviceId, privateKey);
+    return JSON.parse(decrypted) as Record<string, unknown>;
+  } catch {
+    return null; // not for us
+  }
+}
+
 
 export interface TestEnv {
   port: number;
   storage: Storage;
   head: HeadServer;
   httpServer: Server;
+  /** Records every pushPreview the head fires at its push layer (offline
+   *  notifications). Since the preview no longer reaches online apps on the
+   *  wire, this is where tests observe it. */
+  pushSpy: SpyPushManager;
   cleanup: () => Promise<void>;
+}
+
+/**
+ * A stand-in PushManager that records every pushPreview handed to the push
+ * layer instead of dispatching real notifications.
+ *
+ * The pushPreview now rides the SAME pulse envelope the tentacle sends to the
+ * head. The head consumes that envelope (feeding the pulse hub) and fires the
+ * preview at its push layer for OFFLINE devices via
+ * `firePushPreview → pushManager.sendToOfflineDevices(userId, onlineDeviceIds,
+ * pushPreview)`; it does NOT forward the preview to online apps. So an online
+ * app never sees a standalone `{type:'broadcast', pushPreview}` on the wire —
+ * the only surviving observation point is the PushManager. This spy captures
+ * the `pushPreview` arg there. The preview is encrypted for every recipient
+ * (including online apps), so a connected app's key still decrypts it.
+ */
+export interface SpyPushManager {
+  /** Cast to inject as `HeadServerOptions.pushManager`. */
+  manager: PushManager;
+  /** pushPreview payloads captured by sendToOfflineDevices, in call order. */
+  previews: BlobPayload[];
+  /** Resolve once a captured preview satisfies `predicate` (default: any),
+   *  polling until it lands or the timeout elapses. Undefined on timeout. */
+  waitForPreview: (
+    predicate?: (p: BlobPayload) => boolean,
+    timeout?: number,
+  ) => Promise<BlobPayload | undefined>;
+}
+
+export function createSpyPushManager(): SpyPushManager {
+  const previews: BlobPayload[] = [];
+  // The head calls getVapidPublicKey() (for auth_ok), sendToOfflineDevices()
+  // (firePushPreview), and close() (shutdown). A real instance carries private
+  // fields, so we structurally satisfy the used surface and cast.
+  const manager = {
+    sendToOfflineDevices(
+      _userId: string,
+      _onlineDeviceIds: string[],
+      pushPreview: BlobPayload,
+    ): Promise<void> {
+      previews.push(pushPreview);
+      return Promise.resolve();
+    },
+    getVapidPublicKey(): string | undefined {
+      return undefined;
+    },
+    close(): void {},
+  } as unknown as PushManager;
+
+  async function waitForPreview(
+    predicate: (p: BlobPayload) => boolean = () => true,
+    timeout = 3000,
+  ): Promise<BlobPayload | undefined> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const found = previews.find(predicate);
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return previews.find(predicate);
+  }
+
+  return { manager, previews, waitForPreview };
 }
 
 export async function createTestEnv(options?: {
   authProvider?: AuthProvider;
 }): Promise<TestEnv> {
   const storage = new Storage(':memory:');
+  const pushSpy = createSpyPushManager();
   const head = new HeadServer(storage, {
     authProvider: options?.authProvider ?? new OpenAuthProvider(),
+    pushManager: pushSpy.manager,
   });
 
   const httpServer = createServer();
@@ -100,7 +204,7 @@ export async function createTestEnv(options?: {
     storage.close();
   };
 
-  return { port, storage, head, httpServer, cleanup };
+  return { port, storage, head, httpServer, pushSpy, cleanup };
 }
 
 export function createTmpSessionDir(): { dir: string; cleanup: () => void } {
@@ -218,17 +322,14 @@ export async function connectApp(
     for (const l of listeners.slice()) l(msg);
   });
 
-  // Pulse layer: delivers decoded {blob,keys} payloads → decrypt → dispatch.
+  // Pulse layer: delivers decoded payloads → dispatch. A payload is either a
+  // head-originated control message ({from:'@head', msg}) or an E2E {blob,keys}
+  // envelope for this device; decodePulsePayload handles both.
   const pulse = createPulseAppLayer(ws, (payloadJson) => {
-    try {
-      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
-      const decrypted = decryptFromBlob({ blob, keys }, deviceId, kp.privateKey);
-      const msg = JSON.parse(decrypted) as Record<string, unknown>;
-      messages.push(msg);
-      for (const l of listeners.slice()) l(msg);
-    } catch {
-      /* not for us */
-    }
+    const msg = decodePulsePayload(payloadJson, deviceId, kp.privateKey);
+    if (!msg) return; // not for us
+    messages.push(msg);
+    for (const l of listeners.slice()) l(msg);
   });
 
   // Auth
@@ -355,15 +456,10 @@ export async function connectAppWithCrypto(
   });
 
   const pulse = createPulseAppLayer(ws, (payloadJson) => {
-    try {
-      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
-      const decrypted = decryptFromBlob({ blob, keys }, deviceId, opts.privateKey);
-      const msg = JSON.parse(decrypted) as Record<string, unknown>;
-      messages.push(msg);
-      for (const l of listeners.slice()) l(msg);
-    } catch {
-      /* not for us */
-    }
+    const msg = decodePulsePayload(payloadJson, deviceId, opts.privateKey);
+    if (!msg) return; // not for us
+    messages.push(msg);
+    for (const l of listeners.slice()) l(msg);
   });
 
   // Auth with challenge (reconnecting known device)

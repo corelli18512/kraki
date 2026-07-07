@@ -23,7 +23,14 @@ vi.mock('./encryption', () => ({
       callbacks.handleDataMessage(inner);
       (callbacks as { getHandlers: () => Array<(msg: unknown) => void> }).getHandlers().forEach((h: (msg: unknown) => void) => h(inner));
     }
-    async encryptOutbound(msg: unknown, send: (msg: unknown) => void) { send(msg); }
+    async encryptForTarget(msg: Record<string, unknown>) {
+      // Resolve the target the same way the real impl does (payload.targetDeviceId
+      // or the session's deviceId), and carry the plaintext through as the "blob"
+      // so tests can assert the round-trip without real crypto.
+      const payload = msg.payload as Record<string, unknown> | undefined;
+      const to = (payload?.targetDeviceId as string) ?? 'test-tentacle';
+      return { blob: JSON.stringify(msg), keys: {}, to };
+    }
     async drainEncryptedQueue() {}
   },
 }));

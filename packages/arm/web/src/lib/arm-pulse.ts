@@ -1,4 +1,4 @@
-import { type Effect, Endpoint } from '@coinfra/pulse';
+import { decodeFrame, type Effect, Endpoint } from '@coinfra/pulse';
 import type { InnerMessage } from '@kraki/protocol';
 import { createLogger } from './logger';
 
@@ -45,8 +45,16 @@ const dec = new TextDecoder();
 
 export class ArmPulse {
   private endpoint: Endpoint;
-  /** Target tentacle for the frame currently being emitted (per send). */
-  private currentTarget = '';
+  /** Per-send target, keyed by the DATA frame's seq. A single mutable
+   *  "currentTarget" is WRONG: retransmits (from onConnected/onFrame/tick, e.g.
+   *  after packet loss or reconnect) fire OUTSIDE the synchronous send() window,
+   *  so they'd emit with an empty target. For E2E traffic an empty `to` degrades
+   *  to broadcast (tolerated — only the right tentacle can decrypt). But for
+   *  PLAINTEXT head-bound control (HEAD_PULSE_TARGET) an empty `to` would both
+   *  miss the head's self-dispatch AND leak the control JSON to every device. So
+   *  the target must be recovered per DATA seq on every transmit, resends
+   *  included. Control frames (hello/ack/heartbeat/reset) carry no target. */
+  private targetBySeq = new Map<bigint, string>();
 
   constructor(
     private readonly host: ArmPulseHost,
@@ -55,14 +63,14 @@ export class ArmPulse {
     this.endpoint = new Endpoint({ epoch, durable: { supported: false } });
   }
 
-  /** Send a reliable message (a JSON string {blob, keys}) toward a tentacle.
-   *  `durable` marks it for relay persistence while the tentacle is offline.
-   *  Returns the assigned pulse seq so the caller can track it for rollback. */
+  /** Send a reliable message (a JSON string {blob, keys}, or plaintext control
+   *  JSON for HEAD_PULSE_TARGET) toward `targetDeviceId`. `durable` marks it for
+   *  relay persistence while the target is offline. Returns the assigned pulse
+   *  seq so the caller can track it for rollback. */
   send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
-    this.currentTarget = targetDeviceId;
     const { seq, effects } = this.endpoint.send(enc.encode(payloadJson), { durable });
+    this.targetBySeq.set(seq, targetDeviceId);
     this.run(effects);
-    this.currentTarget = '';
     return seq;
   }
 
@@ -82,13 +90,24 @@ export class ArmPulse {
   private run(effects: Effect[]): void {
     for (const e of effects) {
       switch (e.t) {
-        case 'transmit':
-          this.host.sendPulseFrame(b64(e.bytes), this.currentTarget);
+        case 'transmit': {
+          // Recover the target for THIS frame from its DATA seq, so retransmits
+          // (fired outside send()) carry the right `to` — critical for plaintext
+          // head-bound control (see targetBySeq). Non-data control frames
+          // (hello/ack/heartbeat/reset) have no target → empty.
+          const frame = decodeFrame(e.bytes);
+          const target = frame?.t === 'data' ? (this.targetBySeq.get(frame.seq) ?? '') : '';
+          this.host.sendPulseFrame(b64(e.bytes), target);
           break;
+        }
         case 'deliver':
           this.host.onDelivered(dec.decode(e.payload));
           break;
         case 'acked':
+          // Prune targets the relay has confirmed — they'll never be resent.
+          for (const s of this.targetBySeq.keys()) {
+            if (s <= e.seqUpTo) this.targetBySeq.delete(s);
+          }
           this.host.onAcked(e.seqUpTo);
           break;
         case 'reset-inbound':

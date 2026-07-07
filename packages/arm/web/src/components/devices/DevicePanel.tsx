@@ -50,7 +50,7 @@ export function DevicePanel({
       : 'offline';
 
   const handleRemove = () => {
-    wsClient.send({ type: 'remove_device', deviceId: device.id });
+    wsClient.removeDevice(device.id);
     setConfirmOpen(false);
     onClose();
   };

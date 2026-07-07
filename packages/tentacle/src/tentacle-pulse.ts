@@ -19,8 +19,10 @@ import { createLogger } from './logger.js';
 const logger = createLogger('pulse');
 
 export interface TentaclePulseHost {
-  /** Send a pulse frame to the relay as a broadcast envelope (head fans out). */
-  sendPulseFrame(pulseB64: string): void;
+  /** Send a pulse frame to the relay. When `targetDeviceId` is set, the frame
+   *  rides a unicast envelope so head forwards it to exactly that one app;
+   *  otherwise a broadcast envelope so head fans it out to all the user's apps. */
+  sendPulseFrame(pulseB64: string, targetDeviceId?: string): void;
   /** A reliable payload was delivered in order — the JSON string carrying
    *  {blob, keys} for the normal decrypt+dispatch path. */
   onDelivered(payloadJson: string): void;
@@ -33,6 +35,9 @@ const dec = new TextDecoder();
 
 export class TentaclePulse {
   private endpoint: Endpoint;
+  /** Target app for the frame currently being emitted (per send). Empty ⇒ the
+   *  frame fans out to all apps (broadcast); set ⇒ unicast to one app. */
+  private currentTarget = '';
 
   constructor(
     private readonly host: TentaclePulseHost,
@@ -44,10 +49,15 @@ export class TentaclePulse {
     });
   }
 
-  /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse. */
-  send(payloadJson: string): void {
-    const { effects } = this.endpoint.send(enc.encode(payloadJson));
+  /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse.
+   *  `targetDeviceId` addresses one app (unicast); omit it to fan out to all
+   *  apps (broadcast). `durable` marks it for head persistence while the target
+   *  app is offline (default false — sync snapshots self-heal on reconnect). */
+  send(payloadJson: string, targetDeviceId = '', durable = false): void {
+    this.currentTarget = targetDeviceId;
+    const { effects } = this.endpoint.send(enc.encode(payloadJson), { durable });
     this.run(effects);
+    this.currentTarget = '';
   }
 
   /** The relay connection is up — resume the stream. */
@@ -74,7 +84,7 @@ export class TentaclePulse {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit':
-          this.host.sendPulseFrame(b64(e.bytes));
+          this.host.sendPulseFrame(b64(e.bytes), this.currentTarget || undefined);
           break;
         case 'deliver':
           // The delivered payload is the JSON {blob, keys} string.

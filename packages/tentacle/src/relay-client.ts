@@ -13,8 +13,8 @@ import { homedir } from 'node:os';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
-  BroadcastEnvelope, UnicastEnvelope,
 } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
@@ -104,6 +104,10 @@ export class RelayClient {
   // ── Push preview state ─────────────────────────────
   /** Last agent message content per session (for idle push preview) */
   private lastAgentContent = new Map<string, string>();
+  /** Push preview to attach to the next pulse broadcast envelope (set just
+   *  before pulse.send for a notification-worthy message, consumed by
+   *  sendPulseEnvelope). */
+  private pendingPushPreview: { blob: string; keys: Record<string, string> } | undefined;
 
   // ── Streaming delta debounce ───────────────────────
   // Each agent_message_delta otherwise triggers a full hybrid encryption
@@ -157,7 +161,7 @@ export class RelayClient {
     this.pulse = new TentaclePulse(
       {
         now: () => Date.now(),
-        sendPulseFrame: (pulseB64) => this.sendPulseEnvelope(pulseB64),
+        sendPulseFrame: (pulseB64, targetDeviceId) => this.sendPulseEnvelope(pulseB64, targetDeviceId),
         onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
       },
       `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
@@ -890,7 +894,7 @@ export class RelayClient {
       };
 
       if (requesterKey) {
-        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+        this.sendReliableUnicastTo(requesterDeviceId, requesterKey, response);
       } else {
         // No encryption key — broadcast (works in open/non-E2E mode)
         this.send(response as Partial<ProducerMessage>);
@@ -908,7 +912,7 @@ export class RelayClient {
       };
 
       if (requesterKey) {
-        this.sendUnicastTo(requesterDeviceId, requesterKey, response);
+        this.sendReliableUnicastTo(requesterDeviceId, requesterKey, response);
       } else {
         this.send(response as Partial<ProducerMessage>);
       }
@@ -1432,7 +1436,7 @@ export class RelayClient {
       timestamp: new Date().toISOString(),
       payload: { sessions },
     };
-    this.sendUnicastTo(targetDeviceId, compactPubKey, msg);
+    this.sendReliableUnicastTo(targetDeviceId, compactPubKey, msg);
   }
 
   /**
@@ -1492,7 +1496,7 @@ export class RelayClient {
         totalLastSeq: meta?.lastSeq ?? replayedLastSeq,
       },
     };
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   /**
@@ -1507,7 +1511,7 @@ export class RelayClient {
 
     const meta = this.sessionManager.getMeta(sessionId);
     if (!meta) {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1521,7 +1525,7 @@ export class RelayClient {
     const endSeqExclusive = beforeSeq ?? headSeq + 1;
 
     if (endSeqExclusive <= 1) {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1572,7 +1576,7 @@ export class RelayClient {
       { requesterDeviceId, sessionId, beforeSeq, startSeq, endSeqInclusive, count: parsed.length },
       'Replied to turn-aware session messages request',
     );
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   /**
@@ -1613,7 +1617,7 @@ export class RelayClient {
     }
 
     const sendEmpty = (): void => {
-      this.sendUnicastTo(requesterDeviceId, requesterKey, {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
         type: 'session_messages_range_batch',
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
@@ -1683,7 +1687,7 @@ export class RelayClient {
       { requesterDeviceId, sessionId, fromSeq, toSeq, lo, hi, headSeq, count: parsed.length, truncated },
       'Replied to range session messages request',
     );
-    this.sendUnicastTo(requesterDeviceId, requesterKey, batchMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, batchMsg);
   }
 
   // ── Attachment bytes ────────────────────────────────
@@ -1785,7 +1789,7 @@ export class RelayClient {
           data: slice.toString('base64'),
         },
       };
-      this.sendUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
     }
   }
 
@@ -1804,7 +1808,7 @@ export class RelayClient {
       timestamp: new Date().toISOString(),
       payload: { id, index: 0, total: 0, mimeType: '', data: '', error },
     };
-    this.sendUnicastTo(requesterDeviceId, requesterKey, errorMsg);
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, errorMsg);
   }
 
   // ── Client log shipping ─────────────────────────────
@@ -1884,33 +1888,26 @@ export class RelayClient {
       this.eventsWatcher.skipToEnd(sessionId);
     }
 
-    if (this.keyManager) {
-      if (this.consumerKeys.size === 0) {
-        // No consumer keys at all — queue until a device registers
-        if (this.pendingE2eQueue.length < 1000) {
-          this.pendingE2eQueue.push(msg);
-        } else {
-          logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
-        }
-        return;
-      }
-
-      // Broadcast to all known devices (online get it via WS, offline via pushPreview)
-      this.sendEncrypted(msg);
-
-      // Also queue if no online consumers, so new devices get it on connect
-      if (this.onlineConsumers.size === 0) {
-        if (this.pendingE2eQueue.length < 1000) {
-          this.pendingE2eQueue.push(msg);
-        }
+    if (this.consumerKeys.size === 0) {
+      // No consumer keys at all — queue until a device registers
+      if (this.pendingE2eQueue.length < 1000) {
+        this.pendingE2eQueue.push(msg);
+      } else {
+        logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
       }
       return;
     }
 
-    try {
-      this.ws.send(JSON.stringify(msg as Record<string, unknown>));
-    } catch (err) {
-      logger.error({ err }, 'ws.send failed');
+    // Broadcast to all known devices (online get it via WS, offline via pushPreview).
+    // Everything rides pulse — there is no non-E2E plaintext path (a keyManager is
+    // always present; daemon-worker constructs one unconditionally).
+    this.sendEncrypted(msg);
+
+    // Also queue if no online consumers, so new devices get it on connect
+    if (this.onlineConsumers.size === 0) {
+      if (this.pendingE2eQueue.length < 1000) {
+        this.pendingE2eQueue.push(msg);
+      }
     }
   }
 
@@ -1958,7 +1955,7 @@ export class RelayClient {
   }
 
   /**
-   * Encrypt and send a message to the relay as a BroadcastEnvelope.
+   * Encrypt a producer message to all consumers and send it over pulse.
    */
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
@@ -1983,59 +1980,63 @@ export class RelayClient {
         if (content) this.lastAgentContent.set(msg.sessionId as string, content);
       }
 
-      // Pulse path: reliable types go through the per-hop pulse endpoint to head
-      // (head fans out + acks + durably holds for offline arms). The pulse
-      // frame's payload carries BOTH the ciphertext blob AND the per-recipient
-      // keys, so everything the receiver needs travels together through head
-      // (head never touches keys). Everything else keeps the legacy broadcast.
-      if (RelayClient.PERSISTENT_TYPES.has(msg.type as string)) {
-        this.pulse.send(JSON.stringify({ blob, keys }));
-        this.emitPushPreviewIfNeeded(msg, recipients);
-        return;
-      }
-
-      const envelope: BroadcastEnvelope = {
-        type: 'broadcast',
-        blob,
-        keys,
-      };
-
-      // Build encrypted push preview for notification-worthy messages
-      let previewSummary: string | undefined;
-      if (msg.type === 'permission') {
-        previewSummary = (msg.payload as Record<string, unknown>).description as string;
-      } else if (msg.type === 'question') {
-        previewSummary = (msg.payload as Record<string, unknown>).question as string;
-      } else if (msg.type === 'idle') {
-        previewSummary = this.lastAgentContent.get(msg.sessionId as string);
-      }
-
-      if (previewSummary) {
-        const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
-        const previewBlob = encryptToBlob(preview, recipients);
-        envelope.pushPreview = { blob: previewBlob.blob, keys: previewBlob.keys };
-      }
-
-      this.ws.send(JSON.stringify(envelope as unknown as Record<string, unknown>));
+      // All producer messages ride the per-hop pulse endpoint to head (head fans
+      // out + acks + durably holds for offline arms). The pulse frame's payload
+      // carries BOTH the ciphertext blob AND the per-recipient keys, so everything
+      // the receiver needs travels together through head (head never touches keys).
+      //
+      // The push preview (for notification-worthy messages) rides the SAME pulse
+      // envelope — the head reads `pushPreview` off it in its broadcast branch — so
+      // there is no separate raw send.
+      this.pendingPushPreview = this.buildPushPreview(msg, recipients);
+      this.pulse.send(JSON.stringify({ blob, keys }));
+      this.pendingPushPreview = undefined;
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
     }
   }
 
-  /** Put a pulse frame on the wire as a broadcast envelope: head reads `pulse`
-   *  for transport and fan-out. The payload ({blob,keys}) is inside the frame. */
-  private sendPulseEnvelope(pulseB64: string): void {
+  /** Put a pulse frame on the wire. With no target it rides a BROADCAST envelope
+   *  (head fans out to all the user's apps); with a `targetDeviceId` it rides a
+   *  UNICAST envelope so head forwards it to exactly that one app. head reads
+   *  `pulse` for transport (+ `to` for unicast routing); the payload ({blob,keys})
+   *  is inside the frame. */
+  private sendPulseEnvelope(pulseB64: string, targetDeviceId?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const envelope = { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
-    this.ws.send(JSON.stringify(envelope as Record<string, unknown>));
+    const envelope: Record<string, unknown> = targetDeviceId
+      ? { type: 'unicast', to: targetDeviceId, pulse: pulseB64, blob: '', keys: {} }
+      : { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
+    // Attach a pending push preview (broadcast messages only) to this same
+    // envelope so the head's push manager reaches offline devices — no separate
+    // raw send. Consume it so it rides exactly one frame.
+    if (!targetDeviceId && this.pendingPushPreview) {
+      envelope.pushPreview = this.pendingPushPreview;
+      this.pendingPushPreview = undefined;
+    }
+    this.ws.send(JSON.stringify(envelope));
   }
 
-  /** A reliable consumer message was delivered in order by pulse (arm→tentacle).
-   *  `payloadJson` is the JSON string {blob, keys}; decrypt + dispatch. */
+  /** A reliable consumer message was delivered in order by pulse (arm→tentacle),
+   *  OR a plaintext head-originated control message ({from:'@head'} — presence).
+   *  `payloadJson` is a JSON string of either shape; dispatch accordingly. */
   private handlePulseDelivered(payloadJson: string): void {
     if (!this.keyManager || !this.authInfo) return;
+    let parsed: { from?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
-      const { blob, keys } = JSON.parse(payloadJson) as { blob: string; keys: Record<string, string> };
+      parsed = JSON.parse(payloadJson);
+    } catch (err) {
+      logger.error({ err }, 'Pulse delivered payload parse failed');
+      return;
+    }
+    // Head-originated plaintext control (device_joined/left/removed, etc.): route
+    // back through the normal presence handling in handleMessage. This is
+    // load-bearing — device_joined registers the app's consumer key.
+    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
+      this.handleMessage(parsed.msg);
+      return;
+    }
+    try {
+      const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
       const decrypted = decryptFromBlob(
         { blob, keys },
         this.authInfo.deviceId,
@@ -2047,9 +2048,14 @@ export class RelayClient {
     }
   }
 
-  /** Emit a push preview for notification-worthy reliable messages (pulse path
-   *  covers online delivery; offline arms are reached by push + pulse durable). */
-  private emitPushPreviewIfNeeded(msg: Partial<ProducerMessage>, recipients: RecipientKey[]): void {
+  /** Build the encrypted push preview for a notification-worthy message, or
+   *  undefined if the message isn't one. The preview rides the SAME pulse
+   *  envelope as the reliable message (attached by sendPulseEnvelope), so the
+   *  head's push manager can notify offline devices without a separate raw send. */
+  private buildPushPreview(
+    msg: Partial<ProducerMessage>,
+    recipients: RecipientKey[],
+  ): { blob: string; keys: Record<string, string> } | undefined {
     let previewSummary: string | undefined;
     if (msg.type === 'permission') {
       previewSummary = (msg.payload as Record<string, unknown>).description as string;
@@ -2058,51 +2064,40 @@ export class RelayClient {
     } else if (msg.type === 'idle') {
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);
     }
-    if (!previewSummary || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!previewSummary) return undefined;
     try {
       const preview = JSON.stringify({ type: msg.type, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
       const previewBlob = encryptToBlob(preview, recipients);
-      // The reliable message already went out via pulse; this envelope exists
-      // ONLY to carry the push preview to head's push manager (offline devices).
-      // Keep the main blob/keys EMPTY so online arms — which decode `blob` when
-      // `keys[deviceId]` is present — skip it (no key → not addressed to them),
-      // instead of decoding the preview as a phantom message. This matches the
-      // legacy side-channel semantics (preview never was the deliverable blob).
-      const envelope = {
-        type: 'broadcast',
-        blob: '',
-        keys: {},
-        pushPreview: { blob: previewBlob.blob, keys: previewBlob.keys },
-      };
-      this.ws.send(JSON.stringify(envelope as Record<string, unknown>));
+      return { blob: previewBlob.blob, keys: previewBlob.keys };
     } catch (err) {
-      logger.debug({ err }, 'Pulse push-preview emit failed');
+      logger.debug({ err }, 'Pulse push-preview build failed');
+      return undefined;
     }
   }
 
   /**
-   * Encrypt and send a message to a single device as a UnicastEnvelope.
+   * Reliable per-app send over pulse. Encrypts `msg` for exactly one app, then
+   * hands the {blob,keys} to the pulse endpoint addressed to that app (head
+   * forwards it over the second pulse hop). Non-durable by default — sync
+   * snapshots (session_list, greeting) self-heal on reconnect, so we don't
+   * persist them in head's offline outbox.
    */
-  private sendUnicastTo(targetDeviceId: string, compactPubKey: string, msg: Record<string, unknown>): void {
+  private sendReliableUnicastTo(
+    targetDeviceId: string,
+    compactPubKey: string,
+    msg: Record<string, unknown>,
+    durable = false,
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
     try {
       const recipientPubKey = importPublicKey(compactPubKey);
-      const plaintext = JSON.stringify(msg);
-      const { blob, keys } = encryptToBlob(plaintext, [
+      const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
         { deviceId: targetDeviceId, publicKey: recipientPubKey },
       ]);
-
-      const envelope: UnicastEnvelope = {
-        type: 'unicast',
-        to: targetDeviceId,
-        blob,
-        keys,
-      };
-
-      this.ws.send(JSON.stringify(envelope as unknown as Record<string, unknown>));
+      this.pulse.send(JSON.stringify({ blob, keys }), targetDeviceId, durable);
     } catch (err) {
-      logger.error({ err, targetDeviceId }, 'Encrypted unicast failed');
+      logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
   }
 
@@ -2140,7 +2135,7 @@ export class RelayClient {
         version: this.options.version,
       },
     };
-    this.sendUnicastTo(targetDeviceId, compactPubKey, greeting);
+    this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
   }
 
   /**

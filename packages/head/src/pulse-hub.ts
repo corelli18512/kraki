@@ -23,7 +23,7 @@
 
 import type Database from 'better-sqlite3';
 import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@coinfra/pulse';
-import type { PulseFrameField, UnicastEnvelope } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 
 /** How the hub reaches out: send bytes to a device, and resolve where a
  *  delivered payload should be forwarded. Injected so the hub stays decoupled
@@ -37,6 +37,11 @@ export interface PulseHubHost {
    *  broadcasts to all the user's apps; an app that broadcasts, to the
    *  tentacles.) Empty for a pure unicast (routing comes from `to` instead). */
   broadcastTargets(fromDevice: string): string[];
+  /** A delivered payload was addressed to the head itself (HEAD_PULSE_TARGET),
+   *  not a forward destination. The payload is PLAINTEXT control JSON; hand it to
+   *  head's own control dispatch, resolving `fromDevice` → its authenticated
+   *  connection/state. */
+  onDeliverToSelf(fromDevice: string, payload: Uint8Array): void;
   now(): number;
 }
 
@@ -117,16 +122,23 @@ export class PulseHub {
   onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string }): void {
     if (!env.pulse) return;
     const d = this.ep(fromDevice);
+    // A frame addressed to HEAD_PULSE_TARGET is consumed by the head itself, not
+    // forwarded to a device. It still rides the source endpoint (same seq/ack/
+    // resume as everything else) — only the `deliver` handling differs.
+    const selfBound = env.to === HEAD_PULSE_TARGET;
     // Destinations for anything this device delivers: an explicit unicast `to`,
-    // or (for a broadcast) the fan-out targets from the host.
-    const dests = env.to ? [env.to] : this.host.broadcastTargets(fromDevice);
-    this.run(fromDevice, d.endpoint.onBytes(b64decode(env.pulse), this.host.now()), dests);
+    // or (for a broadcast) the fan-out targets from the host. '@head' is a
+    // routing sentinel, never a forward destination.
+    const dests = selfBound
+      ? []
+      : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
+    this.run(fromDevice, d.endpoint.onBytes(b64decode(env.pulse), this.host.now()), dests, selfBound);
     this.saveSnapshot(fromDevice);
   }
 
   // ── Effect execution ────────────────────────────────────────────────────────
 
-  private run(deviceId: string, effects: Effect[], dests?: string[]): void {
+  private run(deviceId: string, effects: Effect[], dests?: string[], selfBound = false): void {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit':
@@ -134,9 +146,15 @@ export class PulseHub {
           this.host.sendPulseTo(deviceId, b64encode(e.bytes));
           break;
         case 'deliver':
-          // Store-and-forward bridge: forward the reliable payload onto each
-          // destination device's endpoint, preserving the durable intent.
-          for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable);
+          if (selfBound) {
+            // Terminus at head: consume the plaintext control payload with the
+            // source connection's auth context, instead of forwarding.
+            this.host.onDeliverToSelf(deviceId, e.payload);
+          } else {
+            // Store-and-forward bridge: forward the reliable payload onto each
+            // destination device's endpoint, preserving the durable intent.
+            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable);
+          }
           break;
         case 'store':
           this.storeOutbox(deviceId, e.seq, e.payload, (dests ?? []).join(','));
@@ -161,6 +179,15 @@ export class PulseHub {
     // dest — a forwarded message is terminal at the destination device.
     this.run(destDevice, effects, undefined);
     this.saveSnapshot(destDevice);
+  }
+
+  /** Head-ORIGINATED reliable send to a device (presence / preferences / voice
+   *  responses). Same mechanism as `forward`, but the payload originates at the
+   *  head rather than being relayed from another device. Non-durable by default:
+   *  head-originated control (e.g. "device X joined") is ephemeral and must not
+   *  be redelivered stale after the target reconnects. */
+  sendToDevice(destDevice: string, payload: Uint8Array, opts?: { durable?: boolean }): void {
+    this.forward(destDevice, payload, opts?.durable ?? false);
   }
 
   // ── SQLite persistence ──────────────────────────────────────────────────────

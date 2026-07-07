@@ -15,12 +15,41 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
+import { decodeFrame } from '@coinfra/pulse';
 import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
 import type {
   AuthBackend, AuthOutcome, ChallengeOutcome, AuthInfoConfig,
 } from '../auth-backend.js';
+
+/** Unwrap head-originated pulse control frames back to their inner control
+ *  messages. Head→device control (device_joined/left/pending, preferences) now
+ *  rides pulse: each such message arrives as a `unicast` envelope wrapping a
+ *  plaintext `{from:'@head', msg}` payload. This maps a raw received-message
+ *  array to the control messages a real client would dispatch: head-control
+ *  frames yield their inner `msg`; non-pulse envelopes (auth_ok, …) pass
+ *  through unchanged; other pulse frames (HELLO/ACK/heartbeat) are dropped. */
+function unwrapControl(messages: Record<string, unknown>[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const m of messages) {
+    if (typeof m.pulse === 'string') {
+      const frame = decodeFrame(new Uint8Array(Buffer.from(m.pulse as string, 'base64')));
+      if (frame?.t === 'data') {
+        try {
+          const inner = JSON.parse(new TextDecoder().decode(frame.payload)) as {
+            from?: string; msg?: Record<string, unknown>;
+          };
+          if (inner.from === HEAD_PULSE_TARGET && inner.msg) { out.push(inner.msg); continue; }
+        } catch { /* fall through */ }
+      }
+      continue; // non-head pulse frame — a real client hands it to its pulse layer
+    }
+    out.push(m); // non-pulse message (auth_ok, …) passes through
+  }
+  return out;
+}
 
 // ── Minimal mock auth backend ───────────────────────────────
 
@@ -240,14 +269,14 @@ describe('Edge-mode auth: response shape regression', () => {
   it('device_joined is broadcast to existing peers on new auth', async () => {
     // First device — no peers to notify.
     const first = await connectEdge(env.port, 'dev_first');
-    expect(first.raw.find(m => m.type === 'device_joined')).toBeUndefined();
+    expect(unwrapControl(first.raw).find(m => m.type === 'device_joined')).toBeUndefined();
 
     // Second device connects — first should receive device_joined.
     await connectEdge(env.port, 'dev_second');
     // Allow time for the broadcast.
     await new Promise(r => setTimeout(r, 50));
 
-    const joined = first.raw.find(m => m.type === 'device_joined');
+    const joined = unwrapControl(first.raw).find(m => m.type === 'device_joined');
     expect(joined).toBeDefined();
     expect((joined!.device as Record<string, unknown>).id).toBe('dev_second');
   });
