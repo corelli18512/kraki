@@ -1,6 +1,7 @@
 import type { Message } from '@kraki/protocol';
 import { createLogger } from './logger';
 import { getStore } from './store-adapter';
+import { traceEvent } from './trace';
 
 export type MessageHandler = (msg: Message) => void;
 
@@ -282,6 +283,8 @@ export class KrakiTransport {
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as Message;
+        const rawLen = typeof event.data === 'string' ? event.data.length : 0;
+        traceEvent({ comp: 'arm', evt: 'WS-RX', type: (msg as { type?: string }).type, hasPulse: typeof (msg as { pulse?: unknown }).pulse === 'string', rawLen });
         this.callbacks.onParsedMessage(msg);
       } catch (err) {
         logger.warn('Malformed WS message:', event.data, err);

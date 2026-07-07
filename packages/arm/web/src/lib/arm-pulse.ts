@@ -1,6 +1,7 @@
 import { decodeFrame, type Effect, Endpoint } from '@coinfra/pulse';
 import type { InnerMessage } from '@kraki/protocol';
 import { createLogger } from './logger';
+import { traceEvent } from './trace';
 
 const logger = createLogger('pulse');
 
@@ -68,20 +69,27 @@ export class ArmPulse {
    *  relay persistence while the target is offline. Returns the assigned pulse
    *  seq so the caller can track it for rollback. */
   send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
-    const { seq, effects } = this.endpoint.send(enc.encode(payloadJson), { durable });
+    const payload = enc.encode(payloadJson);
+    const { seq, effects } = this.endpoint.send(payload, { durable });
     this.targetBySeq.set(seq, targetDeviceId);
+    traceEvent({ comp: 'arm', evt: 'PULSE-SEND', seq: String(seq), len: payload.length, target: targetDeviceId, durable });
     this.run(effects);
     return seq;
   }
 
   onConnected(): void {
+    traceEvent({ comp: 'arm', evt: 'PULSE-CONNECTED' });
     this.run(this.endpoint.onConnected(this.host.now()));
   }
   onDisconnected(): void {
+    traceEvent({ comp: 'arm', evt: 'PULSE-DISCONNECTED' });
     this.endpoint.onDisconnected(this.host.now());
   }
   onFrame(pulseB64: string): void {
-    this.run(this.endpoint.onBytes(unb64(pulseB64), this.host.now()));
+    const bytes = unb64(pulseB64);
+    const frame = decodeFrame(bytes);
+    traceEvent({ comp: 'arm', evt: 'PULSE-RX', seq: frame?.t === 'data' ? String(frame.seq) : '0', len: bytes.length, kind: frame?.t ?? '?' });
+    this.run(this.endpoint.onBytes(bytes, this.host.now()));
   }
   tick(): void {
     this.run(this.endpoint.onTick(this.host.now()));
@@ -91,30 +99,27 @@ export class ArmPulse {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit': {
-          // Recover the target for THIS frame from its DATA seq, so retransmits
-          // (fired outside send()) carry the right `to` — critical for plaintext
-          // head-bound control (see targetBySeq). Non-data control frames
-          // (hello/ack/heartbeat/reset) have no target → empty.
           const frame = decodeFrame(e.bytes);
           const target = frame?.t === 'data' ? (this.targetBySeq.get(frame.seq) ?? '') : '';
+          traceEvent({ comp: 'arm', evt: 'PULSE-TX', seq: frame?.t === 'data' ? String(frame.seq) : '0', len: e.bytes.length, kind: frame?.t ?? '?', target });
           this.host.sendPulseFrame(b64(e.bytes), target);
           break;
         }
         case 'deliver':
+          traceEvent({ comp: 'arm', evt: 'PULSE-DELIVER', seq: String(e.seq), len: e.payload.length });
           this.host.onDelivered(dec.decode(e.payload));
           break;
         case 'acked':
-          // Prune targets the relay has confirmed — they'll never be resent.
+          traceEvent({ comp: 'arm', evt: 'PULSE-ACKED', seq: String(e.seqUpTo) });
           for (const s of this.targetBySeq.keys()) {
             if (s <= e.seqUpTo) this.targetBySeq.delete(s);
           }
           this.host.onAcked(e.seqUpTo);
           break;
         case 'reset-inbound':
+          traceEvent({ comp: 'arm', evt: 'PULSE-RESET-INBOUND', seq: String(e.fromSeq) });
           logger.warn('pulse reset-inbound (relay stream reset)', { from: String(e.fromSeq) });
           break;
-        // store/unstore/open/close: arm is not durable-supported; lifecycle
-        // driven explicitly.
       }
     }
   }

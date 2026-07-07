@@ -7,6 +7,7 @@ import { resolvePermissionMessage, resolveQuestionMessage } from './commands';
 import { messageProvider } from './message-provider';
 import { ingestChunk, markAwaitingPush } from './attachments';
 import type { PendingPermission, PendingQuestion, SessionPreview } from '../types/store';
+import { traceEvent } from './trace';
 
 const logger = createLogger('msg-router');
 
@@ -170,12 +171,14 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'agent_message_delta': {
       logger.info('delta received', { sessionId: sid, contentLen: msg.payload.content?.length });
+      traceEvent({ comp: 'arm', evt: 'APP-DELTA', sessionId: sid, contentLen: msg.payload.content?.length });
       store.appendDelta(sid, msg.payload.content);
       break;
     }
 
     case 'agent_message': {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
+      traceEvent({ comp: 'arm', evt: 'APP-AGENT-MESSAGE', sessionId: sid, contentLen: msg.payload.content?.length });
       store.flushDelta(sid);
       store.appendMessage(sid, msg);
       // Preview is set by idle handler (final answer only) and rebuildPreview (IDB/replay).
@@ -417,6 +420,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const payload = (msg.payload ?? {}) as Record<string, unknown>;
       const clientId = typeof payload.clientId === 'string' ? payload.clientId : undefined;
       const serverContent = typeof payload.content === 'string' ? payload.content : undefined;
+      traceEvent({ comp: 'arm', evt: 'APP-USER-MESSAGE-ECHO', sessionId: sid, clientId, contentLen: serverContent?.length });
       const resolved = store.resolvePendingInput(sid, msg.seq, clientId, serverContent);
       if (!resolved) {
         store.appendMessage(sid, msg);

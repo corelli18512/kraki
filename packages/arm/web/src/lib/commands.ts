@@ -78,6 +78,8 @@ function generateClientId(): string {
   return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
 }
 
+import { traceEvent } from './trace';
+
 export function sendInput(
   sessionId: string,
   text: string,
@@ -86,11 +88,8 @@ export function sendInput(
 ): void {
   const store = getStore();
   const timestamp = new Date().toISOString();
-  // Generate a stable correlation id. Tentacle echoes this back inside
-  // the resulting `user_message.payload.clientId`, letting us resolve
-  // the right pending placeholder even with multiple in-flight sends,
-  // reconnects, or multi-device scenarios.
   const clientId = generateClientId();
+  traceEvent({ comp: 'arm', evt: 'USER-SEND-INPUT', sessionId, clientId, textLen: text.length, hasAttachments: !!attachments?.length });
   store.appendMessage(sessionId, {
     type: 'pending_input',
     id: clientId,

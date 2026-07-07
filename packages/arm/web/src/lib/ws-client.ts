@@ -12,6 +12,7 @@ import { CommandState } from './commands';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
+import { traceEvent } from './trace';
 
 const logger = createLogger('ws-client');
 
@@ -90,17 +91,16 @@ export class KrakiWSClient {
    *  tracking), or null when the target/key could not be resolved. */
   sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
     const durable = msg.type === 'delete_session';
+    const clientId = (msg.payload as { clientId?: string } | undefined)?.clientId;
+    traceEvent({ comp: 'arm', evt: 'APP-SEND-ENCRYPTED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId, clientId });
     void this.encryption.encryptForTarget(msg).then((enc) => {
       if (!enc) {
-        // No target device / key resolvable — the message is undeliverable (there
-        // is no tentacle to encrypt to). Surface it; onSeq(null) clears any pending
-        // optimistic-rollback tracking for this send.
+        traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-FAIL', type: msg.type as string, clientId });
         getStore().setLastError('Cannot send: no target device for this session. Try reconnecting.');
         onSeq?.(null);
         return;
       }
-      // The pulse payload carries BOTH blob and keys so everything the tentacle
-      // needs to decrypt travels together through head.
+      traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-OK', type: msg.type as string, clientId, blobLen: enc.blob.length, to: enc.to });
       const seq = this.pulse.send(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, durable);
       onSeq?.(seq);
     });
@@ -110,6 +110,7 @@ export class KrakiWSClient {
    *  head: head reads `pulse` for transport + `to` for the forward destination.
    *  The payload ({blob,keys}) is inside the frame. */
   private sendPulseEnvelope(pulseB64: string, to: string) {
+    traceEvent({ comp: 'arm', evt: 'WS-TX', type: 'unicast', to, pulseB64Len: pulseB64.length });
     this.transport.send({ type: 'unicast', to, pulse: pulseB64, blob: '', keys: {} });
   }
 
@@ -126,19 +127,19 @@ export class KrakiWSClient {
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
-      // Head-originated plaintext control (device_joined/left/removed,
-      // preferences_updated, server_error, …). These are NOT session-scoped, so
-      // they must go through handleMessage — the same switch the raw-WS path uses
-      // (onParsedMessage above) — NOT dispatchInner/handleDataMessage, which drops
-      // any message without a sessionId. Mirror of the tentacle's handlePulseDelivered.
       const inner = parsed.msg as unknown as Message;
+      traceEvent({ comp: 'arm', evt: 'APP-HEAD-CONTROL', type: (inner as { type?: string }).type });
       this.handleMessage(inner);
       this.handlers.forEach((h) => h(inner));
       return;
     }
     if (typeof parsed.blob === 'string' && parsed.keys) {
+      const decryptStart = performance.now();
       void this.encryption.decryptBlob(parsed.blob, parsed.keys).then((inner) => {
-        if (inner) this.dispatchInner(inner);
+        if (inner) {
+          traceEvent({ comp: 'arm', evt: 'APP-DECRYPT', type: (inner as { type?: string }).type, sessionId: (inner as { sessionId?: string }).sessionId, clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId, decryptMs: performance.now() - decryptStart });
+          this.dispatchInner(inner);
+        }
       });
     }
   }

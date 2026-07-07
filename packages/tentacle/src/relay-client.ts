@@ -29,6 +29,7 @@ import { makeHeadline } from './tool-headline.js';
 import { TentaclePulse } from './tentacle-pulse.js';
 
 const logger = createLogger('relay-client');
+const traceLog = createLogger('pulse-trace');
 
 export interface RelayClientOptions {
   /** Relay WebSocket URL (e.g., wss://relay.kraki.chat) */
@@ -286,9 +287,21 @@ export class RelayClient {
     });
 
     ws.on('message', (data) => {
+      const wsRxNs = process.hrtime.bigint();
       this.lastActivityAt = Date.now();
       try {
+        const rawLen = (data as Buffer | ArrayBuffer | string).toString ? (data as Buffer).length : 0;
         const msg = JSON.parse(data.toString());
+        traceLog.info({
+          ns: wsRxNs.toString(),
+          comp: 'tentacle',
+          evt: 'WS-RX',
+          type: msg.type,
+          from: msg.from,
+          to: msg.to,
+          hasPulse: typeof msg.pulse === 'string',
+          rawLen,
+        });
         this.handleMessage(msg);
       } catch {
         // Ignore malformed messages from head
@@ -601,7 +614,17 @@ export class RelayClient {
 
     try {
       switch (msg.type) {
-        case 'send_input':
+        case 'send_input': {
+          const clientId = msg.payload.clientId as string | undefined;
+          traceLog.info({
+            ns: process.hrtime.bigint().toString(),
+            comp: 'tentacle',
+            evt: 'APP-SEND-INPUT',
+            sessionId,
+            clientId,
+            textLen: (msg.payload.text || '').length,
+            hasAttachments: !!msg.payload.attachments?.length,
+          });
           // Broadcast user_message back to apps (round-trip confirmation).
           // Echo the optional `clientId` so the originating client can
           // correlate this broadcast with its optimistic pending_input
@@ -622,14 +645,19 @@ export class RelayClient {
           // "Session not found". (Regression discovered post-v0.21.1.)
           this.ensureSessionResumed(sessionId)
             .then(() => {
+              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId });
               this.sessionManager.markActive(sessionId);
               return this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+            })
+            .then(() => {
+              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'sendMessage failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
             });
           break;
+        }
         case 'approve':
           // Broadcast the resolution only AFTER the adapter actually applies it,
           // so arms are never told "approved" for a permission that failed /
@@ -1857,6 +1885,15 @@ export class RelayClient {
       return;
     }
 
+    traceLog.info({
+      ns: process.hrtime.bigint().toString(),
+      comp: 'tentacle',
+      evt: 'APP-OUT',
+      type: msg.type,
+      sessionId: msg.sessionId,
+      clientId: (msg.payload as { clientId?: string } | undefined)?.clientId,
+    });
+
     // Any non-delta message for a session with pending deltas must
     // flush first so the merged delta arrives before the subsequent
     // agent_message / tool_start / idle / etc.
@@ -2022,7 +2059,16 @@ export class RelayClient {
       envelope.pushPreview = this.pendingPushPreview;
       this.pendingPushPreview = undefined;
     }
-    this.ws.send(JSON.stringify(envelope));
+    const raw = JSON.stringify(envelope);
+    traceLog.info({
+      ns: process.hrtime.bigint().toString(),
+      comp: 'tentacle',
+      evt: 'WS-TX',
+      type: envelope.type,
+      to: targetDeviceId,
+      rawLen: raw.length,
+    });
+    this.ws.send(raw);
   }
 
   /** A reliable consumer message was delivered in order by pulse (arm→tentacle),
@@ -2045,13 +2091,24 @@ export class RelayClient {
       return;
     }
     try {
+      const decryptStart = process.hrtime.bigint();
       const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
       const decrypted = decryptFromBlob(
         { blob, keys },
         this.authInfo.deviceId,
         this.keyManager.getKeyPair().privateKey,
       );
-      this.handleConsumerMessage(JSON.parse(decrypted) as ConsumerMessage);
+      const inner = JSON.parse(decrypted) as ConsumerMessage;
+      traceLog.info({
+        ns: process.hrtime.bigint().toString(),
+        comp: 'tentacle',
+        evt: 'APP-DECRYPT',
+        type: (inner as { type?: string }).type,
+        sessionId: (inner as { sessionId?: string }).sessionId,
+        clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId,
+        decryptNs: (process.hrtime.bigint() - decryptStart).toString(),
+      });
+      this.handleConsumerMessage(inner);
     } catch (err) {
       logger.error({ err }, 'Pulse delivered payload decrypt failed');
     }

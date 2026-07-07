@@ -37,3 +37,5 @@ packages/arm/ios/DerivedData/
 *.xcuserstate
 xcuserdata/
 *.bak
+.claude/
+.claude-worktrees
