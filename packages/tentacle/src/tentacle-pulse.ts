@@ -88,11 +88,11 @@ export class TentaclePulse {
    *  `targetDeviceId` addresses one app (unicast); omit it to fan out to all
    *  apps (broadcast). `durable` marks it for head persistence while the target
    *  app is offline (default false — sync snapshots self-heal on reconnect). */
-  send(payloadJson: string, targetDeviceId = '', durable = false): void {
+  send(payloadJson: string, targetDeviceId = '', durable = false, coalesceKey?: string): void {
     const payload = enc.encode(payloadJson);
     this.currentTarget = targetDeviceId;
-    const { seq, effects } = this.endpoint.send(payload, { durable });
-    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable });
+    const { seq, effects } = this.endpoint.send(payload, { durable, coalesceKey });
+    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey });
     this.run(effects);
     this.currentTarget = '';
   }

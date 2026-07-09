@@ -61,6 +61,30 @@ export interface RelayClientOptions {
 
 export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
+/**
+ * Send-time coalesce key for the pulse reliable-transport layer (pulse spec §12).
+ * Messages that share a key supersede each other in the outbox: a later send
+ * with the same key drops earlier ones before transmission. This means a peer
+ * that was offline receives exactly ONE latest value per key on reconnect — not
+ * a burst of stale frames.
+ *
+ * Only state-covering messages get a key:
+ *   - `agent_message_delta` — streaming tokens; only the latest chunk matters.
+ *   - `card_action` — the current status-card state; stale actions are noise.
+ *
+ * Event messages (`agent_message`, `user_message`, `tool_start`, etc.) return
+ * `undefined` — every event must be delivered.
+ */
+export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefined {
+  if (msg.type === 'agent_message_delta' && msg.sessionId) {
+    return `agent_message_delta:${msg.sessionId}`;
+  }
+  if (msg.type === 'card_action' && msg.sessionId) {
+    return `card_action:${msg.sessionId}`;
+  }
+  return undefined;
+}
+
 export class RelayClient {
   private ws: WebSocket | null = null;
   private adapter: AgentAdapter;
@@ -2233,11 +2257,7 @@ export class RelayClient {
 
     if (this.consumerKeys.size === 0) {
       // No consumer keys at all — queue until a device registers
-      if (this.pendingE2eQueue.length < 1000) {
-        this.pendingE2eQueue.push(msg);
-      } else {
-        logger.warn({ type: (msg as Partial<ProducerMessage>).type }, 'E2E queue full (1000) — dropping message');
-      }
+      this.queuePendingE2e(msg);
       return;
     }
 
@@ -2248,9 +2268,7 @@ export class RelayClient {
 
     // Also queue if no online consumers, so new devices get it on connect
     if (this.onlineConsumers.size === 0) {
-      if (this.pendingE2eQueue.length < 1000) {
-        this.pendingE2eQueue.push(msg);
-      }
+      this.queuePendingE2e(msg);
     }
   }
 
@@ -2349,7 +2367,7 @@ export class RelayClient {
       // envelope — the head reads `pushPreview` off it in its broadcast branch — so
       // there is no separate raw send.
       this.pendingPushPreview = this.buildPushPreview(msg, recipients);
-      this.pulse.send(JSON.stringify({ blob, keys }));
+      this.pulse.send(JSON.stringify({ blob, keys }), '', false, coalesceKeyFor(msg));
       this.pendingPushPreview = undefined;
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
@@ -2527,6 +2545,25 @@ export class RelayClient {
       },
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
+  }
+
+  /**
+   * Enqueue a producer message for later delivery (no consumer keys/online
+   * consumers yet). State-covering messages (deltas, card actions) coalesce
+   * via {@link coalesceKeyFor}: only the latest per-key is kept, so a
+   * reconnecting arm receives one current snapshot per key rather than a
+   * burst of stale frames. Event messages always append.
+   */
+  private queuePendingE2e(msg: Partial<ProducerMessage>): void {
+    const key = coalesceKeyFor(msg);
+    if (key) {
+      this.pendingE2eQueue = this.pendingE2eQueue.filter((m) => coalesceKeyFor(m) !== key);
+    }
+    if (this.pendingE2eQueue.length < 1000) {
+      this.pendingE2eQueue.push(msg);
+    } else {
+      logger.warn({ type: msg.type }, 'E2E queue full (1000) — dropping message');
+    }
   }
 
   /**
