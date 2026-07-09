@@ -8,10 +8,20 @@
  * trip an API-side rejection. Aspect ratio is preserved.
  */
 
-import sharp from 'sharp';
-
 /** Max per-side pixel dimension we'll ship to the model. */
 export const MAX_DIMENSION = 2000;
+
+/** Lazily load sharp at first use, not at module import time.
+ *  sharp is a native addon (.node) that cannot be bundled into a Node SEA
+ *  (single-executable application). Static `import sharp from 'sharp'` would
+ *  crash the SEA binary on startup because esbuild bundles the JS wrapper but
+ *  not the native binary. Dynamic import defers loading until fitToMaxDimension
+ *  is actually called (which only happens when an oversized image is processed). */
+let _sharp: typeof import('sharp').default | null = null;
+async function getSharp() {
+  if (!_sharp) _sharp = (await import('sharp')).default;
+  return _sharp;
+}
 
 /**
  * If either dimension exceeds {@link MAX_DIMENSION}, resize (fit inside,
@@ -27,6 +37,7 @@ export async function fitToMaxDimension(
   const isGif = mimeType === 'image/gif';
   let meta;
   try {
+    const sharp = await getSharp();
     meta = await sharp(bytes, { animated: isGif }).metadata();
   } catch {
     return { bytes, mimeType };
@@ -37,6 +48,7 @@ export async function fitToMaxDimension(
     return { bytes, mimeType };
   }
 
+  const sharp = await getSharp();
   const pipeline = sharp(bytes, { animated: isGif }).resize({
     width: MAX_DIMENSION,
     height: MAX_DIMENSION,
