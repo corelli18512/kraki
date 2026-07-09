@@ -1583,7 +1583,10 @@ export class CopilotAdapter extends AgentAdapter {
   private flushNarration(sessionId: string): void {
     const text = (this.pendingNarration.get(sessionId) ?? '').trim();
     this.pendingNarration.delete(sessionId);
-    if (text) this.onNarration?.(sessionId, { content: text });
+    if (text) {
+      this.onNarration?.(sessionId, { content: text });
+      this.onNarrationTrace?.(sessionId, { content: text });
+    }
   }
 
   /**

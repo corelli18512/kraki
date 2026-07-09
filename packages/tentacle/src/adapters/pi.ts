@@ -311,6 +311,14 @@ interface PiSession {
   /** The most recent narration segment's finalized prose — the kept "draft" text
    *  (keep-last). Seeds the finalize prompt and is the fallback reply. */
   lastNarration: string;
+  /** The most recent narration segment whose TRACE mirror is still DEFERRED —
+   *  not yet emitted as an `agent_narration` step because it might still
+   *  graduate verbatim into the concluding bubble (skip-finalize / finalize
+   *  keep-last / fallback). It is FLUSHED to the trace (a confirmed intermediate
+   *  step) when superseded by a newer narration or by a following tool, and
+   *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
+   *  never shows twice (last Step + bubble). Empty when nothing is pending. */
+  pendingNarration: string;
   /** True while the injected finalize round is in flight (between sending the
    *  finalize prompt and the following agent_end). During it, ordinary narration
    *  is suppressed so the draft stays frozen at `lastNarration`. */
@@ -503,7 +511,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', pendingNarration: '', finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Clear the active
@@ -547,6 +555,16 @@ export class PiAdapter extends AgentAdapter {
   private touch(id: string) {
     const s = this.sessions.get(id);
     if (s) s.lastActivity = Date.now();
+  }
+
+  /** Emit the DEFERRED narration segment (if any) to the TRACE axis — it is now
+   *  a confirmed intermediate step (superseded by a newer narration or a tool),
+   *  so it can never be the graduating reply. Clears the pending slot. */
+  private flushPendingNarration(sessionId: string, s: PiSession): void {
+    if (s.pendingNarration) {
+      this.onNarrationTrace?.(sessionId, { content: s.pendingNarration });
+      s.pendingNarration = '';
+    }
   }
 
   // ── Event mapping: pi session.subscribe → Kraki callbacks ──
@@ -616,12 +634,18 @@ export class PiAdapter extends AgentAdapter {
               s.finalizeNarration = prose;
             } else if (s) {
               // Ordinary NARRATION: streams live to the draft bubble (see
-              // message_update) and is the agent's reply. The finalized prose is
-              // kept (keep-last) as the draft/fallback and mirrored to the TRACE
-              // axis (agent_narration) for the lazy "Steps" history. Tracked for
-              // the skip-finalize rule: count segments, remember it, and note that
-              // no tool has run since (so a trailing narration counts as a reply).
+              // message_update). RECONCILE the live draft NOW on every segment
+              // (onNarration → card.onNarrationFinal) so the throttled draft is
+              // squared with the finalized prose before the bubble lands — no
+              // draft→spine size-jump. But DEFER the TRACE mirror: this segment
+              // might still graduate verbatim into the concluding bubble, so we
+              // hold it as `pendingNarration` and only trace it once it is
+              // confirmed intermediate (a newer narration or a tool follows) —
+              // never the trailing reply. Flush the PREVIOUS pending here (a new
+              // segment supersedes it). Tracked for the skip-finalize rule.
               this.onNarration?.(sessionId, { content: prose });
+              this.flushPendingNarration(sessionId, s);
+              s.pendingNarration = prose;
               s.narrationSegments += 1;
               s.lastNarration = prose;
               s.toolSinceLastNarration = false;
@@ -642,7 +666,17 @@ export class PiAdapter extends AgentAdapter {
             const resummarize = args.resummarize === true;
             const text = typeof args.text === 'string' ? args.text.trim() : '';
             s.finalizeResolved = true;
-            const reply = resummarize && text ? text : s.lastNarration.trim();
+            const useResummarized = resummarize && text.length > 0;
+            const reply = useResummarized ? text : s.lastNarration.trim();
+            if (useResummarized) {
+              // The reply is a fresh summary distinct from the drafted narration,
+              // so that last narration IS a genuine step — flush it to the trace.
+              this.flushPendingNarration(sessionId, s);
+            } else {
+              // keep-last: the pending narration graduates verbatim into the
+              // bubble — DISCARD it so it isn't ALSO traced as the last Step.
+              s.pendingNarration = '';
+            }
             if (reply) {
               // For resummarize the streamed text already replaced the draft; for
               // keep (resummarize:false) the draft is still the frozen narration.
@@ -659,8 +693,13 @@ export class PiAdapter extends AgentAdapter {
         if (toolName === 'ask_user') break;
         // A real tool ran — mark that the current narration (if any) is no longer
         // the trailing reply, so the skip-finalize rule requires a finalize round.
+        // The pending narration is now confirmed intermediate (a tool follows it),
+        // so FLUSH it to the trace BEFORE the tool step to keep chronological order.
         const s = this.sessions.get(sessionId);
-        if (s) s.toolSinceLastNarration = true;
+        if (s) {
+          this.flushPendingNarration(sessionId, s);
+          s.toolSinceLastNarration = true;
+        }
         this.onToolStart?.(sessionId, {
           toolName,
           args: (e.args as Record<string, unknown>) ?? {},
@@ -741,9 +780,21 @@ export class PiAdapter extends AgentAdapter {
           // finalize_reply, the reply was already crystallized. Otherwise fall
           // back to its finalize-round prose, then the kept draft, then a notice.
           if (!s.finalizeResolved) {
-            const fallback = (s.finalizeNarration || s.lastNarration).trim();
-            if (fallback) this.onMessage?.(sessionId, { content: fallback });
-            else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+            // Prefer the finalize-round's own prose; if the model produced none,
+            // fall back to the kept draft. When the fallback is the finalize
+            // prose (distinct from the draft), the pending narration is a genuine
+            // step → flush it; when it IS the kept draft, that draft graduates
+            // into the bubble → discard so it isn't ALSO traced.
+            const finalizeProse = s.finalizeNarration.trim();
+            if (finalizeProse) {
+              this.flushPendingNarration(sessionId, s);
+              this.onMessage?.(sessionId, { content: finalizeProse });
+            } else {
+              s.pendingNarration = '';
+              const draft = s.lastNarration.trim();
+              if (draft) this.onMessage?.(sessionId, { content: draft });
+              else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+            }
           }
           s.finalizing = false;
           this.onIdle?.(sessionId);
@@ -757,6 +808,9 @@ export class PiAdapter extends AgentAdapter {
         // to settle a single clean closing message via finalize_reply.
         const skip = s.narrationSegments === 1 && !s.toolSinceLastNarration;
         if (skip) {
+          // The single trailing narration graduates verbatim into the bubble —
+          // discard the deferred trace so it isn't ALSO shown as the last Step.
+          s.pendingNarration = '';
           const reply = s.lastNarration.trim();
           if (reply) this.onMessage?.(sessionId, { content: reply });
           this.onIdle?.(sessionId);
@@ -772,7 +826,9 @@ export class PiAdapter extends AgentAdapter {
           s.proc.send('prompt', { message: finalizePrompt(s.lastNarration) });
           break;
         }
-        // Process gone before we could finalize — best-effort crystallize.
+        // Process gone before we could finalize — best-effort crystallize the
+        // kept draft, which graduates into the bubble → discard its deferred trace.
+        s.pendingNarration = '';
         const fallback = s.lastNarration.trim();
         if (fallback) this.onMessage?.(sessionId, { content: fallback });
         this.onIdle?.(sessionId);
@@ -925,6 +981,7 @@ export class PiAdapter extends AgentAdapter {
     s.narrationSegments = 0;
     s.toolSinceLastNarration = false;
     s.lastNarration = '';
+    s.pendingNarration = '';
     s.finalizing = false;
     s.finalizeResolved = false;
     s.finalizeNarration = '';

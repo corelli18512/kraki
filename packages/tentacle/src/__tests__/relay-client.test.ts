@@ -1066,7 +1066,7 @@ describe('RelayClient turn step counter (payload.steps hint)', () => {
       toolName: 'bash', args: { command: 'echo ' + id }, toolCallId: id,
     });
   const narrate = (adapter: Record<string, unknown>, content: string) =>
-    (adapter.onNarration as ((sid: string, e: { content: string }) => void))('sess_1', { content });
+    (adapter.onNarrationTrace as ((sid: string, e: { content: string }) => void))('sess_1', { content });
   const conclude = (adapter: Record<string, unknown>, content: string) =>
     (adapter.onMessage as ((sid: string, e: { content: string }) => void))('sess_1', { content });
   const userMsg = (client: RelayClient) =>

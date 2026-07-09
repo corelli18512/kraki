@@ -49,6 +49,7 @@ function makeAdapter() {
     narrationSegments: 0,
     toolSinceLastNarration: false,
     lastNarration: '',
+    pendingNarration: '',
     finalizing: false,
     finalizeResolved: false,
     finalizeNarration: '',
@@ -65,20 +66,27 @@ function makeAdapter() {
 type Sess = ReturnType<typeof makeAdapter>['session'];
 
 describe('pi narration → draft + TRACE', () => {
-  it('message_end prose → onNarration (TRACE) and tracks it as the kept draft', () => {
+  it('message_end prose → onNarration RECONCILE now, TRACE deferred (may still graduate)', () => {
     const { adapter, session, narrate } = makeAdapter();
     const onNarration = vi.fn();
+    const onNarrationTrace = vi.fn();
     const onMessage = vi.fn();
     adapter.onNarration = onNarration;
+    adapter.onNarrationTrace = onNarrationTrace;
     adapter.onMessage = onMessage;
 
     narrate('  let me think...  ');
 
+    // Live draft reconcile fires immediately on every segment.
     expect(onNarration).toHaveBeenCalledWith('s1', { content: 'let me think...' });
+    // But the TRACE mirror is DEFERRED — this segment might graduate into the
+    // concluding bubble, so it isn't traced until confirmed intermediate.
+    expect(onNarrationTrace).not.toHaveBeenCalled();
     // Narration is NOT itself a spine bubble — it graduates at idle.
     expect(onMessage).not.toHaveBeenCalled();
     expect(session.narrationSegments).toBe(1);
     expect(session.lastNarration).toBe('let me think...');
+    expect(session.pendingNarration).toBe('let me think...');
     expect(session.toolSinceLastNarration).toBe(false);
   });
 
@@ -109,15 +117,22 @@ describe('pi narration → draft + TRACE', () => {
     expect(session.narrationSegments).toBe(0);
   });
 
-  it('a real tool marks toolSinceLastNarration and flows through TRACE', () => {
+  it('a real tool marks toolSinceLastNarration and FLUSHES the pending narration to TRACE', () => {
     const { adapter, session, emit, narrate } = makeAdapter();
     const onToolStart = vi.fn();
     const onToolComplete = vi.fn();
+    const onNarrationTrace = vi.fn();
     adapter.onToolStart = onToolStart;
     adapter.onToolComplete = onToolComplete;
+    adapter.onNarrationTrace = onNarrationTrace;
     narrate('working on it');
     expect(session.toolSinceLastNarration).toBe(false);
+    expect(onNarrationTrace).not.toHaveBeenCalled(); // still deferred
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't9' });
+    // A tool follows → the narration is confirmed intermediate → traced now,
+    // BEFORE the tool step so trace order is chronological, and pending cleared.
+    expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'working on it' });
+    expect(session.pendingNarration).toBe('');
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'files', toolCallId: 't9', isError: false });
     expect(onToolStart).toHaveBeenCalledTimes(1);
     expect(onToolComplete).toHaveBeenCalledTimes(1);
@@ -170,7 +185,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
     (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, {
       proc, cwd: '/tmp', model: 'm', mode: 'execute', usage: {}, lastActivity: Date.now(),
       pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0,
-      toolSinceLastNarration: false, lastNarration: '', finalizing: false,
+      toolSinceLastNarration: false, lastNarration: '', pendingNarration: '', finalizing: false,
       finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0,
     });
     const emit = (e: Record<string, unknown>) =>
@@ -250,21 +265,28 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onIdle = vi.fn();
+    const onNarrationTrace = vi.fn();
     adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
+    adapter.onNarrationTrace = onNarrationTrace;
 
     narrate('Here is your answer.');
     emit({ type: 'agent_end' });
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Here is your answer.' });
+    // The trailing narration graduated INTO the bubble — it must NOT also be
+    // traced as a Step (the duplication bug this fix targets).
+    expect(onNarrationTrace).not.toHaveBeenCalled();
     expect(onIdle).toHaveBeenCalledTimes(1);
     expect(proc.send).not.toHaveBeenCalled(); // no finalize prompt injected
   });
 
-  it('tool THEN one explanation (git → explain) → skip, direct reply', () => {
+  it('tool THEN one explanation (git → explain) → skip, direct reply, no dup Step', () => {
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
+    const onNarrationTrace = vi.fn();
     adapter.onMessage = onMessage;
+    adapter.onNarrationTrace = onNarrationTrace;
 
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'git status' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'clean', toolCallId: 't1', isError: false });
@@ -272,7 +294,53 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     emit({ type: 'agent_end' });
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Your tree is clean.' });
+    // The explanation is the reply (bubble), not a Step.
+    expect(onNarrationTrace).not.toHaveBeenCalled();
     expect(proc.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('pi Steps dedup — trailing narration never traced as its own bubble', () => {
+  it('two narrations, finalize keep-last → first is a Step, the graduating last is NOT', () => {
+    const { adapter, proc, emit, narrate } = makeAdapter();
+    const onMessage = vi.fn();
+    const onNarrationTrace = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onNarrationTrace = onNarrationTrace;
+
+    narrate('First I will look around.');
+    narrate('Now here is the conclusion.');
+    // The SECOND narration supersedes the first → first is traced immediately.
+    expect(onNarrationTrace).toHaveBeenCalledTimes(1);
+    expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First I will look around.' });
+
+    emit({ type: 'agent_end' }); // 2 segments → finalize round
+    // Model keeps the last drafted line as the reply.
+    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 'f1' });
+
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
+    // The concluding narration graduated into the bubble → still exactly ONE trace step.
+    expect(onNarrationTrace).toHaveBeenCalledTimes(1);
+  });
+
+  it('two narrations, finalize resummarize → the last narration IS a Step (distinct from summary)', () => {
+    const { adapter, emit, narrate } = makeAdapter();
+    const onMessage = vi.fn();
+    const onNarrationTrace = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onNarrationTrace = onNarrationTrace;
+
+    narrate('First pass thoughts.');
+    narrate('Second pass thoughts.');
+    emit({ type: 'agent_end' });
+    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'A tidy summary.' }, toolCallId: 'f1' });
+
+    // Bubble is the fresh summary, distinct from either narration.
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'A tidy summary.' });
+    // BOTH narrations are genuine steps (neither equals the summary bubble).
+    expect(onNarrationTrace).toHaveBeenCalledTimes(2);
+    expect(onNarrationTrace).toHaveBeenNthCalledWith(1, 's1', { content: 'First pass thoughts.' });
+    expect(onNarrationTrace).toHaveBeenNthCalledWith(2, 's1', { content: 'Second pass thoughts.' });
   });
 });
 

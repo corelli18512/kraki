@@ -1271,12 +1271,19 @@ export class RelayClient {
       this.card.onDelta(sessionId, event.content);
     };
 
-    // Finalized narration prose → TRACE axis only: mirrored to trace.jsonl for
-    // the lazy "Steps" history and marked as the end of the draft's current
-    // segment (the next delta starts fresh). Never broadcast standalone.
+    // Finalized narration prose. Two decoupled axes:
+    //  • onNarration → LIVE card reconcile only (onNarrationFinal). Fires on
+    //    EVERY finalized segment so the streamed draft is reconciled in place
+    //    before the concluding bubble lands (no draft→spine size-jump).
+    //  • onNarrationTrace → TRACE axis only: mirror to trace.jsonl for the lazy
+    //    "Steps" history. Adapters fire this ONLY for segments that are genuine
+    //    intermediate steps — never the trailing one that graduates into the
+    //    bubble — so a reply never shows duplicated (last Step + bubble).
     this.adapter.onNarration = (sessionId, event) => {
-      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
       this.card.onNarrationFinal(sessionId, event.content);
+    };
+    this.adapter.onNarrationTrace = (sessionId, event) => {
+      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {

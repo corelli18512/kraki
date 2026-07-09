@@ -128,6 +128,15 @@ export abstract class AgentAdapter {
    *  `agent_narration` step, interleaved with tool steps, so a turn's steps can
    *  be pulled later. NEVER a spine bubble (that is the final reply only). */
   onNarration: ((sessionId: string, event: MessageEvent) => void) | null = null;
+  /** Called to MIRROR a finalized narration segment to the TRACE axis
+   *  (trace.jsonl) as an `agent_narration` step — the durable "Steps" history,
+   *  distinct from onNarration's live draft reconcile. Split from onNarration so
+   *  an adapter can reconcile the live draft on EVERY segment (avoiding a
+   *  draft→bubble size-jump) while tracing ONLY the segments that are genuine
+   *  intermediate steps — never the trailing segment that graduates into the
+   *  concluding bubble (which would otherwise show duplicated: once as the last
+   *  Step and once as the bubble). */
+  onNarrationTrace: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onPermissionRequest: ((sessionId: string, event: PermissionRequestEvent) => void) | null = null;
   /** Called when a permission is auto-resolved (e.g. by "Always Allow" for same tool kind, or cancelled on cleanup) */
   onPermissionAutoResolved: ((sessionId: string, permissionId: string, resolution: 'approved' | 'cancelled') => void) | null = null;
