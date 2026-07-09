@@ -161,8 +161,11 @@ export class PulseHub {
     const dests = selfBound
       ? []
       : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
-    this.run(fromDevice, d.endpoint.onBytes(b64decode(env.pulse), this.host.now()), dests, selfBound);
-    this.saveSnapshot(fromDevice);
+    const effects = d.endpoint.onBytes(b64decode(env.pulse), this.host.now());
+    this.run(fromDevice, effects, dests, selfBound);
+    // Only persist when a durable entry was added/removed (store/unstore effect).
+    // Same rationale as forward() — saving on every message was the OOM cause.
+    if (effects.some((e) => e.t === 'store' || e.t === 'unstore')) this.saveSnapshot(fromDevice);
   }
 
   // ── Effect execution ────────────────────────────────────────────────────────
@@ -210,7 +213,12 @@ export class PulseHub {
     // deliveries would bridge back (not used in one-way flows). No secondary
     // dest — a forwarded message is terminal at the destination device.
     this.run(destDevice, effects, undefined);
-    this.saveSnapshot(destDevice);
+    // Only persist the snapshot when a durable entry was actually added
+    // (store effect emitted). Non-durable messages (deltas, user_message,
+    // idle, etc.) do not change the durable outbox — saving on every forward
+    // was the root cause of the 2026-07-09 head OOM: JSON.stringify +
+    // SQLite INSERT per streaming delta × N online arms saturated V8 heap.
+    if (effects.some((e) => e.t === 'store')) this.saveSnapshot(destDevice);
   }
 
   /** Head-ORIGINATED reliable send to a device (presence / preferences / voice

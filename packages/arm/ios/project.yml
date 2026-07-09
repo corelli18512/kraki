@@ -10,6 +10,8 @@ options:
 packages:
   GRDB:
     path: ./Vendor/GRDB.swift
+  Pulse:
+    path: ./Vendor/Pulse
 
 settings:
   base:
@@ -65,6 +67,7 @@ targets:
       - target: KrakiNotification
         embed: true
       - package: GRDB
+      - package: Pulse
 
   KrakiNotification:
     type: app-extension
