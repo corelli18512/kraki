@@ -735,8 +735,13 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
-      - name: Update npm CLI
-        run: npm install --global npm@latest
+      - name: Show npm version
+        # Node 24 bundles a complete npm (with the `sigstore` dep) that supports
+        # `npm publish --provenance`. We deliberately do NOT `npm i -g npm@latest`
+        # here: npm's global self-upgrade has shipped broken trees missing its own
+        # `sigstore`/`tuf-js` deps, which made `--provenance` crash with
+        # "Cannot find module 'sigstore'". Use the bundled npm as-is.
+        run: npm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
