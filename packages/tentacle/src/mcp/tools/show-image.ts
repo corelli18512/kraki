@@ -77,8 +77,10 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
   let outMime: string;
   try {
     ({ bytes: outBytes, mimeType: outMime } = await fitToMaxDimension(bytes, mimeType));
-  } catch (err) {
-    return errorResult(`Failed to process image: ${(err as Error).message}`);
+  } catch {
+    // Best-effort: if resize fails, ship the original.
+    outBytes = bytes;
+    outMime = mimeType;
   }
 
   const caption = typeof args.caption === 'string' ? args.caption.trim() : '';
