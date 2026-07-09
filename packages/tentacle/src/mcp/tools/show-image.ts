@@ -3,6 +3,7 @@ import { extname, isAbsolute } from 'node:path';
 
 import type { McpToolResult } from '../protocol.js';
 import type { RegisteredTool, ToolHandler } from './index.js';
+import { fitToMaxDimension } from '../../image-resize.js';
 
 /** Hard cap on a single image's raw bytes. Stays well under the relay 10 MB
  *  frame cap once base64 + JSON wrapping + RSA-OAEP per-recipient keys are
@@ -72,6 +73,14 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
     return errorResult(`Failed to read file: ${(err as Error).message}`);
   }
 
+  let outBytes: Buffer;
+  let outMime: string;
+  try {
+    ({ bytes: outBytes, mimeType: outMime } = await fitToMaxDimension(bytes, mimeType));
+  } catch (err) {
+    return errorResult(`Failed to process image: ${(err as Error).message}`);
+  }
+
   const caption = typeof args.caption === 'string' ? args.caption.trim() : '';
   const text = caption
     ? `Image displayed to user. Caption: ${caption}`
@@ -79,7 +88,7 @@ export const showImageHandler: ToolHandler = async (args, _ctx): Promise<McpTool
 
   return {
     content: [
-      { type: 'image', mimeType, data: bytes.toString('base64') },
+      { type: 'image', mimeType: outMime, data: outBytes.toString('base64') },
       { type: 'text', text },
     ],
   };

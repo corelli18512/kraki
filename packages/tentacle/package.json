@@ -1,6 +1,6 @@
 {
   "name": "@kraki/tentacle",
-  "version": "0.28.2",
+"version": "0.28.2",
   "description": "Kraki agent bridge — the arm that connects your coding agent to the head",
   "repository": {
     "type": "git",
@@ -47,6 +47,7 @@
     "pino": "^10.3.1",
     "pino-roll": "^4.0.0",
     "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.35.3",
     "uuid": "^13.0.0",
     "ws": "^8.19.0"
   },

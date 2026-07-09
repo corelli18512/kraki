@@ -181,8 +181,11 @@ export class PulseHub {
             this.host.onDeliverToSelf(deviceId, e.payload);
           } else {
             // Store-and-forward bridge: forward the reliable payload onto each
-            // destination device's endpoint, preserving the durable intent.
-            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable);
+            // destination device's endpoint, preserving durable intent AND the
+            // send-time coalesce hint (pulse §12) so state-covering streams
+            // (deltas, card state) collapse on the arm-facing outbox if the arm
+            // is offline, instead of bursting on reconnect.
+            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable, e.coalesceKey);
           }
           break;
         case 'store':
@@ -200,9 +203,9 @@ export class PulseHub {
   /** Forward a payload onto the destination device's outbound endpoint. If the
    *  destination is offline, the pulse endpoint keeps it in its outbox (durable
    *  → also persisted to SQLite via the store effect) and resends on reconnect. */
-  private forward(destDevice: string, payload: Uint8Array, durable: boolean): void {
+  private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey?: string): void {
     const d = this.ep(destDevice);
-    const { effects } = d.endpoint.send(payload, { durable });
+    const { effects } = d.endpoint.send(payload, { durable, coalesceKey });
     // The destination endpoint's transmits go to the destination device; its
     // deliveries would bridge back (not used in one-way flows). No secondary
     // dest — a forwarded message is terminal at the destination device.
@@ -215,8 +218,8 @@ export class PulseHub {
    *  head rather than being relayed from another device. Non-durable by default:
    *  head-originated control (e.g. "device X joined") is ephemeral and must not
    *  be redelivered stale after the target reconnects. */
-  sendToDevice(destDevice: string, payload: Uint8Array, opts?: { durable?: boolean }): void {
-    this.forward(destDevice, payload, opts?.durable ?? false);
+  sendToDevice(destDevice: string, payload: Uint8Array, opts?: { durable?: boolean; coalesceKey?: string }): void {
+    this.forward(destDevice, payload, opts?.durable ?? false, opts?.coalesceKey);
   }
 
   // ── SQLite persistence ──────────────────────────────────────────────────────

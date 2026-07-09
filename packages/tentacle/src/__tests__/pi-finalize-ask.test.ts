@@ -188,19 +188,19 @@ describe('pi outbound images (tool result → attachment store)', () => {
       toolSinceLastNarration: false, lastNarration: '', pendingNarration: '', finalizing: false,
       finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0,
     });
-    const emit = (e: Record<string, unknown>) =>
-      (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => void }).handleEvent(sid, e);
+    const emit = async (e: Record<string, unknown>) =>
+      await (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => Promise<void> }).handleEvent(sid, e);
     return { adapter, emit, put };
   }
 
-  it('extracts image blocks from a tool result into the attachment store + broadcasts bytes', () => {
+  it('extracts image blocks from a tool result into the attachment store + broadcasts bytes', async () => {
     const { adapter, emit, put } = makeAdapterWithStore();
     const onToolComplete = vi.fn();
     const onAttachmentBytes = vi.fn();
     adapter.onToolComplete = onToolComplete;
     adapter.onAttachmentBytes = onAttachmentBytes;
 
-    emit({
+    await emit({
       type: 'tool_execution_end',
       toolName: 'show_image',
       toolCallId: 't1',

@@ -29,6 +29,7 @@ import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@krak
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
+import { fitToMaxDimension } from '../image-resize.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -627,7 +628,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   // ── Event mapping: pi session.subscribe → Kraki callbacks ──
-  private handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): void {
+  private async handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
     this.touch(sessionId);
     switch (e.type) {
       case 'agent_start':
@@ -791,7 +792,9 @@ export class PiAdapter extends AgentAdapter {
               if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
                 try {
                   const bytes = Buffer.from(c.data, 'base64');
-                  const ref = this.attachmentStore.put(sessionId, bytes, c.mimeType, {});
+                  const mime = c.mimeType;
+                  const { bytes: resized, mimeType: outMime } = await fitToMaxDimension(bytes, mime).catch(() => ({ bytes, mimeType: mime }));
+                  const ref = this.attachmentStore.put(sessionId, resized, outMime, {});
                   imageAttachments.push(ref);
                 } catch (err) {
                   logger.warn({ err, sessionId }, 'failed to store pi image attachment');
