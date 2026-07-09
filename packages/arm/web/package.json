@@ -16,7 +16,7 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.2.0",
+    "@coinfra/pulse": "^0.3.0",
     "@kraki/protocol": "workspace:*",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",
