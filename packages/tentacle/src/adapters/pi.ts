@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -336,8 +336,67 @@ interface PiSession {
   finalizeStreamLen: number;
 }
 
-const DEFAULT_PROVIDER = 'github-copilot';
-const DEFAULT_MODEL = 'github-copilot/claude-opus-4.8';
+// ── Dynamic model discovery via `pi --list-models` ────────────────
+
+interface PiModelRow {
+  provider: string;
+  model: string;
+  contextWindow: number;
+  reasoning: boolean;
+}
+
+/** Parse the human-readable table output of `pi --list-models`. */
+function parsePiListModels(stdout: string): PiModelRow[] {
+  const lines = stdout.split('\n').filter(l => l.trim().length > 0);
+  const header = lines[0];
+  if (!header?.includes('provider')) return [];
+
+  // Locate column boundaries from the header
+  const cols = ['provider', 'model', 'context', 'max-out', 'thinking', 'images'];
+  const boundaries: number[] = [];
+  let searchFrom = 0;
+  for (const col of cols) {
+    const idx = header.indexOf(col, searchFrom);
+    if (idx === -1) return [];
+    boundaries.push(idx);
+    searchFrom = idx + col.length;
+  }
+
+  const rows: PiModelRow[] = [];
+  for (const line of lines.slice(1)) {
+    const parts: string[] = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i];
+      const end = i + 1 < boundaries.length ? boundaries[i + 1] : undefined;
+      parts.push((end ? line.slice(start, end) : line.slice(start)).trim());
+    }
+    const [provider, model, ctxStr, , thinking] = parts;
+    if (!provider || !model) continue;
+
+    rows.push({
+      provider: provider.trim(),
+      model: model.trim(),
+      contextWindow: parseContext(ctxStr),
+      reasoning: thinking?.trim().toLowerCase() === 'yes',
+    });
+  }
+  return rows;
+}
+
+function parseContext(s: string): number {
+  s = s.trim().toUpperCase();
+  if (s.endsWith('K')) return parseInt(s, 10) * 1000;
+  if (s.endsWith('M')) return parseInt(s, 10) * 1_000_000;
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : 200_000;
+}
+
+function resolveDefaultModel(models: PiModelRow[]): string {
+  if (models.length === 0) return 'deepseek/deepseek-v4-pro';
+  // Prefer a pro/large model as default, then the first model
+  const preferred = models.find(m => m.model.includes('pro') || m.model.includes('opus')) ?? models[0];
+  return `${preferred.provider}/${preferred.model}`;
+}
 
 /** Minimal shape of pi's streamed `assistantMessageEvent` (message_update RPC).
  *  `partial` carries the accumulating AssistantMessage; for a streaming tool
@@ -493,7 +552,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
-    const [provider, modelId] = model.includes('/') ? model.split('/') : [DEFAULT_PROVIDER, model];
+    const [provider, modelId] = model.includes('/') ? model.split('/') : [this.getDefaultModel().split('/')[0], model];
     // Export the meta sidecar path so the extension's kraki_get_mode reads the
     // live permission mode (the adapter, via persistMeta, is the source of truth).
     // The gate itself is loaded in every mode; the adapter decides silent-approve
@@ -914,7 +973,7 @@ export class PiAdapter extends AgentAdapter {
 
   async createSession(config: CreateSessionConfig): Promise<{ sessionId: string }> {
     const sessionId = config.sessionId ?? randomUUID();
-    const model = config.model ?? DEFAULT_MODEL;
+    const model = config.model ?? this.getDefaultModel();
     const thinking = effortToThinking(config.reasoningEffort);
     // Co-locate pi's transcript inside the Kraki session dir. Passing the exact
     // path via `--session` makes pi write there natively (verified: pi reports
@@ -944,7 +1003,7 @@ export class PiAdapter extends AgentAdapter {
     const sess = this.spawn(
       sessionId,
       meta?.cwd ?? process.cwd(),
-      meta?.model ?? DEFAULT_MODEL,
+      meta?.model ?? this.getDefaultModel(),
       meta?.mode ?? MUTATING_DEFAULT_MODE,
       sessionFile,
       meta?.thinking,
@@ -1066,7 +1125,7 @@ export class PiAdapter extends AgentAdapter {
     if (srcFile && existsSync(srcFile)) {
       try { copyFileSync(srcFile, forkFile); } catch (err) { logger.debug({ err: (err as Error).message }, 'fork copy failed'); }
     }
-    const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? DEFAULT_MODEL, src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
+    const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? this.getDefaultModel(), src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
     this.persistMeta(newSessionId, next);
     return { sessionId: newSessionId };
   }
@@ -1112,7 +1171,7 @@ export class PiAdapter extends AgentAdapter {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.model = model;
-    const [provider, modelId] = model.includes('/') ? model.split('/') : [DEFAULT_PROVIDER, model];
+    const [provider, modelId] = model.includes('/') ? model.split('/') : [this.getDefaultModel().split('/')[0], model];
     try { await s.proc.request('set_model', { provider, modelId }); } catch { /* ignore */ }
     const thinking = effortToThinking(reasoningEffort);
     if (thinking) {
@@ -1128,17 +1187,43 @@ export class PiAdapter extends AgentAdapter {
     }));
   }
 
+  private cachedModels: PiModelRow[] | null = null;
+
+  private fetchModels(): PiModelRow[] {
+    if (this.cachedModels) return this.cachedModels;
+    try {
+      const stdout = execSync(`"${this.cliPath}" --list-models`, {
+        encoding: 'utf-8',
+        timeout: 15_000,
+        env: process.env,
+      });
+      this.cachedModels = parsePiListModels(stdout);
+      logger.info({ count: this.cachedModels.length }, 'Fetched pi model list');
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list, using empty list');
+      this.cachedModels = [];
+    }
+    return this.cachedModels;
+  }
+
+  private getDefaultModel(): string {
+    return resolveDefaultModel(this.fetchModels());
+  }
+
   async listModels(): Promise<string[]> {
-    return ['github-copilot/claude-opus-4.8', 'github-copilot/claude-sonnet-4.5', 'github-copilot/claude-haiku-4.5'];
+    return this.fetchModels().map(m => `${m.provider}/${m.model}`);
   }
 
   async listModelDetails(): Promise<ModelDetail[]> {
-    const efforts: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
-    return [
-      { id: 'github-copilot/claude-opus-4.8', name: 'Claude Opus 4.8 (1M)', supportsReasoningEffort: true, supportedReasoningEfforts: efforts, defaultReasoningEffort: 'high', contextWindow: 1000000 },
-      { id: 'github-copilot/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsReasoningEffort: true, supportedReasoningEfforts: efforts, defaultReasoningEffort: 'medium', contextWindow: 200000 },
-      { id: 'github-copilot/claude-haiku-4.5', name: 'Claude Haiku 4.5', supportsReasoningEffort: false, contextWindow: 200000 },
-    ];
+    const efforts: ReasoningEffort[] = ['high', 'xhigh'];
+    return this.fetchModels().map(m => ({
+      id: `${m.provider}/${m.model}`,
+      name: `${m.provider.charAt(0).toUpperCase() + m.provider.slice(1)} ${m.model}`,
+      supportsReasoningEffort: m.reasoning,
+      supportedReasoningEfforts: m.reasoning ? efforts : undefined,
+      defaultReasoningEffort: m.reasoning ? 'high' as const : undefined,
+      contextWindow: m.contextWindow,
+    }));
   }
 
   getSessionUsage(sessionId: string): SessionUsage | null {
