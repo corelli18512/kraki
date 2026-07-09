@@ -1049,6 +1049,10 @@ export class PiAdapter extends AgentAdapter {
     s.finalizeNarration = '';
     s.finalizeStreamId = undefined;
     s.finalizeStreamLen = 0;
+    const images = (attachments ?? [])
+      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
+      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+    const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
     // The `prompt` RPC resolves as soon as pi accepts the run (it streams
     // asynchronously and ends with agent_end); backend failures surface
     // in-stream as message_end{stopReason:'error'} -> onError. The await here
@@ -1056,16 +1060,22 @@ export class PiAdapter extends AgentAdapter {
     // (stdin closed, process gone, command timeout) there will be no agent_end,
     // so emit error + idle to avoid hanging the session "active" forever.
     try {
-      // pi's RPC `prompt` natively accepts image attachments as ImageContent
-      // blocks ({type:'image', data:base64, mimeType}) — a 1:1 match with
-      // Kraki's ImageAttachment. Non-image attachments (ContentRef handles)
-      // can't be inlined into a prompt, so they're dropped.
-      const images = (attachments ?? [])
-        .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
-        .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
-      await s.proc.request('prompt', { message: text, ...(images.length > 0 && { images }) });
+      await s.proc.request('prompt', promptPayload);
     } catch (err) {
       const message = (err as Error).message;
+      // pi can get into a state where the adapter has emitted idle (agent_end
+      // was received) but pi's internal RPC layer still thinks it's processing.
+      // Try aborting the phantom turn and retry once before giving up.
+      if (message.includes('already processing') || message.includes('still processing')) {
+        logger.warn({ sessionId }, 'pi stuck in processing state — aborting and retrying');
+        try { s.proc.send('abort'); } catch { /* ignore */ }
+        try {
+          await s.proc.request('prompt', promptPayload);
+          return;
+        } catch (retryErr) {
+          logger.warn({ sessionId, err: (retryErr as Error).message }, 'pi prompt retry also failed');
+        }
+      }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
       this.onError?.(sessionId, { message });
       this.onIdle?.(sessionId);
