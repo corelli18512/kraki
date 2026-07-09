@@ -1087,7 +1087,10 @@ export class ClaudeAdapter extends AgentAdapter {
     if (!entry) return;
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
-    if (text) this.onNarration?.(sessionId, { content: text });
+    if (text) {
+      this.onNarration?.(sessionId, { content: text });
+      this.onNarrationTrace?.(sessionId, { content: text });
+    }
   }
 
   /**

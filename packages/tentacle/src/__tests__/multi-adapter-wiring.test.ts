@@ -18,6 +18,7 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
       onMessageDelta: null,
       onFinalizeDelta: null,
       onNarration: null,
+      onNarrationTrace: null,
       onPermissionRequest: null,
       onPermissionAutoResolved: null,
       onQuestionAutoResolved: null,
@@ -45,6 +46,18 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
     stub.onNarration?.('s1', { content: 'thinking out loud' });
 
     expect(seen).toHaveBeenCalledWith('s1', { content: 'thinking out loud' });
+  });
+
+  it('forwards onNarrationTrace (TRACE axis — regression guard, same class as onNarration)', () => {
+    const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
+    const stub = makeStubAdapter();
+    (multi as unknown as { wireCallbacks(id: string, a: AgentAdapter): void }).wireCallbacks('pi', stub);
+
+    const seen = vi.fn();
+    multi.onNarrationTrace = seen;
+    stub.onNarrationTrace?.('s1', { content: 'a traced step' });
+
+    expect(seen).toHaveBeenCalledWith('s1', { content: 'a traced step' });
   });
 
   it('forwards onFinalizeDelta (regression — same missing-wiring class as onNarration)', () => {

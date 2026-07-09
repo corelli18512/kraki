@@ -389,6 +389,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onMessageDelta = (sid, e) => this.onMessageDelta?.(sid, e);
     adapter.onFinalizeDelta = (sid, e) => this.onFinalizeDelta?.(sid, e);
     adapter.onNarration = (sid, e) => this.onNarration?.(sid, e);
+    adapter.onNarrationTrace = (sid, e) => this.onNarrationTrace?.(sid, e);
     adapter.onPermissionRequest = (sid, e) => this.onPermissionRequest?.(sid, e);
     adapter.onPermissionAutoResolved = (sid, pid, r) => this.onPermissionAutoResolved?.(sid, pid, r);
     adapter.onQuestionAutoResolved = (sid, qid) => this.onQuestionAutoResolved?.(sid, qid);
