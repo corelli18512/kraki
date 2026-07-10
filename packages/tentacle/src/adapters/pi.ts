@@ -312,6 +312,10 @@ interface PiSession {
   /** The most recent narration segment's finalized prose — the kept "draft" text
    *  (keep-last). Seeds the finalize prompt and is the fallback reply. */
   lastNarration: string;
+  /** stopReason of the most recent assistant message_end this turn ('stop' |
+   *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
+   *  NOT produce a real answer → no finalize round, just idle. */
+  lastStopReason: string | undefined;
   /** The most recent narration segment whose TRACE mirror is still DEFERRED —
    *  not yet emitted as an `agent_narration` step because it might still
    *  graduate verbatim into the concluding bubble (skip-finalize / finalize
@@ -320,6 +324,9 @@ interface PiSession {
    *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
    *  never shows twice (last Step + bubble). Empty when nothing is pending. */
   pendingNarration: string;
+  /** True from sending an abort RPC until pi acknowledges that the agent is idle.
+   *  Prevents the aborted agent_end from injecting a new finalize prompt. */
+  aborting: boolean;
   /** True while the injected finalize round is in flight (between sending the
    *  finalize prompt and the following agent_end). During it, ordinary narration
    *  is suppressed so the draft stays frozen at `lastNarration`. */
@@ -426,7 +433,11 @@ const KRAKI_SYSTEM_PROMPT =
   'human by writing ordinary assistant prose — it IS your reply and is shown to ' +
   'them directly. You do NOT need any special tool to "send" a message; just ' +
   'write. Narrate preamble, thinking, and progress as prose while you work, and ' +
-  'end your turn with a short, self-contained final answer. Kraki takes care of ' +
+  'end your turn with a short, self-contained final answer. IMPORTANT: your LAST ' +
+  'paragraph of prose is used verbatim as the final reply to the user, with no ' +
+  'rewriting or summarization step in between — so make that last paragraph a ' +
+  'complete, standalone answer on its own, not a segue or a teaser. Kraki takes ' +
+  'care of ' +
   'settling that final message into the chat, so you never manage bubbles ' +
   'yourself. To get a decision or missing information from the human, call the ' +
   'ask_user tool (it blocks and returns their answer). To visually show the human ' +
@@ -571,7 +582,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', pendingNarration: '', finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Clear the active
@@ -681,6 +692,7 @@ export class PiAdapter extends AgentAdapter {
           if (m.stopReason === 'error' && m.errorMessage) {
             this.onError?.(sessionId, { message: m.errorMessage });
           }
+          if (s) s.lastStopReason = m.stopReason;
           const prose = (m.content ?? [])
             .filter((c) => c.type === 'text' && typeof c.text === 'string')
             .map((c) => c.text as string)
@@ -837,6 +849,18 @@ export class PiAdapter extends AgentAdapter {
           this.onIdle?.(sessionId);
           break;
         }
+        if (s.aborting) {
+          // abortSession owns the terminal idle(reason=aborted) notification.
+          // Pi emits agent_end before acknowledging the abort RPC; do not turn
+          // that aborted run into a fresh finalize prompt.
+          s.pendingNarration = '';
+          s.finalizing = false;
+          s.finalizeResolved = false;
+          s.finalizeNarration = '';
+          s.finalizeStreamId = undefined;
+          s.finalizeStreamLen = 0;
+          break;
+        }
         if (s.finalizing) {
           // The injected finalize round just ended. If the model called
           // finalize_reply, the reply was already crystallized. Otherwise fall
@@ -862,19 +886,29 @@ export class PiAdapter extends AgentAdapter {
           this.onIdle?.(sessionId);
           break;
         }
-        // Skip-finalize rule: a turn with EXACTLY ONE narration segment and no
-        // tool after it is already a clean trailing reply (e.g. "ran git → one
-        // explanation", or a pure one-line chat) — graduate that draft directly,
-        // no finalize round. Any other shape (multi-segment where keep-last
-        // dropped earlier prose, ends-on-tool, or zero narration) needs the model
-        // to settle a single clean closing message via finalize_reply.
-        const skip = s.narrationSegments === 1 && !s.toolSinceLastNarration;
-        if (skip) {
-          // The single trailing narration graduates verbatim into the bubble —
-          // discard the deferred trace so it isn't ALSO shown as the last Step.
+        // A backend failure / cancellation already surfaced via onError at
+        // message_end. Don't synthesize a closing reply and don't start a
+        // finalize round that re-runs the model on a dead/broken turn.
+        if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
           s.pendingNarration = '';
-          const reply = s.lastNarration.trim();
-          if (reply) this.onMessage?.(sessionId, { content: reply });
+          this.onIdle?.(sessionId);
+          break;
+        }
+        // The run produced a natural closing answer: the last narration was not
+        // followed by a tool, so it IS the model's final reply — graduate it
+        // directly into the chat, regardless of how many narration segments
+        // preceded it (earlier ones are already captured as trace steps). This
+        // replaces the old "exactly one segment" rule, which forced a finalize
+        // round on every multi-step turn. Measured across recent sessions that
+        // finalize round rewrote the draft only ~15% of the time (almost always
+        // compression, never salvage) while re-running the model with the full
+        // context + thinking budget on every turn — tens of seconds of latency
+        // for a near-no-op.
+        if (!s.toolSinceLastNarration && s.lastNarration.trim()) {
+          // The trailing narration graduates verbatim into the bubble — discard
+          // the deferred trace so it isn't ALSO shown as the last Step.
+          s.pendingNarration = '';
+          this.onMessage?.(sessionId, { content: s.lastNarration.trim() });
           this.onIdle?.(sessionId);
           break;
         }
@@ -1048,7 +1082,9 @@ export class PiAdapter extends AgentAdapter {
     s.narrationSegments = 0;
     s.toolSinceLastNarration = false;
     s.lastNarration = '';
+    s.lastStopReason = undefined;
     s.pendingNarration = '';
+    s.aborting = false;
     s.finalizing = false;
     s.finalizeResolved = false;
     s.finalizeNarration = '';
@@ -1088,7 +1124,21 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async abortSession(sessionId: string): Promise<void> {
-    this.sessions.get(sessionId)?.proc.send('abort');
+    const s = this.sessions.get(sessionId);
+    if (!s?.proc.alive) return;
+
+    // Pi emits agent_end before resolving this RPC. Keep that event from
+    // entering the normal finalize flow, which would start a new model turn
+    // immediately after the user aborted the previous one.
+    s.aborting = true;
+    try {
+      // Pi resolves this RPC only after AgentSession.abort() has cancelled the
+      // active tool process group and waitForIdle() has completed. Relay-client
+      // must not announce `idle` before that acknowledgement arrives.
+      await s.proc.request('abort');
+    } finally {
+      s.aborting = false;
+    }
   }
 
   async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {

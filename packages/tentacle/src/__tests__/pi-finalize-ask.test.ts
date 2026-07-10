@@ -50,6 +50,8 @@ function makeAdapter() {
     toolSinceLastNarration: false,
     lastNarration: '',
     pendingNarration: '',
+    lastStopReason: undefined,
+    aborting: false,
     finalizing: false,
     finalizeResolved: false,
     finalizeNarration: '',
@@ -140,6 +142,52 @@ describe('pi narration → draft + TRACE', () => {
   });
 });
 
+describe('pi abort', () => {
+  it('waits for the pi abort acknowledgement before resolving', async () => {
+    const { adapter, sid, proc } = makeAdapter();
+    let acknowledge!: () => void;
+    proc.request.mockReturnValueOnce(new Promise<void>((resolve) => { acknowledge = resolve; }));
+
+    let resolved = false;
+    const aborting = adapter.abortSession(sid).then(() => { resolved = true; });
+    await Promise.resolve();
+
+    expect(proc.request).toHaveBeenCalledWith('abort');
+    expect(resolved).toBe(false);
+
+    acknowledge();
+    await aborting;
+    expect(resolved).toBe(true);
+  });
+
+  it('suppresses finalize when pi emits agent_end during abort', async () => {
+    const { adapter, sid, proc, emit } = makeAdapter();
+    const onIdle = vi.fn();
+    adapter.onIdle = onIdle;
+    let acknowledge!: () => void;
+    proc.request.mockReturnValueOnce(new Promise<void>((resolve) => { acknowledge = resolve; }));
+
+    const aborting = adapter.abortSession(sid);
+    await Promise.resolve();
+    emit({ type: 'agent_end' });
+
+    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
+    expect(onIdle).not.toHaveBeenCalled();
+
+    acknowledge();
+    await aborting;
+  });
+
+  it('does not send abort to an already-dead pi process', async () => {
+    const { adapter, sid, proc } = makeAdapter();
+    proc.alive = false;
+
+    await adapter.abortSession(sid);
+
+    expect(proc.request).not.toHaveBeenCalled();
+  });
+});
+
 describe('pi inbound images (sendMessage → RPC prompt.images)', () => {
   it('converts ImageAttachment → pi ImageContent and passes it in the prompt', async () => {
     const { adapter, proc } = makeAdapter();
@@ -185,7 +233,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
     (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, {
       proc, cwd: '/tmp', model: 'm', mode: 'execute', usage: {}, lastActivity: Date.now(),
       pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0,
-      toolSinceLastNarration: false, lastNarration: '', pendingNarration: '', finalizing: false,
+      toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false,
       finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0,
     });
     const emit = async (e: Record<string, unknown>) =>
@@ -301,7 +349,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
 });
 
 describe('pi Steps dedup — trailing narration never traced as its own bubble', () => {
-  it('two narrations, finalize keep-last → first is a Step, the graduating last is NOT', () => {
+  it('two narrations, last is trailing → first is a Step, the graduating last is NOT (no finalize round)', () => {
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onNarrationTrace = vi.fn();
@@ -314,38 +362,37 @@ describe('pi Steps dedup — trailing narration never traced as its own bubble',
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
     expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First I will look around.' });
 
-    emit({ type: 'agent_end' }); // 2 segments → finalize round
-    // Model keeps the last drafted line as the reply.
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 'f1' });
+    emit({ type: 'agent_end' }); // 2 segments, last is trailing → graduate directly, no finalize round
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
     // The concluding narration graduated into the bubble → still exactly ONE trace step.
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
+    // No finalize round is injected for a multi-segment turn with a clean trailing reply.
+    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
   });
 
-  it('two narrations, finalize resummarize → the last narration IS a Step (distinct from summary)', () => {
+  it('genuine finalize fallback (ends on a tool) keeps the keep-last trace discipline', () => {
     const { adapter, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onNarrationTrace = vi.fn();
     adapter.onMessage = onMessage;
     adapter.onNarrationTrace = onNarrationTrace;
 
-    narrate('First pass thoughts.');
-    narrate('Second pass thoughts.');
-    emit({ type: 'agent_end' });
+    narrate('First pass thoughts.'); // trailing so far
+    // A real tool follows → the narration is now an intermediate step, traced now.
+    emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
+    emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
+    emit({ type: 'agent_end' }); // ended on a tool, no trailing reply → finalize round
     emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'A tidy summary.' }, toolCallId: 'f1' });
 
-    // Bubble is the fresh summary, distinct from either narration.
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'A tidy summary.' });
-    // BOTH narrations are genuine steps (neither equals the summary bubble).
-    expect(onNarrationTrace).toHaveBeenCalledTimes(2);
-    expect(onNarrationTrace).toHaveBeenNthCalledWith(1, 's1', { content: 'First pass thoughts.' });
-    expect(onNarrationTrace).toHaveBeenNthCalledWith(2, 's1', { content: 'Second pass thoughts.' });
+    expect(onNarrationTrace).toHaveBeenCalledTimes(1);
+    expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First pass thoughts.' });
   });
 });
 
-describe('pi finalize round (dropped narration → conclude)', () => {
-  it('TWO narration segments → inject a finalize prompt seeded with the last draft', () => {
+describe('pi finalize round (only when no trailing reply)', () => {
+  it('multi-segment with a clean trailing reply graduates directly, NO finalize round', () => {
     const { adapter, proc, session, emit, narrate } = makeAdapter();
     const onIdle = vi.fn();
     const onMessage = vi.fn();
@@ -356,16 +403,13 @@ describe('pi finalize round (dropped narration → conclude)', () => {
     narrate('Now here is the conclusion.');
     emit({ type: 'agent_end' });
 
-    expect(session.finalizing).toBe(true);
-    expect(onIdle).not.toHaveBeenCalled();
-    expect(onMessage).not.toHaveBeenCalled();
-    const sent = proc.send.mock.calls.find((c) => c[0] === 'prompt');
-    expect(sent).toBeTruthy();
-    expect(sent?.[1].message).toContain('finalize_reply');
-    expect(sent?.[1].message).toContain('Now here is the conclusion.'); // seeded draft
+    expect(session.finalizing).toBe(false);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
+    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
   });
 
-  it('ends on a tool (narration then tool) → finalize round', () => {
+  it('ends on a tool (narration then tool, no trailing reply) → finalize round', () => {
     const { adapter, proc, session, emit, narrate } = makeAdapter();
     adapter.onIdle = vi.fn();
     narrate('Let me run this.');
@@ -376,7 +420,7 @@ describe('pi finalize round (dropped narration → conclude)', () => {
     expect(proc.send).toHaveBeenCalledWith('prompt', expect.objectContaining({ message: expect.stringContaining('finalize_reply') }));
   });
 
-  it('zero narration → finalize round', () => {
+  it('zero narration (tool only) → finalize round', () => {
     const { adapter, proc, session, emit } = makeAdapter();
     adapter.onIdle = vi.fn();
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
@@ -384,6 +428,37 @@ describe('pi finalize round (dropped narration → conclude)', () => {
     emit({ type: 'agent_end' });
     expect(session.finalizing).toBe(true);
     expect(proc.send).toHaveBeenCalledWith('prompt', expect.objectContaining({ message: expect.stringContaining('finalize_reply') }));
+  });
+
+  it('backend error stopReason → no finalize round, no reply, just idle (error already surfaced)', () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onIdle = vi.fn();
+    const onMessage = vi.fn();
+    const onError = vi.fn();
+    adapter.onIdle = onIdle;
+    adapter.onMessage = onMessage;
+    adapter.onError = onError;
+    emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'quota exceeded' } });
+    emit({ type: 'agent_end' });
+    expect(session.finalizing).toBe(false);
+    expect(onError).toHaveBeenCalledWith('s1', { message: 'quota exceeded' });
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborted stopReason → no finalize round, just idle', () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onIdle = vi.fn();
+    const onMessage = vi.fn();
+    adapter.onIdle = onIdle;
+    adapter.onMessage = onMessage;
+    emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted', errorMessage: 'Request was aborted' } });
+    emit({ type: 'agent_end' });
+    expect(session.finalizing).toBe(false);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
+    expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
   it('suppresses draft narration deltas during the finalize round (draft frozen)', () => {
