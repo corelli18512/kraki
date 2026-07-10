@@ -15,6 +15,7 @@ import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
+import { trace, fp } from './trace.js';
 import type { PushManager } from './push/index.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
 
@@ -212,6 +213,25 @@ export class HeadServer {
       for (const [token, data] of this.pairingTokens) {
         if (now > data.expiresAt) this.pairingTokens.delete(token);
       }
+
+      // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
+      // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
+      // that recurred across the pulse PRs. rss/heap from process.memoryUsage;
+      // endpointCount + durable-row total reflect the pulse-hub memory state.
+      const mem = process.memoryUsage();
+      let durableRows = 0;
+      try {
+        durableRows = (this.storage.rawDb.prepare('SELECT COUNT(*) AS n FROM pulse_outbox').get() as { n: number }).n;
+      } catch { /* table may not exist yet */ }
+      getLogger().info('health', {
+        conns: this.connections.size,
+        endpoints: this.pulseHub.endpointCount(),
+        durableRows,
+        rssMb: Math.round(mem.rss / 1048576),
+        heapUsedMb: Math.round(mem.heapUsed / 1048576),
+        heapTotalMb: Math.round(mem.heapTotal / 1048576),
+        evlLagMs: undefined,
+      });
     }, HeadServer.PING_INTERVAL);
   }
 
@@ -361,6 +381,7 @@ export class HeadServer {
           this.connections.delete(disconnectedDeviceId);
           this.userByDevice.delete(disconnectedDeviceId);
           this.pulseHub.onDeviceDisconnected(disconnectedDeviceId);
+          trace('DEV-DISCONNECT', { device: disconnectedDeviceId, code, reason: reasonStr });
           logger.info('Device disconnected', {
             deviceId: disconnectedDeviceId,
             closeCode: code,
@@ -626,7 +647,9 @@ export class HeadServer {
    *  the device is online. Used by the PulseHub to reach endpoints. */
   private sendPulseFrameTo(deviceId: string, pulseB64: string): boolean {
     const ws = this.connections.get(deviceId);
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const online = !!ws && ws.readyState === WebSocket.OPEN;
+    trace('HUB-TX-WS', { to: deviceId, online, pulseB64Len: pulseB64.length });
+    if (!online) return false;
     // `to` lets the receiver's own pulse layer know which stream this is; blob
     // is empty because the payload (if any) is inside the pulse frame.
     ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
@@ -650,6 +673,7 @@ export class HeadServer {
    *  handlers the raw-WS path uses, so auth context (state.userId/deviceId) and
    *  responses (over ws) are identical. */
   private deliverPulseToSelf(fromDevice: string, payload: Uint8Array): void {
+    trace('CTRL-SELF', { from: fromDevice, len: payload.length, fp: fp(payload) });
     const ws = this.connections.get(fromDevice);
     if (!ws) return; // device vanished — the control op is moot
     const state = this.clients.get(ws);
@@ -734,12 +758,18 @@ export class HeadServer {
   private firePushPreview(state: ClientState, pushPreview: BlobPayload | undefined): void {
     const senderUserId = state.userId;
     const senderDeviceId = state.deviceId;
-    if (!senderUserId || !senderDeviceId || !pushPreview || !this.options.pushManager) return;
+    if (!senderUserId || !senderDeviceId || !pushPreview || !this.options.pushManager) {
+      trace('PUSH-SKIP', { reason: !senderUserId ? 'no-user' : !senderDeviceId ? 'no-device' : !pushPreview ? 'no-preview' : 'no-pushmgr' });
+      return;
+    }
     const onlineDeviceIds: string[] = [senderDeviceId];
+    let offlineCount = 0;
     for (const device of this.storage.getDevicesByUser(senderUserId)) {
       if (device.id === senderDeviceId) continue;
       if (this.connections.get(device.id)) onlineDeviceIds.push(device.id);
+      else offlineCount++;
     }
+    trace('PUSH-FIRE', { sender: senderDeviceId, onlineCount: onlineDeviceIds.length, offlineCount, previewKeys: Object.keys(pushPreview.keys) });
     this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, pushPreview)
       .catch(err => getLogger().warn('Push notification send failed', { error: (err as Error).message }));
   }
@@ -984,6 +1014,7 @@ export class HeadServer {
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
     this.pulseHub.onDeviceConnected(deviceId);
+    trace('DEV-CONNECT', { device: deviceId, user: user.userId, auth: 'challenge' });
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
 
@@ -1022,6 +1053,7 @@ export class HeadServer {
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
     this.pulseHub.onDeviceConnected(result.deviceId);
+    trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
 
     logger.info('Device authenticated (via backend)', {
       deviceId: result.deviceId,
@@ -1179,6 +1211,7 @@ export class HeadServer {
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
     this.pulseHub.onDeviceConnected(deviceId);
+    trace('DEV-CONNECT', { device: deviceId, user: user.id, auth: 'inline' });
 
     logger.info('Device authenticated', {
       deviceId,

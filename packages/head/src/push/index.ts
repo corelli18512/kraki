@@ -3,6 +3,7 @@
 // ------------------------------------------------------------
 
 import { getLogger } from '../logger.js';
+import { trace } from '../trace.js';
 import type { Storage, StoredPushToken } from '../storage.js';
 import type { PushProvider } from './provider.js';
 import type { BlobPayload } from '@kraki/protocol';
@@ -47,12 +48,14 @@ export class PushManager {
     const logger = getLogger();
     const provider = this.providers.get(storedToken.provider);
     if (!provider) {
+      trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: false, reason: 'no-provider' });
       logger.debug('No push provider for type', { provider: storedToken.provider });
       return;
     }
 
     const deviceKey = pushPreview.keys[storedToken.deviceId];
     if (!deviceKey) {
+      trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: false, reason: 'no-key', availableKeys: Object.keys(pushPreview.keys) });
       logger.debug('No push preview key for device', { deviceId: storedToken.deviceId });
       return;
     }
@@ -65,7 +68,10 @@ export class PushManager {
 
     if (result.gone) {
       this.storage.deletePushToken(storedToken.deviceId, storedToken.provider);
+      trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: true, gone: true });
       logger.info('Removed stale push token', { deviceId: storedToken.deviceId, provider: storedToken.provider });
+    } else {
+      trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: true });
     }
   }
 

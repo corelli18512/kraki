@@ -2339,14 +2339,23 @@ export class RelayClient {
     const recipients: RecipientKey[] = [];
     for (const deviceId of this.onlineConsumers) {
       const compactKey = this.consumerKeys.get(deviceId);
-      if (!compactKey) continue;
+      if (!compactKey) {
+        traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, sessionId: (msg as { sessionId?: string }).sessionId, seq: (msg as { seq?: number }).seq, droppedReason: 'no-online-key', deviceId });
+        continue;
+      }
       try {
         recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
       } catch (err) {
+        traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, droppedReason: 'invalid-key', deviceId });
         logger.warn({ err, deviceId }, 'Skipping device with invalid public key');
       }
     }
-    if (recipients.length === 0) return;
+    if (recipients.length === 0) {
+      traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, droppedReason: 'recipients-empty', onlineConsumers: this.onlineConsumers.size, consumerKeys: this.consumerKeys.size });
+      return;
+    }
+
+    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-OK', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, recipients: recipients.map((r) => r.deviceId), coalesceKey: coalesceKeyFor(msg) });
 
     try {
       const plaintext = JSON.stringify(msg);
@@ -2474,6 +2483,15 @@ export class RelayClient {
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);
     }
     if (!previewType || !previewSummary) return undefined;
+    // NOTE: `recipients` here is ONLINE-only (sendEncrypted filters to
+    // onlineConsumers). But push previews are meant for OFFLINE devices. This
+    // is the root of the offline-push regression (ec6a255c): the preview's
+    // `keys` map only contains online device ids, so PushManager.sendToDevice
+    // finds `keys[offlineDeviceId] === undefined` and bails for every offline
+    // device. Traced on head as PUSH-SEND reason:'no-key'. See
+    // https://github.com/.../ issues for the fix (encrypt preview to ALL
+    // consumerKeys, not just online).
+    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientIds: recipients.map((r) => r.deviceId), consumerKeyIds: [...this.consumerKeys.keys()], onlineConsumerIds: [...this.onlineConsumers], keysHasOfflineDevice: [...this.consumerKeys.keys()].some((id) => !this.onlineConsumers.has(id)) });
     try {
       const preview = JSON.stringify({ type: previewType, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
       const previewBlob = encryptToBlob(preview, recipients);

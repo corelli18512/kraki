@@ -25,6 +25,7 @@ import type Database from 'better-sqlite3';
 import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 import { getLogger } from './logger.js';
+import { fp, trace } from './trace.js';
 
 /** GC policy — how aggressively the hub reclaims per-device outbox memory
  *  for peers that stay disconnected. Zero disables that step. Defaults tuned
@@ -161,11 +162,21 @@ export class PulseHub {
     const dests = selfBound
       ? []
       : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
+    const inLen = env.pulse.length;
+    trace('WS-RX', { from: fromDevice, to: env.to, selfBound, destCount: dests.length, pulseB64Len: inLen });
     const effects = d.endpoint.onBytes(b64decode(env.pulse), this.host.now());
+    const delivered = effects.filter((e) => e.t === 'deliver');
+    if (delivered.length > 0) {
+      for (const e of delivered) {
+        if (e.t === 'deliver') trace('HUB-DELIVER', { from: fromDevice, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, selfBound });
+      }
+    }
     this.run(fromDevice, effects, dests, selfBound);
+    const willSnapshot = effects.some((e) => e.t === 'store' || e.t === 'unstore');
+    trace('HUB-ONPULSE', { from: fromDevice, effects: effects.map((e) => e.t), willSnapshot });
     // Only persist when a durable entry was added/removed (store/unstore effect).
     // Same rationale as forward() — saving on every message was the OOM cause.
-    if (effects.some((e) => e.t === 'store' || e.t === 'unstore')) this.saveSnapshot(fromDevice);
+    if (willSnapshot) this.saveSnapshot(fromDevice);
   }
 
   // ── Effect execution ────────────────────────────────────────────────────────
@@ -174,15 +185,18 @@ export class PulseHub {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit':
+          trace('HUB-TX', { to: deviceId, len: e.bytes.length });
           // Control/resend bytes go back to this device.
           this.host.sendPulseTo(deviceId, b64encode(e.bytes));
           break;
         case 'deliver':
           if (selfBound) {
+            trace('HUB-DELIVER-SELF', { from: deviceId, seq: String(e.seq), len: e.payload.length });
             // Terminus at head: consume the plaintext control payload with the
             // source connection's auth context, instead of forwarding.
             this.host.onDeliverToSelf(deviceId, e.payload);
           } else {
+            trace('HUB-FORWARD', { from: deviceId, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, dests: dests ?? [] });
             // Store-and-forward bridge: forward the reliable payload onto each
             // destination device's endpoint, preserving durable intent AND the
             // send-time coalesce hint (pulse §12) so state-covering streams
@@ -192,9 +206,11 @@ export class PulseHub {
           }
           break;
         case 'store':
+          trace('HUB-STORE', { device: deviceId, seq: String(e.seq), len: e.payload.length, dests: dests ?? [] });
           this.storeOutbox(deviceId, e.seq, e.payload, (dests ?? []).join(','));
           break;
         case 'unstore':
+          trace('HUB-UNSTORE', { device: deviceId, seqUpTo: String(e.seqUpTo) });
           this.unstoreOutbox(deviceId, e.seqUpTo);
           break;
         // reset-inbound / acked / open / close: nothing for the hub to do —
@@ -209,16 +225,18 @@ export class PulseHub {
   private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey?: string): void {
     const d = this.ep(destDevice);
     const { effects } = d.endpoint.send(payload, { durable, coalesceKey });
+    trace('FWD-SEND', { dest: destDevice, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
     // The destination endpoint's transmits go to the destination device; its
     // deliveries would bridge back (not used in one-way flows). No secondary
     // dest — a forwarded message is terminal at the destination device.
     this.run(destDevice, effects, undefined);
+    const willSnapshot = effects.some((e) => e.t === 'store' || e.t === 'unstore');
     // Only persist the snapshot when a durable entry was actually added
     // (store effect emitted). Non-durable messages (deltas, user_message,
     // idle, etc.) do not change the durable outbox — saving on every forward
     // was the root cause of the 2026-07-09 head OOM: JSON.stringify +
     // SQLite INSERT per streaming delta × N online arms saturated V8 heap.
-    if (effects.some((e) => e.t === 'store' || e.t === 'unstore')) this.saveSnapshot(destDevice);
+    if (willSnapshot) this.saveSnapshot(destDevice);
   }
 
   /** Head-ORIGINATED reliable send to a device (presence / preferences / voice
@@ -337,6 +355,7 @@ export class PulseHub {
 
       if (this.gc.evictEndpointAfterMs > 0 && offlineMs >= this.gc.evictEndpointAfterMs) {
         // L2: release the endpoint. Durable state stays in pulse_meta.
+        trace('GC-EVICT', { device: deviceId, offlineMs });
         this.devices.delete(deviceId);
         evicted += 1;
         continue;
@@ -350,6 +369,7 @@ export class PulseHub {
         const { droppedSeqs } = d.endpoint.purgeNonDurable('gc-idle');
         if (droppedSeqs.length > 0) {
           purged += droppedSeqs.length;
+          trace('GC-PURGE', { device: deviceId, dropped: droppedSeqs.length, offlineMs });
           this.saveSnapshot(deviceId);
         }
       }

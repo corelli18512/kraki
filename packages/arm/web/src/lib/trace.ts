@@ -56,10 +56,18 @@ if (typeof window !== 'undefined') {
 
 export function traceEvent(fields: Omit<TraceEvent, 't' | 'wallMs'>): void {
   if (!enabled) return;
-  buffer.push({
+  const e: TraceEvent = {
     t: performance.now(),
     wallMs: Date.now(),
     ...fields,
-  });
+  };
+  buffer.push(e);
   if (buffer.length > MAX_EVENTS) buffer.splice(0, buffer.length - MAX_EVENTS);
+  // Out-of-band drain for live debugging via Playwright (see
+  // scripts/arm-prod-log.ts). The page installs window.__pwTrace before the
+  // app loads, so every traceEvent streams to the Node side in real time
+  // WITHOUT going through the (possibly-broken) pulse transport.
+  if (typeof (window as unknown as { __pwTrace?: (e: TraceEvent) => void }).__pwTrace === 'function') {
+    try { (window as unknown as { __pwTrace: (e: TraceEvent) => void }).__pwTrace(e); } catch { /* ignore */ }
+  }
 }
