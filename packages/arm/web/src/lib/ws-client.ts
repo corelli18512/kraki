@@ -652,8 +652,16 @@ export class KrakiWSClient {
   }
 
   private handleMessage(msg: Message) {
-    // Handle pong (keepalive response) — not in typed Message union
-    if ((msg as Record<string, unknown>).type === 'pong') return;
+    // Handle ping/pong keepalive — not in typed Message union
+    const rawType = (msg as Record<string, unknown>).type;
+    if (rawType === 'pong') return;
+    if (rawType === 'ping') {
+      // Reply with pong so the relay's stale-connection detector (30s no-pong
+      // → terminate) doesn't kill us. The relay's protocol-level ws.ping() may
+      // be swallowed by nginx; this JSON pong is the reliable fallback.
+      this.transport.send({ type: 'pong' });
+      return;
+    }
 
     switch (msg.type) {
       // --- Encrypted envelopes ---
