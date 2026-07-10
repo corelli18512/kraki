@@ -1026,7 +1026,12 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
-    const s = this.sessions.get(sessionId) ?? (await this.resumeSession(sessionId), this.sessions.get(sessionId));
+    // If the session was idle-evicted (proc killed but map entry retained) or
+    // the daemon restarted, resume before sending — the proc's stdin is gone.
+    const existing = this.sessions.get(sessionId);
+    const s = existing?.proc.alive
+      ? existing
+      : (await this.resumeSession(sessionId), this.sessions.get(sessionId));
     if (!s) throw new Error(`pi session ${sessionId} not found`);
     this.touch(sessionId);
     // Edge-triggered mode signal: if the mode changed since the last message,
