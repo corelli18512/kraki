@@ -93,7 +93,7 @@ The snapshot path is printed on both success and failure so you always have a ma
 Run on the host:
 
 ```bash
-sudo /usr/local/sbin/deploy-edge-relay.sh 0.12.0
+sudo deploy-edge-relay.sh <version>   # e.g. 0.16.2
 ```
 
 (or invoke `scripts/deploy-edge-relay.sh` directly from a checkout — the script doesn't depend on the repo).

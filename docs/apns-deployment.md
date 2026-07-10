@@ -11,7 +11,7 @@ Steps to enable Apple Push Notifications on a Kraki relay.
 5. Note:
    - **Key ID** (10-char string shown after registration, e.g. `ABC123DEFG`)
    - **Team ID** (Apple Developer → Membership)
-   - **Bundle ID**: `cloud.corelli.kraki`
+   - **Bundle ID**: `chat.kraki.ios`
 
 ## 2. Upload the key to the relay
 
@@ -31,7 +31,7 @@ Environment=NPM_CONFIG_UPDATE_NOTIFIER=false
 Environment=APNS_KEY_PATH=/var/lib/kraki/apns-key.p8
 Environment=APNS_KEY_ID=ABC123DEFG
 Environment=APNS_TEAM_ID=XXXXXXXXXX
-Environment=APNS_BUNDLE_ID=cloud.corelli.kraki
+Environment=APNS_BUNDLE_ID=chat.kraki.ios
 Environment=APNS_ENVIRONMENT=production
 WorkingDirectory=/var/lib/kraki
 ExecStart=/usr/local/bin/kraki-relay --port 4000 --db /var/lib/kraki/kraki-relay.db --push web_push,apns
@@ -49,7 +49,7 @@ ssh corelli-tecent-cloud-small-0 "systemctl daemon-reload && systemctl restart k
 
 Tail the log on connect — should see:
 ```
-APNs push provider configured {"bundleId":"cloud.corelli.kraki","environment":"production"}
+APNs push provider configured {"bundleId":"chat.kraki.ios","environment":"production"}
 ```
 
 When the iOS app first registers a token:

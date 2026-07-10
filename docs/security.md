@@ -7,7 +7,7 @@ This document explains what Kraki protects, what it does not protect, and what t
 ## Short version
 
 - The relay cannot read message contents. All message bodies are end-to-end encrypted.
-- The relay sees only what it needs to forward traffic: envelope type, destination device ID, sender device ID, and blob size.
+- The relay sees only what it needs to forward traffic: envelope type, destination device ID, sender device ID, and payload size.
 - Endpoints still see plaintext: the machine running the agent and the device reading the session.
 
 ## What Kraki is designed to protect
@@ -29,7 +29,7 @@ The relay must route traffic, so it sees some metadata. Here is the complete lis
 | Envelope type (unicast or broadcast) | Needed to decide fan-out behavior |
 | `to` device ID (unicast only) | Needed to route to the right connection |
 | Sender device ID (from connection) | Needed to identify origin |
-| Blob size | The relay forwards blobs, so size is visible |
+| Blob size | The relay forwards payloads, so size is visible |
 
 That is all. The following are **not** visible to the relay:
 
@@ -37,7 +37,7 @@ That is all. The following are **not** visible to the relay:
 - Session IDs
 - Tool names and agent output
 - User input and approval decisions
-- Sequence numbers (assigned by tentacle, inside the blob)
+- Sequence numbers (assigned by tentacle, inside the encrypted payload)
 
 Kraki protects content fully, not just partially. The relay is an encrypted forwarder with no ability to inspect payloads.
 
@@ -71,9 +71,9 @@ At a high level, the flow is:
 
 1. A sender creates a fresh symmetric key for one message.
 2. The message body is encrypted with AES-256-GCM.
-3. The IV, ciphertext, and authentication tag are concatenated into a single blob: `base64(iv ‖ ciphertext ‖ tag)`.
+3. The IV, ciphertext, and authentication tag are concatenated into a single payload: `base64(iv ‖ ciphertext ‖ tag)`.
 4. The symmetric key is wrapped separately for each recipient device's public key.
-5. The relay forwards the blob and wrapped keys without being able to read them.
+5. The relay forwards the payload and wrapped keys without being able to read them.
 6. Each recipient unwraps the symmetric key with its private key and decrypts locally.
 
 This keeps the large payload encryption fast while still allowing multiple receiving devices.
@@ -111,8 +111,8 @@ That behavior is a normal consequence of per-device encryption.
 | Question | Answer |
 |----------|--------|
 | Can the relay read message bodies? | No |
-| Can the relay see routing metadata? | Yes — envelope type, device IDs, blob size |
-| Can the relay see session IDs, message types, or content? | No — all inside encrypted blob |
+| Can the relay see routing metadata? | Yes — envelope type, device IDs, payload size |
+| Can the relay see session IDs, message types, or content? | No — all inside encrypted payload |
 | Do endpoints see plaintext? | Yes |
 | Does the relay store messages? | No — only user and device tables |
 | Is self-hosting still useful? | Yes, for operational control and latency |
@@ -125,7 +125,7 @@ Push notifications use the same E2E encryption model. When an agent event requir
 2. The relay forwards the opaque encrypted preview through the push service (APNs or Web Push/VAPID).
 3. The device's service worker decrypts the preview locally and shows the notification content.
 
-The relay sees the encrypted blob size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
+The relay sees the encrypted payload size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
 
 ## Image attachments
 
@@ -136,7 +136,7 @@ Bytes are delivered separately, encrypted per-recipient like any other message:
 - On live activity, the tentacle pushes the bytes as a chunked `attachment_data` stream to all session-member devices immediately after the referencing tool message.
 - On replay or cache miss, a receiver explicitly requests the bytes via a `request_attachment` unicast; the tentacle serves chunks back to that specific authenticated device.
 
-The relay sees the same opaque encrypted blobs it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
+The relay sees the same opaque encrypted payloads it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
 
 ## Local MCP server
 
@@ -148,4 +148,4 @@ The MCP server is not exposed to the relay or to other devices. It is reachable 
 
 Open source helps because it lets people inspect how Kraki handles encryption, routing, and storage. It does not replace operational trust by itself, but it does make the design auditable and self-hosting possible.
 
-For the runtime picture of how the pieces fit together, read [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+For the runtime picture of how the pieces fit together, read [`architecture.md`](./architecture.md).

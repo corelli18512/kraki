@@ -66,7 +66,7 @@ On first run, Kraki will:
 
 ### Self-host your own relay
 
-See [SELF-HOSTING.md](./SELF-HOSTING.md) for relay setup, GitHub login, and push notification configuration.
+See [self-hosting guide](./docs/self-hosting.md) for relay setup, GitHub login, and push notification configuration.
 
 ## How it works
 
@@ -75,18 +75,18 @@ Agent <-> tentacle -- WebSocket --> head -- WebSocket --> arm
 ```
 
 1. `tentacle` listens to agent events on the machine doing the work, encrypts them, and sends them to `head`.
-2. `head` authenticates devices and forwards encrypted blobs to the right connections. It cannot read message contents.
+2. `head` authenticates devices and forwards encrypted payloads over a reliable transport (pulse). It cannot read message contents.
 3. `arm` decrypts messages, shows sessions, and sends approvals, answers, and user input back to the right machine.
 
 Tentacle buffers messages and handles replay on reconnect so sessions recover cleanly after temporary disconnects.
 
 ## Security at a glance
 
-Kraki is always end-to-end encrypted. The relay sees envelope type, destination device ID, sender device ID, and blob size. Everything else — message content, session IDs, tool names, user input — is inside the encrypted blob.
+Kraki is always end-to-end encrypted. The relay sees pulse frame headers, envelope type, destination device ID, sender device ID, and payload size. Everything else — message content, session IDs, tool names, user input — is inside the encrypted payload.
 
 The relay stores only a users table and a devices table. No messages, no sessions, no content.
 
-For the full security model, see [`SECURITY.md`](./SECURITY.md).
+For the full security model, see [`docs/security.md`](./docs/security.md).
 
 ## Repository guide
 
@@ -97,7 +97,7 @@ For the full security model, see [`SECURITY.md`](./SECURITY.md).
 - `packages/arm/web` - web receiver / PWA
 - `packages/tests` - integration tests
 
-For the runtime design, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+For the runtime design, see [`docs/architecture.md`](./docs/architecture.md).
 
 ## Development
 
@@ -149,7 +149,7 @@ pnpm dev:demo          # old mock tentacle / REPL demo flow
 
 ## Company / enterprise use
 
-Kraki's security guarantees are limited to the model described in [`SECURITY.md`](./SECURITY.md). The relay cannot read message bodies, but that does not cover endpoint compromise, company policy, network monitoring, logging, data residency, or other organizational controls.
+Kraki's security guarantees are limited to the model described in [`docs/security.md`](./docs/security.md). The relay cannot read message bodies, but that does not cover endpoint compromise, company policy, network monitoring, logging, data residency, or other organizational controls.
 
 You are responsible for deciding whether Kraki is appropriate for your environment. If you plan to use it with company-managed devices, repositories, or networks, review your organization's policies and consult your security / IT team before using it.
 
