@@ -2351,6 +2351,13 @@ export class RelayClient {
       }
     }
     if (recipients.length === 0) {
+      // No usable online recipient key. The caller's `send()` already handles
+      // `onlineConsumers.size === 0`, but we can also arrive here when an
+      // online device's key is invalid (test fixture or key rotation race).
+      // Do NOT queue in that case — the message would loop forever in
+      // flushE2eQueue on every reconnect because the key never becomes valid.
+      // The original message is still preserved locally (events.jsonl + card
+      // state), so a reconnecting arm picks it up via session replay.
       traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, droppedReason: 'recipients-empty', onlineConsumers: this.onlineConsumers.size, consumerKeys: this.consumerKeys.size });
       return;
     }
@@ -2458,10 +2465,16 @@ export class RelayClient {
   /** Build the encrypted push preview for a notification-worthy message, or
    *  undefined if the message isn't one. The preview rides the SAME pulse
    *  envelope as the reliable message (attached by sendPulseEnvelope), so the
-   *  head's push manager can notify offline devices without a separate raw send. */
+   *  head's push manager can notify offline devices without a separate raw send.
+   *
+   *  IMPORTANT: the preview is encrypted to ALL consumerKeys (online + offline),
+   *  NOT just the online `recipients`. Offline devices are the entire point of
+   *  push notifications — if we only encrypt to online devices, the head's
+   *  PushManager finds `keys[offlineDeviceId] === undefined` and bails, so no
+   *  push is ever sent. (This was the ec6a255c regression.) */
   private buildPushPreview(
     msg: Partial<ProducerMessage>,
-    recipients: RecipientKey[],
+    _recipients: RecipientKey[],
   ): { blob: string; keys: Record<string, string> } | undefined {
     let previewType: string | undefined;
     let previewSummary: string | undefined;
@@ -2483,18 +2496,22 @@ export class RelayClient {
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);
     }
     if (!previewType || !previewSummary) return undefined;
-    // NOTE: `recipients` here is ONLINE-only (sendEncrypted filters to
-    // onlineConsumers). But push previews are meant for OFFLINE devices. This
-    // is the root of the offline-push regression (ec6a255c): the preview's
-    // `keys` map only contains online device ids, so PushManager.sendToDevice
-    // finds `keys[offlineDeviceId] === undefined` and bails for every offline
-    // device. Traced on head as PUSH-SEND reason:'no-key'. See
-    // https://github.com/.../ issues for the fix (encrypt preview to ALL
-    // consumerKeys, not just online).
-    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientIds: recipients.map((r) => r.deviceId), consumerKeyIds: [...this.consumerKeys.keys()], onlineConsumerIds: [...this.onlineConsumers], keysHasOfflineDevice: [...this.consumerKeys.keys()].some((id) => !this.onlineConsumers.has(id)) });
+    // Encrypt to ALL consumerKeys (online + offline). The push preview is
+    // specifically for offline delivery — online devices already got the real
+    // message via the live pulse stream.
+    const previewRecipients: RecipientKey[] = [];
+    for (const [deviceId, compactKey] of this.consumerKeys) {
+      try {
+        previewRecipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
+      } catch {
+        // skip invalid keys
+      }
+    }
+    if (previewRecipients.length === 0) return undefined;
+    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: this.onlineConsumers.size, offlineCount: previewRecipients.length - this.onlineConsumers.size });
     try {
       const preview = JSON.stringify({ type: previewType, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
-      const previewBlob = encryptToBlob(preview, recipients);
+      const previewBlob = encryptToBlob(preview, previewRecipients);
       return { blob: previewBlob.blob, keys: previewBlob.keys };
     } catch (err) {
       logger.debug({ err }, 'Pulse push-preview build failed');
