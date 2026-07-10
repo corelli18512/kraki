@@ -18,6 +18,8 @@ scripts/test*
 ROADMAP.md
 KRAKI_FILE_BY_FILE_REVIEW.md
 AGENTS.md
+plan.md
+docs/reports/
 .playwright-mcp/
 
 # Toolbar build artifacts
