@@ -344,6 +344,111 @@ describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
   });
 });
 
+describe('RelayClient fork session confirmation', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  function connectForkClient(emitCreatedFromAdapter: boolean) {
+    const adapter = {
+      ...createAdapter(),
+      forkSession: vi.fn(async (_sourceSessionId: string, newSessionId: string) => {
+        if (emitCreatedFromAdapter) {
+          (adapter.onSessionCreated as ((event: { sessionId: string; agent: string; model?: string }) => void) | null)?.({
+            sessionId: newSessionId,
+            agent: 'copilot',
+            model: 'test/model',
+          });
+        }
+        return { sessionId: newSessionId };
+      }),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+      registerSessionAgent: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      forkSession: vi.fn(() => ({ sessionId: 'source-forked1', runId: 'run_001' })),
+      getMeta: vi.fn((sessionId: string) => sessionId === 'source-forked1'
+        ? { id: sessionId, agent: emitCreatedFromAdapter ? 'copilot' : 'pi', model: 'test/model', lastSeq: 42, state: 'active' }
+        : { id: sessionId, agent: 'pi', model: 'test/model', lastSeq: 42, state: 'idle' }),
+    };
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [],
+    })));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'arm_1', role: 'app', encryptionKey: 'arm-pub' },
+    })));
+  }
+
+  function sendForkRequest(requestId: string): void {
+    const inner = JSON.stringify({
+      type: 'fork_session',
+      sessionId: 'source-original',
+      deviceId: 'arm_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { sourceSessionId: 'source-original', requestId },
+    });
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'unicast',
+      to: 'dev_1',
+      blob: inner,
+      keys: {},
+    })));
+  }
+
+  it('broadcasts session_created with the fork requestId when the adapter does not emit a callback', async () => {
+    connectForkClient(false);
+    sendForkRequest('req_fork_pi');
+
+    await vi.runAllTimersAsync();
+
+    const created = decodePulseSends(sockets[0].sent).filter((msg) => msg.type === 'session_created');
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      sessionId: 'source-forked1',
+      payload: { agent: 'pi', model: 'test/model', requestId: 'req_fork_pi', lastSeq: 42 },
+    });
+  });
+
+  it('does not duplicate session_created when the adapter emits its own callback', async () => {
+    connectForkClient(true);
+    sendForkRequest('req_fork_copilot');
+
+    await vi.runAllTimersAsync();
+
+    const created = decodePulseSends(sockets[0].sent).filter((msg) => msg.type === 'session_created');
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      sessionId: 'source-forked1',
+      payload: { requestId: 'req_fork_copilot', lastSeq: 42 },
+    });
+  });
+});
+
 describe('RelayClient title generation', () => {
   beforeEach(() => {
     sockets.length = 0;

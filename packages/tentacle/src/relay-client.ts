@@ -1007,14 +1007,36 @@ export class RelayClient {
         this.pendingRequestIds.set(newId, requestId);
       }
 
-      // 2. Fork SDK session state and resume
+      // 2. Fork SDK session state and resume. Some adapters (currently
+      // Copilot) emit onSessionCreated themselves, while others (Pi) only
+      // return after the fork is ready. If the adapter did not consume the
+      // pending requestId through that callback, publish session_created here
+      // so the requesting Arm can clear its pending state and navigate.
       await this.adapter.forkSession(sourceSessionId, newId);
+      const pendingRequestId = this.pendingRequestIds.get(newId);
+      if (pendingRequestId) {
+        this.pendingRequestIds.delete(newId);
+        const meta = this.sessionManager.getMeta(newId);
+        this.send({
+          type: 'session_created',
+          sessionId: newId,
+          payload: {
+            agent: meta?.agent,
+            model: meta?.model,
+            requestId: pendingRequestId,
+            lastSeq: meta?.lastSeq ?? 0,
+          },
+        } as Partial<ProducerMessage>);
+      }
 
       // 3. Forked session is idle until the user sends a message
       this.sessionManager.markIdle(newId);
       this.send({ type: 'idle', sessionId: newId, payload: {} });
 
     } catch (err) {
+      for (const [sessionId, pendingId] of this.pendingRequestIds) {
+        if (pendingId === requestId) this.pendingRequestIds.delete(sessionId);
+      }
       logger.error({ err, sourceSessionId }, 'Fork session failed');
       const errorMsg = `Failed to fork session: ${(err as Error).message}`;
       this.send({
