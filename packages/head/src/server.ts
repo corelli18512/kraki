@@ -1013,7 +1013,6 @@ export class HeadServer {
     state.userId = user.userId;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
-    this.pulseHub.onDeviceConnected(deviceId);
     trace('DEV-CONNECT', { device: deviceId, user: user.userId, auth: 'challenge' });
 
     logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
@@ -1052,7 +1051,6 @@ export class HeadServer {
     state.userId = result.userId;
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
-    this.pulseHub.onDeviceConnected(result.deviceId);
     trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
 
     logger.info('Device authenticated (via backend)', {
@@ -1176,6 +1174,12 @@ export class HeadServer {
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
+    // Clients only accept Pulse envelopes after processing auth_ok. Starting
+    // the endpoint before auth_ok loses the initial hello, leaving peerEpoch
+    // empty and making a later relay restart indistinguishable from the first
+    // connection. That stale recvCursor then drops the restarted seq=1..N as
+    // duplicates. Keep this ordering centralized for every auth path.
+    this.pulseHub.onDeviceConnected(params.deviceId);
     this.broadcastDeviceJoined(params.userId, params.deviceId);
   }
 
@@ -1210,7 +1214,6 @@ export class HeadServer {
     state.userId = user.id;
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
-    this.pulseHub.onDeviceConnected(deviceId);
     trace('DEV-CONNECT', { device: deviceId, user: user.id, auth: 'inline' });
 
     logger.info('Device authenticated', {

@@ -179,6 +179,37 @@ describe('HeadServer (thin relay)', () => {
       expect(authOk.devices[0].name).toBe('Laptop');
     });
 
+    it('sends auth_ok before the initial Pulse hello', async () => {
+      head = await createHead();
+      const ws = connect(head.port);
+      await waitForOpen(ws);
+
+      const rawMessages: Record<string, unknown>[] = [];
+      const received = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timed out waiting for auth_ok and Pulse hello')), 5000);
+        ws.on('message', (data: Buffer) => {
+          rawMessages.push(JSON.parse(data.toString()));
+          if (rawMessages.length >= 2) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
+
+      ws.send(JSON.stringify({
+        type: 'auth',
+        auth: { method: 'open' },
+        device: { name: 'Laptop', role: 'tentacle' },
+      }));
+      await received;
+
+      expect(rawMessages[0].type).toBe('auth_ok');
+      expect(rawMessages[1].type).toBe('unicast');
+      const hello = decodeFrame(new Uint8Array(Buffer.from(rawMessages[1].pulse as string, 'base64')));
+      expect(hello?.t).toBe('hello');
+      ws.close();
+    });
+
     it('should auth with GitHub token → auth_ok', async () => {
       const fetcher = mockFetch(200, { id: 12345, login: 'corelli' });
       head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher }) });

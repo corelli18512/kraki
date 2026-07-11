@@ -22,7 +22,7 @@ importers:
     dependencies:
       '@coinfra/pulse':
         specifier: ^0.3.1
-        version: 0.3.1
+        version: 0.3.2
       '@kraki/protocol':
         specifier: workspace:*
         version: link:../../protocol
@@ -136,8 +136,8 @@ importers:
   packages/head:
     dependencies:
       '@coinfra/pulse':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.3.2
+        version: 0.3.2
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -198,7 +198,7 @@ importers:
         version: 0.3.156(@anthropic-ai/sdk@0.100.1(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
       '@coinfra/pulse':
         specifier: ^0.3.1
-        version: 0.3.1
+        version: 0.3.2
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.2
         version: 0.80.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
@@ -268,7 +268,7 @@ importers:
     dependencies:
       '@coinfra/pulse':
         specifier: ^0.3.1
-        version: 0.3.1
+        version: 0.3.2
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -730,8 +730,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@coinfra/pulse@0.3.1':
-    resolution: {integrity: sha512-vK59d58XHzorzHtzrR+3x4U7IKlrCOhSe8o7bSKT7bXWC+GPxMyhu77W08BR8wUspvw7NEyAS0H+f9hWiAvd8w==}
+  '@coinfra/pulse@0.3.2':
+    resolution: {integrity: sha512-ZH1o6zrUGsAyvOjV5MflCWiM9tfD92lIJqvlHAyKt1920OeMcjzDFgNwLujTLJtHwt1goyvULebndeAFpUmWVw==}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -4853,7 +4853,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.9':
     optional: true
 
-  '@coinfra/pulse@0.3.1': {}
+  '@coinfra/pulse@0.3.2': {}
 
   '@csstools/color-helpers@5.1.0': {}
 

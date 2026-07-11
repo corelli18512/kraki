@@ -111,8 +111,18 @@ export class PulseHub {
     let d = this.devices.get(deviceId);
     if (!d) {
       const restore = this.loadSnapshot(deviceId);
+      // ALWAYS mint a fresh epoch for this process, even when restoring. A
+      // process restart is a new send-stream identity (spec §9): non-durable
+      // sends in flight were lost, so the peer MUST learn the discontinuity
+      // and reset its recvCursor, else our post-restart seq=1..N collide
+      // with the pre-crash seq=1..N it already delivered and get silently
+      // dropped as duplicates (2026-07-11 relay-restart device_joined-loss
+      // bug). The durable outbox entries we restore still resend correctly:
+      // the peer resets and accepts them under our new epoch. `this.host.now()`
+      // is process-scoped, so within one process run the cached endpoint keeps
+      // its epoch; only a real restart produces a new one.
       const endpoint = new Endpoint({
-        epoch: restore?.epoch ?? `head:${deviceId}:${this.host.now()}`,
+        epoch: `head:${deviceId}:${this.host.now()}`,
         durable: { supported: true },
         restore,
       });
