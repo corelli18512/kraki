@@ -912,20 +912,30 @@ export class RelayClient {
         }
         case 'set_session_model': {
           const { model, reasoningEffort, contextTier } = msg.payload;
-          // Persist + ack immediately so the choice survives even if the
-          // session is currently disconnected and lazy-resume fails.
+          const previousModel = this.sessionManager.getMeta(sessionId)?.model;
+          // Persist the intent before adapter resume so adapters that rebuild a
+          // disconnected SDK session can restore the requested model. Roll it
+          // back if the adapter rejects the change; never acknowledge a model
+          // switch that did not reach the agent runtime.
           this.sessionManager.setModel(sessionId, model);
-          this.send({
-            type: 'session_model_set',
-            sessionId,
-            payload: { model, reasoningEffort, contextTier },
-          });
-          // Lazy resume: ensure the SDK session is live before pushing the
-          // new model into it; otherwise the adapter would silently drop it
-          // (and the user's selection would be lost on next interaction).
-          this.ensureSessionResumed(sessionId)
-            .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier))
+          // Pi must see the explicit model before generic lazy resume: a retired
+          // provider in pi.jsonl can otherwise make pi exit before set_model.
+          // Other agents retain the established resume-then-set ordering.
+          const applyModel = this.sessionManager.getMeta(sessionId)?.agent === 'pi'
+            ? this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier)
+                .then(() => this.ensureSessionResumed(sessionId, false))
+            : this.ensureSessionResumed(sessionId)
+                .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier));
+          applyModel
+            .then(() => {
+              this.send({
+                type: 'session_model_set',
+                sessionId,
+                payload: { model, reasoningEffort, contextTier },
+              });
+            })
             .catch((err) => {
+              if (previousModel) this.sessionManager.setModel(sessionId, previousModel);
               logger.error({ err, sessionId }, 'setSessionModel failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
             });
@@ -1594,7 +1604,7 @@ export class RelayClient {
    * Returns true if the session was freshly resumed, false if it was already
    * active/idle (or the resume failed).
    */
-  private async ensureSessionResumed(sessionId: string): Promise<boolean> {
+  private async ensureSessionResumed(sessionId: string, restoreModel = true): Promise<boolean> {
     const existing = this.resumeInFlight.get(sessionId);
     if (existing) return existing;
 
@@ -1618,7 +1628,7 @@ export class RelayClient {
         // rotates its model lineup). Pushing kraki's persisted meta.model
         // back into the SDK ensures the next turn uses the model the user
         // intended, not whatever the SDK happened to write last.
-        if (meta.model) {
+        if (restoreModel && meta.model) {
           try {
             await this.adapter.setSessionModel(sessionId, meta.model);
           } catch (err) {

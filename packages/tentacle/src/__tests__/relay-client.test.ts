@@ -529,7 +529,7 @@ describe('RelayClient set_session_model', () => {
     expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined, undefined);
   });
 
-  it('broadcasts session_model_set after handling set_session_model', () => {
+  it('broadcasts session_model_set only after the adapter confirms the change', async () => {
     buildConnectedClient();
     const ws = sockets[0];
     ws.sent.length = 0;
@@ -543,6 +543,8 @@ describe('RelayClient set_session_model', () => {
       payload: { model: 'gpt-5', reasoningEffort: 'high' },
     })));
 
+    await vi.runAllTimersAsync();
+
     // Find the session_model_set broadcast in sent messages
     const sent = decodePulseSends(ws.sent);
     const modelSet = sent.find(m => m.type === 'session_model_set');
@@ -550,6 +552,65 @@ describe('RelayClient set_session_model', () => {
     expect(modelSet.payload.model).toBe('gpt-5');
     expect(modelSet.payload.reasoningEffort).toBe('high');
     expect(modelSet.sessionId).toBe('sess_1');
+  });
+
+  it('does not acknowledge a failed model change and rolls persisted metadata back', async () => {
+    const { adapter, sm } = buildConnectedClient();
+    adapter.setSessionModel.mockRejectedValueOnce(new Error('unknown provider'));
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { model: 'missing/model' },
+    })));
+    await vi.runAllTimersAsync();
+
+    expect(sm.setModel).toHaveBeenNthCalledWith(1, 'sess_1', 'missing/model');
+    expect(sm.setModel).toHaveBeenNthCalledWith(2, 'sess_1', 'old-model');
+    const sent = decodePulseSends(ws.sent);
+    expect(sent.find(m => m.type === 'session_model_set')).toBeUndefined();
+    expect(sent.find(m => m.type === 'error')?.payload.message).toContain('unknown provider');
+  });
+
+  it('lets pi apply an explicit model before generic lazy resume', async () => {
+    const callOrder: string[] = [];
+    const adapter = {
+      ...createAdapter(),
+      setSessionModel: vi.fn(async () => { callOrder.push('setModel'); }),
+      resumeSession: vi.fn(async () => { callOrder.push('resume'); return { sessionId: 'sess_pi' }; }),
+      setSessionMode: vi.fn(),
+      setSessionUsage: vi.fn(),
+      registerSessionAgent: vi.fn(),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_pi', agent: 'pi', state: 'disconnected', model: 'old', mode: 'execute' })),
+      resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
+      setModel: vi.fn(),
+      markDisconnected: vi.fn(),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model', sessionId: 'sess_pi', deviceId: 'dev_1', seq: 1,
+      timestamp: new Date().toISOString(), payload: { model: '1yuan-gpt/gpt-5.6-sol' },
+    })));
+
+    await vi.runAllTimersAsync();
+
+    expect(callOrder).toEqual(['setModel', 'resume']);
   });
 
   it('lazily resumes a disconnected session before delivering set_session_model', async () => {

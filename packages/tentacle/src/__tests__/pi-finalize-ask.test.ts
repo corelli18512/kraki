@@ -18,6 +18,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PiAdapter } from '../adapters/pi.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
@@ -185,6 +188,68 @@ describe('pi abort', () => {
     await adapter.abortSession(sid);
 
     expect(proc.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('pi model switching', () => {
+  it('persists the model only after pi acknowledges set_model', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    const persistMeta = vi.spyOn(adapter as unknown as { persistMeta: () => void }, 'persistMeta');
+
+    await adapter.setSessionModel(sid, '1yuan-gpt/gpt-5.6-sol');
+
+    expect(proc.request).toHaveBeenCalledWith('set_model', { provider: '1yuan-gpt', modelId: 'gpt-5.6-sol' });
+    expect(session.model).toBe('1yuan-gpt/gpt-5.6-sol');
+    expect(persistMeta).toHaveBeenCalled();
+  });
+
+  it('does not change memory or sidecar when set_model fails', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    const persistMeta = vi.spyOn(adapter as unknown as { persistMeta: () => void }, 'persistMeta');
+    proc.request.mockRejectedValueOnce(new Error('unknown provider'));
+
+    await expect(adapter.setSessionModel(sid, 'missing/model')).rejects.toThrow('unknown provider');
+
+    expect(session.model).toBe('github-copilot/claude-opus-4.8');
+    expect(persistMeta).not.toHaveBeenCalled();
+  });
+
+  it('appends the requested model before resuming a dead session', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-model-'));
+    const transcript = join(dir, 'pi.jsonl');
+    writeFileSync(transcript, [
+      JSON.stringify({ type: 'session', version: 3, id: 'old-session', timestamp: new Date().toISOString(), cwd: '/tmp' }),
+      JSON.stringify({ type: 'model_change', id: 'oldmodel', parentId: null, timestamp: new Date().toISOString(), provider: 'retired', modelId: 'old' }),
+      '',
+    ].join('\n'));
+
+    try {
+      const { adapter, sid, proc, session } = makeAdapter();
+      proc.alive = false;
+      Object.assign(session, { sessionFile: transcript });
+      const resumedProc: StubProc = {
+        alive: true,
+        send: vi.fn(),
+        sendRaw: vi.fn(),
+        request: vi.fn().mockResolvedValue({ sessionFile: transcript }),
+      };
+      const resumed = { ...session, proc: resumedProc, model: '1yuan-gpt/gpt-5.6-sol' };
+      vi.spyOn(adapter as unknown as { spawn: () => unknown }, 'spawn').mockReturnValue(resumed);
+      vi.spyOn(adapter as unknown as { persistMeta: () => void }, 'persistMeta').mockImplementation(() => undefined);
+
+      await adapter.setSessionModel(sid, '1yuan-gpt/gpt-5.6-sol');
+
+      const entries = readFileSync(transcript, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries.at(-1)).toMatchObject({
+        type: 'model_change',
+        parentId: 'oldmodel',
+        provider: '1yuan-gpt',
+        modelId: 'gpt-5.6-sol',
+      });
+      expect(resumedProc.request).toHaveBeenCalledWith('get_state');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

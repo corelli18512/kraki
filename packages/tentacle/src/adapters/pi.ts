@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AgentAdapter,
@@ -84,6 +84,7 @@ class PiRpcProcess {
   private pending = new Map<string, Pending>();
   private seq = 0;
   private intentionalExit = false;
+  private lastStderr = '';
   onEvent: ((e: PiRpcEvent) => void) | null = null;
   /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
   onExit: ((code: number | null) => void) | null = null;
@@ -118,13 +119,19 @@ class PiRpcProcess {
 
     this.rl = createInterface({ input: this.child.stdout });
     this.rl.on('line', (line) => this.handleLine(line));
-    this.child.stderr.on('data', (d) => rpcLogger.debug({ stderr: d.toString().trim() }, 'pi stderr'));
+    this.child.stderr.on('data', (d) => {
+      const stderr = d.toString().trim();
+      if (stderr) this.lastStderr = stderr;
+      rpcLogger.debug({ stderr }, 'pi stderr');
+    });
     this.child.on('exit', (code) => {
+      const detail = this.lastStderr ? `: ${this.lastStderr}` : '';
       for (const p of this.pending.values()) {
         clearTimeout(p.timer);
-        p.reject(new Error('pi process exited'));
+        p.reject(new Error(`pi process exited${detail}`));
       }
       this.pending.clear();
+      this.child = null;
       if (!this.intentionalExit) this.onExit?.(code);
     });
   }
@@ -193,7 +200,11 @@ class PiRpcProcess {
   }
 
   get alive(): boolean {
-    return !!this.child && !this.child.killed;
+    return !!this.child
+      && this.child.exitCode === null
+      && this.child.signalCode === null
+      && this.child.stdin.writable
+      && !this.child.stdin.destroyed;
   }
 }
 
@@ -546,6 +557,28 @@ export class PiAdapter extends AgentAdapter {
       }
     }
     return null;
+  }
+
+  /** Record an explicit user model choice before resuming a dead pi process.
+   *  pi restores the active model from the session tree before RPC starts, so a
+   *  retired provider in the previous model_change can otherwise prevent the
+   *  process from starting far enough to receive set_model. */
+  private appendModelChange(sessionFile: string, provider: string, modelId: string): string | null {
+    if (!existsSync(sessionFile)) return null;
+    const original = readFileSync(sessionFile, 'utf8');
+    const lines = original.split('\n').filter(line => line.trim().length > 0);
+    const last = lines.length > 0 ? JSON.parse(lines[lines.length - 1]) as { id?: string } : undefined;
+    const entry = {
+      type: 'model_change',
+      id: randomUUID().replaceAll('-', '').slice(0, 8),
+      parentId: last?.id ?? null,
+      timestamp: new Date().toISOString(),
+      provider,
+      modelId,
+    };
+    const separator = original.length > 0 && !original.endsWith('\n') ? '\n' : '';
+    appendFileSync(sessionFile, `${separator}${JSON.stringify(entry)}\n`, 'utf8');
+    return original;
   }
 
   async start(): Promise<void> {
@@ -1052,7 +1085,9 @@ export class PiAdapter extends AgentAdapter {
       const state = await sess.proc.request<{ sessionFile?: string }>('get_state');
       if (state.sessionFile) sess.sessionFile = state.sessionFile;
     } catch (err) {
-      logger.debug({ err: (err as Error).message }, 'get_state failed at resume');
+      if (this.sessions.get(sessionId) === sess) this.sessions.delete(sessionId);
+      sess.proc.kill();
+      throw new Error(`failed to resume pi session ${sessionId}: ${(err as Error).message}`);
     }
     // Re-persist (refreshes the sidecar if it was just reconstructed from disk).
     this.persistMeta(sessionId, sess);
@@ -1236,17 +1271,55 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
-    const s = this.sessions.get(sessionId);
-    if (!s) return;
-    s.model = model;
     const [provider, modelId] = model.includes('/') ? model.split('/') : [this.getDefaultModel().split('/')[0], model];
-    try { await s.proc.request('set_model', { provider, modelId }); } catch { /* ignore */ }
     const thinking = effortToThinking(reasoningEffort);
-    if (thinking) {
-      s.thinking = thinking;
-      try { await s.proc.request('set_thinking_level', { level: thinking }); } catch { /* ignore */ }
+    let s = this.sessions.get(sessionId);
+
+    if (!s?.proc.alive) {
+      const meta = s ?? this.loadMeta(sessionId);
+      if (!meta) throw new Error(`pi session ${sessionId} not found`);
+      const coLocated = this.transcriptPath(sessionId);
+      const sessionFile = existsSync(coLocated) ? coLocated : (meta.sessionFile ?? coLocated);
+      const originalTranscript = this.appendModelChange(sessionFile, provider, modelId);
+      const previous = s;
+      s = this.spawn(
+        sessionId,
+        meta.cwd ?? process.cwd(),
+        model,
+        meta.mode ?? MUTATING_DEFAULT_MODE,
+        sessionFile,
+        thinking ?? meta.thinking,
+      );
+      try {
+        const state = await s.proc.request<{ sessionFile?: string }>('get_state');
+        if (state.sessionFile) s.sessionFile = state.sessionFile;
+      } catch (err) {
+        if (this.sessions.get(sessionId) === s) this.sessions.delete(sessionId);
+        s.proc.kill();
+        if (originalTranscript !== null) writeFileSync(sessionFile, originalTranscript, 'utf8');
+        if (previous) {
+          this.sessions.set(sessionId, previous);
+          this.persistMeta(sessionId, previous);
+        } else {
+          writeFileSync(this.sidecarPath(sessionId), JSON.stringify(meta), 'utf8');
+        }
+        throw new Error(`failed to change model for pi session ${sessionId}: ${(err as Error).message}`);
+      }
+    } else {
+      await s.proc.request('set_model', { provider, modelId });
     }
+
+    s.model = model;
     this.persistMeta(sessionId, s);
+    if (thinking) {
+      try {
+        await s.proc.request('set_thinking_level', { level: thinking });
+        s.thinking = thinking;
+        this.persistMeta(sessionId, s);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, sessionId, thinking }, 'pi thinking level change failed');
+      }
+    }
   }
 
   async listSessions(): Promise<SessionInfo[]> {
