@@ -33,6 +33,7 @@ const mockGetDaemonStatus = vi.fn();
 const mockStartDaemon = vi.fn();
 const mockStopDaemon = vi.fn();
 const mockRunSetup = vi.fn();
+const mockShowPairingQr = vi.fn();
 const mockStartWorker = vi.fn();
 
 vi.mock('../config.js', () => ({
@@ -72,6 +73,7 @@ const mockResolveRelay = vi.fn();
 vi.mock('../setup.js', () => ({
   runSetup: (...args: unknown[]) => mockRunSetup(...args),
   resolveRelay: (...args: unknown[]) => mockResolveRelay(...args),
+  showPairingQr: (...args: unknown[]) => mockShowPairingQr(...args),
 }));
 
 vi.mock('../update.js', () => ({
@@ -118,13 +120,16 @@ vi.mock('node:fs', async () => {
 // Capture console output
 let consoleOutput: string[];
 let stdoutOutput: string[];
+let stderrOutput: string[];
 let originalArgv: string[];
+let originalMetaFile: string | undefined;
 const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
 beforeEach(() => {
   vi.resetAllMocks();
   consoleOutput = [];
   stdoutOutput = [];
+  stderrOutput = [];
   vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
     consoleOutput.push(args.join(' '));
   });
@@ -135,7 +140,13 @@ beforeEach(() => {
     stdoutOutput.push(String(chunk));
     return true;
   }) as never);
+  vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+    stderrOutput.push(String(chunk));
+    return true;
+  }) as never);
   originalArgv = process.argv;
+  originalMetaFile = process.env.KRAKI_META_FILE;
+  delete process.env.KRAKI_META_FILE;
   // Reset mock defaults
   mockGetConfigDir.mockReturnValue('/tmp/fake-kraki');
   mockGetConfigPath.mockReturnValue('/tmp/fake-kraki/config.json');
@@ -146,6 +157,8 @@ beforeEach(() => {
 
 afterEach(() => {
   process.argv = originalArgv;
+  if (originalMetaFile === undefined) delete process.env.KRAKI_META_FILE;
+  else process.env.KRAKI_META_FILE = originalMetaFile;
 });
 
 /**
@@ -237,6 +250,46 @@ describe('CLI stop', () => {
     await runCli(['stop']);
     expect(consoleOutput.join('\n')).toContain('Failed');
   });
+});
+
+describe('CLI restart', () => {
+  it('starts from existing config when the daemon is stopped', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
+    mockLoadConfig.mockReturnValue(config);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    mockStartDaemon.mockResolvedValue(1234);
+
+    await runCli(['restart']);
+
+    expect(mockStopDaemon).not.toHaveBeenCalled();
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+  });
+
+  it('stops a running daemon before starting it again', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
+    mockLoadConfig.mockReturnValue(config);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 999_999_999 });
+    mockStopDaemon.mockReturnValue(true);
+    mockStartDaemon.mockResolvedValue(1234);
+
+    await runCli(['restart']);
+
+    expect(mockStopDaemon).toHaveBeenCalledOnce();
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+  });
+});
+
+describe('CLI agent-session self-management guard', () => {
+  for (const command of ['stop', 'restart', 'update']) {
+    it(`denies kraki ${command} from an agent session with a reason`, async () => {
+      process.env.KRAKI_META_FILE = '/tmp/session/.pi-adapter.json';
+      await runCli([command]);
+
+      expect(stderrOutput.join('')).toContain('would terminate the tentacle hosting this session');
+      expect(mockStopDaemon).not.toHaveBeenCalled();
+      expect(mockStartDaemon).not.toHaveBeenCalled();
+    });
+  }
 });
 
 // ── status ──────────────────────────────────────────────

@@ -30,6 +30,7 @@ import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
 import { fitToMaxDimension } from '../image-resize.js';
+import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('pi-adapter');
 const rpcLogger = createLogger('pi-rpc');
@@ -999,6 +1000,16 @@ export class PiAdapter extends AgentAdapter {
           const parsed = inputJson ? JSON.parse(inputJson) : {};
           if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
         } catch { /* leave input empty on malformed JSON */ }
+        if (toolName === 'bash' && isKrakiSelfManagementCommand(shellCommandFromInput(input))) {
+          s.proc.sendRaw({
+            type: 'extension_ui_response',
+            id: permId,
+            confirmed: false,
+            error: SELF_MANAGEMENT_DENIAL_REASON,
+          });
+          logger.warn({ sessionId }, 'blocked tentacle self-management command');
+          break;
+        }
         if (shouldAutoApprove(s.mode, toolName, input)) {
           // Silent approve — no card. Respond immediately so the tool runs.
           s.proc.sendRaw({ type: 'extension_ui_response', id: permId, confirmed: true });

@@ -41,6 +41,7 @@ import {
 } from './base.js';
 import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
+import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('copilot-adapter');
 type CopilotSdkModule = typeof import('@github/copilot-sdk');
@@ -1929,6 +1930,12 @@ export class CopilotAdapter extends AgentAdapter {
       const sessionId = invocation.sessionId;
       const toolKind = req.kind; // e.g. 'shell', 'write', 'read', 'url', 'mcp'
       const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+
+      const rawRequest = req as PermissionRequest & Record<string, unknown>;
+      if (toolKind === 'shell' && isKrakiSelfManagementCommand(shellCommandFromInput(rawRequest))) {
+        logger.warn({ sessionId }, 'blocked tentacle self-management command');
+        return { kind: 'reject', feedback: SELF_MANAGEMENT_DENIAL_REASON };
+      }
 
       // Mode-based auto-approval
       if (mode === 'execute' || mode === 'delegate') {

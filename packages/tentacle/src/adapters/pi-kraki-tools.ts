@@ -193,6 +193,15 @@ export default function krakiTools(pi) {
     // the session isn't wedged waiting on a prompt that can never be answered.
     if (!ctx || !ctx.hasUI) return;
     const input = (event && event.input) || {};
+    if (toolName === "bash") {
+      const command = typeof input.command === "string" ? input.command : "";
+      if (/\bkraki\s+(?:stop|restart|update)\b/i.test(command)) {
+        return {
+          block: true,
+          reason: "Denied by Kraki: kraki stop, restart, and update cannot run inside an agent session because they would terminate the tentacle hosting this session."
+        };
+      }
+    }
     let message;
     try {
       message = JSON.stringify(input);

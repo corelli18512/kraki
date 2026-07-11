@@ -28,6 +28,7 @@ import { printStaticBanner } from './banner.js';
 import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
 import type { AgentId } from '@kraki/protocol';
+import { SELF_MANAGEMENT_DENIAL_REASON } from './self-management-guard.js';
 
 // Self-heal PATH on Windows BEFORE any setup/check spawns a child
 // process. If kraki is launched from a context with a minimal PATH
@@ -65,6 +66,7 @@ function printHelp(): void {
   kraki                Setup wizard + start (first time or reconfigure)
   kraki start          Start silently from existing config
   kraki stop           Stop Kraki
+  kraki restart        Restart Kraki
   kraki update         Check for updates and install the latest version
   kraki connect        Generate QR code to connect a device
   kraki connect --url-only
@@ -285,6 +287,33 @@ function cmdStop(): void {
   } else {
     console.log(chalk.red('Failed to stop.'));
   }
+}
+
+async function waitForPidExit(pid: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+async function cmdRestart(): Promise<void> {
+  const config = loadConfig();
+  if (!config) {
+    console.log(chalk.red('Cannot restart Kraki: no config found. Run `kraki` to set up first.'));
+    return;
+  }
+
+  const status = getDaemonStatus();
+  if (status.running && status.pid !== null) {
+    stopDaemon();
+    await waitForPidExit(status.pid);
+  }
+  await silentStart(config);
 }
 
 function cmdStatus(jsonOutput = false): void {
@@ -889,8 +918,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (process.env.KRAKI_META_FILE && (cmd === 'stop' || cmd === 'restart' || cmd === 'update')) {
+    process.stderr.write(`${SELF_MANAGEMENT_DENIAL_REASON}\n`);
+    gracefulExit(1);
+    return;
+  }
+
   if (cmd === 'stop') {
     cmdStop();
+    return;
+  }
+
+  if (cmd === 'restart') {
+    await cmdRestart();
     return;
   }
 

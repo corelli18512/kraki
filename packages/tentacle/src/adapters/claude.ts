@@ -25,6 +25,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlin
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
+import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('claude-adapter');
 
@@ -1379,6 +1380,11 @@ export class ClaudeAdapter extends AgentAdapter {
       // Handle AskUserQuestion tool → bridge to onQuestionRequest
       if (toolName === 'AskUserQuestion') {
         return this.handleAskUserQuestion(sessionId, input, pendingQuestions);
+      }
+
+      if (isKrakiSelfManagementCommand(shellCommandFromInput(input))) {
+        logger.warn({ sessionId, toolName }, 'blocked tentacle self-management command');
+        return { behavior: 'deny', message: SELF_MANAGEMENT_DENIAL_REASON };
       }
 
       const toolKind = toolNameToKind(toolName);

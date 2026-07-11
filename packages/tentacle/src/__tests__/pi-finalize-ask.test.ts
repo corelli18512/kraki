@@ -832,6 +832,11 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('ctx.ui.confirm');
   });
 
+  it('blocks tentacle self-management commands before mode approval with a reason', () => {
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('(?:stop|restart|update)');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('would terminate the tentacle hosting this session');
+  });
+
   it('registers kraki_get_mode reading the KRAKI_META_FILE sidecar', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "kraki_get_mode"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('KRAKI_META_FILE');
