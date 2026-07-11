@@ -13,9 +13,35 @@ import { getConfigDir } from './config.js';
 
 const PREVIEW_MAX = 80;
 
+/** Replace lone UTF-16 surrogates before serializing text for strict JSON consumers. */
+function toWellFormedText(text: string): string {
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : -1;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        result += text[i] + text[++i];
+      } else {
+        result += '\ufffd';
+      }
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      result += '\ufffd';
+    } else {
+      result += text[i];
+    }
+  }
+  return result;
+}
+
+/** Truncate by Unicode code point, never through the middle of an emoji. */
+function truncateText(text: string, maxCodePoints: number): string {
+  return Array.from(toWellFormedText(text)).slice(0, maxCodePoints).join('');
+}
+
 /** Strip common markdown syntax for clean preview display. */
 function stripMarkdownForPreview(text: string): string {
-  return text
+  const stripped = text
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
@@ -29,8 +55,8 @@ function stripMarkdownForPreview(text: string): string {
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\n+/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, PREVIEW_MAX);
+    .trim();
+  return truncateText(stripped, PREVIEW_MAX);
 }
 
 // ── Types ───────────────────────────────────────────────
@@ -902,9 +928,9 @@ export class SessionManager {
       result.push({
         id: meta.id,
         agent: meta.agent,
-        model: meta.model,
-        title: meta.title,
-        autoTitle: meta.autoTitle,
+        model: meta.model ? toWellFormedText(meta.model) : undefined,
+        title: meta.title ? toWellFormedText(meta.title) : undefined,
+        autoTitle: meta.autoTitle ? toWellFormedText(meta.autoTitle) : undefined,
         state,
         mode: meta.mode ?? 'discuss',
         pinned: meta.pinned || undefined,
@@ -914,7 +940,10 @@ export class SessionManager {
         createdAt: meta.createdAt,
         usage: meta.usage,
         source: meta.source,
-        preview: this.getSessionPreview(meta.id),
+        preview: (() => {
+          const preview = this.getSessionPreview(meta.id);
+          return preview ? { ...preview, text: toWellFormedText(preview.text) } : undefined;
+        })(),
       });
     }
     return result;
@@ -987,7 +1016,7 @@ export class SessionManager {
           case 'permission': {
             if (!payload.resolution) {
               const tool = typeof payload.toolName === 'string' ? payload.toolName : 'permission';
-              return { text: tool.slice(0, 80), type: 'permission', timestamp: entry.ts };
+              return { text: truncateText(tool, PREVIEW_MAX), type: 'permission', timestamp: entry.ts };
             }
             break;
           }

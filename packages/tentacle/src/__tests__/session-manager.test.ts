@@ -593,6 +593,28 @@ describe('SessionManager', () => {
       expect(entry!.preview!.text.length).toBeLessThanOrEqual(80);
     });
 
+    it('should not split an emoji surrogate pair at the preview limit', () => {
+      const { sessionId } = sm.createSession('copilot');
+      const content = `${'A'.repeat(79)}😀trailing`;
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content },
+      }));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(Array.from(entry!.preview!.text)).toHaveLength(80);
+      expect(entry!.preview!.text.endsWith('😀')).toBe(true);
+      expect(JSON.stringify(entry)).not.toMatch(/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})/i);
+    });
+
+    it('should sanitize lone surrogates from existing session metadata', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.updateMeta(sessionId, { title: `broken-\ud83d` });
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.title).toBe('broken-�');
+      expect(JSON.stringify(entry)).not.toContain('\\ud83d');
+    });
+
     it('should return undefined preview for session with no messages', () => {
       const { sessionId } = sm.createSession('copilot');
 
