@@ -281,12 +281,12 @@ describe('CardManager action part', () => {
     expect(a[a.length - 1]).toMatchObject({ type: 'permission', payload: { id: 'p1', decision: 'approve' } });
   });
 
-  it('resolving without a resolution (auto-cancel) clears the slot', () => {
+  it('resolving without a resolution freezes a question as cancelled', () => {
     const { card, sent } = setup();
     card.onPrompt('s1', question('q1', 'a?'));
     card.resolvePrompt('s1', 'q1');
     const a = actions(sent);
-    expect(a[a.length - 1]).toBeNull();
+    expect(a[a.length - 1]).toMatchObject({ type: 'question', payload: { id: 'q1', cancelled: true } });
   });
 
   it('an UNRESOLVED prompt blocks a subsequent tool from taking the slot', () => {

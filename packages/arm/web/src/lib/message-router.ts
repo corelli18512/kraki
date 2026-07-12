@@ -212,6 +212,17 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }, !replaying);
       break;
 
+    case 'interrupted_turn': {
+      store.appendMessage(sid, msg);
+      const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';
+      updatePreview(sid, {
+        text: truncPreview(draft || 'Turn aborted'),
+        type: 'agent',
+        timestamp: msg.timestamp,
+      }, !replaying);
+      break;
+    }
+
     case 'system_message': {
       // Kraki-originated spine notice (e.g. no_reply). Behaves like an
       // agent_message boundary: clear the ephemeral narration draft and land a

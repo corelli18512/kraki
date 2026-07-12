@@ -23,6 +23,8 @@ import {
   type CreateSessionConfig,
   type SessionInfo,
   type PermissionDecision,
+  type QuestionAnswer,
+  type QuestionResponseResult,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
@@ -619,10 +621,11 @@ export class PiAdapter extends AgentAdapter {
     const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
-      // Process gone (crash/kill) → no agent_end will arrive. Clear the active
-      // spinner so the session doesn't hang "active" forever, then evict.
+      // Process gone (crash/kill) → no agent_end will arrive. Permissions cannot
+      // be reconstructed, but ask_user is durable at RelayClient/CardManager:
+      // keep its id/card so the next answer can transparently use a recovery
+      // prompt after lazy resume.
       this.clearPendingPerms(sessionId);
-      this.clearPendingQuestions(sessionId);
       this.pendingModeSignals.delete(sessionId);
       this.onIdle?.(sessionId);
       this.onSessionEvicted?.(sessionId);
@@ -676,7 +679,6 @@ export class PiAdapter extends AgentAdapter {
   private async handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
     this.touch(sessionId);
     switch (e.type) {
-      case 'agent_start':
       case 'agent_start':
         break;
       case 'message_update': {
@@ -1152,16 +1154,27 @@ export class PiAdapter extends AgentAdapter {
       const message = (err as Error).message;
       // pi can get into a state where the adapter has emitted idle (agent_end
       // was received) but pi's internal RPC layer still thinks it's processing.
-      // Try aborting the phantom turn and retry once before giving up.
+      // A genuinely live human prompt must never enter this path — RelayClient
+      // answers it directly, and this guard prevents a stale caller from aborting
+      // it. For a phantom run, await abort + authoritative idle reconciliation
+      // before retrying exactly once.
       if (message.includes('already processing') || message.includes('still processing')) {
-        logger.warn({ sessionId }, 'pi stuck in processing state — aborting and retrying');
-        try { s.proc.send('abort'); } catch { /* ignore */ }
-        try {
-          await s.proc.request('prompt', promptPayload);
-          return;
-        } catch (retryErr) {
-          logger.warn({ sessionId, err: (retryErr as Error).message }, 'pi prompt retry also failed');
+        if (s.pendingQuestions.size > 0 || s.pendingPerms.size > 0) {
+          throw new Error('Pi is waiting for a human response; the message was not sent as a new prompt.');
         }
+        logger.warn({ sessionId }, 'pi stuck in processing state — awaiting abort before retry');
+        s.aborting = true;
+        try {
+          await s.proc.request('abort');
+          const state = await s.proc.request<{ isStreaming?: boolean; isCompacting?: boolean }>('get_state');
+          if (state.isStreaming || state.isCompacting) {
+            throw new Error('Pi remained busy after abort acknowledgement');
+          }
+        } finally {
+          s.aborting = false;
+        }
+        await s.proc.request('prompt', promptPayload);
+        return;
       }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
       this.onError?.(sessionId, { message });
@@ -1172,6 +1185,18 @@ export class PiAdapter extends AgentAdapter {
   async abortSession(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s?.proc.alive) return;
+
+    // First resolve any extension UI promises that ignore/precede the agent abort
+    // signal. The RelayClient already captured the visible card snapshot, so
+    // these transport cancellations cannot erase the durable abort history.
+    for (const questionId of s.pendingQuestions.keys()) {
+      s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, cancelled: true });
+    }
+    s.pendingQuestions.clear();
+    for (const permissionId of s.pendingPerms.keys()) {
+      s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: false });
+    }
+    s.pendingPerms.clear();
 
     // Pi emits agent_end before resolving this RPC. Keep that event from
     // entering the normal finalize flow, which would start a new model turn
@@ -1202,17 +1227,31 @@ export class PiAdapter extends AgentAdapter {
     logger.debug({ sessionId, permissionId, confirmed }, 'pi permission answered');
   }
 
-  async respondToQuestion(sessionId: string, questionId: string, answer: string, _wasFreeform: boolean): Promise<void> {
+  async respondToQuestion(sessionId: string, questionId: string, answer: QuestionAnswer | string, _wasFreeform: boolean): Promise<QuestionResponseResult> {
     const s = this.sessions.get(sessionId);
-    if (!s) { logger.warn({ sessionId }, 'respondToQuestion: session not found'); return; }
-    if (!s.pendingQuestions.delete(questionId)) {
-      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
-      return;
+    if (!s) {
+      logger.warn({ sessionId }, 'respondToQuestion: session not found');
+      return 'session_gone';
     }
-    // Echo the pi UI request id verbatim; `value` resolves ctx.ui.select/input in
-    // the ask_user tool, which returns the answer to the model as the tool result.
-    s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: answer });
-    logger.debug({ sessionId, questionId }, 'pi question answered');
+    if (!s.pendingQuestions.has(questionId)) {
+      logger.warn({ sessionId, questionId }, 'respondToQuestion: no pending question');
+      return 'not_found';
+    }
+    if (!s.proc.alive) return 'session_gone';
+
+    const answerValue = typeof answer === 'string' ? { text: answer } : answer;
+    const images = (answerValue.attachments ?? [])
+      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
+      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+    const envelope = JSON.stringify({
+      __krakiAnswer: 1,
+      text: answerValue.text,
+      ...(images.length > 0 && { images }),
+    });
+    s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: envelope });
+    s.pendingQuestions.delete(questionId);
+    logger.debug({ sessionId, questionId, images: images.length }, 'pi question answered');
+    return 'accepted';
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -1256,29 +1295,18 @@ export class PiAdapter extends AgentAdapter {
     this.persistMeta(sessionId, s);
     // Edge-triggered: prepend a one-shot marker to the next user message.
     this.pendingModeSignals.set(sessionId, mode);
-    // If a turn is streaming right now, also nudge the model mid-run via steer so
-    // it re-checks its permission envelope before acting on a stale one.
-    void this.steerModeNudge(sessionId);
-    logger.debug({ sessionId, mode }, 'pi session mode changed');
-  }
-
-  /** Steer a mode-agnostic nudge into an active turn so the model re-checks its
-   *  permission envelope. No-op when the session is idle (the prepend on the next
-   *  message covers that). Active state is read from pi's get_state
-   *  (isStreaming/isCompacting) rather than a hand-tracked flag, because pi's
-   *  auto-retry and compaction continuations run AFTER agent_end. */
-  private async steerModeNudge(sessionId: string): Promise<void> {
-    const s = this.sessions.get(sessionId);
-    if (!s?.proc.alive) return;
-    try {
-      const state = await s.proc.request<{ isStreaming?: boolean; isCompacting?: boolean }>('get_state');
-      if (state.isStreaming || state.isCompacting) {
-        s.proc.send('steer', { message: '[kraki: permission mode changed — call kraki_get_mode before acting]' });
-        logger.debug({ sessionId }, 'pi mode-change steer nudge sent');
+    // Switching into an automatic mode must also release permissions that are
+    // already waiting on the human. Use the existing UI response rather than a
+    // Pi steer: steer creates an independent agent lifecycle whose agent_end can
+    // incorrectly settle the real user turn.
+    if (mode === 'execute' || mode === 'delegate') {
+      for (const permissionId of s.pendingPerms.keys()) {
+        s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: true });
+        s.pendingPerms.delete(permissionId);
+        this.onPermissionAutoResolved?.(sessionId, permissionId, 'approved');
       }
-    } catch (err) {
-      logger.debug({ err: (err as Error).message }, 'steer mode nudge failed');
     }
+    logger.debug({ sessionId, mode }, 'pi session mode changed');
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
@@ -1385,7 +1413,14 @@ export class PiAdapter extends AgentAdapter {
   private sweepIdle(): void {
     const now = Date.now();
     for (const [id, s] of this.sessions) {
-      if (s.proc.alive && now - s.lastActivity > IDLE_TTL_MS) {
+      if (
+        s.proc.alive
+        && s.pendingQuestions.size === 0
+        && s.pendingPerms.size === 0
+        && !s.aborting
+        && !s.finalizing
+        && now - s.lastActivity > IDLE_TTL_MS
+      ) {
         logger.info({ id }, 'Evicting idle pi session');
         s.proc.kill();
         this.onSessionEvicted?.(id);

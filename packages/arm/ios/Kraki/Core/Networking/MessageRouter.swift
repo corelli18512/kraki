@@ -96,6 +96,7 @@ final class MessageRouter {
     private static let persistentTypes: Set<String> = [
         "session_created",
         "agent_message",
+        "interrupted_turn",
         "user_message",
         "permission",
         "permission_resolved",
@@ -382,6 +383,13 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
+
+        case "interrupted_turn":
+            appState.sessionStore.flushDelta(sessionId)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            let draft = payload?["draft"] as? String ?? ""
+            updatePreview(sessionId, text: draft.isEmpty ? "Turn aborted" : draft,
+                          type: "agent", timestamp: timestamp)
 
         case "agent_message_delta":
             if let content = payload?["content"] as? String {

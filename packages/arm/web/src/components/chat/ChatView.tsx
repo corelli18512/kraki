@@ -141,7 +141,7 @@ export const ChatView = memo(function ChatView() {
     cardAction?.type === 'permission' ||
     cardAction?.type === 'question';
   const livePending =
-    (cardAction?.type === 'question' && cardAction.payload.answer === undefined) ||
+    (cardAction?.type === 'question' && cardAction.payload.answer === undefined && !cardAction.payload.cancelled) ||
     (cardAction?.type === 'permission' && !cardAction.payload.decision)
       ? 1
       : 0;
@@ -180,7 +180,7 @@ export const ChatView = memo(function ChatView() {
     if (!sessionId || !isTentacleEncryptable) return;
     for (let i = spine.length - 1; i >= 0; i--) {
       const msg = spine[i];
-      if (msg.type === 'agent_message') {
+      if (msg.type === 'agent_message' || msg.type === 'interrupted_turn') {
         if ((msg.payload.steps ?? 0) > 0) messageProvider.requestTurnTrace(sessionId, getSeq(msg));
         break;
       }
@@ -206,7 +206,7 @@ export const ChatView = memo(function ChatView() {
       }
     }
     for (let i = spine.length - 1; i >= 0; i--) {
-      if (spine[i].type === 'agent_message') return i;
+      if (spine[i].type === 'agent_message' || spine[i].type === 'interrupted_turn') return i;
     }
     return -1;
   }, [spine, sessionIdle]);

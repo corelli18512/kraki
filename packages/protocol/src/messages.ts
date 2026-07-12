@@ -261,6 +261,8 @@ export interface QuestionRequest extends BaseEnvelope {
     /** Only set when this request occupies a RESOLVED card slot — see
      *  {@link PermissionRequest} `decision`. */
     answer?: string;
+    /** A cancelled question remains visible but is never actionable. */
+    cancelled?: boolean;
   };
 }
 
@@ -436,6 +438,26 @@ export interface SystemMessage extends BaseEnvelope {
     content?: string;
     /** See {@link AgentMessage.payload.steps}. A `no_reply` notice also anchors
      *  a turn's Steps history, so it carries the same running step count. */
+    steps?: number;
+  };
+}
+
+/**
+ * Durable snapshot of the live turn at the instant the user explicitly aborted.
+ * Unlike the transient CardManager state, this lives on the conversation spine
+ * and is replayed forever. It is Kraki UI history only and is never injected into
+ * the agent/model transcript.
+ */
+export interface InterruptedTurnMessage extends BaseEnvelope {
+  type: 'interrupted_turn';
+  payload: {
+    reason: 'user_aborted' | 'process_lost';
+    draft: string;
+    action: CardActionState | null;
+    interruptedAt: string;
+    /** Running tool actions are frozen as cancelled in history. */
+    cancelled: true;
+    /** Trace-step count accumulated before interruption. */
     steps?: number;
   };
 }
@@ -752,6 +774,7 @@ export type ProducerMessage =
   | ActiveMessage
   | ErrorMessage
   | SystemMessage
+  | InterruptedTurnMessage
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
   | SessionModelSetMessage
@@ -814,6 +837,7 @@ export interface AnswerMessage extends BaseEnvelope {
   payload: {
     questionId: string;
     answer: string;
+    attachments?: Attachment[];
     /** True when the answer was typed freely rather than picked from a
      *  provided choice. Adapters (e.g. copilot) use this to decide whether the
      *  answer maps to a listed option or is custom text. Optional for backward

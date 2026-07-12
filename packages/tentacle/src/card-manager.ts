@@ -120,7 +120,7 @@ export class CardManager {
     }
     if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
     if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.decision ?? ''}`;
-    return `question:${a.payload.id}:${a.payload.answer !== undefined ? '1' : '0'}`;
+    return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
   }
 
   /** The action a session's live tools should occupy the slot with, derived from
@@ -262,7 +262,8 @@ export class CardManager {
   /** Resolve a permission or question. If it still occupies the slot, update it
    *  IN PLACE to a resolved (read-only) state showing the decision/answer and
    *  keep it displayed — no fallback to any prior tool. An auto-resolve without
-   *  a resolution (e.g. cancellation) clears the slot instead. */
+   *  a resolution marks questions cancelled instead of making the user's
+   *  pending decision disappear. */
   resolvePrompt(sessionId: string, id: string, resolution?: PromptResolution): void {
     const c = this.cards.get(sessionId);
     const a = c?.action;
@@ -270,11 +271,29 @@ export class CardManager {
     if (a.type === 'permission' && resolution && 'decision' in resolution) {
       c.action = { ...a, payload: { ...a.payload, decision: resolution.decision } };
     } else if (a.type === 'question' && resolution && 'answer' in resolution) {
-      c.action = { ...a, payload: { ...a.payload, answer: resolution.answer } };
+      c.action = { ...a, payload: { ...a.payload, answer: resolution.answer, cancelled: undefined } };
+    } else if (a.type === 'question') {
+      c.action = { ...a, payload: { ...a.payload, cancelled: true } };
     } else {
       c.action = null;
     }
     this.syncAction(sessionId, c);
+  }
+
+  /** Authoritative full state used for durable pending and abort history. */
+  state(sessionId: string): { draft: string; action: CardActionState | null } {
+    const c = this.cards.get(sessionId);
+    return { draft: c?.draftText ?? '', action: c?.action ?? null };
+  }
+
+  /** Rehydrate a durable pending card after a daemon/process restart. */
+  restore(sessionId: string, snapshot: { draft: string; action: CardActionState | null }): void {
+    const c = this.get(sessionId);
+    c.draftText = snapshot.draft;
+    c.resetNext = false;
+    c.action = snapshot.action;
+    c.runningTools.clear();
+    c.lastActionKey = this.actionKey(snapshot.action);
   }
 
   // ── Lifecycle ─────────────────────────────────────────

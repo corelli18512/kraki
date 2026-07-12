@@ -19,7 +19,7 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import type { SessionManager, SessionContext } from './session-manager.js';
+import type { SessionManager, SessionContext, PendingHumanAction } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
@@ -118,6 +118,7 @@ export class RelayClient {
     'user_message',
     'error',
     'system_message',
+    'interrupted_turn',
     'session_ended',
     'idle',
   ]);
@@ -155,6 +156,27 @@ export class RelayClient {
   /** In-flight `ensureSessionResumed` promises keyed by sessionId, so two
    *  concurrent callers don't double-resume the same SDK session. */
   private resumeInFlight = new Map<string, Promise<boolean>>();
+
+  /** Per-session input chain. Distinct user sends are serialized until the
+   *  preceding turn reaches a real idle boundary. */
+  private inputChains = new Map<string, Promise<void>>();
+  private turnIdleWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+
+  private waitForTurnIdle(sessionId: string): Promise<void> {
+    const existing = this.turnIdleWaiters.get(sessionId);
+    if (existing) return existing.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    this.turnIdleWaiters.set(sessionId, { promise, resolve });
+    return promise;
+  }
+
+  private resolveTurnIdle(sessionId: string): void {
+    const waiter = this.turnIdleWaiters.get(sessionId);
+    if (!waiter) return;
+    this.turnIdleWaiters.delete(sessionId);
+    waiter.resolve();
+  }
 
   // ── Push preview state ─────────────────────────────
   /** Last agent message content per session (for idle push preview) */
@@ -266,16 +288,17 @@ export class RelayClient {
    *  yet — the question no longer persists to the spine, so the file-based
    *  preview can't surface it. Insertion order is preserved so the newest open
    *  question wins the preview slot. */
-  private openQuestions = new Map<string, Map<string, string>>();
+  private openQuestions = new Map<string, Map<string, PendingHumanAction>>();
 
-  /** Record a newly-opened question for a session (keyed by id → prompt text). */
-  private addOpenQuestion(sessionId: string, questionId: string, question: string): void {
+  /** Record a newly-opened question and persist the full recoverable card. */
+  private addOpenQuestion(sessionId: string, pending: PendingHumanAction): void {
     let map = this.openQuestions.get(sessionId);
     if (!map) {
       map = new Map();
       this.openQuestions.set(sessionId, map);
     }
-    map.set(questionId, question);
+    map.set(pending.questionId, pending);
+    this.sessionManager.savePendingHumanAction(sessionId, pending);
   }
 
   /** Drop a resolved/cancelled question for a session. */
@@ -283,12 +306,26 @@ export class RelayClient {
     const map = this.openQuestions.get(sessionId);
     if (!map) return;
     map.delete(questionId);
-    if (map.size === 0) this.openQuestions.delete(sessionId);
+    if (map.size === 0) {
+      this.openQuestions.delete(sessionId);
+      this.sessionManager.clearPendingHumanAction(sessionId);
+    } else {
+      let newest: PendingHumanAction | undefined;
+      for (const pending of map.values()) newest = pending;
+      if (newest) this.sessionManager.savePendingHumanAction(sessionId, newest);
+    }
   }
 
   /** Clear all open questions for a session (turn ended / session gone). */
   private clearOpenQuestions(sessionId: string): void {
     this.openQuestions.delete(sessionId);
+    this.sessionManager.clearPendingHumanAction(sessionId);
+  }
+
+  private soleOpenQuestion(sessionId: string): PendingHumanAction | null {
+    const map = this.openQuestions.get(sessionId);
+    if (!map || map.size !== 1) return null;
+    return map.values().next().value ?? null;
   }
 
   /** The newest open (human-blocking) question's text, or undefined if none. */
@@ -296,8 +333,59 @@ export class RelayClient {
     const map = this.openQuestions.get(sessionId);
     if (!map || map.size === 0) return undefined;
     let last: string | undefined;
-    for (const q of map.values()) last = q;
+    for (const q of map.values()) last = q.question;
     return last;
+  }
+
+  /** Rehydrate durable pending cards before session-list/card snapshots. */
+  private restorePendingHumanActions(): void {
+    for (const meta of this.sessionManager.getSessionList()) {
+      const pending = this.sessionManager.getPendingHumanAction(meta.id);
+      if (!pending) continue;
+      let map = this.openQuestions.get(meta.id);
+      if (!map) {
+        map = new Map();
+        this.openQuestions.set(meta.id, map);
+      }
+      map.set(pending.questionId, pending);
+      this.card.restore(meta.id, { draft: pending.draft, action: pending.action });
+    }
+  }
+
+  /** Deliver through the original live request when possible. If the daemon/Pi
+   *  process was reconstructed, continue transparently with a recovery prompt;
+   *  the arm sees the same pending card throughout. */
+  private async deliverQuestionAnswer(
+    sessionId: string,
+    pending: PendingHumanAction,
+    answer: { text: string; attachments?: import('@kraki/protocol').Attachment[] },
+    wasFreeform: boolean,
+  ): Promise<void> {
+    await this.ensureSessionResumed(sessionId);
+    const result = await this.adapter.respondToQuestion(sessionId, pending.questionId, answer, wasFreeform);
+    if (result !== 'accepted') {
+      const answerText = answer.text || (answer.attachments?.length ? '[image attachment]' : '(no text)');
+      const recoveryPrompt = [
+        'A previous turn was interrupted while waiting for the user to answer this question:',
+        pending.question,
+        '',
+        'The user has now answered:',
+        answerText,
+        '',
+        'Continue the previous task using this answer. Do not ask the same question again unless the answer is genuinely insufficient.',
+      ].join('\n');
+      this.send({ type: 'active', sessionId, payload: {} });
+      this.sessionManager.markActive(sessionId);
+      await this.adapter.sendMessage(sessionId, recoveryPrompt, answer.attachments);
+    }
+
+    this.removeOpenQuestion(sessionId, pending.questionId);
+    this.card.resolvePrompt(sessionId, pending.questionId, { answer: answer.text || 'Answered with image' });
+    this.send({
+      type: 'question_resolved',
+      sessionId,
+      payload: { questionId: pending.questionId, answer: answer.text || 'Answered with image' },
+    });
   }
 
   /** Build a ContentRef for the args JSON if the serialized size exceeds the
@@ -493,6 +581,7 @@ export class RelayClient {
       this.pulse.onConnected();
       // Initialize events watcher for imported sessions
       this.initEventsWatcher();
+      this.restorePendingHumanActions();
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
       this.broadcastSessionList();
@@ -748,10 +837,6 @@ export class RelayClient {
             textLen: (msg.payload.text || '').length,
             hasAttachments: !!msg.payload.attachments?.length,
           });
-          // Broadcast user_message back to apps (round-trip confirmation).
-          // Echo the optional `clientId` so the originating client can
-          // correlate this broadcast with its optimistic pending_input
-          // placeholder (see UserMessage.payload.clientId).
           this.send({
             type: 'user_message',
             sessionId,
@@ -761,24 +846,49 @@ export class RelayClient {
               ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
             },
           });
-          this.send({ type: 'active', sessionId, payload: {} });
-          // Lazy resume must run BEFORE markActive — otherwise the meta flip
-          // from disconnected → active defeats ensureSessionResumed's state
-          // gate, sessions never get loaded, and every send fails with
-          // "Session not found". (Regression discovered post-v0.21.1.)
-          this.ensureSessionResumed(sessionId)
-            .then(() => {
+
+          const pendingAtArrival = this.soleOpenQuestion(sessionId);
+          if (pendingAtArrival) {
+            void this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
+              text: msg.payload.text === '[image]' ? '' : msg.payload.text,
+              attachments: msg.payload.attachments,
+            }, true).catch((err) => {
+              logger.error({ err, sessionId }, 'question answer from composer failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
+            });
+            break;
+          }
+          if ((this.openQuestions.get(sessionId)?.size ?? 0) > 1) {
+            this.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question card directly.' } });
+            break;
+          }
+
+          const previous = this.inputChains.get(sessionId) ?? Promise.resolve();
+          const next = previous
+            .catch(() => {})
+            .then(async () => {
+              this.send({ type: 'active', sessionId, payload: {} });
+              await this.ensureSessionResumed(sessionId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId });
               this.sessionManager.markActive(sessionId);
-              return this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
-            })
-            .then(() => {
-              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
+              const idle = this.waitForTurnIdle(sessionId);
+              try {
+                await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
+                await idle;
+              } catch (err) {
+                this.resolveTurnIdle(sessionId);
+                throw err;
+              }
             })
             .catch((err) => {
-              logger.error({ err, sessionId }, 'sendMessage failed');
+              logger.error({ err, sessionId }, 'send input failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
+            })
+            .finally(() => {
+              if (this.inputChains.get(sessionId) === next) this.inputChains.delete(sessionId);
             });
+          this.inputChains.set(sessionId, next);
           break;
         }
         case 'approve':
@@ -788,57 +898,78 @@ export class RelayClient {
           // pulse resend is safe.)
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
             .then(() => {
+              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
             });
-          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
           break;
         case 'deny':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
             .then(() => {
+              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
             });
-          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
           break;
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .then(() => {
+              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
             });
-          this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
           break;
-        case 'answer':
-          this.removeOpenQuestion(sessionId, msg.payload.questionId);
-          this.adapter.respondToQuestion(sessionId, msg.payload.questionId, msg.payload.answer, msg.payload.wasFreeform ?? false)
-            .then(() => {
-              this.send({ type: 'question_resolved', sessionId, payload: { questionId: msg.payload.questionId, answer: msg.payload.answer } });
-            })
-            .catch((err) => {
-              logger.error({ err, sessionId }, 'respondToQuestion failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
-            });
-          this.card.resolvePrompt(sessionId, msg.payload.questionId, { answer: msg.payload.answer });
+        case 'answer': {
+          const pending = this.openQuestions.get(sessionId)?.get(msg.payload.questionId);
+          if (!pending) {
+            this.send({ type: 'error', sessionId, payload: { message: 'That question is no longer pending.' } });
+            break;
+          }
+          void this.deliverQuestionAnswer(sessionId, pending, {
+            text: msg.payload.answer,
+            attachments: msg.payload.attachments,
+          }, msg.payload.wasFreeform ?? false).catch((err) => {
+            logger.error({ err, sessionId }, 'respondToQuestion failed');
+            this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
+          });
           break;
+        }
         case 'kill_session':
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession failed'));
           break;
-        case 'abort_session':
+        case 'abort_session': {
+          const snapshot = this.card.state(sessionId);
           this.adapter.abortSession(sessionId)
             .then(() => {
+              const frozenAction = snapshot.action?.type === 'question'
+                ? { ...snapshot.action, payload: { ...snapshot.action.payload, cancelled: true } }
+                : snapshot.action;
+              if (snapshot.draft || frozenAction) {
+                this.send({
+                  type: 'interrupted_turn',
+                  sessionId,
+                  payload: {
+                    reason: 'user_aborted',
+                    draft: snapshot.draft,
+                    action: frozenAction,
+                    interruptedAt: new Date().toISOString(),
+                    cancelled: true,
+                  },
+                });
+              }
               this.clearOpenQuestions(sessionId);
               this.card.clear(sessionId);
+              this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
             })
@@ -847,6 +978,7 @@ export class RelayClient {
               this.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
             });
           break;
+        }
         case 'delete_session':
           // Remove from local session state SYNCHRONOUSLY. The adapter's
           // killSession runs async and may take a while to talk to the
@@ -1364,15 +1496,27 @@ export class RelayClient {
     };
 
     this.adapter.onQuestionRequest = (sessionId, event) => {
-      this.addOpenQuestion(sessionId, event.id, event.question);
-      this.card.onPrompt(sessionId, {
-        type: 'question',
+      const action = {
+        type: 'question' as const,
         payload: {
           id: event.id,
           question: event.question,
           ...(event.choices ? { choices: event.choices } : {}),
           allowFreeform: event.allowFreeform,
         },
+      };
+      this.card.onPrompt(sessionId, action);
+      const snapshot = this.card.state(sessionId);
+      this.addOpenQuestion(sessionId, {
+        version: 1,
+        kind: 'question',
+        questionId: event.id,
+        question: event.question,
+        ...(event.choices ? { choices: event.choices } : {}),
+        allowFreeform: event.allowFreeform,
+        draft: snapshot.draft,
+        action,
+        createdAt: new Date().toISOString(),
       });
     };
 
@@ -1499,8 +1643,12 @@ export class RelayClient {
     };
 
     this.adapter.onIdle = (sessionId) => {
+      // Idle carries no run/turn identity. Never let a late idle callback erase
+      // a newer card. Permanent bubble boundaries retire settled card state;
+      // explicit abort owns its own freeze+clear path; pending questions stay.
+      if (this.soleOpenQuestion(sessionId)) return;
       this.clearOpenQuestions(sessionId);
-      this.card.clear(sessionId);
+      this.resolveTurnIdle(sessionId);
       this.sessionManager.markIdle(sessionId);
       const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
       if (usage) this.sessionManager.setUsage(sessionId, usage);
@@ -1528,6 +1676,7 @@ export class RelayClient {
     // bubble so the turn — which produced no final reply — still has an
     // anchor for its "Steps" history.
     this.adapter.onSystemMessage = (sessionId, event) => {
+      this.card.onBubble(sessionId);
       this.send({
         type: 'system_message',
         sessionId,
@@ -1543,6 +1692,7 @@ export class RelayClient {
       this.lastAgentContent.delete(sessionId);
       this.purgeSessionToolState(sessionId);
       this.broadcastedAttachmentIds.delete(sessionId);
+      this.resolveTurnIdle(sessionId);
       this.card.delete(sessionId);
       this.send({
         type: 'session_ended',
@@ -1557,7 +1707,7 @@ export class RelayClient {
     // through ensureSessionResumed and lazy-loads transparently.
     this.adapter.onSessionEvicted = (sessionId) => {
       this.sessionManager.markDisconnected(sessionId);
-      this.card.delete(sessionId);
+      if (!this.soleOpenQuestion(sessionId)) this.card.delete(sessionId);
     };
 
     // SDK title fallback — use as fast placeholder while LLM generation runs
@@ -2267,7 +2417,7 @@ export class RelayClient {
     if (sessionId) {
       if (type === 'user_message') {
         this.turnStepCounts.set(sessionId, 0);
-      } else if (type === 'agent_message' || type === 'system_message') {
+      } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn') {
         const p = enriched.payload as Record<string, unknown> | undefined;
         if (p && typeof p === 'object') p.steps = this.turnStepCounts.get(sessionId) ?? 0;
       }
