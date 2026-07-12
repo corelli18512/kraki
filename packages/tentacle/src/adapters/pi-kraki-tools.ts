@@ -14,7 +14,7 @@
  *     its drafted closing line (`resummarize:false`) or replace it with a short
  *     rewritten summary (`resummarize:true, text`). NOT for spontaneous use —
  *     ordinary assistant prose already streams to the human as the reply.
- *   • `kraki_get_mode()` — returns the live Kraki permission mode
+ *   • `kraki_get_mode({query:"current"})` — returns the live Kraki permission mode
  *     (safe|discuss|execute|delegate), read from the meta sidecar the adapter
  *     exports as `KRAKI_META_FILE`. Lets the model confirm its permission
  *     envelope before irreversible actions (the adapter is the source of truth).
@@ -167,7 +167,18 @@ export default function krakiTools(pi) {
       "Call kraki_get_mode before irreversible or destructive actions (deleting " +
       "files, force-pushing, destructive shell) to confirm the operator has " +
       "granted you permission to act.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          enum: ["current"],
+          description: "Request the current Kraki permission mode.",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
     async execute() {
       let mode = "discuss";
       try {

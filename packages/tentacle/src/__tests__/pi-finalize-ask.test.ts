@@ -17,10 +17,12 @@
  * real pi child is spawned.
  */
 
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PiAdapter } from '../adapters/pi.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
@@ -837,9 +839,75 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('would terminate the tentacle hosting this session');
   });
 
-  it('registers kraki_get_mode reading the KRAKI_META_FILE sidecar', () => {
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "kraki_get_mode"');
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('KRAKI_META_FILE');
+  it('registers kraki_get_mode with a strict, non-empty input schema', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-tools-'));
+    const extensionPath = join(dir, 'kraki-tools.mjs');
+    writeFileSync(extensionPath, PI_KRAKI_TOOLS_SOURCE);
+    const tools = new Map<string, Record<string, unknown>>();
+    const pi = {
+      registerTool(tool: Record<string, unknown>) {
+        tools.set(String(tool.name), tool);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      const extension = await import(`${pathToFileURL(extensionPath).href}?test=${randomUUID()}`);
+      extension.default(pi);
+      const modeTool = tools.get('kraki_get_mode');
+
+      expect(modeTool?.parameters).toEqual({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            enum: ['current'],
+            description: 'Request the current Kraki permission mode.',
+          },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the live mode from the sidecar on every kraki_get_mode call', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-mode-'));
+    const extensionPath = join(dir, 'kraki-tools.mjs');
+    const metaPath = join(dir, 'meta.json');
+    writeFileSync(extensionPath, PI_KRAKI_TOOLS_SOURCE);
+    writeFileSync(metaPath, JSON.stringify({ mode: 'safe' }));
+    const previousMetaFile = process.env.KRAKI_META_FILE;
+    process.env.KRAKI_META_FILE = metaPath;
+    const tools = new Map<string, Record<string, unknown>>();
+    const pi = {
+      registerTool(tool: Record<string, unknown>) {
+        tools.set(String(tool.name), tool);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      const extension = await import(`${pathToFileURL(extensionPath).href}?test=${randomUUID()}`);
+      extension.default(pi);
+      const execute = tools.get('kraki_get_mode')?.execute as () => Promise<unknown>;
+
+      await expect(execute()).resolves.toMatchObject({
+        content: [{ type: 'text', text: 'safe' }],
+        details: { mode: 'safe' },
+      });
+      writeFileSync(metaPath, JSON.stringify({ mode: 'execute' }));
+      await expect(execute()).resolves.toMatchObject({
+        content: [{ type: 'text', text: 'execute' }],
+        details: { mode: 'execute' },
+      });
+    } finally {
+      if (previousMetaFile === undefined) delete process.env.KRAKI_META_FILE;
+      else process.env.KRAKI_META_FILE = previousMetaFile;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('uses ctx.ui.select for choices and ctx.ui.input for free-form asks', () => {
