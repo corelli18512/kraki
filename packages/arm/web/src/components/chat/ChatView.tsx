@@ -103,6 +103,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   const isDeviceOnline = useStore(
     useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
   );
+  const isConnected = useStore((s) => s.status === 'connected');
   // Whether the tentacle device is encryptable yet — a `request_card` snapshot
   // pull needs its key, which may arrive AFTER this view first mounts (fresh
   // reload). Gate + re-trigger the seed effect on this so the pull isn't lost.
@@ -202,9 +203,9 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // being encryptable (its key may arrive after mount) and re-runs when it does.
   useEffect(() => {
     if (!sessionId || !cardEligible || card) return;
-    if (!isTentacleEncryptable) return;
+    if (!isConnected || !isTentacleEncryptable) return;
     messageProvider.requestCard(sessionId);
-  }, [sessionId, cardEligible, card, isTentacleEncryptable]);
+  }, [sessionId, cardEligible, card, isConnected, isTentacleEncryptable]);
 
   useEffect(() => {
     if (!sessionId || !isTentacleEncryptable) return;

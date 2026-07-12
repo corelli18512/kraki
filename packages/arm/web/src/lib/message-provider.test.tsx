@@ -26,6 +26,7 @@ describe('message-provider: requestCard', () => {
   it('sends request_card with targetDeviceId when tentacle is encryptable', () => {
     setupSession();
     useStore.getState().setAuth('web-1');
+    useStore.getState().setStatus('connected');
     useStore.getState().upsertDevice({ id: 'd1', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'key' } as any);
     messageProvider.setTentacleInfo('s1', 100, 'd1');
     const sent: Record<string, unknown>[] = [];
@@ -42,6 +43,7 @@ describe('message-provider: requestCard', () => {
 
   it('skips request_card when tentacle is not encryptable', () => {
     setupSession();
+    useStore.getState().setStatus('connected');
     messageProvider.setTentacleInfo('s1', 100, 'd1');
     const sent: Record<string, unknown>[] = [];
     messageProvider.setSend((m) => sent.push(m));
@@ -49,6 +51,22 @@ describe('message-provider: requestCard', () => {
     messageProvider.requestCard('s1');
 
     expect(sent).toEqual([]);
+  });
+
+  it('waits for authentication and allows retry after reconnect', () => {
+    setupSession();
+    useStore.getState().setAuth('web-1');
+    useStore.getState().upsertDevice({ id: 'd1', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'key' } as any);
+    messageProvider.setTentacleInfo('s1', 100, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    messageProvider.requestCard('s1');
+    expect(sent).toEqual([]);
+
+    useStore.getState().setStatus('connected');
+    messageProvider.requestCard('s1');
+    expect(sent).toHaveLength(1);
   });
 
   it('does not restore permission/question state from replay batches', () => {

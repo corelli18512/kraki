@@ -437,6 +437,7 @@ describe('ChatView', () => {
 
   it('requests a card snapshot when opening a working session without a card', async () => {
     const spy = vi.spyOn(messageProvider, 'requestCard').mockImplementation(() => {});
+    useStore.getState().setStatus('connected');
     useStore.getState().upsertDevice({
       id: 'd1', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k1',
     });

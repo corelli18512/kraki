@@ -296,6 +296,7 @@ class MessageProvider {
   requestCard(sessionId: string): void {
     if (this.cardRequested.has(sessionId)) return;
     const store = getStore();
+    if (store.status !== 'connected') return;
     // Prefer the live session_list mapping, but fall back to the store's session
     // record (hydrated from IDB on reload before session_list lands) so a
     // mid-turn reconnect can still pull the card snapshot.
