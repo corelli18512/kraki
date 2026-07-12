@@ -442,7 +442,7 @@ const IDLE_TTL_MS = 30 * 60_000;
 
 /** Describes the Kraki UI to the model so it narrates naturally instead of
  *  tagging its own messages. Appended to pi's system prompt on every spawn. */
-const KRAKI_SYSTEM_PROMPT =
+export const KRAKI_SYSTEM_PROMPT =
   'You are operating inside Kraki, a remote-control harness. Communicate with the ' +
   'human by writing ordinary assistant prose — it IS your reply and is shown to ' +
   'them directly. You do NOT need any special tool to "send" a message; just ' +
@@ -456,8 +456,11 @@ const KRAKI_SYSTEM_PROMPT =
   'yourself. To get a decision or missing information from the human, call the ' +
   'ask_user tool (it blocks and returns their answer). To visually show the human ' +
   'an image (a screenshot, diagram, chart, or generated graphic they cannot ' +
-  'already see), call the show_image tool with the file path. Do NOT call ' +
-  'finalize_reply on your own — Kraki will ask you to when it needs you to ' +
+  'already see), call the show_image tool with the file path. When the human asks you to ' +
+  'inspect, open, review, generate, or update a local HTML report, call show_html before ' +
+  'concluding so it remains accessible in the producing message; a shell command that ' +
+  'opens the system browser is not a substitute. ' +
+  'Do NOT call finalize_reply on your own — Kraki will ask you to when it needs you to ' +
   'conclude a turn.';
 
 /** Injected at the end of a turn whose intermediate narration was dropped, so

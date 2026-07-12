@@ -23,7 +23,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { PiAdapter } from '../adapters/pi.js';
+import { KRAKI_SYSTEM_PROMPT, PiAdapter } from '../adapters/pi.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
 interface StubProc {
@@ -963,6 +963,14 @@ describe('pi agent_end guards', () => {
     adapter.onIdle = onIdle;
     emit({ type: 'agent_end', willRetry: true });
     expect(onIdle).not.toHaveBeenCalled();
+  });
+});
+
+describe('Pi Kraki system prompt', () => {
+  it('directs local HTML reports through show_html instead of the system browser', () => {
+    expect(KRAKI_SYSTEM_PROMPT).toContain('call show_html');
+    expect(KRAKI_SYSTEM_PROMPT).toContain('remains accessible in the producing message');
+    expect(KRAKI_SYSTEM_PROMPT).toContain('is not a substitute');
   });
 });
 
