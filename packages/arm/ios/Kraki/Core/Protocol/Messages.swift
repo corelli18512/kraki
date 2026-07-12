@@ -142,6 +142,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     // MARK: Convenience Accessors
 
     var content: String? { payload["content"]?.stringValue }
+    var interruptedDraft: String? { payload["draft"]?.stringValue }
     var toolName: String? { payload["toolName"]?.stringValue }
     var toolCallId: String? { payload["toolCallId"]?.stringValue }
     var result: String? { payload["result"]?.stringValue }
@@ -234,7 +235,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// True for message types that should be rendered in the chat.
     var isRenderable: Bool {
         switch type {
-        case "user_message", "agent_message", "pending_input", "send_input",
+        case "user_message", "agent_message", "interrupted_turn", "pending_input", "send_input",
              "permission", "question", "tool_start", "tool_complete",
              "idle", "active", "error", "session_created", "session_ended",
              "session_deleted", "kill_session", "answer",

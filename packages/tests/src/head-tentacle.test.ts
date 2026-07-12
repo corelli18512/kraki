@@ -36,9 +36,13 @@ class MockAdapter {
   private sessionCounter = 0;
   started = false;
   sessions = new Map<string, { ended: boolean }>();
-  lastPermissionResponse: string | null = null;
-  lastQuestionResponse: string | null = null;
-  lastMessage: string | null = null;
+  lastPermissionResponse: { sessionId: string; permissionId: string; decision: string } | null = null;
+  lastQuestionResponse: {
+    sessionId: string;
+    questionId: string;
+    answer: string | { text: string; attachments?: unknown[] };
+  } | null = null;
+  lastMessage: { sessionId: string; text: string } | null = null;
   killedSessions: string[] = [];
 
   async start() { this.started = true; }
@@ -58,7 +62,7 @@ class MockAdapter {
   async respondToPermission(sid: string, pid: string, d: string) {
     this.lastPermissionResponse = { sessionId: sid, permissionId: pid, decision: d };
   }
-  async respondToQuestion(sid: string, qid: string, a: string) {
+  async respondToQuestion(sid: string, qid: string, a: string | { text: string; attachments?: unknown[] }) {
     this.lastQuestionResponse = { sessionId: sid, questionId: qid, answer: a };
   }
   async endSession(sessionId: string) {
@@ -242,7 +246,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await waitMs(200);
 
     expect(adapter.lastQuestionResponse).toEqual({
-      sessionId, questionId: "q_1", answer: "SQLite",
+      sessionId, questionId: "q_1", answer: { text: "SQLite", attachments: undefined },
     });
 
     app.close();

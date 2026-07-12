@@ -14,7 +14,7 @@
  *     its drafted closing line (`resummarize:false`) or replace it with a short
  *     rewritten summary (`resummarize:true, text`). NOT for spontaneous use —
  *     ordinary assistant prose already streams to the human as the reply.
- *   • `kraki_get_mode()` — returns the live Kraki permission mode
+ *   • `kraki_get_mode({query:"current"})` — returns the live Kraki permission mode
  *     (safe|discuss|execute|delegate), read from the meta sidecar the adapter
  *     exports as `KRAKI_META_FILE`. Lets the model confirm its permission
  *     envelope before irreversible actions (the adapter is the source of truth).
@@ -62,7 +62,7 @@ export default function krakiTools(pi) {
       required: ["question"],
       additionalProperties: false,
     },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const q = String((params && params.question) || "");
       const choices = params && Array.isArray(params.choices) ? params.choices : null;
       if (!ctx || !ctx.hasUI) {
@@ -70,12 +70,35 @@ export default function krakiTools(pi) {
       }
       let answer;
       if (choices && choices.length) {
-        answer = await ctx.ui.select(q, choices);
+        answer = await ctx.ui.select(q, choices, { signal });
       } else {
-        answer = await ctx.ui.input(q, "");
+        answer = await ctx.ui.input(q, "", { signal });
       }
-      const text = answer == null ? "(the user did not answer)" : String(answer);
-      return { content: [{ type: "text", text }], details: { answer: text } };
+      if (answer == null) {
+        return { content: [{ type: "text", text: "(the user did not answer)" }], details: { cancelled: true } };
+      }
+      let decoded = null;
+      try {
+        const value = JSON.parse(String(answer));
+        if (value && value.__krakiAnswer === 1) decoded = value;
+      } catch (_err) {
+        // Legacy/non-Kraki UI response: use the raw string below.
+      }
+      if (!decoded) {
+        const text = String(answer);
+        return { content: [{ type: "text", text }], details: { answer: text } };
+      }
+      const text = typeof decoded.text === "string" ? decoded.text : "";
+      const content = [];
+      if (text) content.push({ type: "text", text });
+      const images = Array.isArray(decoded.images) ? decoded.images : [];
+      for (const image of images) {
+        if (image && typeof image.data === "string" && typeof image.mimeType === "string") {
+          content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+        }
+      }
+      if (content.length === 0) content.push({ type: "text", text: "The user answered with an image." });
+      return { content, details: { answer: text, imageCount: images.length } };
     },
   });
 
@@ -214,7 +237,18 @@ export default function krakiTools(pi) {
       "Call kraki_get_mode before irreversible or destructive actions (deleting " +
       "files, force-pushing, destructive shell) to confirm the operator has " +
       "granted you permission to act.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          enum: ["current"],
+          description: "Request the current Kraki permission mode.",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
     async execute() {
       let mode = "discuss";
       try {

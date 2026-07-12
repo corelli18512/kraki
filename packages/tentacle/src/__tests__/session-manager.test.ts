@@ -59,6 +59,33 @@ describe('SessionManager', () => {
     });
   });
 
+  describe('durable pending human action', () => {
+    it('round-trips and clears a pending question sidecar', () => {
+      const { sessionId } = sm.createSession('pi');
+      const pending = {
+        version: 1 as const,
+        kind: 'question' as const,
+        questionId: 'q1',
+        question: 'Which backend?',
+        choices: ['A', 'B'],
+        allowFreeform: true,
+        draft: 'I inspected the project.',
+        action: {
+          type: 'question' as const,
+          payload: { id: 'q1', question: 'Which backend?', choices: ['A', 'B'], allowFreeform: true },
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      sm.savePendingHumanAction(sessionId, pending);
+      expect(sm.getPendingHumanAction(sessionId)).toEqual(pending);
+      expect(existsSync(join(dir, sessionId, 'pending-human-action.json'))).toBe(true);
+
+      sm.clearPendingHumanAction(sessionId);
+      expect(sm.getPendingHumanAction(sessionId)).toBeNull();
+    });
+  });
+
   // ── Context updates ───────────────────────────────────
 
   describe('context updates', () => {

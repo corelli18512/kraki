@@ -1,7 +1,7 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, ContentRef } from '@kraki/protocol';
+import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, CardActionState, ContentRef } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
@@ -90,6 +90,55 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
           </div>
         </CopyableBubble>
       );
+
+    case 'interrupted_turn': {
+      const payload = message.payload;
+      const action = payload.action as CardActionState | null;
+      const actionText = action?.type === 'question'
+        ? action.payload.question
+        : action?.type === 'permission'
+          ? action.payload.description
+          : action?.type === 'tool_start' || action?.type === 'tool_complete'
+            ? action.payload.headline
+            : action?.type === 'tool_batch'
+              ? `${action.payload.running} tools were running`
+              : '';
+      return (
+        <div className="flex gap-2">
+          <div className="mt-0.5 shrink-0">
+            <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
+          </div>
+          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md border border-slate-500/30 bg-slate-500/5 shadow-sm sm:max-w-[70%]">
+            {payload.draft && (
+              <div className="markdown-content px-4 py-2.5 text-sm leading-relaxed text-text-primary opacity-80">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {payload.draft}
+                </Markdown>
+              </div>
+            )}
+            {(actionText || !payload.draft) && (
+              <div className="border-t border-slate-500/20 bg-slate-500/10 px-4 py-2.5">
+                {actionText && <p className="text-sm text-text-secondary">{actionText}</p>}
+                <p className="mt-1 flex items-center gap-1 text-xs font-medium text-text-muted">
+                  <CircleStop className="h-3.5 w-3.5" /> Turn aborted
+                </p>
+              </div>
+            )}
+            <div className="flex items-center gap-2 px-4 pb-2">
+              {!actionText && payload.draft && (
+                <p className="flex items-center gap-1 text-xs font-medium text-text-muted">
+                  <CircleStop className="h-3.5 w-3.5" /> Turn aborted
+                </p>
+              )}
+              <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
+              {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
+                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={payload.steps} />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     case 'system_message': {
       const noReply = message.payload.kind === 'no_reply';

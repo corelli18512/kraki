@@ -67,6 +67,11 @@ function rebuildPreview(sessionId: string): void {
       preview = { text: stripMarkdown(msg).slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
       break;
     }
+    if (m.type === 'interrupted_turn' && payload) {
+      const draft = typeof payload.draft === 'string' ? payload.draft : '';
+      preview = { text: stripMarkdown(draft || 'Turn aborted').slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
+      break;
+    }
     if (m.type === 'agent_message' && payload) {
       const content = typeof payload.content === 'string' ? payload.content : '';
       if (content) {

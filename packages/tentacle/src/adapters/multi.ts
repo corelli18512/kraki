@@ -19,6 +19,8 @@ import {
   type CreateSessionConfig,
   type SessionInfo,
   type PermissionDecision,
+  type QuestionAnswer,
+  type QuestionResponseResult,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
@@ -287,7 +289,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     return this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision);
   }
 
-  async respondToQuestion(sessionId: string, questionId: string, answer: string, wasFreeform: boolean): Promise<void> {
+  async respondToQuestion(sessionId: string, questionId: string, answer: QuestionAnswer | string, wasFreeform: boolean): Promise<QuestionResponseResult> {
     return this.getSessionAdapter(sessionId).respondToQuestion(sessionId, questionId, answer, wasFreeform);
   }
 

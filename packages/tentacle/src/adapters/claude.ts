@@ -18,6 +18,8 @@ import {
   type CreateSessionConfig,
   type SessionInfo,
   type PermissionDecision,
+  type QuestionAnswer,
+  type QuestionResponseResult,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
@@ -850,19 +852,21 @@ export class ClaudeAdapter extends AgentAdapter {
   async respondToQuestion(
     sessionId: string,
     questionId: string,
-    answer: string,
+    answer: QuestionAnswer | string,
     _wasFreeform: boolean,
-  ): Promise<void> {
+  ): Promise<QuestionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'respondToQuestion: session not found');
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingQuestions.get(questionId);
     if (!pending) {
       logger.warn({ questionId }, 'respondToQuestion: no pending question');
-      return;
+      return 'not_found';
     }
+    const answerValue = typeof answer === 'string' ? { text: answer } : answer;
+    const answerText = answerValue.text || (answerValue.attachments?.length ? 'The user answered with image attachment(s).' : '');
 
     // SDK schema: AskUserQuestion's `answers` is a Record keyed by each
     // question's `question` TEXT (not a literal "answer" key), and `questions`
@@ -876,7 +880,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const collected = pending.collected ?? {};
     const index = pending.qIndex ?? 0;
     const thisQuestionText = qs[index]?.question;
-    if (thisQuestionText) collected[thisQuestionText] = answer;
+    if (thisQuestionText) collected[thisQuestionText] = answerText;
 
     entry.pendingQuestions.delete(questionId);
 
@@ -884,7 +888,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (nextIndex < qs.length) {
       this.emitQuestionCard(sessionId, pending.resolve, qs, nextIndex, collected, entry.pendingQuestions);
       logger.debug({ questionId, sessionId, index, nextIndex, total: qs.length }, 'question answered, advancing');
-      return;
+      return 'accepted';
     }
 
     pending.resolve({
@@ -892,6 +896,7 @@ export class ClaudeAdapter extends AgentAdapter {
       updatedInput: { questions: qs, answers: collected },
     });
     logger.debug({ questionId, sessionId, answered: Object.keys(collected).length }, 'all questions answered');
+    return 'accepted';
   }
 
   async killSession(sessionId: string): Promise<void> {

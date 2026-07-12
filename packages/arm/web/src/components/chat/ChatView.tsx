@@ -171,7 +171,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     cardAction?.type === 'permission' ||
     cardAction?.type === 'question';
   const livePending =
-    (cardAction?.type === 'question' && cardAction.payload.answer === undefined) ||
+    (cardAction?.type === 'question' && cardAction.payload.answer === undefined && !cardAction.payload.cancelled) ||
     (cardAction?.type === 'permission' && !cardAction.payload.decision)
       ? 1
       : 0;
@@ -210,7 +210,8 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     if (!sessionId || !isTentacleEncryptable) return;
     for (const msg of spine) {
       const seq = getSeq(msg);
-      if (msg.type === 'agent_message' && finalAgentSeqs.has(seq) && (msg.payload.steps ?? 0) > 0) {
+      const isFinalAgent = msg.type === 'agent_message' && finalAgentSeqs.has(seq);
+      if ((isFinalAgent || msg.type === 'interrupted_turn') && (msg.payload.steps ?? 0) > 0) {
         messageProvider.requestTurnTrace(sessionId, seq);
       }
     }
@@ -234,7 +235,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
       }
     }
     for (let i = spine.length - 1; i >= 0; i--) {
-      if (spine[i].type === 'agent_message') return i;
+      if (spine[i].type === 'agent_message' || spine[i].type === 'interrupted_turn') return i;
     }
     return -1;
   }, [spine, sessionIdle]);

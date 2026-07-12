@@ -32,7 +32,7 @@ export function cardActionKey(a: CardActionState | null): string {
     case 'permission':
       return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
     case 'question':
-      return `q:${a.payload.id}:${a.payload.answer === undefined ? 'pending' : 'answered'}`;
+      return `q:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer === undefined ? 'pending' : 'answered'}`;
   }
 }
 
@@ -42,7 +42,7 @@ export function countPendingQuestions(
   cards: Map<string, SessionCard>,
 ): number {
   const action = cards.get(sessionId)?.action;
-  return action?.type === 'question' && action.payload.answer === undefined ? 1 : 0;
+  return action?.type === 'question' && action.payload.answer === undefined && !action.payload.cancelled ? 1 : 0;
 }
 
 export function getSessionStatus(
