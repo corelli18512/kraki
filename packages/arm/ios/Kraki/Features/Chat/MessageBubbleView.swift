@@ -258,6 +258,9 @@ struct MessageBubbleView: View {
         case "agent_message":
             agentBubble
 
+        case "interrupted_turn":
+            interruptedTurnBubble
+
         case "session_created":
             sessionCreatedBanner
 
@@ -310,6 +313,36 @@ struct MessageBubbleView: View {
 
         default:
             EmptyView()
+        }
+    }
+
+    // MARK: - Interrupted Turn
+
+    private var interruptedTurnBubble: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let draft = message.interruptedDraft, !draft.isEmpty {
+                    messageBody(draft, foreground: .primary.opacity(0.8))
+                }
+                if let action = message.payload["action"]?.dictValue,
+                   let actionPayload = action["payload"]?.dictValue {
+                    let summary = actionPayload["question"]?.stringValue
+                        ?? actionPayload["description"]?.stringValue
+                        ?? actionPayload["headline"]?.stringValue
+                    if let summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Label("Turn aborted", systemImage: "stop.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.secondary.opacity(0.08), in: bubbleShape(isUser: false))
+            Spacer(minLength: WindowSize.width * 0.05)
         }
     }
 

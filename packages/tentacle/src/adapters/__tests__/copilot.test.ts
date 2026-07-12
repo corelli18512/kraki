@@ -412,10 +412,10 @@ describe('CopilotAdapter', () => {
         .resolves.toBeUndefined();
     });
 
-    it('respondToQuestion returns silently for unknown session', async () => {
+    it('respondToQuestion reports an unknown session', async () => {
       await adapter.start();
       await expect(adapter.respondToQuestion('nonexistent', 'q1', 'yes', true))
-        .resolves.toBeUndefined();
+        .resolves.toBe('session_gone');
     });
 
     it('respondToPermission returns silently for unknown permissionId', async () => {
@@ -425,11 +425,11 @@ describe('CopilotAdapter', () => {
         .resolves.toBeUndefined();
     });
 
-    it('respondToQuestion returns silently for unknown questionId', async () => {
+    it('respondToQuestion reports an unknown questionId', async () => {
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
       await expect(adapter.respondToQuestion(sessionId, 'nonexistent', 'yes', true))
-        .resolves.toBeUndefined();
+        .resolves.toBe('not_found');
     });
   });
 

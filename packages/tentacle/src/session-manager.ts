@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rename
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
+import type { CardActionState } from '@kraki/protocol';
 
 const PREVIEW_MAX = 80;
 
@@ -135,6 +136,19 @@ export interface RunRecord {
   startedAt: string;
   endedAt?: string;
   endReason?: string;
+}
+
+/** Durable human-blocking state kept outside the model transcript. */
+export interface PendingHumanAction {
+  version: 1;
+  kind: 'question';
+  questionId: string;
+  question: string;
+  choices?: string[];
+  allowFreeform?: boolean;
+  draft: string;
+  action: CardActionState;
+  createdAt: string;
 }
 
 // ── Session Manager ─────────────────────────────────────
@@ -705,6 +719,35 @@ export class SessionManager {
     this.writeMeta(sessionId, meta);
   }
 
+  // ── Durable human-action state ─────────────────────────
+
+  private pendingActionPath(sessionId: string): string {
+    return join(this.sessionDir(sessionId), 'pending-human-action.json');
+  }
+
+  savePendingHumanAction(sessionId: string, pending: PendingHumanAction): void {
+    const path = this.pendingActionPath(sessionId);
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(pending), 'utf8');
+    renameSync(tmp, path);
+  }
+
+  getPendingHumanAction(sessionId: string): PendingHumanAction | null {
+    const path = this.pendingActionPath(sessionId);
+    if (!existsSync(path)) return null;
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8')) as PendingHumanAction;
+      if (value?.version !== 1 || value.kind !== 'question' || !value.questionId) return null;
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
+  clearPendingHumanAction(sessionId: string): void {
+    rmSync(this.pendingActionPath(sessionId), { force: true });
+  }
+
   // ── Message log ────────────────────────────────────────
 
   /**
@@ -992,6 +1035,14 @@ export class SessionManager {
         if (!payload) continue;
 
         switch (inner.type) {
+          case 'interrupted_turn': {
+            const draft = payload.draft;
+            return {
+              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : 'Turn aborted',
+              type: 'agent',
+              timestamp: entry.ts,
+            };
+          }
           case 'agent_message': {
             const content = payload.content;
             if (typeof content === 'string' && content) {
