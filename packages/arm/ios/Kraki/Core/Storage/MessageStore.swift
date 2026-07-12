@@ -77,6 +77,7 @@ final class MessageStore {
     static let persistentTypes: Set<String> = [
         "session_created",
         "agent_message",
+        "interrupted_turn",
         "user_message",
         "permission",
         "permission_resolved",

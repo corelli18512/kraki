@@ -38,6 +38,8 @@ import {
   type CreateSessionConfig,
   type SessionInfo,
   type PermissionDecision,
+  type QuestionAnswer,
+  type QuestionResponseResult,
 } from './base.js';
 import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
@@ -1184,23 +1186,26 @@ export class CopilotAdapter extends AgentAdapter {
   async respondToQuestion(
     sessionId: string,
     questionId: string,
-    answer: string,
+    answer: QuestionAnswer | string,
     wasFreeform: boolean,
-  ): Promise<void> {
+  ): Promise<QuestionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn(`respondToQuestion: session not found: ${sessionId}`);
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingQuestions.get(questionId);
     if (!pending) {
       logger.warn(`respondToQuestion: no pending question: ${questionId}`);
-      return;
+      return 'not_found';
     }
 
-    pending.resolve({ answer, wasFreeform });
+    const answerValue = typeof answer === 'string' ? { text: answer } : answer;
+    const answerText = answerValue.text || (answerValue.attachments?.length ? 'The user answered with image attachment(s).' : '');
+    pending.resolve({ answer: answerText, wasFreeform });
     entry.pendingQuestions.delete(questionId);
     this.touchSession(sessionId);
+    return 'accepted';
   }
 
   async killSession(sessionId: string): Promise<void> {

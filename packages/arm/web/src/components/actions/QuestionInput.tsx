@@ -6,15 +6,15 @@ import type { CardActionState } from '@kraki/protocol';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 
 export function QuestionInput({ action, sessionId }: { action: Extract<CardActionState, { type: 'question' }>; sessionId: string }) {
-  const { id, question: text, choices, answer } = action.payload;
+  const { id, question: text, choices, answer, cancelled } = action.payload;
   const [freeform, setFreeform] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const shouldAutoFocus = shouldAutoFocusTextInput();
 
   useEffect(() => {
-    if (!shouldAutoFocus || answer !== undefined) return;
+    if (!shouldAutoFocus || answer !== undefined || cancelled) return;
     inputRef.current?.focus();
-  }, [id, shouldAutoFocus, answer]);
+  }, [id, shouldAutoFocus, answer, cancelled]);
 
   const handleAnswer = (value: string, wasFreeform: boolean) => {
     wsClient.answer(id, sessionId, value, wasFreeform);
@@ -23,6 +23,17 @@ export function QuestionInput({ action, sessionId }: { action: Extract<CardActio
       inputRef.current?.blur();
     }
   };
+
+  if (cancelled) {
+    return (
+      <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-slate-500/30 bg-slate-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
+        <div className="mx-auto max-w-3xl">
+          {text && <div className="text-sm text-text-primary"><Markdown>{text}</Markdown></div>}
+          <p className="mt-2 text-xs font-semibold text-text-muted">Turn aborted</p>
+        </div>
+      </div>
+    );
+  }
 
   // Resolved: read-only view showing the chosen answer, no input controls.
   if (answer !== undefined) {

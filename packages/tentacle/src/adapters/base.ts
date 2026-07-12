@@ -107,6 +107,13 @@ export interface SessionInfo {
 
 export type PermissionDecision = 'approve' | 'deny' | 'always_allow';
 
+export interface QuestionAnswer {
+  text: string;
+  attachments?: import('@kraki/protocol').Attachment[];
+}
+
+export type QuestionResponseResult = 'accepted' | 'not_found' | 'session_gone';
+
 // ── The adapter interface ───────────────────────────────
 
 export abstract class AgentAdapter {
@@ -200,13 +207,14 @@ export abstract class AgentAdapter {
     decision: PermissionDecision,
   ): Promise<void>;
 
-  /** Respond to a pending agent question. */
+  /** Respond to a pending agent question. Returns whether the live runtime
+   *  actually accepted the answer; callers must not resolve UI state earlier. */
   abstract respondToQuestion(
     sessionId: string,
     questionId: string,
-    answer: string,
+    answer: QuestionAnswer | string,
     wasFreeform: boolean,
-  ): Promise<void>;
+  ): Promise<QuestionResponseResult>;
 
   /** Kill / disconnect a session. */
   abstract killSession(sessionId: string): Promise<void>;

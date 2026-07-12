@@ -163,6 +163,20 @@ describe('pi abort', () => {
     expect(resolved).toBe(true);
   });
 
+  it('cancels pending question and permission UI requests before aborting', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    session.pendingQuestions.set('q1', 'q1');
+    session.pendingPerms.set('p1', 'p1');
+
+    await adapter.abortSession(sid);
+
+    expect(proc.sendRaw).toHaveBeenNthCalledWith(1, { type: 'extension_ui_response', id: 'q1', cancelled: true });
+    expect(proc.sendRaw).toHaveBeenNthCalledWith(2, { type: 'extension_ui_response', id: 'p1', confirmed: false });
+    expect(proc.request).toHaveBeenCalledWith('abort');
+    expect(session.pendingQuestions.size).toBe(0);
+    expect(session.pendingPerms.size).toBe(0);
+  });
+
   it('suppresses finalize when pi emits agent_end during abort', async () => {
     const { adapter, sid, proc, emit } = makeAdapter();
     const onIdle = vi.fn();
@@ -250,6 +264,38 @@ describe('pi model switching', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('pi prompt recovery', () => {
+  it('awaits abort and idle reconciliation before retrying the prompt', async () => {
+    const { adapter, proc } = makeAdapter();
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    proc.request
+      .mockRejectedValueOnce(new Error('Agent is already processing'))
+      .mockImplementationOnce(async (type: string) => {
+        expect(type).toBe('abort');
+        await abortGate;
+        return {};
+      })
+      .mockResolvedValueOnce({ isStreaming: false, isCompacting: false })
+      .mockResolvedValueOnce({});
+
+    const sending = adapter.sendMessage('s1', 'retry me');
+    await Promise.resolve();
+    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt', 'abort']);
+    releaseAbort();
+    await sending;
+    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt', 'abort', 'get_state', 'prompt']);
+  });
+
+  it('does not abort a live pending human prompt', async () => {
+    const { adapter, proc, session } = makeAdapter();
+    session.pendingQuestions.set('q1', 'q1');
+    proc.request.mockRejectedValueOnce(new Error('Agent is already processing'));
+    await expect(adapter.sendMessage('s1', 'wrong route')).rejects.toThrow('waiting for a human response');
+    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt']);
   });
 });
 
@@ -762,6 +808,30 @@ describe('pi ask_user → question card', () => {
     expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
   });
 
+  it('switching to execute auto-approves an existing permission without steering Pi', async () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    session.mode = 'safe';
+    const onPermissionRequest = vi.fn();
+    const onPermissionAutoResolved = vi.fn();
+    adapter.onPermissionRequest = onPermissionRequest;
+    adapter.onPermissionAutoResolved = onPermissionAutoResolved;
+
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'bash', message: JSON.stringify({ command: 'rm -f build.tmp' }) });
+    expect(onPermissionRequest).toHaveBeenCalledTimes(1);
+    expect(session.pendingPerms.has('p1')).toBe(true);
+
+    adapter.setSessionMode('s1', 'execute');
+
+    expect(proc.sendRaw).toHaveBeenLastCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
+    expect(session.pendingPerms.has('p1')).toBe(false);
+    expect(onPermissionAutoResolved).toHaveBeenCalledWith('s1', 'p1', 'approved');
+    expect(proc.send).not.toHaveBeenCalledWith('steer', expect.anything());
+
+    const responseCount = proc.sendRaw.mock.calls.length;
+    await adapter.respondToPermission('s1', 'p1', 'approve');
+    expect(proc.sendRaw).toHaveBeenCalledTimes(responseCount);
+  });
+
   it('ask_user tool_execution_start is swallowed (not TRACE)', () => {
     const { adapter, emit } = makeAdapter();
     const onToolStart = vi.fn();
@@ -781,12 +851,31 @@ describe('pi ask_user → question card', () => {
     expect(session.toolSinceLastNarration).toBe(false);
   });
 
-  it('respondToQuestion sends extension_ui_response value and clears pending', async () => {
+  it('respondToQuestion sends a structured extension_ui_response and clears pending', async () => {
     const { adapter, proc, session } = makeAdapter();
     session.pendingQuestions.set('q1', 'q1');
-    await adapter.respondToQuestion('s1', 'q1', 'red', false);
-    expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'q1', value: 'red' });
+    const result = await adapter.respondToQuestion('s1', 'q1', 'red', false);
+    expect(proc.sendRaw).toHaveBeenCalledWith({
+      type: 'extension_ui_response',
+      id: 'q1',
+      value: JSON.stringify({ __krakiAnswer: 1, text: 'red' }),
+    });
+    expect(result).toBe('accepted');
     expect(session.pendingQuestions.has('q1')).toBe(false);
+  });
+
+  it('respondToQuestion carries inline images through the structured response', async () => {
+    const { adapter, proc, session } = makeAdapter();
+    session.pendingQuestions.set('q1', 'q1');
+    await adapter.respondToQuestion('s1', 'q1', {
+      text: '',
+      attachments: [{ type: 'image', mimeType: 'image/png', data: 'abc' }],
+    }, true);
+    expect(proc.sendRaw).toHaveBeenCalledWith({
+      type: 'extension_ui_response',
+      id: 'q1',
+      value: JSON.stringify({ __krakiAnswer: 1, text: '', images: [{ type: 'image', data: 'abc', mimeType: 'image/png' }] }),
+    });
   });
 
   it('respondToQuestion for an unknown question is a no-op', async () => {

@@ -135,6 +135,12 @@ function createAdapter(): Record<string, unknown> {
     getSessionUsage: vi.fn(() => null),
     setSessionUsage: vi.fn(),
     registerSessionAgent: vi.fn(),
+    sendMessage: vi.fn(async () => {}),
+    respondToQuestion: vi.fn(async () => 'accepted'),
+    respondToPermission: vi.fn(async () => {}),
+    abortSession: vi.fn(async () => {}),
+    killSession: vi.fn(async () => {}),
+    resumeSession: vi.fn(async (sessionId: string) => ({ sessionId })),
   };
 }
 
@@ -156,6 +162,9 @@ function createSessionManager(): Record<string, unknown> {
     deleteSession: vi.fn(),
     markRead: vi.fn(),
     getSessionList: vi.fn(() => []),
+    getPendingHumanAction: vi.fn(() => null),
+    savePendingHumanAction: vi.fn(),
+    clearPendingHumanAction: vi.fn(),
     getMessagesAfterSeq: vi.fn(() => []),
     appendMessage: vi.fn(() => 1),
     appendTrace: vi.fn(),
@@ -1930,13 +1939,17 @@ describe('RelayClient pending-question digest', () => {
     expect(preview()).toMatchObject({ type: 'question', text: 'Q q2' });
   });
 
-  it('reverts the preview as questions are answered (answering one leaves the rest)', () => {
+  it('reverts the preview as questions are answered (answering one leaves the rest)', async () => {
     const { askQ, answerQ, preview } = buildClient();
     askQ('q1');
     askQ('q2');
     answerQ('q2');
+    await Promise.resolve();
+    await Promise.resolve();
     expect(preview()).toMatchObject({ type: 'question', text: 'Q q1' });
     answerQ('q1');
+    await Promise.resolve();
+    await Promise.resolve();
     expect(preview()?.type).not.toBe('question');
   });
 
@@ -1953,6 +1966,132 @@ describe('RelayClient pending-question digest', () => {
     askQ('q1');
     (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
     expect(preview()?.type).not.toBe('question');
+  });
+
+  it('serializes distinct composer prompts until the preceding turn idles', async () => {
+    const { adapter, ws } = buildClient();
+    for (const [seq, text] of [[600, 'first'], [601, 'second']] as const) {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+        timestamp: new Date().toISOString(), payload: { text },
+      })));
+    }
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(1, 'sess_1', 'first', undefined);
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
+  });
+
+  it('routes ordinary composer input to the sole pending question', async () => {
+    const { adapter, askQ, ws, sm } = buildClient();
+    askQ('q1');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 500,
+      timestamp: new Date().toISOString(), payload: { text: 'my answer', clientId: 'c1' },
+    })));
+    await vi.waitFor(() => {
+      expect(adapter.respondToQuestion).toHaveBeenCalledWith(
+        'sess_1', 'q1', { text: 'my answer', attachments: undefined }, true,
+      );
+    });
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('uses a recovery prompt when the live question request was lost', async () => {
+    const { adapter, askQ, ws } = buildClient();
+    (adapter.respondToQuestion as ReturnType<typeof vi.fn>).mockResolvedValueOnce('not_found');
+    askQ('q1');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 501,
+      timestamp: new Date().toISOString(), payload: {
+        text: 'answer after restart',
+        attachments: [{ type: 'image', mimeType: 'image/png', data: 'abc' }],
+      },
+    })));
+    await vi.runAllTimersAsync();
+    expect(adapter.sendMessage).toHaveBeenCalledWith(
+      'sess_1',
+      expect.stringContaining('answer after restart'),
+      [{ type: 'image', mimeType: 'image/png', data: 'abc' }],
+    );
+  });
+
+  it('keeps the pending sidecar when recovery delivery fails', async () => {
+    const { adapter, askQ, ws, sm } = buildClient();
+    (adapter.respondToQuestion as ReturnType<typeof vi.fn>).mockResolvedValueOnce('not_found');
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('replacement prompt failed'));
+    askQ('q1');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: 504,
+      timestamp: new Date().toISOString(), payload: { questionId: 'q1', answer: 'keep me pending' },
+    })));
+    await vi.runAllTimersAsync();
+    expect(sm.savePendingHumanAction).toHaveBeenCalledWith('sess_1', expect.objectContaining({ questionId: 'q1' }));
+    expect(sm.clearPendingHumanAction).not.toHaveBeenCalledWith('sess_1');
+  });
+
+  it('rejects ambiguous composer text when multiple questions are pending', async () => {
+    const { adapter, askQ, ws } = buildClient();
+    askQ('q1');
+    askQ('q2');
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 505,
+      timestamp: new Date().toISOString(), payload: { text: 'ambiguous answer' },
+    })));
+    await vi.runAllTimersAsync();
+    expect(adapter.respondToQuestion).not.toHaveBeenCalled();
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes image-only composer input to the sole pending question', async () => {
+    const { adapter, askQ, ws } = buildClient();
+    askQ('q1');
+    const image = { type: 'image' as const, mimeType: 'image/png', data: 'abc' };
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 506,
+      timestamp: new Date().toISOString(), payload: { text: '[image]', attachments: [image] },
+    })));
+    await vi.waitFor(() => expect(adapter.respondToQuestion).toHaveBeenCalledWith(
+      'sess_1', 'q1', { text: '', attachments: [image] }, true,
+    ));
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not persist interrupted history when explicit abort sees an empty card', async () => {
+    const { adapter, ws, sm } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 507,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    await vi.runAllTimersAsync();
+    expect(adapter.abortSession).toHaveBeenCalledWith('sess_1');
+    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'interrupted_turn')).toBe(false);
+  });
+
+  it('persists the full visible card as interrupted_turn on explicit abort', async () => {
+    const { adapter, askQ, ws, sm } = buildClient();
+    askQ('q1');
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 502,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    await Promise.resolve();
+    await Promise.resolve();
+    const interruptedCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .find((call) => call[1] === 'interrupted_turn');
+    expect(interruptedCall).toBeDefined();
+    const interrupted = JSON.parse(interruptedCall![2]) as { payload: Record<string, unknown> };
+    expect(interrupted.payload).toMatchObject({
+      reason: 'user_aborted',
+      cancelled: true,
+      action: { type: 'question', payload: { id: 'q1', question: 'Q q1', cancelled: true } },
+    });
+    expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
   });
 
   it('pushes the active card snapshot to a freshly-joined device', () => {
