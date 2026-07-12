@@ -15,6 +15,7 @@ vi.mock('../../lib/ws-client', () => ({
     answer: vi.fn(),
     markRead: vi.fn(),
     createSession: vi.fn(),
+    requestAttachment: vi.fn(),
   },
 }));
 
@@ -135,6 +136,162 @@ describe('ChatView', () => {
     renderChatView('s1');
     expect(screen.getByText('shell')).toBeInTheDocument();
     expect(screen.queryByText('Working…')).not.toBeInTheDocument();
+  });
+
+  it('renders show_image output inside the concluding agent bubble', () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
+    ]);
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+      payload: { content: 'Show me the result' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'tool_complete', deviceId: 'd1', seq: 1.5, timestamp: '', sessionId: 's1',
+      payload: {
+        toolName: 'show_image', headline: 'result.png', success: true,
+        attachments: [{ type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=', caption: 'Rendered result' }],
+      },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+      payload: { content: 'Here is the finished image.' },
+    } as ChatMessage);
+
+    renderChatView('s1');
+
+    const reply = screen.getByText('Here is the finished image.').closest('.rounded-2xl');
+    expect(reply).not.toBeNull();
+    expect(within(reply as HTMLElement).getByRole('img', { name: 'Rendered result' })).toBeInTheDocument();
+    expect(within(reply as HTMLElement).getByText('Rendered result')).toBeInTheDocument();
+  });
+
+  it('puts turn images only in the last agent bubble when a turn has multiple replies', () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 3 },
+    ]);
+    const messages: ChatMessage[] = [
+      {
+        type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+        payload: { content: 'One turn' },
+      } as ChatMessage,
+      {
+        type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+        payload: { content: 'Earlier bubble' },
+      } as ChatMessage,
+      {
+        type: 'tool_complete', deviceId: 'd1', seq: 2.5, timestamp: '', sessionId: 's1',
+        payload: {
+          toolName: 'show_image', headline: 'result.png', success: true,
+          attachments: [{ type: 'image', mimeType: 'image/png', data: 'bGFzdA==', caption: 'Last bubble image' }],
+        },
+      } as ChatMessage,
+      {
+        type: 'agent_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1',
+        payload: { content: 'Last bubble' },
+      } as ChatMessage,
+    ];
+    for (const message of messages) useStore.getState().appendMessage('s1', message);
+
+    renderChatView('s1');
+
+    const earlier = screen.getByText('Earlier bubble').closest('.rounded-2xl');
+    const last = screen.getByText('Last bubble').closest('.rounded-2xl');
+    expect(within(earlier as HTMLElement).queryByRole('img', { name: 'Last bubble image' })).not.toBeInTheDocument();
+    expect(within(last as HTMLElement).getByRole('img', { name: 'Last bubble image' })).toBeInTheDocument();
+  });
+
+  it('keeps show_image output scoped to the turn that produced it', () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 4 },
+    ]);
+    const messages: ChatMessage[] = [
+      {
+        type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+        payload: { content: 'First request' },
+      } as ChatMessage,
+      {
+        type: 'tool_complete', deviceId: 'd1', seq: 1.5, timestamp: '', sessionId: 's1',
+        payload: {
+          toolName: 'show_image', headline: 'first.png', success: true,
+          attachments: [{ type: 'image', mimeType: 'image/png', data: 'Zmlyc3Q=', caption: 'First image' }],
+        },
+      } as ChatMessage,
+      {
+        type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+        payload: { content: 'First reply' },
+      } as ChatMessage,
+      {
+        type: 'user_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1',
+        payload: { content: 'Second request' },
+      } as ChatMessage,
+      {
+        type: 'agent_message', deviceId: 'd1', seq: 4, timestamp: '', sessionId: 's1',
+        payload: { content: 'Second reply' },
+      } as ChatMessage,
+    ];
+    for (const message of messages) useStore.getState().appendMessage('s1', message);
+
+    renderChatView('s1');
+
+    const firstReply = screen.getByText('First reply').closest('.rounded-2xl');
+    const secondReply = screen.getByText('Second reply').closest('.rounded-2xl');
+    expect(within(firstReply as HTMLElement).getByRole('img', { name: 'First image' })).toBeInTheDocument();
+    expect(within(secondReply as HTMLElement).queryByRole('img', { name: 'First image' })).not.toBeInTheDocument();
+  });
+
+  it('deduplicates repeated content refs within the final bubble', () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
+    ]);
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+      payload: { content: 'Show it twice' },
+    } as ChatMessage);
+    const attachment = {
+      type: 'content_ref' as const,
+      id: 'same-image', mimeType: 'image/png', size: 128, caption: 'One image', width: 20, height: 20,
+    };
+    useStore.getState().appendMessage('s1', {
+      type: 'tool_complete', deviceId: 'd1', seq: 1.3, timestamp: '', sessionId: 's1',
+      payload: { toolName: 'show_image', headline: 'one.png', success: true, attachments: [attachment] },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'tool_complete', deviceId: 'd1', seq: 1.6, timestamp: '', sessionId: 's1',
+      payload: { toolName: 'show_image', headline: 'one.png', success: true, attachments: [attachment] },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+      payload: { content: 'Only one tile follows.' },
+    } as ChatMessage);
+
+    renderChatView('s1');
+
+    const reply = screen.getByText('Only one tile follows.').closest('.rounded-2xl');
+    expect(within(reply as HTMLElement).getAllByText('One image')).toHaveLength(1);
+  });
+
+  it('requests the latest final bubble trace on open so images recover after reload', async () => {
+    const spy = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
+    useStore.getState().setDevices([
+      { id: 'd1', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'key' },
+    ]);
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
+    ]);
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+      payload: { content: 'Show it' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+      payload: { content: 'Final reply', steps: 1 },
+    } as ChatMessage);
+
+    renderChatView('s1');
+
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith('s1', 2));
+    spy.mockRestore();
   });
 
   it('hides the status card when the session is idle', () => {

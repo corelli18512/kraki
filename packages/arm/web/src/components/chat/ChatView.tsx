@@ -7,6 +7,7 @@ import { MessageInput } from './MessageInput';
 import { useScrollController } from '../../hooks/useScrollController';
 import { messageProvider } from '../../lib/message-provider';
 import { getSessionStatus, cardActionKey } from '../../lib/session-status';
+import type { Attachment } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -18,6 +19,48 @@ const TRACE_TYPES = new Set(['tool_start', 'tool_complete', 'agent_narration', '
 /** Extract seq from a message, returning 0 for non-sequenced messages. */
 function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
+}
+
+function attachmentKey(attachment: Attachment): string {
+  if (attachment.type === 'content_ref') return `ref:${attachment.id}`;
+  if (attachment.type === 'image') return `image:${attachment.mimeType}:${attachment.data}`;
+  return JSON.stringify(attachment);
+}
+
+/** Images produced by show_image/tool steps in the turn concluding at
+ *  `bubbleSeq`. They stay on the TRACE axis for history, but are also rendered
+ *  inside that turn's final agent bubble. */
+export function collectTurnImages(
+  messages: ChatMessage[],
+  bubbleSeq: number,
+  directAttachments: Attachment[] = [],
+): Attachment[] {
+  const directKeys = new Set(directAttachments.map(attachmentKey));
+  const targetIdx = messages.findIndex((message) => getSeq(message) === bubbleSeq);
+  if (targetIdx < 0 || messages[targetIdx].type !== 'agent_message') return [];
+  let turnStartIdx = -1;
+  for (let i = targetIdx - 1; i >= 0; i--) {
+    if (messages[i].type === 'user_message') {
+      turnStartIdx = i;
+      break;
+    }
+  }
+  const seen = new Set<string>();
+  const images: Attachment[] = [];
+  for (let i = turnStartIdx + 1; i < targetIdx; i++) {
+    const step = messages[i];
+    if (step.type !== 'tool_complete') continue;
+    for (const attachment of step.payload.attachments ?? []) {
+      const isImage = attachment.type === 'image' ||
+        (attachment.type === 'content_ref' && attachment.mimeType.startsWith('image/'));
+      if (!isImage) continue;
+      const key = attachmentKey(attachment);
+      if (directKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      images.push(attachment);
+    }
+  }
+  return images;
 }
 
 export const ChatView = memo(function ChatView() {
@@ -54,6 +97,31 @@ export const ChatView = memo(function ChatView() {
     }),
     [messages],
   );
+  const finalAgentSeqs = useMemo(() => {
+    const seqs = new Set<number>();
+    let lastAgentSeq = 0;
+    for (const msg of spine) {
+      if (msg.type === 'user_message') {
+        if (lastAgentSeq > 0) seqs.add(lastAgentSeq);
+        lastAgentSeq = 0;
+      } else if (msg.type === 'agent_message') {
+        lastAgentSeq = getSeq(msg);
+      }
+    }
+    if (lastAgentSeq > 0) seqs.add(lastAgentSeq);
+    return seqs;
+  }, [spine]);
+  const turnImagesByBubbleSeq = useMemo(() => {
+    const bySeq = new Map<number, Attachment[]>();
+    for (const msg of spine) {
+      if (msg.type !== 'agent_message') continue;
+      const seq = getSeq(msg);
+      if (!finalAgentSeqs.has(seq)) continue;
+      const images = collectTurnImages(messages, seq, msg.payload.attachments);
+      if (images.length > 0) bySeq.set(seq, images);
+    }
+    return bySeq;
+  }, [finalAgentSeqs, messages, spine]);
 
   // Derived human-facing status decides card visibility.
   const cardAction = card?.action;
@@ -107,6 +175,18 @@ export const ChatView = memo(function ChatView() {
     if (!isTentacleEncryptable) return;
     messageProvider.requestCard(sessionId);
   }, [sessionId, cardEligible, card, isTentacleEncryptable]);
+
+  useEffect(() => {
+    if (!sessionId || !isTentacleEncryptable) return;
+    for (let i = spine.length - 1; i >= 0; i--) {
+      const msg = spine[i];
+      if (msg.type === 'agent_message') {
+        if ((msg.payload.steps ?? 0) > 0) messageProvider.requestTurnTrace(sessionId, getSeq(msg));
+        break;
+      }
+      if (msg.type === 'user_message') break;
+    }
+  }, [sessionId, isTentacleEncryptable, spine]);
 
   // `idle` here is the message-level marker (last spine entry is an idle
   // event), used by the scroll controller for the working→idle reposition. It
@@ -183,7 +263,12 @@ export const ChatView = memo(function ChatView() {
             )}
             {spine.map((msg, idx) => (
               <div key={`b-${getSeq(msg) || idx}-${msg.type}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
-                <MessageBubble message={msg} agent={session.agent} sessionId={sessionId} />
+                <MessageBubble
+                  message={msg}
+                  agent={session.agent}
+                  sessionId={sessionId}
+                  turnImages={msg.type === 'agent_message' ? turnImagesByBubbleSeq.get(getSeq(msg)) : undefined}
+                />
               </div>
             ))}
             {showLive && card && (

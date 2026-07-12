@@ -87,6 +87,68 @@ describe('MessageBubble', () => {
       expect(spy).toHaveBeenCalledWith('sess-1', 5);
       spy.mockRestore();
     });
+
+    it('lays out three turn images as a compact gallery', () => {
+      const turnImages = ['One', 'Two', 'Three'].map((caption, index) => ({
+        type: 'image' as const,
+        mimeType: 'image/png',
+        data: `aW1hZ2Ut${index}`,
+        caption,
+      }));
+      const { container } = render(
+        <MemoryRouter>
+          <MessageBubble message={makeMsg('agent_message', { content: 'Gallery' })} turnImages={turnImages} />
+        </MemoryRouter>,
+      );
+
+      const gallery = container.querySelector('[data-image-gallery="3"]');
+      expect(gallery).toBeInTheDocument();
+      expect(gallery).toHaveClass('grid-cols-2', 'grid-rows-2');
+      expect(screen.getByRole('button', { name: 'Open One' }).closest('.relative')).toHaveClass('row-span-2');
+    });
+
+    it('collapses five images into four tiles with a more-images overlay', () => {
+      const turnImages = ['One', 'Two', 'Three', 'Four', 'Five'].map((caption, index) => ({
+        type: 'image' as const,
+        mimeType: 'image/png',
+        data: `aW1hZ2Ut${index}`,
+        caption,
+      }));
+      const { container } = render(
+        <MemoryRouter>
+          <MessageBubble message={makeMsg('agent_message', { content: 'Gallery' })} turnImages={turnImages} />
+        </MemoryRouter>,
+      );
+
+      expect(container.querySelector('[data-image-gallery="5"]')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show 1 more images' })).toHaveTextContent('+1');
+      expect(screen.getByRole('button', { name: 'Open Five' }).closest('.relative')).toHaveClass('hidden');
+    });
+
+    it('browses every image from the full-screen gallery', () => {
+      const turnImages = ['One', 'Two', 'Three', 'Four', 'Five'].map((caption, index) => ({
+        type: 'image' as const,
+        mimeType: 'image/png',
+        data: `aW1hZ2Ut${index}`,
+        caption,
+      }));
+      render(
+        <MemoryRouter>
+          <MessageBubble message={makeMsg('agent_message', { content: 'Gallery' })} turnImages={turnImages} />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show 1 more images' }));
+      expect(screen.getByRole('dialog', { name: 'Image gallery' })).toHaveTextContent('4 / 5');
+      fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+      expect(screen.getByRole('dialog', { name: 'Image gallery' })).toHaveTextContent('Five');
+      expect(screen.getByRole('dialog', { name: 'Image gallery' })).toHaveTextContent('5 / 5');
+      fireEvent.keyDown(window, { key: 'ArrowRight' });
+      expect(screen.getByRole('dialog', { name: 'Image gallery' })).toHaveTextContent('One');
+      expect(screen.getByRole('dialog', { name: 'Image gallery' })).toHaveTextContent('1 / 5');
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog', { name: 'Image gallery' })).not.toBeInTheDocument();
+    });
   });
 
   describe('system_message', () => {
