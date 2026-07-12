@@ -40,7 +40,7 @@ import { isAbsolute, join } from "node:path";
 // Capability tools never go through the permission gate — they carry their own
 // operator interaction (ask_user/show_image), settle the turn (finalize_reply),
 // or are read-only introspection (kraki_get_mode).
-const KRAKI_TOOLS = new Set(["ask_user", "finalize_reply", "show_image", "kraki_get_mode"]);
+const KRAKI_TOOLS = new Set(["ask_user", "finalize_reply", "show_image", "show_html", "kraki_get_mode"]);
 
 export default function krakiTools(pi) {
   pi.registerTool({
@@ -152,6 +152,53 @@ export default function krakiTools(pi) {
       if (caption) content.push({ type: "text", text: caption });
       content.push({ type: "image", data: bytes.toString("base64"), mimeType });
       return { content, details: { shown: abs, mimeType } };
+    },
+  });
+
+  pi.registerTool({
+    name: "show_html",
+    label: "Show HTML report",
+    description:
+      "Display a self-contained HTML report to the user in the Kraki preview panel. " +
+      "Use this for documents, architecture reports, diagrams, and technical analysis. " +
+      "The file must be a local .html or .htm file and is rendered locally in a sandbox.",
+    promptGuidelines:
+      "Use show_html when the user would benefit from reading a generated HTML report. " +
+      "Prefer a self-contained HTML file with inline CSS, inline SVG, and no external resources.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Absolute or cwd-relative path to the HTML report." },
+        title: { type: "string", description: "Optional report title shown in the preview panel." },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    async execute(_id, params) {
+      const p = String((params && params.path) || "");
+      const requestedTitle = params && params.title ? String(params.title).trim() : "";
+      if (!p) return { content: [{ type: "text", text: "show_html: no path provided" }], isError: true, details: {} };
+      const abs = isAbsolute(p) ? p : join(process.cwd(), p);
+      const lower = abs.toLowerCase();
+      if (!lower.endsWith(".html") && !lower.endsWith(".htm")) {
+        return { content: [{ type: "text", text: "show_html: path must end in .html or .htm" }], isError: true, details: {} };
+      }
+      let bytes;
+      try {
+        bytes = readFileSync(abs);
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        return { content: [{ type: "text", text: "show_html: cannot read " + abs + " — " + msg }], isError: true, details: {} };
+      }
+      if (bytes.length > 10 * 1024 * 1024) {
+        return { content: [{ type: "text", text: "show_html: file is larger than the 10 MB limit" }], isError: true, details: {} };
+      }
+      return {
+        content: [{ type: "text", text: "HTML report ready for preview." }],
+        // The adapter consumes this local path and stores the bytes as an
+        // attachment. The HTML itself is deliberately never returned to pi.
+        details: { htmlPath: abs, title: requestedTitle, name: abs.split(/[\\/]/).pop() || "report.html" },
+      };
     },
   });
 

@@ -1,13 +1,13 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment } from '@kraki/protocol';
+import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, ContentRef } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { StepsButton } from './StepsModal';
@@ -35,7 +35,7 @@ export const markdownComponents = {
   ),
 };
 
-export function MessageBubble({ message, agent, forceExpanded, turnImages, cancelled, sessionId }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; cancelled?: boolean; sessionId?: string }) {
+export function MessageBubble({ message, agent, forceExpanded, turnImages, turnArtifacts, onOpenArtifact, cancelled, sessionId }: { message: ChatMessage; agent?: string; forceExpanded?: boolean; turnImages?: Attachment[]; turnArtifacts?: ContentRef[]; onOpenArtifact?: (artifact: ContentRef) => void; cancelled?: boolean; sessionId?: string }) {
   switch (message.type) {
     case 'user_message': {
       const showUserText = message.payload.content !== IMAGE_PLACEHOLDER;
@@ -75,6 +75,9 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, cance
               </div>
               <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
               {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} sessionId={sessionId} />}
+              {turnArtifacts && turnArtifacts.length > 0 && (
+                <HtmlArtifactCards artifacts={turnArtifacts} onOpen={onOpenArtifact} />
+              )}
               <div className="mt-1 flex items-center gap-2">
                 <p className="text-[10px] text-text-muted">
                   {formatTime(message.timestamp)}
@@ -404,12 +407,41 @@ function CopyableBubble({ text, children }: { text: string; children: React.Reac
   );
 }
 
+function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onOpen?: (artifact: ContentRef) => void }) {
+  return (
+    <div className="mt-2 space-y-1.5" data-html-artifacts={artifacts.length}>
+      {artifacts.map((artifact) => {
+        const title = artifact.caption || artifact.name || 'HTML report';
+        return (
+          <button
+            key={artifact.id}
+            type="button"
+            onClick={() => onOpen?.(artifact)}
+            className="group flex w-full items-center gap-3 rounded-xl border border-border-primary bg-surface-primary/80 px-3 py-2.5 text-left transition-colors hover:border-kraki-500/40 hover:bg-surface-secondary disabled:cursor-default"
+            aria-label={`Open report ${title}`}
+            disabled={!onOpen}
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-kraki-500/10 text-kraki-500">
+              <FileCode2 className="size-4.5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-semibold text-text-primary">{title}</span>
+              <span className="mt-0.5 block text-[10px] text-text-muted">HTML Report · {formatBytes(artifact.size)}</span>
+            </span>
+            <ExternalLink className="size-3.5 shrink-0 text-text-muted transition-colors group-hover:text-kraki-500" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [resolvedRefs, setResolvedRefs] = useState<Record<number, string>>({});
   const images = attachments?.filter(
     (a): a is (Attachment & { type: 'image' }) | (Attachment & { type: 'content_ref' }) =>
-      a.type === 'image' || a.type === 'content_ref',
+      a.type === 'image' || (a.type === 'content_ref' && a.mimeType.startsWith('image/')),
   ) ?? [];
   const imageCount = images.length;
   const isGallery = imageCount > 1;

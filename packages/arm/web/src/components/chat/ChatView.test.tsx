@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { ChatView } from './ChatView';
 import type { ChatMessage } from '../../types/store';
+import type { ContentRef } from '@kraki/protocol';
 import { messageProvider } from '../../lib/message-provider';
 
 vi.mock('../../lib/ws-client', () => ({
@@ -19,12 +20,12 @@ vi.mock('../../lib/ws-client', () => ({
   },
 }));
 
-function renderChatView(sessionId?: string) {
+function renderChatView(sessionId?: string, onOpenArtifact?: (artifact: ContentRef) => void) {
   const route = sessionId ? `/session/${sessionId}` : '/session/none';
   return render(
     <MemoryRouter initialEntries={[route]}>
       <Routes>
-        <Route path="/session/:sessionId" element={<ChatView />} />
+        <Route path="/session/:sessionId" element={<ChatView onOpenArtifact={onOpenArtifact} />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -271,7 +272,74 @@ describe('ChatView', () => {
     expect(within(reply as HTMLElement).getAllByText('One image')).toHaveLength(1);
   });
 
-  it('requests the latest final bubble trace on open so images recover after reload', async () => {
+  it('renders each turn HTML report in its concluding bubble and opens the selected report', () => {
+    const onOpen = vi.fn();
+    const first = { type: 'content_ref' as const, id: 'report-1', mimeType: 'text/html', size: 2048, name: 'first.html', caption: 'First report' };
+    const second = { type: 'content_ref' as const, id: 'report-2', mimeType: 'text/html', size: 4096, name: 'second.html', caption: 'Second report' };
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 4 },
+    ]);
+    const messages: ChatMessage[] = [
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'First' } } as ChatMessage,
+      { type: 'tool_complete', deviceId: 'd1', seq: 1.5, timestamp: '', sessionId: 's1', payload: { toolName: 'show_html', success: true, attachments: [first] } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'First reply' } } as ChatMessage,
+      { type: 'user_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { content: 'Second' } } as ChatMessage,
+      { type: 'tool_complete', deviceId: 'd1', seq: 3.5, timestamp: '', sessionId: 's1', payload: { toolName: 'show_html', success: true, attachments: [second] } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 4, timestamp: '', sessionId: 's1', payload: { content: 'Second reply' } } as ChatMessage,
+    ];
+    for (const message of messages) useStore.getState().appendMessage('s1', message);
+
+    renderChatView('s1', onOpen);
+
+    const firstReply = screen.getByText('First reply').closest('.rounded-2xl');
+    const secondReply = screen.getByText('Second reply').closest('.rounded-2xl');
+    expect(within(firstReply as HTMLElement).getByText('First report')).toBeInTheDocument();
+    expect(within(firstReply as HTMLElement).queryByText('Second report')).not.toBeInTheDocument();
+    expect(within(secondReply as HTMLElement).getByText('Second report')).toBeInTheDocument();
+    fireEvent.click(within(firstReply as HTMLElement).getByRole('button', { name: 'Open report First report' }));
+    expect(onOpen).toHaveBeenCalledWith(first);
+  });
+
+  it('renders an HTML report attached directly to the final agent message', () => {
+    const report = { type: 'content_ref' as const, id: 'direct-report', mimeType: 'text/html', size: 512, name: 'direct.html' };
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
+    ]);
+    useStore.getState().appendMessage('s1', {
+      type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
+      payload: { content: 'Report' },
+    } as ChatMessage);
+    useStore.getState().appendMessage('s1', {
+      type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
+      payload: { content: 'Direct report', attachments: [report] },
+    } as ChatMessage);
+
+    renderChatView('s1', vi.fn());
+
+    expect(screen.getByRole('button', { name: 'Open report direct.html' })).toBeInTheDocument();
+  });
+
+  it('renders multiple HTML reports from one turn without duplicates', () => {
+    const first = { type: 'content_ref' as const, id: 'report-1', mimeType: 'text/html', size: 100, name: 'first.html' };
+    const second = { type: 'content_ref' as const, id: 'report-2', mimeType: 'text/html', size: 200, name: 'second.html' };
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
+    ]);
+    const messages: ChatMessage[] = [
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'Reports' } } as ChatMessage,
+      { type: 'tool_complete', deviceId: 'd1', seq: 1.2, timestamp: '', sessionId: 's1', payload: { toolName: 'show_html', success: true, attachments: [first, second] } } as ChatMessage,
+      { type: 'tool_complete', deviceId: 'd1', seq: 1.4, timestamp: '', sessionId: 's1', payload: { toolName: 'show_html', success: true, attachments: [first] } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'Both reports' } } as ChatMessage,
+    ];
+    for (const message of messages) useStore.getState().appendMessage('s1', message);
+
+    renderChatView('s1', vi.fn());
+
+    expect(screen.getAllByText('first.html')).toHaveLength(1);
+    expect(screen.getByText('second.html')).toBeInTheDocument();
+  });
+
+  it('requests every historical final bubble trace on open so artifacts recover after reload', async () => {
     const spy = vi.spyOn(messageProvider, 'requestTurnTrace').mockImplementation(() => {});
     useStore.getState().setDevices([
       { id: 'd1', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'key' },
@@ -279,18 +347,22 @@ describe('ChatView', () => {
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 2 },
     ]);
-    useStore.getState().appendMessage('s1', {
-      type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1',
-      payload: { content: 'Show it' },
-    } as ChatMessage);
-    useStore.getState().appendMessage('s1', {
-      type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1',
-      payload: { content: 'Final reply', steps: 1 },
-    } as ChatMessage);
+    const messages: ChatMessage[] = [
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'First' } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 1.5, timestamp: '', sessionId: 's1', payload: { content: 'Intermediate reply', steps: 1 } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'First reply', steps: 1 } } as ChatMessage,
+      { type: 'user_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { content: 'Second' } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 4, timestamp: '', sessionId: 's1', payload: { content: 'Second reply', steps: 2 } } as ChatMessage,
+    ];
+    for (const message of messages) useStore.getState().appendMessage('s1', message);
 
     renderChatView('s1');
 
-    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith('s1', 2));
+    await vi.waitFor(() => {
+      expect(spy).toHaveBeenCalledWith('s1', 2);
+      expect(spy).toHaveBeenCalledWith('s1', 4);
+      expect(spy).not.toHaveBeenCalledWith('s1', 1.5);
+    });
     spy.mockRestore();
   });
 

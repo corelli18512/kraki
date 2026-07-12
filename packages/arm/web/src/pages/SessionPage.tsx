@@ -7,6 +7,8 @@ import { getSessionStatus, countPendingQuestions } from '../lib/session-status';
 import { AgentAvatar } from '../components/common/AgentAvatar';
 import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 import { messageProvider } from '../lib/message-provider';
+import { HtmlArtifactPanel } from '../components/chat/HtmlArtifactPanel';
+import type { ContentRef } from '@kraki/protocol';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -30,6 +32,7 @@ export function SessionPage() {
   });
   const navigate = useNavigate();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<ContentRef | null>(null);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
   const deviceAgentsList = useStore((s) => session ? s.deviceAgents.get(session.deviceId) : undefined);
   // Find the agent matching this session, or flatten all agents' models
@@ -51,6 +54,7 @@ export function SessionPage() {
   // Track which session is being viewed so ws-client can suppress unread for it
   useEffect(() => {
     if (sessionId) setActiveSessionId(sessionId);
+    setSelectedArtifact(null);
     return () => setActiveSessionId(null);
   }, [sessionId, setActiveSessionId]);
 
@@ -182,7 +186,14 @@ export function SessionPage() {
         </button>
       </div>
 
-      <ChatView />
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative flex min-w-0 flex-1">
+          <ChatView onOpenArtifact={setSelectedArtifact} />
+        </div>
+        {selectedArtifact && (
+          <HtmlArtifactPanel artifact={selectedArtifact} sessionId={sessionId} onClose={() => setSelectedArtifact(null)} />
+        )}
+      </div>
 
       {/* Mobile session info slide-over */}
       {mobileInfoOpen && session && (
