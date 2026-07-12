@@ -388,6 +388,75 @@ describe('pi outbound images (tool result → attachment store)', () => {
     });
   });
 
+  it('stores show_html output as a text/html attachment and broadcasts its bytes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-'));
+    const htmlPath = join(dir, 'report.html');
+    writeFileSync(htmlPath, '<!doctype html><title>Report</title>');
+    try {
+      const { adapter, emit, put } = makeAdapterWithStore();
+      const onToolComplete = vi.fn();
+      const onAttachmentBytes = vi.fn();
+      adapter.onToolComplete = onToolComplete;
+      adapter.onAttachmentBytes = onAttachmentBytes;
+
+      await emit({
+        type: 'tool_execution_end',
+        toolName: 'show_html',
+        toolCallId: 'html-1',
+        isError: false,
+        result: {
+          content: [{ type: 'text', text: 'HTML report ready for preview.' }],
+          details: { htmlPath, title: 'Architecture Report', name: 'report.html' },
+        },
+      });
+
+      expect(put).toHaveBeenCalledWith(
+        's1',
+        Buffer.from('<!doctype html><title>Report</title>'),
+        'text/html',
+        { name: 'report.html', caption: 'Architecture Report' },
+      );
+      expect(onToolComplete).toHaveBeenCalledWith('s1', {
+        toolName: 'show_html',
+        result: 'HTML report ready for preview.',
+        toolCallId: 'html-1',
+        success: true,
+        attachments: [{ type: 'content_ref', id: 'ref1', mimeType: 'text/html', size: 3 }],
+      });
+      expect(onAttachmentBytes).toHaveBeenCalledWith('s1', {
+        refs: [{ type: 'content_ref', id: 'ref1', mimeType: 'text/html', size: 3 }],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an htmlPath handle from tools other than show_html', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-spoof-'));
+    const htmlPath = join(dir, 'secret.html');
+    writeFileSync(htmlPath, '<p>secret</p>');
+    try {
+      const { adapter, emit, put } = makeAdapterWithStore();
+      const onToolComplete = vi.fn();
+      adapter.onToolComplete = onToolComplete;
+
+      await emit({
+        type: 'tool_execution_end',
+        toolName: 'bash',
+        toolCallId: 'bash-1',
+        isError: false,
+        result: { content: [{ type: 'text', text: 'done' }], details: { htmlPath } },
+      });
+
+      expect(put).not.toHaveBeenCalled();
+      expect(onToolComplete).toHaveBeenCalledWith('s1', {
+        toolName: 'bash', result: 'done', toolCallId: 'bash-1', success: true,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('joins text content blocks (no images) into a clean result string', () => {
     const { adapter, emit, put } = makeAdapterWithStore();
     const onToolComplete = vi.fn();
@@ -902,6 +971,7 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "finalize_reply"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_image"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_html"');
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('present_to_user');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('pi.registerTool');
   });
@@ -913,9 +983,16 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_image"');
   });
 
+  it('show_html returns a local attachment handle without returning HTML bytes to pi', () => {
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('details: { htmlPath: abs');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('10 * 1024 * 1024');
+    expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('htmlBase64');
+  });
+
   it('whitelists the capability tools from the always-on permission gate', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"finalize_reply"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"ask_user"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_html"');
     // The gate is loaded in every mode (no KRAKI_PI_GATE env guard); the adapter
     // decides silent-approve vs card per its mode policy.
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('process.env.KRAKI_PI_GATE');

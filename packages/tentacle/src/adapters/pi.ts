@@ -823,7 +823,7 @@ export class PiAdapter extends AgentAdapter {
         // Extract text for the trace and externalize any image blocks (e.g. from
         // the show_image tool) into the attachment store so their bytes reach
         // connected devices — mirrors the claude/copilot outbound image path.
-        const imageAttachments: import('@kraki/protocol').Attachment[] = [];
+        const outputAttachments: import('@kraki/protocol').Attachment[] = [];
         let resultText: string;
         const raw = e.result as unknown;
         const blocks =
@@ -842,8 +842,7 @@ export class PiAdapter extends AgentAdapter {
                   const bytes = Buffer.from(c.data, 'base64');
                   const mime = c.mimeType;
                   const { bytes: resized, mimeType: outMime } = await fitToMaxDimension(bytes, mime).catch(() => ({ bytes, mimeType: mime }));
-                  const ref = this.attachmentStore.put(sessionId, resized, outMime, {});
-                  imageAttachments.push(ref);
+                  outputAttachments.push(this.attachmentStore.put(sessionId, resized, outMime, {}));
                 } catch (err) {
                   logger.warn({ err, sessionId }, 'failed to store pi image attachment');
                 }
@@ -853,16 +852,33 @@ export class PiAdapter extends AgentAdapter {
         } else {
           resultText = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
         }
-        if (imageAttachments.length > 0 && !resultText) resultText = 'Displayed image.';
+        const details = raw && typeof raw === 'object' && (raw as { details?: unknown }).details;
+        if (toolName === 'show_html' && this.attachmentStore && details && typeof details === 'object') {
+          const htmlPath = (details as { htmlPath?: unknown }).htmlPath;
+          const lowerHtmlPath = typeof htmlPath === 'string' ? htmlPath.toLowerCase() : '';
+          if (typeof htmlPath === 'string' && (lowerHtmlPath.endsWith('.html') || lowerHtmlPath.endsWith('.htm'))) {
+            try {
+              const html = readFileSync(htmlPath);
+              const title = typeof (details as { title?: unknown }).title === 'string' ? (details as { title: string }).title : undefined;
+              const name = typeof (details as { name?: unknown }).name === 'string' ? (details as { name: string }).name : 'report.html';
+              if (html.length <= 10 * 1024 * 1024) {
+                outputAttachments.push(this.attachmentStore.put(sessionId, html, 'text/html', { name, caption: title }));
+              }
+            } catch (err) {
+              logger.warn({ err, sessionId }, 'failed to store pi HTML artifact');
+            }
+          }
+        }
+        if (outputAttachments.length > 0 && !resultText) resultText = 'Output is ready.';
         this.onToolComplete?.(sessionId, {
           toolName,
           result: resultText,
           toolCallId: e.toolCallId as string | undefined,
           success: e.isError !== true,
-          ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
+          ...(outputAttachments.length > 0 && { attachments: outputAttachments }),
         });
-        if (imageAttachments.length > 0) {
-          const refs = imageAttachments.filter(
+        if (outputAttachments.length > 0) {
+          const refs = outputAttachments.filter(
             (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
           );
           if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs });

@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="{{LANGUAGE_CODE}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{REPORT_TITLE}}</title>
+<style>
+/*
+  KRAKI HTML REPORT TEMPLATE
+  - Designed for a 420–760px vertical side panel
+  - Self-contained: no external resources
+  - Delete unused components and sections
+  - Keep semantic color meanings consistent
+*/
+:root{
+  --bg:#f4f6fa;--paper:#fff;--ink:#172033;--muted:#667085;--line:#d9dee8;
+  --brand:#f05b44;--brand-soft:#fff0ec;
+  --blue:#2878ff;--blue-soft:#eaf2ff;
+  --green:#169b62;--green-soft:#e8f7f0;
+  --amber:#d98200;--amber-soft:#fff5df;
+  --purple:#7857d8;--purple-soft:#f0ecff;
+  --red:#d83b4c;--red-soft:#ffebee;
+  --shadow:0 8px 28px rgba(23,32,51,.08);--radius:16px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit}
+.report{max-width:760px;margin:0 auto;min-height:100vh}
+
+/* Reading progress */
+.progress{position:fixed;z-index:40;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--brand),#ff9f7d);width:0}
+
+/* Compact report title */
+.report-title{padding:16px 14px 8px}.report-title h1{font-size:22px;line-height:1.3;margin:0 0 3px}.report-title p{margin:0;color:var(--muted);font-size:11px}.report-title .eyebrow{color:var(--brand);font-size:10px;letter-spacing:.12em;font-weight:800}
+
+/* Navigation and sections */
+.quicknav{display:flex;gap:7px;overflow:auto;padding:0 14px 5px;scrollbar-width:none}.quicknav::-webkit-scrollbar{display:none}.quicknav a{flex:none;padding:6px 10px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:11px}.quicknav a:hover{border-color:var(--brand);color:var(--brand)}
+main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.section-head{display:flex;align-items:flex-start;gap:10px;margin:0 2px 9px}.num{display:grid;place-items:center;flex:none;width:27px;height:27px;border-radius:9px;background:#172033;color:#fff;font-size:11px;font-weight:800}.section-head h2{font-size:17px;line-height:1.3;margin:1px 0 2px}.section-head p{margin:0;color:var(--muted);font-size:11px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 3px 14px rgba(23,32,51,.045);padding:15px;margin-bottom:10px}.card h3{font-size:14px;margin:0 0 5px}.card>p{margin:0 0 12px;color:var(--muted);font-size:12px}
+
+/* Metrics and callouts */
+.summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric{border-radius:13px;padding:13px;border:1px solid}.metric strong{display:block;font-size:21px;line-height:1.1}.metric span{font-size:10px;color:var(--muted)}
+.metric.blue{background:var(--blue-soft);border-color:#c6d9ff}.metric.green{background:var(--green-soft);border-color:#bde8d3}.metric.amber{background:var(--amber-soft);border-color:#f5db9e}.metric.purple{background:var(--purple-soft);border-color:#d8ceff}.metric.red{background:var(--red-soft);border-color:#ffc7ce}
+.callout{display:flex;gap:10px;padding:12px;border-radius:12px;border:1px solid #b8d5ff;background:#eff6ff;margin-bottom:10px}.callout .glyph{font-size:17px}.callout strong{display:block;font-size:12px}.callout p{margin:2px 0 0;color:#38547c;font-size:11px}
+.callout.warning{border-color:#f0d28c;background:var(--amber-soft)}.callout.warning p{color:#76501a}.callout.risk{border-color:#f2a9b2;background:var(--red-soft)}.callout.risk p{color:#7c3540}.callout.success{border-color:#a9dfc5;background:var(--green-soft)}.callout.success p{color:#276147}
+
+/* Interactive SVG diagram */
+.diagram-shell{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fbfcfe;margin-top:10px}.diagram-bar{display:flex;align-items:center;gap:6px;padding:7px 8px;border-bottom:1px solid var(--line);background:#fff}.diagram-bar strong{flex:1;font-size:11px}.diagram-bar span{color:var(--muted);font-size:9px}.zoom-btn{min-width:27px;height:25px;display:grid;place-items:center;padding:0 6px;font-size:12px}.diagram-viewport{height:420px;overflow:hidden;position:relative;touch-action:none;cursor:grab;background-image:radial-gradient(#dfe5ef 1px,transparent 1px);background-size:18px 18px}.diagram-viewport.dragging{cursor:grabbing}.diagram-canvas{width:100%;height:100%;transform-origin:0 0;will-change:transform}.diagram-canvas svg{display:block;width:100%;height:100%}.diagram-note{padding:8px 9px;border-top:1px solid var(--line);background:#fff;color:var(--muted);font-size:11px}
+
+/* State flow */
+.state-flow{display:grid;grid-template-columns:1fr;gap:9px}.state{position:relative;border:1.5px solid;border-radius:12px;padding:12px 13px}.state strong{font-size:12px}.state p{font-size:11px;color:var(--muted);margin:2px 0}.state:after{content:"↓";position:absolute;left:50%;bottom:-21px;transform:translateX(-50%);color:#98a2b3;font-size:15px}.state:last-child:after{display:none}.state.neutral{border-color:#aab4c3;background:#f8fafc}.state.active{border-color:#5891ee;background:var(--blue-soft)}.state.waiting{border-color:#e1a542;background:var(--amber-soft)}.state.done{border-color:#45ad7d;background:var(--green-soft)}.state.error{border-color:#e16b78;background:var(--red-soft)}.branch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:5px 0}.branch .state:after{display:none}
+
+/* Pipeline */
+.pipeline{display:grid;gap:8px}.pipe-stage{display:grid;grid-template-columns:35px 1fr auto;align-items:center;gap:9px;padding:10px;border:1px solid var(--line);border-radius:12px}.pipe-icon{display:grid;place-items:center;width:35px;height:35px;border-radius:10px;font-size:16px}.pipe-stage strong{font-size:11px;display:block}.pipe-stage small{font-size:9px;color:var(--muted)}.badge{font-size:9px;padding:3px 6px;border-radius:999px;background:#f0f2f5;color:var(--muted)}.connector{text-align:center;height:11px;color:#98a2b3;font-size:12px;line-height:11px}
+
+/* Entity cards */
+.entity-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.entity{border:1px solid var(--line);border-radius:11px;overflow:hidden}.entity h4{margin:0;padding:8px 10px;background:#172033;color:#fff;font-size:11px}.entity ul{list-style:none;margin:0;padding:6px 9px}.entity li{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #edf0f4;padding:5px 0;font-size:9px}.entity li:last-child{border:0}.entity code{color:var(--muted)}.relation-note{margin-top:9px;padding:8px;border-left:3px solid var(--purple);background:var(--purple-soft);font-size:10px}
+
+/* Tables and decision matrices */
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:11px}.matrix{width:100%;min-width:480px;border-collapse:separate;border-spacing:0;font-size:10px}.matrix th,.matrix td{padding:8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);text-align:center}.matrix th:first-child,.matrix td:first-child{text-align:left;font-weight:700}.matrix th{background:#f7f9fc}.matrix tr:last-child td{border-bottom:0}.matrix th:last-child,.matrix td:last-child{border-right:0}.score{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:7px;font-weight:800}.score.good{background:var(--green-soft);color:var(--green)}.score.mid{background:var(--amber-soft);color:var(--amber)}.score.bad{background:var(--red-soft);color:var(--red)}
+
+/* Timeline */
+.timeline{position:relative;margin-left:8px;padding-left:22px;border-left:2px solid #d9dee8}.event{position:relative;padding:0 0 17px}.event:last-child{padding-bottom:2px}.event:before{content:"";position:absolute;left:-29px;top:3px;width:11px;height:11px;border-radius:50%;background:#fff;border:3px solid var(--blue)}.event.done:before{border-color:var(--green);background:var(--green)}.event.next:before{border-color:var(--amber)}.event.blocked:before{border-color:var(--red)}.event strong{display:block;font-size:11px}.event time{font-size:9px;color:var(--muted)}.event p{font-size:10px;color:var(--muted);margin:3px 0}
+
+/* Lists and code */
+.key-list{margin:0;padding-left:20px}.key-list li{padding:4px 0;font-size:12px}.codeblock{background:#111827;color:#d8dee9;border-radius:12px;padding:13px;overflow:auto;font:10px/1.6 SFMono-Regular,Consolas,monospace;white-space:pre}.footer{text-align:center;color:var(--muted);font-size:9px;padding:18px 5px}
+
+@media(min-width:680px){.summary-grid{grid-template-columns:repeat(4,1fr)}.diagram-viewport{height:470px}}
+@media(max-width:420px){.card{padding:12px}.entity-grid{grid-template-columns:1fr}.diagram-viewport{height:390px}.diagram-bar span{display:none}}
+@media print{.quicknav,.progress,.diagram-bar{display:none}.report{max-width:none}.card{break-inside:avoid;box-shadow:none}.diagram-viewport{height:auto;overflow:visible;background:none}.diagram-canvas{transform:none!important}.diagram-canvas svg{height:auto}.section{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="report">
+
+<header class="report-title">
+  <div class="eyebrow">{{REPORT_CATEGORY}} · {{REPORT_DATE_OR_VERSION}}</div>
+  <h1>{{REPORT_TITLE}}</h1>
+  <p>{{REPORT_SUBTITLE_OR_EXECUTIVE_SUMMARY}}</p>
+</header>
+
+<!-- Keep only links for sections that exist. -->
+<nav class="quicknav" aria-label="Report sections">
+  <a href="#summary">Summary</a>
+  <a href="#overview">Overview</a>
+  <a href="#details">Analysis</a>
+  <a href="#decision">Decision</a>
+  <a href="#risks">Risks</a>
+  <a href="#next">Next steps</a>
+</nav>
+
+<main>
+
+<!-- REQUIRED: Executive summary -->
+<section class="section" id="summary">
+  <div class="section-head">
+    <span class="num">01</span>
+    <div><h2>Executive summary</h2><p>{{SECTION_SUMMARY}}</p></div>
+  </div>
+
+  <div class="card">
+    <!-- Keep 2–4 metrics. Replace metrics with key facts if numeric metrics do not exist. -->
+    <div class="summary-grid">
+      <div class="metric blue"><strong>{{METRIC_1_VALUE}}</strong><span>{{METRIC_1_LABEL}}</span></div>
+      <div class="metric green"><strong>{{METRIC_2_VALUE}}</strong><span>{{METRIC_2_LABEL}}</span></div>
+      <div class="metric amber"><strong>{{METRIC_3_VALUE}}</strong><span>{{METRIC_3_LABEL}}</span></div>
+      <div class="metric purple"><strong>{{METRIC_4_VALUE}}</strong><span>{{METRIC_4_LABEL}}</span></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="glyph">💡</div>
+    <div><strong>Recommendation</strong><p>{{RECOMMENDATION}}</p></div>
+  </div>
+</section>
+
+<!-- REQUIRED WHEN A SYSTEM OR PROCESS CAN BE VISUALIZED -->
+<section class="section" id="overview">
+  <div class="section-head">
+    <span class="num">02</span>
+    <div><h2>{{OVERVIEW_SECTION_TITLE}}</h2><p>{{OVERVIEW_SECTION_SUBTITLE}}</p></div>
+  </div>
+
+  <div class="card">
+    <h3>{{DIAGRAM_TITLE}}</h3>
+    <p>{{DIAGRAM_INTRODUCTION_AND_READING_GUIDANCE}}</p>
+
+    <!--
+      For a complex architecture/flow diagram, keep data-panzoom.
+      Replace the sample SVG entirely. Use a meaningful viewBox.
+      Prefer top-to-bottom flow, <= 4 layers, and 3–5 nodes per layer.
+    -->
+    <div class="diagram-shell" data-panzoom>
+      <div class="diagram-bar">
+        <strong>{{DIAGRAM_SHORT_TITLE}}</strong>
+        <span>Drag to pan · Wheel to zoom</span>
+        <button class="zoom-btn" data-action="out" aria-label="Zoom out">−</button>
+        <button class="zoom-btn" data-action="reset" aria-label="Reset diagram">↺</button>
+        <button class="zoom-btn" data-action="fit" aria-label="Fit diagram">Fit</button>
+        <button class="zoom-btn" data-action="in" aria-label="Zoom in">＋</button>
+      </div>
+      <div class="diagram-viewport">
+        <div class="diagram-canvas">
+          <svg viewBox="0 0 720 720" role="img" aria-label="{{DIAGRAM_ACCESSIBLE_DESCRIPTION}}">
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                <path d="M0 0L8 4L0 8Z" fill="#7b8798"/>
+              </marker>
+            </defs>
+
+            <!-- REPLACE WITH THE REPORT'S INLINE SVG DIAGRAM. -->
+            <rect x="80" y="80" width="560" height="120" rx="18" fill="#f0ecff" stroke="#c8baff"/>
+            <text x="360" y="130" text-anchor="middle" font-size="18" font-weight="700" fill="#172033">{{DIAGRAM_LAYER_OR_NODE_1}}</text>
+            <text x="360" y="158" text-anchor="middle" font-size="12" fill="#667085">{{NODE_1_DESCRIPTION}}</text>
+
+            <path d="M360 200V285" fill="none" stroke="#7b8798" stroke-width="2" marker-end="url(#arrow)"/>
+
+            <rect x="80" y="286" width="560" height="150" rx="18" fill="#eaf2ff" stroke="#b7d0ff"/>
+            <text x="360" y="345" text-anchor="middle" font-size="18" font-weight="700" fill="#172033">{{DIAGRAM_LAYER_OR_NODE_2}}</text>
+            <text x="360" y="375" text-anchor="middle" font-size="12" fill="#667085">{{NODE_2_DESCRIPTION}}</text>
+
+            <path d="M360 436V521" fill="none" stroke="#7b8798" stroke-width="2" marker-end="url(#arrow)"/>
+
+            <rect x="80" y="522" width="560" height="120" rx="18" fill="#e8f7f0" stroke="#a9dfc5"/>
+            <text x="360" y="572" text-anchor="middle" font-size="18" font-weight="700" fill="#172033">{{DIAGRAM_LAYER_OR_NODE_3}}</text>
+            <text x="360" y="600" text-anchor="middle" font-size="12" fill="#667085">{{NODE_3_DESCRIPTION}}</text>
+          </svg>
+        </div>
+      </div>
+      <div class="diagram-note">{{DIAGRAM_INTERPRETATION_OR_KEY_TAKEAWAY}}</div>
+    </div>
+  </div>
+</section>
+
+<!-- OPTIONAL: Detailed analysis. Choose useful components; do not include every type. -->
+<section class="section" id="details">
+  <div class="section-head">
+    <span class="num">03</span>
+    <div><h2>{{DETAIL_SECTION_TITLE}}</h2><p>{{DETAIL_SECTION_SUBTITLE}}</p></div>
+  </div>
+
+  <!-- Example prose/list card. -->
+  <div class="card">
+    <h3>{{ANALYSIS_CARD_TITLE}}</h3>
+    <p>{{ANALYSIS_INTRODUCTION}}</p>
+    <ul class="key-list">
+      <li><strong>{{POINT_1_TITLE}}:</strong> {{POINT_1_DETAIL}}</li>
+      <li><strong>{{POINT_2_TITLE}}:</strong> {{POINT_2_DETAIL}}</li>
+      <li><strong>{{POINT_3_TITLE}}:</strong> {{POINT_3_DETAIL}}</li>
+    </ul>
+  </div>
+
+  <!--
+    OPTIONAL STATE MACHINE COMPONENT — delete unless needed.
+    Put the happy path vertically and alternatives in .branch.
+  -->
+  <div class="card">
+    <h3>{{STATE_MACHINE_TITLE}}</h3>
+    <p>{{STATE_MACHINE_EXPLANATION}}</p>
+    <div class="state-flow">
+      <div class="state neutral"><strong>{{STATE_1}}</strong><p>{{STATE_1_CONDITION_AND_ACTION}}</p></div>
+      <div class="state active"><strong>{{STATE_2}}</strong><p>{{STATE_2_CONDITION_AND_ACTION}}</p></div>
+      <div class="branch">
+        <div class="state done"><strong>{{SUCCESS_STATE}}</strong><p>{{SUCCESS_STATE_DETAIL}}</p></div>
+        <div class="state error"><strong>{{ERROR_STATE}}</strong><p>{{ERROR_STATE_DETAIL}}</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    OPTIONAL PIPELINE COMPONENT — delete unless needed.
+    Add/remove stages as required.
+  -->
+  <div class="card">
+    <h3>{{PIPELINE_TITLE}}</h3>
+    <p>{{PIPELINE_EXPLANATION}}</p>
+    <div class="pipeline">
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--blue-soft)">1</div><div><strong>{{STAGE_1}}</strong><small>{{STAGE_1_DETAIL}}</small></div><span class="badge">{{STAGE_1_MODE}}</span></div>
+      <div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--purple-soft)">2</div><div><strong>{{STAGE_2}}</strong><small>{{STAGE_2_DETAIL}}</small></div><span class="badge">{{STAGE_2_MODE}}</span></div>
+      <div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--green-soft)">3</div><div><strong>{{STAGE_3}}</strong><small>{{STAGE_3_DETAIL}}</small></div><span class="badge">{{STAGE_3_MODE}}</span></div>
+    </div>
+  </div>
+
+  <!--
+    OPTIONAL ENTITY COMPONENT — delete unless needed.
+    Keep only important fields. Add textual relationships below.
+  -->
+  <div class="card">
+    <h3>{{DATA_MODEL_TITLE}}</h3>
+    <p>{{DATA_MODEL_EXPLANATION}}</p>
+    <div class="entity-grid">
+      <div class="entity"><h4>{{ENTITY_1}}</h4><ul><li><strong>{{FIELD_1_PK}} 🔑</strong><code>{{TYPE}}</code></li><li><span>{{FIELD_2}}</span><code>{{TYPE}}</code></li><li><span>{{FIELD_3}}</span><code>{{TYPE}}</code></li></ul></div>
+      <div class="entity"><h4>{{ENTITY_2}}</h4><ul><li><strong>{{FIELD_1_PK}} 🔑</strong><code>{{TYPE}}</code></li><li><span>{{FIELD_2_FK}} ↗</span><code>{{TYPE}}</code></li><li><span>{{FIELD_3}}</span><code>{{TYPE}}</code></li></ul></div>
+    </div>
+    <div class="relation-note"><strong>Relationships and ownership:</strong> {{ENTITY_RELATIONSHIP_AND_OWNERSHIP}}</div>
+  </div>
+</section>
+
+<!-- REQUIRED WHEN THE REPORT SUPPORTS A DECISION -->
+<section class="section" id="decision">
+  <div class="section-head">
+    <span class="num">04</span>
+    <div><h2>Options and decision</h2><p>{{DECISION_SECTION_SUBTITLE}}</p></div>
+  </div>
+
+  <div class="card">
+    <h3>{{MATRIX_TITLE}}</h3>
+    <p>{{MATRIX_EXPLANATION}}</p>
+    <div class="table-wrap">
+      <table class="matrix">
+        <thead><tr><th>Option</th><th>{{CRITERION_1}}</th><th>{{CRITERION_2}}</th><th>{{CRITERION_3}}</th><th>{{CRITERION_4}}</th></tr></thead>
+        <tbody>
+          <tr><td>{{OPTION_1}}</td><td><span class="score good">{{SCORE}}</span></td><td><span class="score mid">{{SCORE}}</span></td><td><span class="score good">{{SCORE}}</span></td><td><span class="score bad">{{SCORE}}</span></td></tr>
+          <tr><td>{{OPTION_2}}</td><td><span class="score mid">{{SCORE}}</span></td><td><span class="score good">{{SCORE}}</span></td><td><span class="score mid">{{SCORE}}</span></td><td><span class="score good">{{SCORE}}</span></td></tr>
+          <tr><td>{{OPTION_3}}</td><td><span class="score bad">{{SCORE}}</span></td><td><span class="score mid">{{SCORE}}</span></td><td><span class="score bad">{{SCORE}}</span></td><td><span class="score mid">{{SCORE}}</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <div class="glyph">✓</div>
+    <div><strong>Decision</strong><p>{{FINAL_DECISION_AND_MAIN_TRADEOFF}}</p></div>
+  </div>
+</section>
+
+<!-- REQUIRED WHEN MATERIAL RISKS OR UNKNOWNS EXIST -->
+<section class="section" id="risks">
+  <div class="section-head">
+    <span class="num">05</span>
+    <div><h2>Risks and open questions</h2><p>{{RISKS_SECTION_SUBTITLE}}</p></div>
+  </div>
+
+  <div class="callout risk"><div class="glyph">!</div><div><strong>{{RISK_1_TITLE}}</strong><p>{{RISK_1_IMPACT_AND_MITIGATION}}</p></div></div>
+  <div class="callout warning"><div class="glyph">?</div><div><strong>{{OPEN_QUESTION_TITLE}}</strong><p>{{OPEN_QUESTION_AND_REQUIRED_EVIDENCE}}</p></div></div>
+</section>
+
+<!-- REQUIRED: Ordered next steps -->
+<section class="section" id="next">
+  <div class="section-head">
+    <span class="num">06</span>
+    <div><h2>Next steps</h2><p>{{NEXT_STEPS_SECTION_SUBTITLE}}</p></div>
+  </div>
+
+  <div class="card">
+    <div class="timeline">
+      <div class="event next"><time>{{PHASE_1_TIME}}</time><strong>{{PHASE_1_TITLE}}</strong><p>{{PHASE_1_DELIVERABLE}}</p></div>
+      <div class="event"><time>{{PHASE_2_TIME}}</time><strong>{{PHASE_2_TITLE}}</strong><p>{{PHASE_2_DELIVERABLE}}</p></div>
+      <div class="event"><time>{{PHASE_3_TIME}}</time><strong>{{PHASE_3_TITLE}}</strong><p>{{PHASE_3_DELIVERABLE}}</p></div>
+    </div>
+  </div>
+</section>
+
+<div class="footer">{{REPORT_FOOTER}}</div>
+</main>
+</div>
+
+<script>
+/* Standard Kraki report interactions. Do not modify unless necessary. */
+(() => {
+  const progress = document.getElementById('progress');
+  const updateProgress = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    progress.style.width = `${max > 0 ? (scrollY / max) * 100 : 0}%`;
+  };
+  addEventListener('scroll', updateProgress, { passive: true });
+  updateProgress();
+
+  document.querySelectorAll('[data-panzoom]').forEach((shell) => {
+    const viewport = shell.querySelector('.diagram-viewport');
+    const canvas = shell.querySelector('.diagram-canvas');
+    if (!viewport || !canvas) return;
+
+    let scale = 1, x = 0, y = 0, dragging = false, startX = 0, startY = 0;
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+    const render = () => { canvas.style.transform = `translate(${x}px,${y}px) scale(${scale})`; };
+    const setScale = (next, cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2) => {
+      next = clamp(next, 0.55, 3.5);
+      const ratio = next / scale;
+      x = cx - (cx - x) * ratio;
+      y = cy - (cy - y) * ratio;
+      scale = next;
+      render();
+    };
+    const reset = () => { scale = 1; x = 0; y = 0; render(); };
+    const fit = () => { scale = 1; x = 0; y = 0; render(); };
+
+    shell.querySelector('[data-action="in"]')?.addEventListener('click', () => setScale(scale * 1.2));
+    shell.querySelector('[data-action="out"]')?.addEventListener('click', () => setScale(scale / 1.2));
+    shell.querySelector('[data-action="reset"]')?.addEventListener('click', reset);
+    shell.querySelector('[data-action="fit"]')?.addEventListener('click', fit);
+
+    viewport.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      setScale(scale * (event.deltaY < 0 ? 1.12 : 0.89), event.clientX - rect.left, event.clientY - rect.top);
+    }, { passive: false });
+
+    viewport.addEventListener('pointerdown', (event) => {
+      dragging = true;
+      startX = event.clientX - x;
+      startY = event.clientY - y;
+      viewport.classList.add('dragging');
+      viewport.setPointerCapture(event.pointerId);
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      if (!dragging) return;
+      x = event.clientX - startX;
+      y = event.clientY - startY;
+      render();
+    });
+    const stopDragging = () => { dragging = false; viewport.classList.remove('dragging'); };
+    viewport.addEventListener('pointerup', stopDragging);
+    viewport.addEventListener('pointercancel', stopDragging);
+    render();
+  });
+})();
+</script>
+</body>
+</html>

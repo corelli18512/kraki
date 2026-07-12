@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kraki HTML Report Template Showcase</title>
+<style>
+:root{
+  --bg:#f4f6fa;--paper:#fff;--ink:#172033;--muted:#667085;--line:#d9dee8;
+  --brand:#f05b44;--brand-soft:#fff0ec;--blue:#2878ff;--blue-soft:#eaf2ff;
+  --green:#169b62;--green-soft:#e8f7f0;--amber:#d98200;--amber-soft:#fff5df;
+  --purple:#7857d8;--purple-soft:#f0ecff;--red:#d83b4c;--red-soft:#ffebee;
+  --shadow:0 8px 28px rgba(23,32,51,.08);--radius:16px;
+}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit}.report{max-width:760px;margin:0 auto;min-height:100vh;background:var(--bg)}
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(217,222,232,.9);background:rgba(255,255,255,.92);backdrop-filter:blur(12px)}
+.mark{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--brand);color:white;font-weight:900}.title-wrap{min-width:0;flex:1}.title-wrap strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}.title-wrap small{display:block;color:var(--muted);font-size:10px}.top-actions{display:flex;gap:5px}.icon-btn,.zoom-btn{border:1px solid var(--line);background:white;color:var(--ink);border-radius:8px;cursor:pointer}.icon-btn{padding:5px 8px;font-size:11px}.icon-btn:hover,.zoom-btn:hover{background:#f8fafc}
+.progress{position:fixed;z-index:40;top:50px;left:0;height:2px;background:linear-gradient(90deg,var(--brand),#ff9f7d);width:0}
+.hero{margin:14px;padding:22px;border-radius:20px;color:white;background:linear-gradient(135deg,#111827 0%,#273449 58%,#3b4960 100%);box-shadow:var(--shadow);overflow:hidden;position:relative}.hero:after{content:"";position:absolute;width:180px;height:180px;border-radius:50%;right:-70px;top:-80px;background:rgba(255,255,255,.06)}
+.eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#ffad9f;font-weight:800}.hero h1{font-size:25px;line-height:1.22;margin:8px 0}.hero p{margin:0;color:#d8deea;font-size:13px;max-width:600px}.meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}.meta span{padding:4px 8px;border:1px solid rgba(255,255,255,.17);border-radius:999px;background:rgba(255,255,255,.06);font-size:10px}
+.quicknav{display:flex;gap:7px;overflow:auto;padding:0 14px 5px;scrollbar-width:none}.quicknav::-webkit-scrollbar{display:none}.quicknav a{flex:none;padding:6px 10px;border-radius:999px;background:white;border:1px solid var(--line);color:var(--muted);text-decoration:none;font-size:11px}.quicknav a:hover{border-color:var(--brand);color:var(--brand)}
+main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.section-head{display:flex;align-items:flex-start;gap:10px;margin:0 2px 9px}.num{display:grid;place-items:center;flex:none;width:27px;height:27px;border-radius:9px;background:#172033;color:white;font-size:11px;font-weight:800}.section-head h2{font-size:17px;line-height:1.3;margin:1px 0 2px}.section-head p{margin:0;color:var(--muted);font-size:11px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 3px 14px rgba(23,32,51,.045);padding:15px;margin-bottom:10px}.card h3{font-size:14px;margin:0 0 5px}.card>p{margin:0 0 12px;color:var(--muted);font-size:12px}
+.summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric{border-radius:13px;padding:13px;border:1px solid}.metric strong{display:block;font-size:21px;line-height:1.1}.metric span{font-size:10px;color:var(--muted)}.metric.blue{background:var(--blue-soft);border-color:#c6d9ff}.metric.green{background:var(--green-soft);border-color:#bde8d3}.metric.amber{background:var(--amber-soft);border-color:#f5db9e}.metric.purple{background:var(--purple-soft);border-color:#d8ceff}
+.callout{display:flex;gap:10px;padding:12px;border-radius:12px;border:1px solid #b8d5ff;background:#eff6ff}.callout .glyph{font-size:17px}.callout strong{display:block;font-size:12px}.callout p{margin:2px 0 0;color:#38547c;font-size:11px}
+.diagram-shell{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fbfcfe}.diagram-bar{display:flex;align-items:center;gap:6px;padding:7px 8px;border-bottom:1px solid var(--line);background:white}.diagram-bar strong{flex:1;font-size:11px}.diagram-bar span{color:var(--muted);font-size:9px}.zoom-btn{width:27px;height:25px;display:grid;place-items:center;font-size:12px}.diagram-viewport{height:420px;overflow:hidden;position:relative;touch-action:none;cursor:grab;background-image:radial-gradient(#dfe5ef 1px,transparent 1px);background-size:18px 18px}.diagram-viewport.dragging{cursor:grabbing}.diagram-canvas{width:100%;height:100%;transform-origin:0 0;will-change:transform}.diagram-canvas svg{display:block;width:100%;height:100%}.diagram-note{padding:7px 9px;border-top:1px solid var(--line);background:white;color:var(--muted);font-size:9px}
+.flow-node rect,.flow-node path{stroke-width:2}.flow-node text{font-family:inherit;fill:var(--ink)}.edge{fill:none;stroke:#7b8798;stroke-width:2;marker-end:url(#arrow)}.edge.dashed{stroke-dasharray:7 5}.edge-label{font-size:10px;fill:#667085}
+.sequence{overflow:auto;padding-bottom:3px}.sequence-grid{min-width:580px;display:grid;grid-template-columns:repeat(4,1fr);position:relative;padding:0 5px 12px}.actor{text-align:center;font-weight:700;font-size:11px;padding:8px 4px;border-radius:9px;margin:0 5px}.actor.user{background:var(--purple-soft);color:#5c3fb1}.actor.web{background:var(--blue-soft);color:#1857ba}.actor.api{background:var(--green-soft);color:#08794a}.actor.db{background:var(--amber-soft);color:#9a5d00}.lifeline{height:270px;border-left:1px dashed #b8c1d0;margin:0 auto;width:1px}.messages{position:absolute;inset:46px 0 0}.message{position:absolute;height:22px;border-top:1.5px solid;color:var(--ink);font-size:9px;padding-top:2px}.message:after{content:"";position:absolute;right:-1px;top:-4px;border-left:7px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent}.message.return:after{right:auto;left:-1px;border-left:0;border-right:7px solid currentColor}.message.return{border-top-style:dashed;color:#7b8798;text-align:right}.activation{position:absolute;width:7px;border:1px solid #71b492;background:#bde8d3;border-radius:3px}.sequence-caption{color:var(--muted);font-size:9px;margin-top:7px}
+.state-flow{display:grid;grid-template-columns:1fr;gap:9px}.state{position:relative;border:1.5px solid;border-radius:12px;padding:12px 13px}.state strong{font-size:12px}.state p{font-size:10px;color:var(--muted);margin:2px 0}.state:after{content:"↓";position:absolute;left:50%;bottom:-21px;transform:translateX(-50%);color:#98a2b3;font-size:15px}.state:last-child:after{display:none}.state.idle{border-color:#aab4c3;background:#f8fafc}.state.active{border-color:#5891ee;background:var(--blue-soft)}.state.review{border-color:#e1a542;background:var(--amber-soft)}.state.done{border-color:#45ad7d;background:var(--green-soft)}.state.error{border-color:#e16b78;background:var(--red-soft)}.branch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:5px 0}.branch .state:after{display:none}
+.pipeline{display:grid;gap:8px}.pipe-stage{display:grid;grid-template-columns:35px 1fr auto;align-items:center;gap:9px;padding:10px;border:1px solid var(--line);border-radius:12px}.pipe-icon{display:grid;place-items:center;width:35px;height:35px;border-radius:10px;font-size:16px}.pipe-stage strong{font-size:11px;display:block}.pipe-stage small{font-size:9px;color:var(--muted)}.badge{font-size:9px;padding:3px 6px;border-radius:999px;background:#f0f2f5;color:var(--muted)}.connector{text-align:center;height:11px;color:#98a2b3;font-size:12px;line-height:11px}
+.entity-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.entity{border:1px solid var(--line);border-radius:11px;overflow:hidden}.entity h4{margin:0;padding:8px 10px;background:#172033;color:white;font-size:11px}.entity ul{list-style:none;margin:0;padding:6px 9px}.entity li{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #edf0f4;padding:5px 0;font-size:9px}.entity li:last-child{border:0}.entity code{color:var(--muted)}.relation-note{margin-top:9px;padding:8px;border-left:3px solid var(--purple);background:var(--purple-soft);font-size:10px}
+.matrix{width:100%;border-collapse:separate;border-spacing:0;font-size:10px;overflow:hidden;border:1px solid var(--line);border-radius:11px}.matrix th,.matrix td{padding:8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);text-align:center}.matrix th:first-child,.matrix td:first-child{text-align:left;font-weight:700}.matrix th{background:#f7f9fc}.matrix tr:last-child td{border-bottom:0}.matrix th:last-child,.matrix td:last-child{border-right:0}.score{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:7px;font-weight:800}.score.good{background:var(--green-soft);color:var(--green)}.score.mid{background:var(--amber-soft);color:var(--amber)}.score.bad{background:var(--red-soft);color:var(--red)}
+.timeline{position:relative;margin-left:8px;padding-left:22px;border-left:2px solid #d9dee8}.event{position:relative;padding:0 0 17px}.event:last-child{padding-bottom:2px}.event:before{content:"";position:absolute;left:-29px;top:3px;width:11px;height:11px;border-radius:50%;background:white;border:3px solid var(--blue)}.event.done:before{border-color:var(--green);background:var(--green)}.event.next:before{border-color:var(--amber)}.event strong{display:block;font-size:11px}.event time{font-size:9px;color:var(--muted)}.event p{font-size:10px;color:var(--muted);margin:3px 0}
+.codeblock{background:#111827;color:#d8dee9;border-radius:12px;padding:13px;overflow:auto;font:10px/1.6 SFMono-Regular,Consolas,monospace;white-space:pre}.rules{margin:0;padding:0;list-style:none;counter-reset:rule}.rules li{counter-increment:rule;position:relative;padding:8px 8px 8px 34px;border-bottom:1px solid #edf0f4;font-size:10px}.rules li:last-child{border:0}.rules li:before{content:counter(rule);position:absolute;left:2px;top:7px;display:grid;place-items:center;width:21px;height:21px;border-radius:7px;background:#172033;color:white;font-size:9px;font-weight:800}
+.footer{text-align:center;color:var(--muted);font-size:9px;padding:18px 5px}.wide-only{display:none}
+@media(min-width:680px){.summary-grid{grid-template-columns:repeat(4,1fr)}.report{padding-bottom:30px}.diagram-viewport{height:470px}.wide-only{display:inline}}
+@media(max-width:420px){.hero h1{font-size:22px}.card{padding:12px}.entity-grid{grid-template-columns:1fr}.diagram-viewport{height:390px}.top-actions .optional{display:none}}
+@media print{.topbar,.quicknav,.progress,.diagram-bar,.diagram-note{display:none}.report{max-width:none}.card,.hero{break-inside:avoid;box-shadow:none}.diagram-viewport{height:auto;overflow:visible;background:none}.diagram-canvas{transform:none!important}.diagram-canvas svg{height:auto}.section{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="report">
+<header class="topbar">
+  <div class="mark">K</div>
+  <div class="title-wrap"><strong>HTML Report Template Showcase</strong><small>Side-panel optimized · self-contained</small></div>
+  <div class="top-actions">
+    <button class="icon-btn optional" onclick="window.print()">Print</button>
+    <button class="icon-btn" onclick="document.documentElement.requestFullscreen?.()">Full</button>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="eyebrow">Kraki Artifact Standard · Draft 01</div>
+  <h1>复杂技术内容，也应该在窄侧栏里清晰可读</h1>
+  <p>这个样例同时展示固定版式、信息层级与多种图形语言。复杂图支持本地缩放和拖动，文字类内容保持纵向阅读节奏。</p>
+  <div class="meta"><span>静态单文件</span><span>无外部依赖</span><span>SVG 可交互</span><span>打印友好</span></div>
+</section>
+
+<nav class="quicknav" aria-label="Report sections">
+  <a href="#summary">摘要</a><a href="#architecture">架构 Flow</a><a href="#sequence">Sequence</a><a href="#state">状态机</a><a href="#pipeline">数据管道</a><a href="#data">ER 模型</a><a href="#decision">决策矩阵</a><a href="#roadmap">时间线</a><a href="#template">LLM 规则</a>
+</nav>
+
+<main>
+<section class="section" id="summary">
+  <div class="section-head"><span class="num">01</span><div><h2>执行摘要</h2><p>先给结论，再提供证据和细节。</p></div></div>
+  <div class="card">
+    <div class="summary-grid">
+      <div class="metric blue"><strong>4</strong><span>核心服务</span></div>
+      <div class="metric green"><strong>99.9%</strong><span>目标可用性</span></div>
+      <div class="metric amber"><strong>180ms</strong><span>P95 延迟</span></div>
+      <div class="metric purple"><strong>3</strong><span>交付阶段</span></div>
+    </div>
+  </div>
+  <div class="callout"><div class="glyph">💡</div><div><strong>推荐结论</strong><p>将报告写成纵向叙事：摘要 → 总图 → 局部流程 → 状态与数据 → 决策和行动项。避免在侧栏中并排放置大段文本。</p></div></div>
+</section>
+
+<section class="section" id="architecture">
+  <div class="section-head"><span class="num">02</span><div><h2>系统架构 Flow</h2><p>适合系统边界、服务关系和主要请求路径。</p></div></div>
+  <div class="card">
+    <h3>Marketplace Request Architecture</h3><p>这类复杂总图应使用 SVG，并提供缩放、拖动和 Fit。下方图可直接交互。</p>
+    <div class="diagram-shell" data-panzoom>
+      <div class="diagram-bar"><strong>Architecture overview</strong><span>拖动画布 · 滚轮缩放</span><button class="zoom-btn" data-action="out">−</button><button class="zoom-btn" data-action="reset">↺</button><button class="zoom-btn" data-action="fit">Fit</button><button class="zoom-btn" data-action="in">＋</button></div>
+      <div class="diagram-viewport">
+        <div class="diagram-canvas">
+          <svg viewBox="0 0 720 760" role="img" aria-label="Marketplace architecture flow diagram">
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#7b8798"/></marker>
+              <filter id="shadow"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity=".12"/></filter>
+            </defs>
+            <rect x="22" y="18" width="676" height="118" rx="18" fill="#f0ecff" stroke="#c8baff"/>
+            <text x="42" y="43" font-size="12" font-weight="800" fill="#6549b8">CLIENT LAYER</text>
+            <g class="flow-node" filter="url(#shadow)"><rect x="55" y="62" width="170" height="48" rx="12" fill="white" stroke="#7857d8"/><text x="140" y="83" text-anchor="middle" font-size="12" font-weight="700">Buyer Web</text><text x="140" y="99" text-anchor="middle" font-size="9" fill="#667085">Next.js · Search · Checkout</text></g>
+            <g class="flow-node" filter="url(#shadow)"><rect x="275" y="62" width="170" height="48" rx="12" fill="white" stroke="#7857d8"/><text x="360" y="83" text-anchor="middle" font-size="12" font-weight="700">Supplier Console</text><text x="360" y="99" text-anchor="middle" font-size="9" fill="#667085">Offers · Capacity · Payout</text></g>
+            <g class="flow-node" filter="url(#shadow)"><rect x="495" y="62" width="170" height="48" rx="12" fill="white" stroke="#7857d8"/><text x="580" y="83" text-anchor="middle" font-size="12" font-weight="700">Operations</text><text x="580" y="99" text-anchor="middle" font-size="9" fill="#667085">Risk · Pricing · Support</text></g>
+
+            <rect x="22" y="166" width="676" height="190" rx="18" fill="#eaf2ff" stroke="#b7d0ff"/>
+            <text x="42" y="191" font-size="12" font-weight="800" fill="#1857ba">CONTROL PLANE</text>
+            <g class="flow-node"><rect x="65" y="216" width="180" height="54" rx="12" fill="white" stroke="#2878ff"/><text x="155" y="239" text-anchor="middle" font-size="12" font-weight="700">API Gateway</text><text x="155" y="256" text-anchor="middle" font-size="9" fill="#667085">Auth · Rate limit · Routing</text></g>
+            <g class="flow-node"><rect x="270" y="216" width="180" height="54" rx="12" fill="white" stroke="#2878ff"/><text x="360" y="239" text-anchor="middle" font-size="12" font-weight="700">Marketplace API</text><text x="360" y="256" text-anchor="middle" font-size="9" fill="#667085">Orders · Offers · Matching</text></g>
+            <g class="flow-node"><rect x="475" y="216" width="180" height="54" rx="12" fill="white" stroke="#2878ff"/><text x="565" y="239" text-anchor="middle" font-size="12" font-weight="700">Policy Engine</text><text x="565" y="256" text-anchor="middle" font-size="9" fill="#667085">Eligibility · Risk · Price</text></g>
+            <g class="flow-node"><rect x="168" y="292" width="180" height="44" rx="12" fill="#dbe8ff" stroke="#2878ff"/><text x="258" y="318" text-anchor="middle" font-size="11" font-weight="700">Identity & RBAC</text></g>
+            <g class="flow-node"><rect x="372" y="292" width="180" height="44" rx="12" fill="#dbe8ff" stroke="#2878ff"/><text x="462" y="318" text-anchor="middle" font-size="11" font-weight="700">Audit & Metering</text></g>
+
+            <rect x="22" y="386" width="676" height="176" rx="18" fill="#e8f7f0" stroke="#a9dfc5"/>
+            <text x="42" y="411" font-size="12" font-weight="800" fill="#08794a">EXECUTION PLANE</text>
+            <g class="flow-node"><rect x="65" y="438" width="180" height="54" rx="12" fill="white" stroke="#169b62"/><text x="155" y="461" text-anchor="middle" font-size="12" font-weight="700">Matching Worker</text><text x="155" y="478" text-anchor="middle" font-size="9" fill="#667085">Rank · Reserve · Retry</text></g>
+            <g class="flow-node"><rect x="270" y="438" width="180" height="54" rx="12" fill="white" stroke="#169b62"/><text x="360" y="461" text-anchor="middle" font-size="12" font-weight="700">Provisioner</text><text x="360" y="478" text-anchor="middle" font-size="9" fill="#667085">Allocate · Start · Observe</text></g>
+            <g class="flow-node"><rect x="475" y="438" width="180" height="54" rx="12" fill="white" stroke="#169b62"/><text x="565" y="461" text-anchor="middle" font-size="12" font-weight="700">Settlement Worker</text><text x="565" y="478" text-anchor="middle" font-size="9" fill="#667085">Usage · Ledger · Payout</text></g>
+            <g class="flow-node"><rect x="168" y="512" width="180" height="34" rx="10" fill="#d9f2e6" stroke="#169b62"/><text x="258" y="533" text-anchor="middle" font-size="10" font-weight="700">Queue / Event Bus</text></g>
+            <g class="flow-node"><rect x="372" y="512" width="180" height="34" rx="10" fill="#d9f2e6" stroke="#169b62"/><text x="462" y="533" text-anchor="middle" font-size="10" font-weight="700">Scheduler / Reconciler</text></g>
+
+            <rect x="22" y="592" width="676" height="140" rx="18" fill="#fff5df" stroke="#f0d28c"/>
+            <text x="42" y="617" font-size="12" font-weight="800" fill="#9a5d00">DATA & INFRASTRUCTURE</text>
+            <g class="flow-node"><path d="M78 650Q78 638 98 638H222Q242 638 242 650V690Q242 702 222 702H98Q78 702 78 690Z" fill="white" stroke="#d98200"/><ellipse cx="160" cy="650" rx="82" ry="12" fill="#fff8ea" stroke="#d98200"/><text x="160" y="674" text-anchor="middle" font-size="11" font-weight="700">PostgreSQL</text><text x="160" y="689" text-anchor="middle" font-size="9" fill="#667085">Orders · Ledger · Audit</text></g>
+            <g class="flow-node"><path d="M278 650Q278 638 298 638H422Q442 638 442 650V690Q442 702 422 702H298Q278 702 278 690Z" fill="white" stroke="#d98200"/><ellipse cx="360" cy="650" rx="82" ry="12" fill="#fff8ea" stroke="#d98200"/><text x="360" y="674" text-anchor="middle" font-size="11" font-weight="700">Redis</text><text x="360" y="689" text-anchor="middle" font-size="9" fill="#667085">Cache · Locks · Streams</text></g>
+            <g class="flow-node"><path d="M478 650Q478 638 498 638H622Q642 638 642 650V690Q642 702 622 702H498Q478 702 478 690Z" fill="white" stroke="#d98200"/><ellipse cx="560" cy="650" rx="82" ry="12" fill="#fff8ea" stroke="#d98200"/><text x="560" y="674" text-anchor="middle" font-size="11" font-weight="700">Object Storage</text><text x="560" y="689" text-anchor="middle" font-size="9" fill="#667085">Reports · Exports · Evidence</text></g>
+
+            <path class="edge" d="M140 110V145H155V216"/><path class="edge" d="M360 110V145H155V216"/><path class="edge" d="M580 110V145H155V216"/>
+            <path class="edge" d="M245 243H270"/><path class="edge" d="M450 243H475"/><path class="edge dashed" d="M360 270V292"/><path class="edge dashed" d="M565 270V314H552"/>
+            <path class="edge" d="M360 336V370H155V438"/><path class="edge" d="M360 336V438"/><path class="edge" d="M462 336V370H565V438"/>
+            <path class="edge" d="M155 492V529H168"/><path class="edge" d="M360 492V512"/><path class="edge" d="M565 492V529H552"/>
+            <path class="edge" d="M258 546V576H160V638"/><path class="edge" d="M360 546V638"/><path class="edge" d="M462 546V576H560V638"/>
+          </svg>
+        </div>
+      </div>
+      <div class="diagram-note">建议：总图最多 4 个层级、每层 3–5 个节点；边使用单一方向；颜色表达边界，不表达装饰。</div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="sequence">
+  <div class="section-head"><span class="num">03</span><div><h2>Sequence Diagram</h2><p>适合展示跨服务时序、同步与异步边界。</p></div></div>
+  <div class="card">
+    <h3>Order placement happy path</h3><p>窄侧栏中允许局部横向滚动，不应压缩到文字不可读。</p>
+    <div class="sequence">
+      <div class="sequence-grid">
+        <div><div class="actor user">Buyer</div><div class="lifeline"></div></div>
+        <div><div class="actor web">Web App</div><div class="lifeline"></div></div>
+        <div><div class="actor api">Marketplace API</div><div class="lifeline"></div></div>
+        <div><div class="actor db">Ledger DB</div><div class="lifeline"></div></div>
+        <div class="messages">
+          <div class="message" style="left:8%;width:25%;top:12px">1. Submit order</div>
+          <div class="message" style="left:33%;width:25%;top:54px">2. Validate + reserve</div>
+          <div class="message" style="left:58%;width:25%;top:96px">3. Create hold</div>
+          <div class="message return" style="left:58%;width:25%;top:138px">4. hold_id</div>
+          <div class="message return" style="left:33%;width:25%;top:180px">5. order accepted</div>
+          <div class="message return" style="left:8%;width:25%;top:222px">6. Show confirmation</div>
+          <div class="activation" style="left:49.4%;top:45px;height:173px"></div>
+          <div class="activation" style="left:74.4%;top:88px;height:89px;background:#ffe7b5;border-color:#d9a33d"></div>
+        </div>
+      </div>
+    </div>
+    <div class="sequence-caption">虚线代表返回；激活条表示服务正在处理。失败分支应拆到独立小节，避免一张图承载所有异常。</div>
+  </div>
+</section>
+
+<section class="section" id="state">
+  <div class="section-head"><span class="num">04</span><div><h2>状态机</h2><p>适合订单、任务、审批和生命周期说明。</p></div></div>
+  <div class="card">
+    <h3>Order lifecycle</h3><p>主路径纵向排列，异常分支并排；每个状态只写进入条件和核心动作。</p>
+    <div class="state-flow">
+      <div class="state idle"><strong>Draft</strong><p>用户编辑需求，尚未占用资源。</p></div>
+      <div class="state active"><strong>Reserved</strong><p>锁定预算与候选供给，等待 provisioning。</p></div>
+      <div class="branch"><div class="state done"><strong>Running</strong><p>资源已交付，持续记录 usage。</p></div><div class="state error"><strong>Reservation Failed</strong><p>释放 hold，返回可重试原因。</p></div></div>
+      <div class="state review"><strong>Settling</strong><p>冻结最终 usage，执行双式记账。</p></div>
+      <div class="branch"><div class="state done"><strong>Completed</strong><p>结算完成，可生成 invoice。</p></div><div class="state error"><strong>Disputed</strong><p>冻结 payout，进入人工复核。</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pipeline">
+  <div class="section-head"><span class="num">05</span><div><h2>数据管道</h2><p>适合 ETL、事件流、模型推理和批处理。</p></div></div>
+  <div class="card">
+    <h3>Usage metering pipeline</h3><p>每阶段突出输入、动作和输出；状态 badge 只表达执行模式。</p>
+    <div class="pipeline">
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--blue-soft)">📥</div><div><strong>Ingest usage events</strong><small>API gateway + runtime agents</small></div><span class="badge">stream</span></div><div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--purple-soft)">🧹</div><div><strong>Normalize & deduplicate</strong><small>schema validation · idempotency key</small></div><span class="badge">real-time</span></div><div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--amber-soft)">🧮</div><div><strong>Price with snapshot</strong><small>rate card · currency · discount policy</small></div><span class="badge">deterministic</span></div><div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--green-soft)">📒</div><div><strong>Post ledger entries</strong><small>debit buyer · credit supplier · fee</small></div><span class="badge">transactional</span></div><div class="connector">↓</div>
+      <div class="pipe-stage"><div class="pipe-icon" style="background:var(--red-soft)">🔎</div><div><strong>Reconcile & alert</strong><small>watermark · missing interval · anomaly</small></div><span class="badge">scheduled</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="data">
+  <div class="section-head"><span class="num">06</span><div><h2>ER / 数据所有权</h2><p>适合展示关键实体、主外键和边界归属。</p></div></div>
+  <div class="card">
+    <h3>Core marketplace entities</h3><p>侧栏内优先使用实体卡片，不强求传统横向 ER 图。</p>
+    <div class="entity-grid">
+      <div class="entity"><h4>orders</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>buyer_org_id</span><code>uuid</code></li><li><span>status</span><code>enum</code></li><li><span>budget_minor</span><code>bigint</code></li></ul></div>
+      <div class="entity"><h4>allocations</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>order_id ↗</span><code>uuid</code></li><li><span>offer_id ↗</span><code>uuid</code></li><li><span>started_at</span><code>timestamptz</code></li></ul></div>
+      <div class="entity"><h4>usage_events</h4><ul><li><strong>event_id 🔑</strong><code>text</code></li><li><span>allocation_id ↗</span><code>uuid</code></li><li><span>quantity</span><code>decimal</code></li><li><span>occurred_at</span><code>timestamptz</code></li></ul></div>
+      <div class="entity"><h4>ledger_entries</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>usage_event_id ↗</span><code>text</code></li><li><span>account_id</span><code>uuid</code></li><li><span>amount_minor</span><code>bigint</code></li></ul></div>
+    </div>
+    <div class="relation-note"><strong>关系：</strong>order 1—N allocation 1—N usage_event 1—N ledger_entry。业务状态归 marketplace；账户余额归 ledger。</div>
+  </div>
+</section>
+
+<section class="section" id="decision">
+  <div class="section-head"><span class="num">07</span><div><h2>决策矩阵</h2><p>适合技术选型、方案比较和 trade-off。</p></div></div>
+  <div class="card">
+    <h3>Report delivery options</h3><p>评分只辅助决策，结论必须在表格后明确写出。</p>
+    <div style="overflow:auto"><table class="matrix"><thead><tr><th>方案</th><th>清晰度</th><th>缩放</th><th>远程</th><th>复杂度</th></tr></thead><tbody>
+      <tr><td>PNG 截图</td><td><span class="score mid">2</span></td><td><span class="score bad">1</span></td><td><span class="score good">3</span></td><td><span class="score good">3</span></td></tr>
+      <tr><td>Screencast</td><td><span class="score mid">2</span></td><td><span class="score bad">1</span></td><td><span class="score good">3</span></td><td><span class="score bad">1</span></td></tr>
+      <tr><td>HTML Artifact</td><td><span class="score good">3</span></td><td><span class="score good">3</span></td><td><span class="score good">3</span></td><td><span class="score mid">2</span></td></tr>
+    </tbody></table></div>
+    <div class="callout" style="margin-top:11px"><div class="glyph">✓</div><div><strong>Decision</strong><p>文档型内容统一使用 self-contained HTML Artifact；仅在必须操作动态 localhost 应用时考虑其他 transport。</p></div></div>
+  </div>
+</section>
+
+<section class="section" id="roadmap">
+  <div class="section-head"><span class="num">08</span><div><h2>Roadmap / 时间线</h2><p>适合实施计划、迁移步骤和里程碑。</p></div></div>
+  <div class="card">
+    <div class="timeline">
+      <div class="event done"><time>Phase 0 · Complete</time><strong>格式规范与 showcase</strong><p>确定窄侧栏布局、静态安全边界、可交互 SVG 约定。</p></div>
+      <div class="event"><time>Phase 1 · MVP</time><strong>HTML Artifact transport</strong><p>通过 attachment/content-ref 传输单文件 HTML，并在 sandbox iframe 中渲染。</p></div>
+      <div class="event next"><time>Phase 2 · UX</time><strong>Side panel reader controls</strong><p>面板宽度、全屏、页面缩放、目录、下载和更新恢复。</p></div>
+      <div class="event"><time>Phase 3 · Authoring</time><strong>LLM template and validation</strong><p>提供模板、生成提示词和静态检查器，保证报告质量。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="template">
+  <div class="section-head"><span class="num">09</span><div><h2>给 LLM 的生成规范</h2><p>固定约束比“做得漂亮”更容易得到稳定质量。</p></div></div>
+  <div class="card">
+    <h3>Required structure</h3>
+    <ol class="rules">
+      <li>输出单个 self-contained HTML 文件；禁止外部 CDN、字体、图片和网络请求。</li>
+      <li>正文按竖向 side panel 设计，目标宽度 420–760px；不要依赖桌面宽屏才能阅读。</li>
+      <li>开头必须有执行摘要、关键指标和明确结论；复杂细节放在后续章节。</li>
+      <li>Flow/Mermaid 最终必须转成内联 SVG；复杂 SVG 必须放入 <code>data-panzoom</code> 容器。</li>
+      <li>一张图只表达一个主题；总图最多 4 层，每层 3–5 个节点，避免交叉连线。</li>
+      <li>颜色用于表达领域或状态，全文保持同一语义；不要使用随机渐变和装饰色。</li>
+      <li>所有表格必须允许横向滚动；所有代码块必须可滚动，不能撑破页面。</li>
+      <li>必须包含结论、风险、未决问题或下一步，不能只给图而没有解释。</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Suggested prompt fragment</h3>
+    <div class="codeblock">Create a single self-contained HTML technical report.
+Target a vertical side panel between 420px and 760px wide.
+Use a clear hierarchy: executive summary, overview diagram,
+detailed flows, state/data model, decisions, risks, next steps.
+Render Mermaid to inline SVG before final output.
+Wrap complex SVG diagrams in the provided data-panzoom component.
+Do not use external scripts, styles, fonts, images, or network calls.
+Keep text selectable and diagrams locally zoomable and pannable.
+Use colors consistently to communicate domain boundaries or state.</div>
+  </div>
+</section>
+
+<div class="footer">Kraki HTML Artifact Template · self-contained reference report</div>
+</main>
+</div>
+<script>
+(() => {
+  const progress = document.getElementById('progress');
+  const updateProgress = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    progress.style.width = `${max > 0 ? (scrollY / max) * 100 : 0}%`;
+  };
+  addEventListener('scroll', updateProgress, { passive: true }); updateProgress();
+
+  document.querySelectorAll('[data-panzoom]').forEach((shell) => {
+    const viewport = shell.querySelector('.diagram-viewport');
+    const canvas = shell.querySelector('.diagram-canvas');
+    let scale = 1, x = 0, y = 0, dragging = false, startX = 0, startY = 0;
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+    const render = () => { canvas.style.transform = `translate(${x}px,${y}px) scale(${scale})`; };
+    const setScale = (next, cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2) => {
+      next = clamp(next, .55, 3.5);
+      const ratio = next / scale;
+      x = cx - (cx - x) * ratio; y = cy - (cy - y) * ratio; scale = next; render();
+    };
+    const reset = () => { scale = 1; x = 0; y = 0; render(); };
+    const fit = () => { scale = 1; x = 0; y = 0; render(); };
+    shell.querySelector('[data-action="in"]').onclick = () => setScale(scale * 1.2);
+    shell.querySelector('[data-action="out"]').onclick = () => setScale(scale / 1.2);
+    shell.querySelector('[data-action="reset"]').onclick = reset;
+    shell.querySelector('[data-action="fit"]').onclick = fit;
+    viewport.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      setScale(scale * (event.deltaY < 0 ? 1.12 : .89), event.clientX - rect.left, event.clientY - rect.top);
+    }, { passive: false });
+    viewport.addEventListener('pointerdown', (event) => {
+      dragging = true; startX = event.clientX - x; startY = event.clientY - y;
+      viewport.classList.add('dragging'); viewport.setPointerCapture(event.pointerId);
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      if (!dragging) return; x = event.clientX - startX; y = event.clientY - startY; render();
+    });
+    const stop = () => { dragging = false; viewport.classList.remove('dragging'); };
+    viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', stop);
+    render();
+  });
+})();
+</script>
+</body>
+</html>
