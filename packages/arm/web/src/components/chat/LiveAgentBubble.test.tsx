@@ -94,6 +94,13 @@ describe('LiveAgentBubble action section', () => {
     expect(screen.queryByText('Working…')).not.toBeInTheDocument();
   });
 
+  it('renders compaction as transient runtime activity, not a fake tool', () => {
+    renderLive({ text: '', action: { type: 'compaction', payload: { phase: 'running', reason: 'threshold' } } });
+    expect(screen.getByText('Compacting context…')).toBeInTheDocument();
+    expect(screen.queryByText('bash')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open steps' })).not.toBeInTheDocument();
+  });
+
   it('renders a running tool in the action section', () => {
     renderLive({
       text: 'working on it',

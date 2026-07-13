@@ -120,7 +120,8 @@ export class CardManager {
     }
     if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
     if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.decision ?? ''}`;
-    return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
+    if (a.type === 'question') return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
+    return `compaction:${a.payload.reason ?? 'unknown'}`;
   }
 
   /** The action a session's live tools should occupy the slot with, derived from
@@ -153,13 +154,9 @@ export class CardManager {
   onDelta(sessionId: string, content: string): void {
     if (!content) return;
     const c = this.get(sessionId);
-    // Narration resumed → a SETTLED tail sitting in the slot is no longer the
-    // most recent activity, so retire it now. This enforces the live-action
-    // rule: the slot carries a completed tool / resolved prompt ONLY while it is
-    // the latest thing that happened (nothing narrated after it). A still-running
-    // tool (runningTools non-empty) or an UNRESOLVED prompt is left untouched —
-    // those are genuinely live and stream in parallel with the narration.
-    if (this.isSettledTail(c)) {
+    // Narration resumed → a SETTLED tail or stale compaction indicator is no
+    // longer the latest activity. Running tools and unresolved prompts remain.
+    if (this.isSettledTail(c) || c.action?.type === 'compaction') {
       c.action = null;
       this.syncAction(sessionId, c);
     }
@@ -187,10 +184,9 @@ export class CardManager {
    *  next delta to start a fresh segment (keep-last). */
   onNarrationFinal(sessionId: string, content: string): void {
     const c = this.get(sessionId);
-    // A narration segment is the latest activity now → retire a settled tail
-    // still sitting in the slot (mirrors the same rule in onDelta, for the edge
-    // where a segment finalizes without having streamed any delta).
-    if (this.isSettledTail(c)) {
+    // A narration segment is the latest activity now → retire a settled tail or
+    // stale compaction indicator (mirrors onDelta for no-stream edge cases).
+    if (this.isSettledTail(c) || c.action?.type === 'compaction') {
       c.action = null;
       this.syncAction(sessionId, c);
     }
@@ -227,6 +223,24 @@ export class CardManager {
   }
 
   // ── Action part ───────────────────────────────────────
+
+  /** Pi started compacting before prompt acceptance. Do not hide a blocking
+   *  human affordance; otherwise compaction owns the transient action slot. */
+  onCompactionStart(sessionId: string, reason?: 'manual' | 'threshold' | 'overflow'): void {
+    const c = this.get(sessionId);
+    if (this.slotBlocksTool(c)) return;
+    c.action = { type: 'compaction', payload: { phase: 'running', ...(reason && { reason }) } };
+    this.syncAction(sessionId, c);
+  }
+
+  /** Clear only if compaction still owns the slot. A newer tool/prompt action
+   *  must survive a late native compaction_end or watchdog reconciliation. */
+  onCompactionEnd(sessionId: string): void {
+    const c = this.cards.get(sessionId);
+    if (!c || c.action?.type !== 'compaction') return;
+    c.action = null;
+    this.syncAction(sessionId, c);
+  }
 
   /** A tool started — track it as in-flight and (unless a pending prompt owns the
    *  slot) show the derived tool action: the single tool, or a `tool_batch` count

@@ -55,7 +55,14 @@ export interface PiRpcEvent {
 interface Pending {
   resolve: (data: unknown) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+interface RequestOptions {
+  /** Omitted = normal bounded control-command timeout; null = wait until the
+   *  response or process exit. Prompt ACKs use null because preflight may spend
+   *  minutes compacting after the frame has already been delivered. */
+  timeoutMs?: number | null;
 }
 
 export interface PiRpcOptions {
@@ -78,8 +85,12 @@ export interface PiRpcOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/** Bounds short control commands; prompts run fire-and-forget. */
+/** Bounds short control commands. Prompt acceptance has its own watchdog. */
 const CMD_TIMEOUT_MS = 30_000;
+const PROMPT_ACK_GRACE_MS = 30_000;
+const PROMPT_WATCHDOG_INTERVAL_MS = 5_000;
+const PROMPT_PROBE_FAILURE_LIMIT = 3;
+const PROMPT_IDLE_STALL_MS = 120_000;
 
 class PiRpcProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -130,7 +141,7 @@ class PiRpcProcess {
     this.child.on('exit', (code) => {
       const detail = this.lastStderr ? `: ${this.lastStderr}` : '';
       for (const p of this.pending.values()) {
-        clearTimeout(p.timer);
+        if (p.timer) clearTimeout(p.timer);
         p.reject(new Error(`pi process exited${detail}`));
       }
       this.pending.clear();
@@ -152,7 +163,7 @@ class PiRpcProcess {
     if (msg.type === 'response' && typeof msg.id === 'string') {
       const p = this.pending.get(msg.id);
       if (p) {
-        clearTimeout(p.timer);
+        if (p.timer) clearTimeout(p.timer);
         this.pending.delete(msg.id);
         if (msg.success) p.resolve(msg.data);
         else p.reject(new Error(String(msg.error ?? 'pi command failed')));
@@ -162,18 +173,25 @@ class PiRpcProcess {
     this.onEvent?.(msg as PiRpcEvent);
   }
 
-  /** Send a command and await its response. */
-  request<T = unknown>(type: string, payload: Record<string, unknown> = {}): Promise<T> {
+  /** Send a command and await its response. Short control commands are bounded;
+   *  callers may disable the wall-clock timer for commands whose response is
+   *  legitimately delayed after delivery (notably prompt preflight/compaction). */
+  request<T = unknown>(
+    type: string,
+    payload: Record<string, unknown> = {},
+    options: RequestOptions = {},
+  ): Promise<T> {
     const id = `c${++this.seq}`;
     const frame = JSON.stringify({ id, type, ...payload });
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timeoutMs = options.timeoutMs === undefined ? CMD_TIMEOUT_MS : options.timeoutMs;
+      const timer = timeoutMs === null ? null : setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`pi command '${type}' timed out`));
-      }, CMD_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer });
       if (!this.child?.stdin.writable) {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         this.pending.delete(id);
         reject(new Error('pi stdin not writable'));
         return;
@@ -307,6 +325,9 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
+  /** Set before the process-exit callback publishes idle, so an in-flight
+   *  prompt rejection cannot publish the same terminal idle a second time. */
+  exitObserved: boolean;
   /** Outstanding per-call permission requests (permissionId → pi's UI request
    *  id). Cleared when answered or when the child is killed/respawned so the
    *  arm's card doesn't dangle. */
@@ -480,10 +501,19 @@ function finalizePrompt(draft: string): string {
   );
 }
 
+interface PromptWatchdogOptions {
+  ackGraceMs: number;
+  intervalMs: number;
+  probeFailureLimit: number;
+  idleStallMs: number;
+}
+
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  private readonly promptWatchdog: PromptWatchdogOptions;
   private sessions = new Map<string, PiSession>();
+  private compactingSessions = new Set<string>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
   /** Lazily-materialized path to the always-loaded Kraki tools extension. */
   private toolsExtPath: string | null = null;
@@ -492,10 +522,21 @@ export class PiAdapter extends AgentAdapter {
    *  message (the meta sidecar / kraki_get_mode stays the source of truth). */
   private pendingModeSignals = new Map<string, Mode>();
 
-  constructor(opts: { cliPath: string; attachmentStore?: import('../attachment-store.js').AttachmentStore }) {
+  constructor(opts: {
+    cliPath: string;
+    attachmentStore?: import('../attachment-store.js').AttachmentStore;
+    /** Test-only timing override; production uses conservative defaults. */
+    promptWatchdog?: Partial<PromptWatchdogOptions>;
+  }) {
     super();
     this.cliPath = opts.cliPath;
     this.attachmentStore = opts.attachmentStore;
+    this.promptWatchdog = {
+      ackGraceMs: opts.promptWatchdog?.ackGraceMs ?? PROMPT_ACK_GRACE_MS,
+      intervalMs: opts.promptWatchdog?.intervalMs ?? PROMPT_WATCHDOG_INTERVAL_MS,
+      probeFailureLimit: opts.promptWatchdog?.probeFailureLimit ?? PROMPT_PROBE_FAILURE_LIMIT,
+      idleStallMs: opts.promptWatchdog?.idleStallMs ?? PROMPT_IDLE_STALL_MS,
+    };
   }
 
   /** Write the embedded Kraki tools extension to a stable on-disk path and
@@ -596,6 +637,7 @@ export class PiAdapter extends AgentAdapter {
     if (this.evictTimer) clearInterval(this.evictTimer);
     for (const s of this.sessions.values()) s.proc.kill();
     this.sessions.clear();
+    this.compactingSessions.clear();
   }
 
   private blankUsage(): SessionUsage {
@@ -621,13 +663,14 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Permissions cannot
       // be reconstructed, but ask_user is durable at RelayClient/CardManager:
       // keep its id/card so the next answer can transparently use a recovery
       // prompt after lazy resume.
+      sess.exitObserved = true;
       this.clearPendingPerms(sessionId);
       this.pendingModeSignals.delete(sessionId);
       this.onIdle?.(sessionId);
@@ -678,13 +721,119 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
+  private setCompacting(
+    sessionId: string,
+    active: boolean,
+    event: Omit<import('./base.js').CompactionEvent, 'phase'> = {},
+  ): void {
+    if (active) {
+      if (this.compactingSessions.has(sessionId)) return;
+      this.compactingSessions.add(sessionId);
+      this.onCompaction?.(sessionId, { phase: 'start', ...event });
+      return;
+    }
+    if (!this.compactingSessions.delete(sessionId)) return;
+    this.onCompaction?.(sessionId, { phase: 'end', ...event });
+  }
+
+  private normalizeCompactionReason(value: unknown): import('./base.js').CompactionReason | undefined {
+    return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
+  }
+
+  /** Wait for the ORIGINAL prompt's preflight ACK without ever resending it.
+   *  After the normal 30s grace, bounded get_state probes distinguish healthy
+   *  compaction/streaming from a dead RPC channel or a genuinely idle stall. */
+  private async awaitPromptAcceptance(
+    sessionId: string,
+    s: PiSession,
+    promptPayload: Record<string, unknown>,
+  ): Promise<void> {
+    const ack = s.proc.request('prompt', promptPayload, { timeoutMs: null });
+    // Attach exactly one terminal observer so returning early on authoritative
+    // isStreaming cannot produce an unhandled rejection when the late ACK lands.
+    const ackOutcome = ack.then(
+      () => ({ kind: 'ack' as const }),
+      (error: unknown) => ({ kind: 'error' as const, error: error as Error }),
+    );
+    let delayMs = this.promptWatchdog.ackGraceMs;
+    let idleSince: number | null = null;
+    let consecutiveProbeFailures = 0;
+
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const tick = new Promise<{ kind: 'tick' }>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: 'tick' }), delayMs);
+      });
+      const outcome = await Promise.race([ackOutcome, tick]);
+      if (timer) clearTimeout(timer);
+      if (outcome.kind === 'ack') return;
+      if (outcome.kind === 'error') throw outcome.error;
+      if (!s.proc.alive) throw new Error('pi process exited before prompt acceptance');
+
+      delayMs = this.promptWatchdog.intervalMs;
+      try {
+        const state = await s.proc.request<{
+          isStreaming?: boolean;
+          isCompacting?: boolean;
+        }>('get_state');
+        consecutiveProbeFailures = 0;
+
+        if (state.isCompacting) {
+          idleSince = null;
+          this.setCompacting(sessionId, true);
+          logger.debug({ sessionId }, 'pi prompt ACK delayed by compaction; continuing to wait');
+          continue;
+        }
+
+        // A missed native compaction_end must not leave stale UI once Pi reports
+        // real streaming or a settled non-compacting state.
+        this.setCompacting(sessionId, false);
+        if (state.isStreaming) {
+          logger.debug({ sessionId }, 'pi prompt accepted before ACK; watchdog reconciled active state');
+          return;
+        }
+
+        idleSince ??= Date.now();
+        if (Date.now() - idleSince >= this.promptWatchdog.idleStallMs) {
+          throw new Error('pi prompt was not acknowledged and pi reported neither streaming nor compaction');
+        }
+      } catch (err) {
+        const message = (err as Error).message;
+        if (message === 'pi prompt was not acknowledged and pi reported neither streaming nor compaction') throw err;
+        consecutiveProbeFailures += 1;
+        logger.warn({ sessionId, err: message, consecutiveProbeFailures }, 'pi prompt watchdog state probe failed');
+        if (!s.proc.alive || consecutiveProbeFailures >= this.promptWatchdog.probeFailureLimit) {
+          throw new Error(`pi prompt acknowledgement could not be reconciled: ${message}`);
+        }
+      }
+    }
+  }
+
   // ── Event mapping: pi session.subscribe → Kraki callbacks ──
   private async handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
     this.touch(sessionId);
     switch (e.type) {
+      case 'compaction_start':
+        this.setCompacting(sessionId, true, { reason: this.normalizeCompactionReason(e.reason) });
+        break;
+      case 'compaction_end':
+        this.setCompacting(sessionId, false, {
+          reason: this.normalizeCompactionReason(e.reason),
+          aborted: e.aborted === true,
+          willRetry: e.willRetry === true,
+          errorMessage: typeof e.errorMessage === 'string' ? e.errorMessage : undefined,
+        });
+        break;
       case 'agent_start':
+        // Streaming proves any preceding compaction is over even if its end
+        // event was missed during resume/reconciliation.
+        this.setCompacting(sessionId, false);
         break;
       case 'message_update': {
+        // Real model/tool activity also proves a stale compaction indicator is
+        // no longer current. Clear only the adapter-owned compaction lifecycle;
+        // CardManager independently protects newer action-slot owners.
+        this.setCompacting(sessionId, false);
         const s = this.sessions.get(sessionId);
         const am = (e as { assistantMessageEvent?: AssistantStreamEvent }).assistantMessageEvent;
         if (am?.type === 'text_delta' && typeof am.delta === 'string') {
@@ -767,6 +916,7 @@ export class PiAdapter extends AgentAdapter {
         break;
       }
       case 'tool_execution_start': {
+        this.setCompacting(sessionId, false);
         const toolName = String(e.toolName ?? 'tool');
         if (toolName === 'finalize_reply') {
           // The turn-conclusion tool — never a TRACE step. Only meaningful during
@@ -1161,14 +1311,12 @@ export class PiAdapter extends AgentAdapter {
       .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
       .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
     const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
-    // The `prompt` RPC resolves as soon as pi accepts the run (it streams
-    // asynchronously and ends with agent_end); backend failures surface
-    // in-stream as message_end{stopReason:'error'} -> onError. The await here
-    // is the transport-level safety net: if the request itself is rejected
-    // (stdin closed, process gone, command timeout) there will be no agent_end,
-    // so emit error + idle to avoid hanging the session "active" forever.
+    // Submit exactly once. Pi only ACKs after prompt preflight, which may spend
+    // minutes compacting even though the frame was delivered successfully. The
+    // state-aware watchdog preserves the original request and never translates a
+    // slow ACK into a false error/idle or duplicate prompt.
     try {
-      await s.proc.request('prompt', promptPayload);
+      await this.awaitPromptAcceptance(sessionId, s, promptPayload);
     } catch (err) {
       const message = (err as Error).message;
       // pi can get into a state where the adapter has emitted idle (agent_end
@@ -1192,12 +1340,16 @@ export class PiAdapter extends AgentAdapter {
         } finally {
           s.aborting = false;
         }
-        await s.proc.request('prompt', promptPayload);
+        // The explicit rejection proves the first prompt was NOT accepted. Only
+        // this path may retry, after authoritative abort + idle reconciliation.
+        await this.awaitPromptAcceptance(sessionId, s, promptPayload);
         return;
       }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
       this.onError?.(sessionId, { message });
-      this.onIdle?.(sessionId);
+      // Unexpected process exit owns its terminal idle in proc.onExit. Other
+      // transport/watchdog failures still need to release the active UI here.
+      if (!s.exitObserved) this.onIdle?.(sessionId);
     }
   }
 

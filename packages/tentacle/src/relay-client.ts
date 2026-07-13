@@ -1664,6 +1664,11 @@ export class RelayClient {
       this.sessionManager.setUsage(sessionId, usage);
     };
 
+    this.adapter.onCompaction = (sessionId, event) => {
+      if (event.phase === 'start') this.card.onCompactionStart(sessionId, event.reason);
+      else this.card.onCompactionEnd(sessionId);
+    };
+
     this.adapter.onError = (sessionId, event) => {
       this.send({
         type: 'error',

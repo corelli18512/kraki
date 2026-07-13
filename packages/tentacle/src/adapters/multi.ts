@@ -402,6 +402,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onIdle = (sid) => this.onIdle?.(sid);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);
+    adapter.onCompaction = (sid, e) => this.onCompaction?.(sid, e);
     adapter.onSystemMessage = (sid, e) => this.onSystemMessage?.(sid, e);
     adapter.onSessionEnded = (sid, e) => {
       this.sessionAgent.delete(sid);

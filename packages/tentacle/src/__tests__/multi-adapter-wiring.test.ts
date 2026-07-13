@@ -29,6 +29,7 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
       onIdle: null,
       onFlushComplete: null,
       onError: null,
+      onCompaction: null,
       onSessionEnded: null,
       onSessionEvicted: null,
       onTitleChanged: null,
@@ -70,6 +71,18 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
     stub.onFinalizeDelta?.('s1', { content: '✅ done' });
 
     expect(seen).toHaveBeenCalledWith('s1', { content: '✅ done' });
+  });
+
+  it('forwards transient compaction lifecycle events', () => {
+    const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
+    const stub = makeStubAdapter();
+    (multi as unknown as { wireCallbacks(id: string, a: AgentAdapter): void }).wireCallbacks('pi', stub);
+
+    const seen = vi.fn();
+    multi.onCompaction = seen;
+    stub.onCompaction?.('s1', { phase: 'start', reason: 'threshold' });
+
+    expect(seen).toHaveBeenCalledWith('s1', { phase: 'start', reason: 'threshold' });
   });
 
   it('forwards onMessageDelta and onToolStart (sanity — same wiring path)', () => {

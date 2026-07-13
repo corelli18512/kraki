@@ -33,8 +33,13 @@ interface StubProc {
   request: ReturnType<typeof vi.fn>;
 }
 
-function makeAdapter() {
-  const adapter = new PiAdapter({ cliPath: '/bin/true' });
+function makeAdapter(promptWatchdog?: {
+  ackGraceMs?: number;
+  intervalMs?: number;
+  probeFailureLimit?: number;
+  idleStallMs?: number;
+}) {
+  const adapter = new PiAdapter({ cliPath: '/bin/true', promptWatchdog });
   const sid = 's1';
   const proc: StubProc = {
     alive: true,
@@ -49,6 +54,7 @@ function makeAdapter() {
     mode: 'execute',
     usage: {},
     lastActivity: Date.now(),
+    exitObserved: false,
     pendingPerms: new Map<string, string>(),
     pendingQuestions: new Map<string, string>(),
     narrationSegments: 0,
@@ -270,6 +276,117 @@ describe('pi model switching', () => {
 });
 
 describe('pi prompt recovery', () => {
+  it('keeps one delayed prompt alive through compaction without false error or idle', async () => {
+    const { adapter, proc } = makeAdapter({ ackGraceMs: 1, intervalMs: 1, idleStallMs: 100 });
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    const onCompaction = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    adapter.onCompaction = onCompaction;
+
+    let acknowledge!: () => void;
+    const ack = new Promise<void>((resolve) => { acknowledge = resolve; });
+    proc.request.mockImplementation((type: string) => {
+      if (type === 'prompt') return ack;
+      if (type === 'get_state') return Promise.resolve({ isCompacting: true, isStreaming: false });
+      return Promise.resolve({});
+    });
+
+    const sending = adapter.sendMessage('s1', 'compact me');
+    await vi.waitFor(() => expect(proc.request.mock.calls.some(call => call[0] === 'get_state')).toBe(true));
+    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
+    expect(onCompaction).toHaveBeenCalledTimes(1);
+    expect(onCompaction).toHaveBeenCalledWith('s1', { phase: 'start' });
+    expect(onError).not.toHaveBeenCalled();
+    expect(onIdle).not.toHaveBeenCalled();
+
+    acknowledge();
+    await sending;
+    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
+  });
+
+  it('treats isStreaming as accepted while retaining the late ACK cleanup', async () => {
+    const { adapter, proc } = makeAdapter({ ackGraceMs: 1, intervalMs: 1 });
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise<void>((_resolve, reject) => { rejectAck = reject; });
+    proc.request.mockImplementation((type: string) => {
+      if (type === 'prompt') return ack;
+      if (type === 'get_state') return Promise.resolve({ isStreaming: true, isCompacting: false });
+      return Promise.resolve({});
+    });
+
+    await adapter.sendMessage('s1', 'run once');
+    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onIdle).not.toHaveBeenCalled();
+    // A late transport rejection is observed by ackOutcome, not left unhandled.
+    rejectAck(new Error('late response after process exit'));
+    await Promise.resolve();
+  });
+
+  it('does not duplicate idle when process exit already owns the terminal transition', async () => {
+    const { adapter, proc, session } = makeAdapter();
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    proc.request.mockImplementation((type: string) => {
+      if (type !== 'prompt') return Promise.resolve({});
+      session.exitObserved = true;
+      onIdle('s1'); // mirrors PiRpcProcess.onExit ordering
+      return Promise.reject(new Error('pi process exited'));
+    });
+
+    await adapter.sendMessage('s1', 'will exit');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails once after repeated state-probe failures without resending', async () => {
+    const { adapter, proc } = makeAdapter({ ackGraceMs: 1, intervalMs: 1, probeFailureLimit: 2 });
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    proc.request.mockImplementation((type: string) => {
+      if (type === 'prompt') return new Promise(() => undefined);
+      if (type === 'get_state') return Promise.reject(new Error('state channel wedged'));
+      return Promise.resolve({});
+    });
+
+    await adapter.sendMessage('s1', 'one delivery');
+    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[1].message).toContain('could not be reconciled');
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps native compaction events once and never forwards summary content', () => {
+    const { adapter, emit } = makeAdapter();
+    const onCompaction = vi.fn();
+    adapter.onCompaction = onCompaction;
+
+    emit({ type: 'compaction_start', reason: 'threshold' });
+    emit({ type: 'compaction_start', reason: 'threshold' });
+    emit({
+      type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: true,
+      result: { summary: 'private conversation summary' },
+    });
+
+    expect(onCompaction).toHaveBeenCalledTimes(2);
+    expect(onCompaction).toHaveBeenNthCalledWith(1, 's1', { phase: 'start', reason: 'threshold' });
+    expect(onCompaction).toHaveBeenNthCalledWith(2, 's1', {
+      phase: 'end', reason: 'threshold', aborted: false, willRetry: true, errorMessage: undefined,
+    });
+    expect(JSON.stringify(onCompaction.mock.calls)).not.toContain('private conversation summary');
+  });
+
   it('awaits abort and idle reconciliation before retrying the prompt', async () => {
     const { adapter, proc } = makeAdapter();
     let releaseAbort!: () => void;
@@ -285,8 +402,10 @@ describe('pi prompt recovery', () => {
       .mockResolvedValueOnce({});
 
     const sending = adapter.sendMessage('s1', 'retry me');
-    await Promise.resolve();
-    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt', 'abort']);
+    await vi.waitFor(() => {
+      expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt', 'abort']);
+    });
+    expect(proc.request.mock.calls[0]?.[2]).toEqual({ timeoutMs: null });
     releaseAbort();
     await sending;
     expect(proc.request.mock.calls.map(call => call[0])).toEqual(['prompt', 'abort', 'get_state', 'prompt']);
@@ -310,13 +429,13 @@ describe('pi inbound images (sendMessage → RPC prompt.images)', () => {
     expect(proc.request).toHaveBeenCalledWith('prompt', {
       message: 'what is this?',
       images: [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }],
-    });
+    }, { timeoutMs: null });
   });
 
   it('omits the images field entirely when there are no image attachments', async () => {
     const { adapter, proc } = makeAdapter();
     await adapter.sendMessage('s1', 'plain text');
-    expect(proc.request).toHaveBeenCalledWith('prompt', { message: 'plain text' });
+    expect(proc.request).toHaveBeenCalledWith('prompt', { message: 'plain text' }, { timeoutMs: null });
   });
 
   it('drops non-image (ContentRef) attachments — they cannot be inlined', async () => {
@@ -324,7 +443,7 @@ describe('pi inbound images (sendMessage → RPC prompt.images)', () => {
     await adapter.sendMessage('s1', 'hi', [
       { type: 'content_ref', id: 'abc', mimeType: 'image/png', size: 10 },
     ]);
-    expect(proc.request).toHaveBeenCalledWith('prompt', { message: 'hi' });
+    expect(proc.request).toHaveBeenCalledWith('prompt', { message: 'hi' }, { timeoutMs: null });
   });
 });
 
