@@ -486,10 +486,11 @@ export class RelayClient {
     }
 
     const finishedAt = action.type === 'user_abort' ? action.payload.abortedAt : action.payload.failedAt;
+    const steps = this.turnStepCounts.get(sessionId) ?? 0;
     this.send({
       type: 'turn_status',
       sessionId,
-      payload: { draft: snapshot.draft, action, finishedAt },
+      payload: { draft: snapshot.draft, action, finishedAt, steps },
     });
     this.clearOpenQuestions(sessionId);
     this.card.clear(sessionId);
@@ -1735,9 +1736,18 @@ export class RelayClient {
     };
 
     this.adapter.onError = (sessionId, event) => {
+      // Stage as the terminal outcome so idle freezes it as a `failed` card,
+      // AND broadcast the error immediately so apps surface it without waiting
+      // for the turn to settle. A recoverable error that never reaches idle just
+      // shows the transient notice — no frozen card.
       this.pendingTerminalErrors.set(sessionId, {
         message: event.message,
         source: 'backend',
+      });
+      this.send({
+        type: 'error',
+        sessionId,
+        payload: { message: event.message },
       });
     };
 

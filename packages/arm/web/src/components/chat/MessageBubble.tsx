@@ -2,15 +2,16 @@ import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, CardActionState, ContentRef } from '@kraki/protocol';
-import type { ChatMessage } from '../../types/store';
+import type { ChatMessage, SessionCard } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink, OctagonX } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { StepsButton } from './StepsModal';
+import { LiveAgentBubble } from './LiveAgentBubble';
 
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
@@ -92,39 +93,23 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
       );
 
     case 'turn_status': {
+      // Reuse the SAME renderer as the live status card — a frozen card looks
+      // identical to the live bubble that was on screen when the turn ended,
+      // just read-only with the action slot set to the terminal outcome.
+      if (!sessionId) return null;
       const payload = message.payload;
-      const action = payload.action as Extract<CardActionState, { type: 'user_abort' | 'failed' }>;
-      const failed = action.type === 'failed';
-      const Icon = failed ? OctagonX : CircleStop;
-      const label = failed ? 'Turn failed' : 'User aborted';
-      const detail = failed ? action.payload.message : undefined;
+      const card: SessionCard = { text: payload.draft ?? '', action: payload.action };
       return (
-        <div className="flex gap-2" data-terminal-card={action.type}>
-          <div className="mt-0.5 shrink-0">
-            <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
-          </div>
-          <div className={`min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md border shadow-sm sm:max-w-[70%] ${failed ? 'border-red-500/30 bg-red-500/5' : 'border-slate-500/30 bg-slate-500/5'}`}>
-            {payload.draft && (
-              <div className="markdown-content px-4 py-2.5 text-sm leading-relaxed text-text-primary opacity-80">
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                  {payload.draft}
-                </Markdown>
-              </div>
-            )}
-            <div className={`px-4 py-2.5 ${payload.draft ? 'border-t' : ''} ${failed ? 'border-red-500/20 bg-red-500/10' : 'border-slate-500/20 bg-slate-500/10'}`}>
-              <p className={`flex items-center gap-1 text-xs font-semibold ${failed ? 'text-red-600 dark:text-red-400' : 'text-text-muted'}`}>
-                <Icon className="h-3.5 w-3.5" /> {label}
-              </p>
-              {detail && <p className="mt-1 text-sm text-text-secondary">{detail}</p>}
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2">
-              <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
-              {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
-                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={payload.steps} />
-              )}
-            </div>
-          </div>
-        </div>
+        <LiveAgentBubble
+          sessionId={sessionId}
+          agent={agent}
+          card={card}
+          frozen={{
+            timestamp: message.timestamp ?? payload.finishedAt ?? new Date().toISOString(),
+            bubbleSeq: typeof message.seq === 'number' ? message.seq : 0,
+            stepHint: payload.steps,
+          }}
+        />
       );
     }
 

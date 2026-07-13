@@ -2126,9 +2126,10 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
   });
 
-  it('freezes an adapter error as failed only when the turn reaches idle', async () => {
-    const { adapter, askQ, sm } = buildClient();
-    askQ('q1');
+  it('freezes an adapter error as failed only when the turn reaches idle and stamps step count', async () => {
+    const { adapter, sm } = buildClient();
+    // Drive a tool_start so the turn has a chip-producing step before failing.
+    (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', { toolName: 'bash', args: { command: 'npm test' }, toolCallId: 'tc-1' });
     (adapter.onError as (sid: string, event: { message: string }) => void)('sess_1', { message: '524 status code (no body)' });
     expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
 
@@ -2140,6 +2141,12 @@ describe('RelayClient pending-question digest', () => {
     expect(status.payload).toMatchObject({
       action: { type: 'failed', payload: { message: '524 status code (no body)', source: 'backend' } },
     });
+    expect(status.payload.steps).toBe(1);
+    // The running tool was closed as interrupted, not left dangling.
+    const interruptedTool = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
+      .find((e) => e.type === 'tool_complete' && e.payload.toolCallId === 'tc-1' && e.payload.termination === 'interrupted');
+    expect(interruptedTool).toBeDefined();
   });
 
   it('pushes the active card snapshot to a freshly-joined device', () => {

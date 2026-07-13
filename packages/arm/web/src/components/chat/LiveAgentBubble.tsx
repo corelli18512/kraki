@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
+import { CircleStop, OctagonX } from 'lucide-react';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
@@ -26,6 +27,17 @@ interface LiveAgentBubbleProps {
   sessionId: string;
   agent?: string;
   card: SessionCard;
+  /** Render as a permanent read-only card rebuilt from a persisted
+   *  `turn_status` message. Uses the supplied timestamp/bubbleSeq instead of
+   *  the live "now" clock, skips the proactive live trace-pull, and always
+   *  shows a bottom footer (timestamp + Steps). The action slot carries the
+   *  terminal outcome (`user_abort` | `failed`) rendered with the SAME action
+   *  section the live card uses — there is no separate terminal-card chrome. */
+  frozen?: {
+    timestamp: string;
+    bubbleSeq: number;
+    stepHint?: number;
+  };
 }
 
 /**
@@ -47,8 +59,14 @@ interface LiveAgentBubbleProps {
  * When the concluding agent_message lands on the spine (and the draft + action
  * clear), ChatView stops rendering this bubble — the concluded spine bubble
  * takes over in place with no visible change.
+ *
+ * Frozen mode: a persisted `turn_status` (user abort / terminal backend error)
+ * reuses this EXACT rendering with the action slot set to the terminal outcome.
+ * It looks identical to the live card that was on screen the instant the turn
+ * ended — just frozen read-only with a permanent footer.
  */
-export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps) {
+export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBubbleProps) {
+  const live = !frozen;
   const draft = card.text ?? '';
   const hasContent = draft.length > 0;
   const a = card.action;
@@ -65,9 +83,11 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
   const permission = a?.type === 'permission' ? a : null;
   const question = a?.type === 'question' ? a : null;
   const compaction = a?.type === 'compaction' ? a : null;
-  const hasAction = !!tool || batchRunning > 0 || !!permission || !!question || !!compaction;
+  const userAbort = a?.type === 'user_abort' ? a : null;
+  const failed = a?.type === 'failed' ? a : null;
+  const hasAction = !!tool || batchRunning > 0 || !!permission || !!question || !!compaction || !!userAbort || !!failed;
 
-  const { steps, targetSeq } = useTurnSteps(sessionId, true);
+  const { steps, targetSeq } = useTurnSteps(sessionId, live, frozen?.bubbleSeq);
 
   // TRACE steps are NOT broadcast live (Phase-10: retired from the wire) — they
   // only enter the store via a request_turn_trace pull. So proactively pull the
@@ -76,16 +96,20 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
   // reality and the Steps footer self-hides only while the turn genuinely has no
   // steps yet. Keyed off the action identity — NOT card.text — so a narration
   // token stream doesn't spam pulls. The Steps modal re-pulls fresh on open.
+  // Frozen cards skip this — their trace is already persisted and the Steps
+  // button pulls it lazily on open (same as any concluded bubble).
   const actionKey = useMemo(() => cardActionKey(card.action), [card.action]);
   useEffect(() => {
+    if (!live) return;
     if (targetSeq < 0) return;
     messageProvider.invalidateTurnTrace(sessionId, targetSeq);
     messageProvider.requestTurnTrace(sessionId, targetSeq);
-  }, [sessionId, targetSeq, actionKey]);
+  }, [sessionId, targetSeq, actionKey, live]);
 
+  const terminalKind = userAbort ? 'user_abort' : failed ? 'failed' : undefined;
 
   return (
-    <div className="flex gap-2" data-live-bubble>
+    <div className="flex gap-2" data-live-bubble={live || undefined} data-terminal-card={terminalKind}>
       <div className="mt-0.5 shrink-0">
         <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
       </div>
@@ -104,7 +128,7 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
                So when this live bubble crystallizes into the spine agent_message,
                the DOM swap repaints the SAME pixels → zero visible flicker. The
                Steps button self-hides while the turn has no steps yet. */}
-            {!hasAction && (
+            {live && !hasAction && (
               <div className="mt-1 flex items-center gap-2">
                 <p className="text-[10px] text-text-muted">{formatTime(new Date().toISOString())}</p>
                 <StepsButton sessionId={sessionId} agent={agent} live />
@@ -145,16 +169,47 @@ export function LiveAgentBubble({ sessionId, agent, card }: LiveAgentBubbleProps
             {permission && <PermissionInput action={permission} sessionId={sessionId} />}
 
             {question && <QuestionInput action={question} sessionId={sessionId} />}
+
+            {/* Terminal outcomes live in the SAME action section as tools /
+               prompts — a read-only status row, no separate card chrome. A
+               frozen card therefore looks exactly like the live card that was
+               on screen when the turn ended, just stopped. */}
+            {userAbort && (
+              <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-surface-primary/40 px-3 py-2 text-xs text-text-secondary">
+                <CircleStop className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+                <span className="font-medium">User aborted</span>
+              </div>
+            )}
+
+            {failed && (
+              <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-surface-primary/40 px-3 py-2 text-xs">
+                <OctagonX className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                <span className="font-medium text-red-600 dark:text-red-400">Turn failed</span>
+                {failed.payload.message && (
+                  <span className="truncate text-text-muted">{failed.payload.message}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Mid-turn only (an action occupies the slot): the subtle bottom-right
-           Steps entry. At the settled tail the inline footer above owns Steps so
-           it aligns with the concluded bubble. */}
-        {hasAction && steps.length > 0 && (
-          <div className="flex justify-end px-2 pb-1 pt-0.5">
-            <StepsButton sessionId={sessionId} agent={agent} live />
+        {/* Frozen terminal card: always a permanent bottom footer (real
+           timestamp + Steps) — the same footer a concluded agent_message owns,
+           so the aborted/failed turn anchors its Steps history like any other. */}
+        {frozen ? (
+          <div className="flex items-center gap-2 px-4 py-2">
+            <p className="text-[10px] text-text-muted">{formatTime(frozen.timestamp)}</p>
+            <StepsButton sessionId={sessionId} agent={agent} bubbleSeq={frozen.bubbleSeq} stepHint={frozen.stepHint} />
           </div>
+        ) : (
+          /* Mid-turn only (an action occupies the slot): the subtle bottom-right
+             Steps entry. At the settled tail the inline footer above owns Steps
+             so it aligns with the concluded bubble. */
+          hasAction && steps.length > 0 && (
+            <div className="flex justify-end px-2 pb-1 pt-0.5">
+              <StepsButton sessionId={sessionId} agent={agent} live />
+            </div>
+          )
         )}
       </div>
     </div>
