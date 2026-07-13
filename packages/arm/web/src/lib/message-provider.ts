@@ -76,7 +76,12 @@ function rebuildPreview(sessionId: string): void {
     }
     if (m.type === 'interrupted_turn' && payload) {
       const draft = typeof payload.draft === 'string' ? payload.draft : '';
-      preview = { text: stripMarkdown(draft || 'Turn aborted').slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
+      const failed = payload.reason === 'process_lost';
+      preview = {
+        text: stripMarkdown(draft || (failed ? 'Turn failed' : 'User aborted')).slice(0, PREVIEW_MAX),
+        type: failed ? 'error' : 'agent',
+        timestamp: ts,
+      };
       break;
     }
     if (m.type === 'agent_message' && payload) {

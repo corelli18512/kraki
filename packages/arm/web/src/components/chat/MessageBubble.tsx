@@ -1,7 +1,7 @@
 import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, CardActionState, ContentRef } from '@kraki/protocol';
+import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, ContentRef } from '@kraki/protocol';
 import type { ChatMessage, SessionCard } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
@@ -92,73 +92,44 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
         </CopyableBubble>
       );
 
-    case 'turn_status': {
-      // Reuse the SAME renderer as the live status card — a frozen card looks
-      // identical to the live bubble that was on screen when the turn ended,
-      // just read-only with the action slot set to the terminal outcome.
+    case 'turn_status':
+    case 'interrupted_turn': {
+      // Legacy `interrupted_turn` remains readable on the wire, but it has no
+      // renderer of its own. Normalize it to the modern terminal action and
+      // feed both message types through the exact frozen live-card path.
       if (!sessionId) return null;
-      const payload = message.payload;
-      const card: SessionCard = { text: payload.draft ?? '', action: payload.action };
+      const legacy = message.type === 'interrupted_turn';
+      const legacyProcessLost = legacy && message.payload.reason === 'process_lost';
+      const card: SessionCard = legacy
+        ? {
+            text: message.payload.draft ?? '',
+            action: legacyProcessLost
+              ? {
+                  type: 'failed',
+                  payload: {
+                    message: 'Agent process was lost',
+                    source: 'process',
+                    failedAt: message.payload.interruptedAt,
+                  },
+                }
+              : {
+                  type: 'user_abort',
+                  payload: { abortedAt: message.payload.interruptedAt },
+                },
+          }
+        : { text: message.payload.draft ?? '', action: message.payload.action };
+      const finishedAt = legacy ? message.payload.interruptedAt : message.payload.finishedAt;
       return (
         <LiveAgentBubble
           sessionId={sessionId}
           agent={agent}
           card={card}
           frozen={{
-            timestamp: message.timestamp ?? payload.finishedAt ?? new Date().toISOString(),
+            timestamp: message.timestamp ?? finishedAt ?? new Date().toISOString(),
             bubbleSeq: typeof message.seq === 'number' ? message.seq : 0,
-            stepHint: payload.steps,
+            stepHint: message.payload.steps,
           }}
         />
-      );
-    }
-
-    case 'interrupted_turn': {
-      const payload = message.payload;
-      const action = payload.action as CardActionState | null;
-      const actionText = action?.type === 'question'
-        ? action.payload.question
-        : action?.type === 'permission'
-          ? action.payload.description
-          : action?.type === 'tool_start' || action?.type === 'tool_complete'
-            ? action.payload.headline
-            : action?.type === 'tool_batch'
-              ? `${action.payload.running} tools were running`
-              : '';
-      return (
-        <div className="flex gap-2">
-          <div className="mt-0.5 shrink-0">
-            <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
-          </div>
-          <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md border border-slate-500/30 bg-slate-500/5 shadow-sm sm:max-w-[70%]">
-            {payload.draft && (
-              <div className="markdown-content px-4 py-2.5 text-sm leading-relaxed text-text-primary opacity-80">
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                  {payload.draft}
-                </Markdown>
-              </div>
-            )}
-            {(actionText || !payload.draft) && (
-              <div className="border-t border-slate-500/20 bg-slate-500/10 px-4 py-2.5">
-                {actionText && <p className="text-sm text-text-secondary">{actionText}</p>}
-                <p className="mt-1 flex items-center gap-1 text-xs font-medium text-text-muted">
-                  <CircleStop className="h-3.5 w-3.5" /> Turn aborted
-                </p>
-              </div>
-            )}
-            <div className="flex items-center gap-2 px-4 pb-2">
-              {!actionText && payload.draft && (
-                <p className="flex items-center gap-1 text-xs font-medium text-text-muted">
-                  <CircleStop className="h-3.5 w-3.5" /> Turn aborted
-                </p>
-              )}
-              <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
-              {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
-                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={payload.steps} />
-              )}
-            </div>
-          </div>
-        </div>
       );
     }
 

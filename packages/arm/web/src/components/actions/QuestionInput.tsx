@@ -26,10 +26,10 @@ export function QuestionInput({ action, sessionId }: { action: Extract<CardActio
 
   if (cancelled) {
     return (
-      <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-slate-500/30 bg-slate-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
+      <div className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-violet-500/30 bg-violet-500/5 px-3 pb-3 pt-2.5 sm:px-4 sm:pb-4">
         <div className="mx-auto max-w-3xl">
           {text && <div className="text-sm text-text-primary"><Markdown>{text}</Markdown></div>}
-          <p className="mt-2 text-xs font-semibold text-text-muted">Turn aborted</p>
+          <p className="mt-2 text-xs font-semibold text-text-muted">Question cancelled</p>
         </div>
       </div>
     );

@@ -258,11 +258,10 @@ struct MessageBubbleView: View {
         case "agent_message":
             agentBubble
 
-        case "turn_status":
+        case "turn_status", "interrupted_turn":
+            // Legacy interrupted_turn is normalized at the render boundary and
+            // uses the same terminal status bubble. It has no separate UI.
             turnStatusBubble
-
-        case "interrupted_turn":
-            interruptedTurnBubble
 
         case "session_created":
             sessionCreatedBanner
@@ -323,11 +322,14 @@ struct MessageBubbleView: View {
 
     private var turnStatusBubble: some View {
         let action = message.terminalAction
-        let failed = action?["type"]?.stringValue == "failed"
+        let legacyProcessLost = message.type == "interrupted_turn" && message.reason == "process_lost"
+        let failed = legacyProcessLost || action?["type"]?.stringValue == "failed"
         let label = failed ? "Turn failed" : "User aborted"
         let icon = failed ? "xmark.octagon.fill" : "stop.circle.fill"
         let tint: Color = failed ? .red : .secondary
-        let detail = failed ? action?["payload"]?.dictValue?["message"]?.stringValue : nil
+        let detail = legacyProcessLost
+            ? "Agent process was lost"
+            : (failed ? action?["payload"]?.dictValue?["message"]?.stringValue : nil)
         return HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 if let draft = message.interruptedDraft, !draft.isEmpty {
@@ -341,36 +343,6 @@ struct MessageBubbleView: View {
                 Label(label, systemImage: icon)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(tint)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.secondary.opacity(0.08), in: bubbleShape(isUser: false))
-            Spacer(minLength: WindowSize.width * 0.05)
-        }
-    }
-
-    // MARK: - Interrupted Turn
-
-    private var interruptedTurnBubble: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                if let draft = message.interruptedDraft, !draft.isEmpty {
-                    messageBody(draft, foreground: .primary.opacity(0.8))
-                }
-                if let action = message.payload["action"]?.dictValue,
-                   let actionPayload = action["payload"]?.dictValue {
-                    let summary = actionPayload["question"]?.stringValue
-                        ?? actionPayload["description"]?.stringValue
-                        ?? actionPayload["headline"]?.stringValue
-                    if let summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Label("Turn aborted", systemImage: "stop.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
