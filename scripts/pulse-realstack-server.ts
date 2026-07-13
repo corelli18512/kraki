@@ -103,8 +103,8 @@ class MockAdapter extends AgentAdapter {
   toolStart(sid: string, tool: string, args: Record<string, unknown> = {}, toolCallId?: string) {
     this.onToolStart?.(sid, { toolName: tool, args, ...(toolCallId && { toolCallId }) });
   }
-  toolComplete(sid: string, tool: string, result: string, toolCallId?: string) {
-    this.onToolComplete?.(sid, { toolName: tool, result, ...(toolCallId && { toolCallId }) });
+  toolComplete(sid: string, tool: string, result: string, toolCallId?: string, attachments?: unknown[]) {
+    this.onToolComplete?.(sid, { toolName: tool, result, ...(toolCallId && { toolCallId }), ...(attachments && { attachments }) });
   }
   idle(sid: string) { this.onIdle?.(sid); }
   error(sid: string, message: string) { this.onError?.(sid, { message }); }
@@ -121,6 +121,17 @@ function fail(msg: string): never {
   console.error(`❌ ${msg}`);
   cleanup();
   process.exit(1);
+}
+
+/** Build a PNG chunk: [length][type][data][crc]. */
+function pngChunk(type: string, data: Buffer, crc32: (b: Buffer) => number): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, 'ascii');
+  const crcVal = crc32(Buffer.concat([typeBuf, data])) >>> 0;
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crcVal, 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
 }
 
 function cleanup() {
@@ -231,6 +242,15 @@ async function main(): Promise<void> {
   // args) to a ContentRef the browser pulls on demand — this is what exercises
   // the request_attachment pulse path in the browser (Stage 4).
   const attachmentStore = new AttachmentStore(mkdtempSync(join(tmpdir(), 'kraki-realstack-att-')));
+  /** Records every paced attachment read so the concurrency spec can prove the
+   *  browser pulls one 256 KiB chunk at a time (not the whole blob at once). */
+  const attachmentReads: Array<{ ts: number; id: string }> = [];
+  const origRead = attachmentStore.read.bind(attachmentStore);
+  attachmentStore.read = (sid: string, id: string) => {
+    const r = origRead(sid, id);
+    if (r) attachmentReads.push({ ts: Date.now(), id });
+    return r;
+  };
   relay = new RelayClient(adapter as unknown as AgentAdapter, sm, {
     relayUrl: RELAY_URL,
     device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
@@ -376,6 +396,54 @@ async function main(): Promise<void> {
         case '/permResponses': return json(200, { responses: adapter.permissionResponses });
         case '/answers': return json(200, { answers: adapter.questionAnswers });
         case '/killed': return json(200, { killed: adapter.killed });
+        // ── generate a large (multi-chunk) tool result so the browser exercises
+        //    paced attachment pulls (one 256 KiB chunk per request_attachment). ──
+        case '/bigRef': {
+          const sid = q.get('sid')!;
+          const sizeKb = Number(q.get('sizeKb') ?? '1500');
+          const marker = q.get('marker') ?? `BIG-${Date.now().toString(36)}`;
+          const body = `${marker}\n${'x'.repeat(sizeKb * 1024)}`;
+          const tcid = `tc-big-${sid}-${marker}`;
+          attachmentReads.length = 0;
+          adapter.toolStart(sid, q.get('tool') ?? 'bash', { command: 'cat big.bin' }, tcid);
+          adapter.toolComplete(sid, q.get('tool') ?? 'bash', body, tcid);
+          // Concluding agent_message anchors the turn so its tool step renders as
+          // a chip on reload (the trace is keyed to the concluding bubble).
+          adapter.msg(sid, q.get('reply') ?? 'Done — open the step to see the result.');
+          adapter.idle(sid);
+          return json(200, { ok: true, marker, sizeKb, chunkCount: Math.ceil((body.length) / (256 * 1024)) });
+        }
+        case '/attachmentReads': return json(200, { reads: attachmentReads });
+        // ── generate a REAL multi-chunk PNG image (show_image path) so the spec
+        //    proves image ContentRefs render via paced request_attachment pulls.
+        //    Noise pixels keep the PNG > 256 KiB (multiple chunks) after compression. ──
+        case '/imageRef': {
+          const sid = q.get('sid')!;
+          const W = 700, H = 500;
+          const { deflateSync, crc32 } = await import('node:zlib');
+          const { randomFillSync } = await import('node:crypto');
+          // Build a valid PNG: signature + IHDR + IDAT(zlib of scanlines) + IEND.
+          const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+          const ihdrData = Buffer.alloc(13);
+          ihdrData.writeUInt32BE(W, 0); ihdrData.writeUInt32BE(H, 4);
+          ihdrData[8] = 8;   // bit depth
+          ihdrData[9] = 2;   // color type RGB
+          const ihdr = pngChunk('IHDR', ihdrData, crc32);
+          const raw = Buffer.alloc(H * (1 + W * 3)); // filter byte per scanline
+          randomFillSync(raw);
+          for (let y = 0; y < H; y++) raw[y * (1 + W * 3)] = 0; // filter = none
+          const idat = pngChunk('IDAT', deflateSync(raw), crc32);
+          const iend = pngChunk('IEND', Buffer.alloc(0), crc32);
+          const png = Buffer.concat([sig, ihdr, idat, iend]);
+          const ref = attachmentStore.put(sid, png, 'image/png', { name: 'gen.png' });
+          attachmentReads.length = 0;
+          const tcid = `tc-img-${sid}-${Date.now().toString(36)}`;
+          adapter.toolStart(sid, 'show_image', {}, tcid);
+          adapter.toolComplete(sid, 'show_image', '', tcid, [ref]);
+          adapter.msg(sid, q.get('reply') ?? 'Here is the generated image.');
+          adapter.idle(sid);
+          return json(200, { ok: true, id: ref.id, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / (256 * 1024)) });
+        }
         case '/shutdown': json(200, { ok: true }); cleanup(); process.exit(0); return;
         default: return json(404, { error: 'unknown control endpoint' });
       }
