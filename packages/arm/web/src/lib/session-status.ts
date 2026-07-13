@@ -35,6 +35,10 @@ export function cardActionKey(a: CardActionState | null): string {
       return `q:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer === undefined ? 'pending' : 'answered'}`;
     case 'compaction':
       return `compaction:${a.payload.reason ?? 'unknown'}`;
+    case 'user_abort':
+      return `user_abort:${a.payload.abortedAt}`;
+    case 'failed':
+      return `failed:${a.payload.failedAt}:${a.payload.code ?? ''}:${a.payload.message}`;
   }
 }
 

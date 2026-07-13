@@ -188,6 +188,7 @@ private let thinkingTypes: Set<String> = [
     "tool_complete",
     "agent_message",
     "interrupted_turn",
+    "turn_status",
     "permission",
     "permission_resolved",
     "question",
@@ -324,7 +325,7 @@ func groupMessagesIntoTurns(
             // block) leave finalMessage nil.
             var lastAgentIdx = -1
             for i in stride(from: currentThinking.count - 1, through: 0, by: -1) {
-                if currentThinking[i].type == "agent_message" || currentThinking[i].type == "interrupted_turn" {
+                if currentThinking[i].type == "agent_message" || currentThinking[i].type == "interrupted_turn" || currentThinking[i].type == "turn_status" {
                     lastAgentIdx = i
                     break
                 }

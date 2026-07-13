@@ -7,7 +7,7 @@ import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink, OctagonX } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { StepsButton } from './StepsModal';
@@ -90,6 +90,43 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
           </div>
         </CopyableBubble>
       );
+
+    case 'turn_status': {
+      const payload = message.payload;
+      const action = payload.action as Extract<CardActionState, { type: 'user_abort' | 'failed' }>;
+      const failed = action.type === 'failed';
+      const Icon = failed ? OctagonX : CircleStop;
+      const label = failed ? 'Turn failed' : 'User aborted';
+      const detail = failed ? action.payload.message : undefined;
+      return (
+        <div className="flex gap-2" data-terminal-card={action.type}>
+          <div className="mt-0.5 shrink-0">
+            <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
+          </div>
+          <div className={`min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md border shadow-sm sm:max-w-[70%] ${failed ? 'border-red-500/30 bg-red-500/5' : 'border-slate-500/30 bg-slate-500/5'}`}>
+            {payload.draft && (
+              <div className="markdown-content px-4 py-2.5 text-sm leading-relaxed text-text-primary opacity-80">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {payload.draft}
+                </Markdown>
+              </div>
+            )}
+            <div className={`px-4 py-2.5 ${payload.draft ? 'border-t' : ''} ${failed ? 'border-red-500/20 bg-red-500/10' : 'border-slate-500/20 bg-slate-500/10'}`}>
+              <p className={`flex items-center gap-1 text-xs font-semibold ${failed ? 'text-red-600 dark:text-red-400' : 'text-text-muted'}`}>
+                <Icon className="h-3.5 w-3.5" /> {label}
+              </p>
+              {detail && <p className="mt-1 text-sm text-text-secondary">{detail}</p>}
+            </div>
+            <div className="flex items-center gap-2 px-4 py-2">
+              <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
+              {sessionId && typeof message.seq === 'number' && message.seq > 0 && (
+                <StepsButton sessionId={sessionId} bubbleSeq={message.seq} agent={agent} stepHint={payload.steps} />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     case 'interrupted_turn': {
       const payload = message.payload;
@@ -211,6 +248,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
             sessionId={sessionId ?? ''}
             requestPull={ATTACHMENT_PULL}
             success={message.payload.success}
+            termination={message.payload.termination}
             forceExpanded={forceExpanded}
           />
           <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
@@ -247,7 +285,13 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
       const args = message.payload.args as Record<string, unknown> | undefined;
       const argsSummary = args ? getPermissionArgsSummary(toolName, args) : '';
       const desc = message.payload.description;
-      const resolution = (message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' | 'cancelled' }).resolution;
+      const permissionPayload = message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' | 'cancelled' };
+      const resolution = permissionPayload.cancelled ? 'cancelled' : permissionPayload.resolution ?? (
+        permissionPayload.decision === 'approve' ? 'approved'
+          : permissionPayload.decision === 'always_allow' ? 'always_allowed'
+            : permissionPayload.decision === 'deny' ? 'denied'
+              : undefined
+      );
       // Build a meaningful description
       const displayDesc = desc && desc !== 'Run:' && desc !== `Run: `
         ? desc
@@ -305,7 +349,19 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
     }
 
     case 'question': {
-      const answer = (message.payload as ProtocolQuestionRequest['payload'] & { answer?: string }).answer;
+      const questionPayload = message.payload as ProtocolQuestionRequest['payload'];
+      const answer = questionPayload.answer;
+      if (questionPayload.cancelled) {
+        return (
+          <div className="flex gap-2">
+            <CircleStop className="mt-1 h-4 w-4 shrink-0 text-text-muted" />
+            <div className="min-w-0 max-w-[85%] rounded-2xl rounded-bl-md bg-slate-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+              <p className="text-xs font-medium text-text-muted">Question cancelled</p>
+              <p className="mt-0.5 text-sm text-text-secondary">{questionPayload.question || 'The turn ended before this question was answered.'}</p>
+            </div>
+          </div>
+        );
+      }
       return (
         <>
           <div className="flex gap-2">

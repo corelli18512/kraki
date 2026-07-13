@@ -212,6 +212,18 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }, !replaying);
       break;
 
+    case 'turn_status': {
+      store.appendMessage(sid, msg);
+      const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';
+      const failed = msg.payload.action?.type === 'failed';
+      updatePreview(sid, {
+        text: truncPreview(draft || (failed ? 'Turn failed' : 'User aborted')),
+        type: failed ? 'error' : 'agent',
+        timestamp: msg.timestamp,
+      }, !replaying);
+      break;
+    }
+
     case 'interrupted_turn': {
       store.appendMessage(sid, msg);
       const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';

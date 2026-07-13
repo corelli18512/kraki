@@ -2091,7 +2091,7 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('does not persist interrupted history when explicit abort sees an empty card', async () => {
+  it('does not persist terminal history when explicit abort sees an empty card', async () => {
     const { adapter, ws, sm } = buildClient();
     ws.emit('message', Buffer.from(JSON.stringify({
       type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 507,
@@ -2099,10 +2099,10 @@ describe('RelayClient pending-question digest', () => {
     })));
     await vi.runAllTimersAsync();
     expect(adapter.abortSession).toHaveBeenCalledWith('sess_1');
-    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'interrupted_turn')).toBe(false);
+    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
   });
 
-  it('persists the full visible card as interrupted_turn on explicit abort', async () => {
+  it('persists the full visible card as turn_status on explicit abort and cancels its question step', async () => {
     const { adapter, askQ, ws, sm } = buildClient();
     askQ('q1');
     ws.sent.length = 0;
@@ -2112,16 +2112,34 @@ describe('RelayClient pending-question digest', () => {
     })));
     await Promise.resolve();
     await Promise.resolve();
-    const interruptedCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
-      .find((call) => call[1] === 'interrupted_turn');
-    expect(interruptedCall).toBeDefined();
-    const interrupted = JSON.parse(interruptedCall![2]) as { payload: Record<string, unknown> };
-    expect(interrupted.payload).toMatchObject({
-      reason: 'user_aborted',
-      cancelled: true,
-      action: { type: 'question', payload: { id: 'q1', question: 'Q q1', cancelled: true } },
+    const statusCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .find((call) => call[1] === 'turn_status');
+    expect(statusCall).toBeDefined();
+    const status = JSON.parse(statusCall![2]) as { payload: Record<string, unknown> };
+    expect(status.payload).toMatchObject({
+      action: { type: 'user_abort' },
     });
+    const cancelledQuestion = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
+      .find((entry) => entry.type === 'question' && entry.payload.id === 'q1' && entry.payload.cancelled === true);
+    expect(cancelledQuestion).toBeDefined();
     expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('freezes an adapter error as failed only when the turn reaches idle', async () => {
+    const { adapter, askQ, sm } = buildClient();
+    askQ('q1');
+    (adapter.onError as (sid: string, event: { message: string }) => void)('sess_1', { message: '524 status code (no body)' });
+    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    const statusCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .find((call) => call[1] === 'turn_status');
+    expect(statusCall).toBeDefined();
+    const status = JSON.parse(statusCall![2]) as { payload: Record<string, unknown> };
+    expect(status.payload).toMatchObject({
+      action: { type: 'failed', payload: { message: '524 status code (no body)', source: 'backend' } },
+    });
   });
 
   it('pushes the active card snapshot to a freshly-joined device', () => {

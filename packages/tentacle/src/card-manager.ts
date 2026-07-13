@@ -6,6 +6,7 @@ type RunningTool = Extract<CardActionState, { type: 'tool_start' }>;
 type CompletedTool = Extract<CardActionState, { type: 'tool_complete' }>;
 /** A prompt step (permission or question). */
 type PromptAction = Extract<CardActionState, { type: 'permission' | 'question' }>;
+type TerminalAction = Extract<CardActionState, { type: 'user_abort' | 'failed' }>;
 
 /** Stable per-tool key: the tool call id, falling back to its headline when the
  *  adapter didn't supply one. */
@@ -119,9 +120,11 @@ export class CardManager {
       return `${a.type}:${a.payload.toolCallId ?? a.payload.headline}`;
     }
     if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
-    if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.decision ?? ''}`;
+    if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.decision ?? ''}`;
     if (a.type === 'question') return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
-    return `compaction:${a.payload.reason ?? 'unknown'}`;
+    if (a.type === 'compaction') return `compaction:${a.payload.reason ?? 'unknown'}`;
+    if (a.type === 'user_abort') return `user_abort:${a.payload.abortedAt}`;
+    return `failed:${a.payload.failedAt}:${a.payload.code ?? ''}:${a.payload.message}`;
   }
 
   /** The action a session's live tools should occupy the slot with, derived from
@@ -294,7 +297,26 @@ export class CardManager {
     this.syncAction(sessionId, c);
   }
 
-  /** Authoritative full state used for durable pending and abort history. */
+  /** Replace the live action with a terminal turn outcome and return everything
+   *  that was still unfinished so RelayClient can close those TRACE steps. */
+  terminate(sessionId: string, action: TerminalAction): {
+    draft: string;
+    previousAction: CardActionState | null;
+    runningTools: RunningTool[];
+  } {
+    const c = this.get(sessionId);
+    const snapshot = {
+      draft: c.draftText,
+      previousAction: c.action,
+      runningTools: [...c.runningTools.values()],
+    };
+    c.runningTools.clear();
+    c.action = action;
+    this.syncAction(sessionId, c);
+    return snapshot;
+  }
+
+  /** Authoritative full state used for durable pending and terminal history. */
   state(sessionId: string): { draft: string; action: CardActionState | null } {
     const c = this.cards.get(sessionId);
     return { draft: c?.draftText ?? '', action: c?.action ?? null };

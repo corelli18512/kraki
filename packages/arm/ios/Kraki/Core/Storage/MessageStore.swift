@@ -78,6 +78,7 @@ final class MessageStore {
         "session_created",
         "agent_message",
         "interrupted_turn",
+        "turn_status",
         "user_message",
         "permission",
         "permission_resolved",
