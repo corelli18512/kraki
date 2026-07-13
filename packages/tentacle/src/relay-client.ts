@@ -119,6 +119,7 @@ export class RelayClient {
     'error',
     'system_message',
     'interrupted_turn',
+    'turn_status',
     'session_ended',
     'idle',
   ]);
@@ -161,6 +162,9 @@ export class RelayClient {
    *  preceding turn reaches a real idle boundary. */
   private inputChains = new Map<string, Promise<void>>();
   private turnIdleWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+  /** Adapter errors become terminal only when the same logical turn reaches
+   *  idle. Keeping them pending avoids freezing recoverable tool failures. */
+  private pendingTerminalErrors = new Map<string, { message: string; code?: string; source: 'adapter' | 'backend' | 'process' }>();
 
   private waitForTurnIdle(sessionId: string): Promise<void> {
     const existing = this.turnIdleWaiters.get(sessionId);
@@ -381,6 +385,7 @@ export class RelayClient {
 
     this.removeOpenQuestion(sessionId, pending.questionId);
     this.card.resolvePrompt(sessionId, pending.questionId, { answer: answer.text || 'Answered with image' });
+    this.recordTrace({ type: 'question', sessionId, payload: { id: pending.questionId, question: pending.question, answer: answer.text || 'Answered with image' } });
     this.send({
       type: 'question_resolved',
       sessionId,
@@ -437,6 +442,58 @@ export class RelayClient {
       logger.warn({ err, sessionId, toolName }, 'failed to offload result');
       return undefined;
     }
+  }
+
+  /** Freeze the live card into a durable terminal status and close every
+   *  unfinished TRACE action with the appropriate non-success outcome. */
+  private finishTurnWithStatus(
+    sessionId: string,
+    action: Extract<CardActionState, { type: 'user_abort' | 'failed' }>,
+  ): void {
+    const termination = action.type === 'user_abort' ? 'cancelled' : 'interrupted';
+    const snapshot = this.card.terminate(sessionId, action);
+
+    for (const tool of snapshot.runningTools) {
+      this.recordTrace({
+        type: 'tool_complete',
+        sessionId,
+        payload: { ...tool.payload, success: false, termination },
+      });
+      const id = tool.payload.toolCallId;
+      if (id) {
+        this.lastArgsByToolCallId.delete(id);
+        this.lastArgsRefByToolCallId.delete(id);
+      }
+    }
+    this.sessionToolCallIds.delete(sessionId);
+
+    if (snapshot.previousAction?.type === 'permission' && !snapshot.previousAction.payload.decision) {
+      this.recordTrace({
+        type: 'permission',
+        sessionId,
+        payload: { ...snapshot.previousAction.payload, cancelled: true },
+      });
+    } else if (
+      snapshot.previousAction?.type === 'question' &&
+      snapshot.previousAction.payload.answer === undefined &&
+      !snapshot.previousAction.payload.cancelled
+    ) {
+      this.recordTrace({
+        type: 'question',
+        sessionId,
+        payload: { ...snapshot.previousAction.payload, cancelled: true },
+      });
+    }
+
+    const finishedAt = action.type === 'user_abort' ? action.payload.abortedAt : action.payload.failedAt;
+    const steps = this.turnStepCounts.get(sessionId) ?? 0;
+    this.send({
+      type: 'turn_status',
+      sessionId,
+      payload: { draft: snapshot.draft, action, finishedAt, steps },
+    });
+    this.clearOpenQuestions(sessionId);
+    this.card.clear(sessionId);
   }
 
   /** Drop any in-flight toolCallId state for a session — called when a
@@ -899,6 +956,7 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
+              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
             })
             .catch((err) => {
@@ -910,6 +968,7 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
+              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'deny' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
             })
             .catch((err) => {
@@ -921,6 +980,7 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
+              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'always_allow' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
             })
             .catch((err) => {
@@ -951,24 +1011,16 @@ export class RelayClient {
           const snapshot = this.card.state(sessionId);
           this.adapter.abortSession(sessionId)
             .then(() => {
-              const frozenAction = snapshot.action?.type === 'question'
-                ? { ...snapshot.action, payload: { ...snapshot.action.payload, cancelled: true } }
-                : snapshot.action;
-              if (snapshot.draft || frozenAction) {
-                this.send({
-                  type: 'interrupted_turn',
-                  sessionId,
-                  payload: {
-                    reason: 'user_aborted',
-                    draft: snapshot.draft,
-                    action: frozenAction,
-                    interruptedAt: new Date().toISOString(),
-                    cancelled: true,
-                  },
+              if (snapshot.draft || snapshot.action) {
+                this.finishTurnWithStatus(sessionId, {
+                  type: 'user_abort',
+                  payload: { abortedAt: new Date().toISOString() },
                 });
+              } else {
+                this.clearOpenQuestions(sessionId);
+                this.card.clear(sessionId);
               }
-              this.clearOpenQuestions(sessionId);
-              this.card.clear(sessionId);
+              this.pendingTerminalErrors.delete(sessionId);
               this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
@@ -1475,24 +1527,25 @@ export class RelayClient {
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
-      // Permission args stay inline (they're what the human is approving — a
-      // command, a path — and must render without a lazy round-trip). The card
-      // slot IS the permission message (type + payload), minus the envelope.
-      this.card.onPrompt(sessionId, {
-        type: 'permission',
+      const action = {
+        type: 'permission' as const,
         payload: { ...event.toolArgs, id: event.id, description: event.description },
-      });
+      };
+      this.card.onPrompt(sessionId, action);
+      this.recordTrace({ type: 'permission', sessionId, payload: action.payload });
     };
 
     // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
     this.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
       this.card.resolvePrompt(sessionId, permissionId, { decision: 'approve' });
+      this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
     };
 
     // Auto-resolved (e.g. cancelled/aborted) — no answer, clear the slot.
     this.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
       this.removeOpenQuestion(sessionId, questionId);
       this.card.resolvePrompt(sessionId, questionId);
+      this.recordTrace({ type: 'question', sessionId, payload: { id: questionId, question: '', cancelled: true } });
     };
 
     this.adapter.onQuestionRequest = (sessionId, event) => {
@@ -1506,6 +1559,7 @@ export class RelayClient {
         },
       };
       this.card.onPrompt(sessionId, action);
+      this.recordTrace({ type: 'question', sessionId, payload: action.payload });
       const snapshot = this.card.state(sessionId);
       this.addOpenQuestion(sessionId, {
         version: 1,
@@ -1646,13 +1700,25 @@ export class RelayClient {
       // Idle carries no run/turn identity. Never let a late idle callback erase
       // a newer card. Permanent bubble boundaries retire settled card state;
       // explicit abort owns its own freeze+clear path; pending questions stay.
-      if (this.soleOpenQuestion(sessionId)) return;
-      this.clearOpenQuestions(sessionId);
+      const terminalError = this.pendingTerminalErrors.get(sessionId);
+      if (this.soleOpenQuestion(sessionId) && !terminalError) return;
+      if (terminalError) {
+        this.pendingTerminalErrors.delete(sessionId);
+        this.finishTurnWithStatus(sessionId, {
+          type: 'failed',
+          payload: {
+            ...terminalError,
+            failedAt: new Date().toISOString(),
+          },
+        });
+      } else {
+        this.clearOpenQuestions(sessionId);
+      }
       this.resolveTurnIdle(sessionId);
       this.sessionManager.markIdle(sessionId);
       const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
       if (usage) this.sessionManager.setUsage(sessionId, usage);
-      this.send({ type: 'idle', sessionId, payload: { usage } });
+      this.send({ type: 'idle', sessionId, payload: { usage, ...(terminalError && { reason: 'failed' as const }) } });
       this.maybeGenerateTitle(sessionId);
     };
 
@@ -1670,6 +1736,14 @@ export class RelayClient {
     };
 
     this.adapter.onError = (sessionId, event) => {
+      // Stage as the terminal outcome so idle freezes it as a `failed` card,
+      // AND broadcast the error immediately so apps surface it without waiting
+      // for the turn to settle. A recoverable error that never reaches idle just
+      // shows the transient notice — no frozen card.
+      this.pendingTerminalErrors.set(sessionId, {
+        message: event.message,
+        source: 'backend',
+      });
       this.send({
         type: 'error',
         sessionId,
@@ -2167,7 +2241,7 @@ export class RelayClient {
     // agent_message / system_message stamps this running total as payload.steps
     // (see send()), letting a concluded bubble show its "Steps" affordance from
     // replay alone — WITHOUT first pulling the transient trace.
-    if (msg.type === 'tool_start' || msg.type === 'agent_narration') {
+    if (msg.type === 'tool_start' || msg.type === 'agent_narration' || msg.type === 'permission' || msg.type === 'question') {
       this.turnStepCounts.set(msg.sessionId, (this.turnStepCounts.get(msg.sessionId) ?? 0) + 1);
     }
     const enriched = { ...msg, timestamp: new Date().toISOString() };
@@ -2422,7 +2496,7 @@ export class RelayClient {
     if (sessionId) {
       if (type === 'user_message') {
         this.turnStepCounts.set(sessionId, 0);
-      } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn') {
+      } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {
         const p = enriched.payload as Record<string, unknown> | undefined;
         if (p && typeof p === 'object') p.steps = this.turnStepCounts.get(sessionId) ?? 0;
       }

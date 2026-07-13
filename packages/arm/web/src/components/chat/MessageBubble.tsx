@@ -2,7 +2,7 @@ import Markdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { PermissionRequest as ProtocolPermissionRequest, QuestionRequest as ProtocolQuestionRequest, Attachment, CardActionState, ContentRef } from '@kraki/protocol';
-import type { ChatMessage } from '../../types/store';
+import type { ChatMessage, SessionCard } from '../../types/store';
 import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
@@ -11,6 +11,7 @@ import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronR
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { StepsButton } from './StepsModal';
+import { LiveAgentBubble } from './LiveAgentBubble';
 
 const ID_DISPLAY_LENGTH = 8;
 const IMAGE_PLACEHOLDER = '[image]';
@@ -90,6 +91,27 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
           </div>
         </CopyableBubble>
       );
+
+    case 'turn_status': {
+      // Reuse the SAME renderer as the live status card — a frozen card looks
+      // identical to the live bubble that was on screen when the turn ended,
+      // just read-only with the action slot set to the terminal outcome.
+      if (!sessionId) return null;
+      const payload = message.payload;
+      const card: SessionCard = { text: payload.draft ?? '', action: payload.action };
+      return (
+        <LiveAgentBubble
+          sessionId={sessionId}
+          agent={agent}
+          card={card}
+          frozen={{
+            timestamp: message.timestamp ?? payload.finishedAt ?? new Date().toISOString(),
+            bubbleSeq: typeof message.seq === 'number' ? message.seq : 0,
+            stepHint: payload.steps,
+          }}
+        />
+      );
+    }
 
     case 'interrupted_turn': {
       const payload = message.payload;
@@ -211,6 +233,7 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
             sessionId={sessionId ?? ''}
             requestPull={ATTACHMENT_PULL}
             success={message.payload.success}
+            termination={message.payload.termination}
             forceExpanded={forceExpanded}
           />
           <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
@@ -247,7 +270,13 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
       const args = message.payload.args as Record<string, unknown> | undefined;
       const argsSummary = args ? getPermissionArgsSummary(toolName, args) : '';
       const desc = message.payload.description;
-      const resolution = (message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' | 'cancelled' }).resolution;
+      const permissionPayload = message.payload as ProtocolPermissionRequest['payload'] & { resolution?: 'approved' | 'denied' | 'always_allowed' | 'cancelled' };
+      const resolution = permissionPayload.cancelled ? 'cancelled' : permissionPayload.resolution ?? (
+        permissionPayload.decision === 'approve' ? 'approved'
+          : permissionPayload.decision === 'always_allow' ? 'always_allowed'
+            : permissionPayload.decision === 'deny' ? 'denied'
+              : undefined
+      );
       // Build a meaningful description
       const displayDesc = desc && desc !== 'Run:' && desc !== `Run: `
         ? desc
@@ -305,7 +334,19 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
     }
 
     case 'question': {
-      const answer = (message.payload as ProtocolQuestionRequest['payload'] & { answer?: string }).answer;
+      const questionPayload = message.payload as ProtocolQuestionRequest['payload'];
+      const answer = questionPayload.answer;
+      if (questionPayload.cancelled) {
+        return (
+          <div className="flex gap-2">
+            <CircleStop className="mt-1 h-4 w-4 shrink-0 text-text-muted" />
+            <div className="min-w-0 max-w-[85%] rounded-2xl rounded-bl-md bg-slate-500/10 px-4 py-2.5 shadow-sm sm:max-w-[70%]">
+              <p className="text-xs font-medium text-text-muted">Question cancelled</p>
+              <p className="mt-0.5 text-sm text-text-secondary">{questionPayload.question || 'The turn ended before this question was answered.'}</p>
+            </div>
+          </div>
+        );
+      }
       return (
         <>
           <div className="flex gap-2">

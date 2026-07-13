@@ -247,6 +247,8 @@ export interface PermissionRequest extends BaseEnvelope {
      *  sole live home is the {@link CardActionState} slot. Absent on old-session
      *  spine records. */
     decision?: 'approve' | 'deny' | 'always_allow';
+    /** Trace/history-only terminal state when the turn ended before a decision. */
+    cancelled?: boolean;
   };
 }
 
@@ -314,8 +316,12 @@ export interface ToolCompleteMessage extends BaseEnvelope {
     argsRef?: ContentRef;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
-    /** Whether the tool execution succeeded (default true if absent) */
+    /** Whether the tool execution succeeded (default true if absent). */
     success?: boolean;
+    /** Synthetic terminal outcome when the turn ended before this tool returned.
+     *  `cancelled` means the user aborted; `interrupted` means the turn failed
+     *  elsewhere (backend/process/model) and the tool result is unknown. */
+    termination?: 'cancelled' | 'interrupted';
     /** Images produced by the tool (e.g. from `kraki-show_image`).
      *  Separate from `resultRef` because images render as a grid below
      *  the chip rather than as an expandable text body. */
@@ -389,6 +395,21 @@ export type CardActionState =
         phase: 'running';
         reason?: 'manual' | 'threshold' | 'overflow';
       };
+    }
+  | {
+      type: 'user_abort';
+      payload: {
+        abortedAt: string;
+      };
+    }
+  | {
+      type: 'failed';
+      payload: {
+        message: string;
+        code?: string;
+        source?: 'adapter' | 'backend' | 'process';
+        failedAt: string;
+      };
     };
 
 /**
@@ -412,7 +433,7 @@ export interface IdleMessage extends BaseEnvelope {
     /** Cumulative session token usage (present when tracked by adapter) */
     usage?: import('./sessions.js').SessionUsage;
     /** Why the session went idle */
-    reason?: 'completed' | 'aborted';
+    reason?: 'completed' | 'aborted' | 'failed';
   };
 }
 
@@ -467,6 +488,23 @@ export interface InterruptedTurnMessage extends BaseEnvelope {
     /** Running tool actions are frozen as cancelled in history. */
     cancelled: true;
     /** Trace-step count accumulated before interruption. */
+    steps?: number;
+  };
+}
+
+/**
+ * Durable terminal status-card snapshot. The card's action is itself the turn
+ * outcome (`user_abort` or `failed`); unfinished work remains in TRACE with a
+ * cancelled/interrupted resolution. This is UI history only and is never added
+ * to the model transcript. `interrupted_turn` remains readable for legacy
+ * history, while new terminal turns use this generic card container.
+ */
+export interface TurnStatusMessage extends BaseEnvelope {
+  type: 'turn_status';
+  payload: {
+    draft: string;
+    action: Extract<CardActionState, { type: 'user_abort' | 'failed' }>;
+    finishedAt: string;
     steps?: number;
   };
 }
@@ -626,7 +664,12 @@ export interface SessionMessagesRangeBatchMessage extends BaseEnvelope {
 /** One recorded step in a turn's trace. These are exactly the live tool
  *  broadcast messages, stored verbatim in `trace.jsonl`, so the client
  *  merges them by `toolCallId` with the SAME code path it uses live. */
-export type TraceEntry = ToolStartMessage | ToolCompleteMessage | AgentNarrationMessage;
+export type TraceEntry =
+  | ToolStartMessage
+  | ToolCompleteMessage
+  | AgentNarrationMessage
+  | PermissionRequest
+  | QuestionRequest;
 
 /**
  * app → tentacle: pull the tool trace for one turn from `trace.jsonl`.
@@ -784,6 +827,7 @@ export type ProducerMessage =
   | ErrorMessage
   | SystemMessage
   | InterruptedTurnMessage
+  | TurnStatusMessage
   | SessionModeSetMessage
   | SessionTitleUpdatedMessage
   | SessionModelSetMessage

@@ -31,16 +31,30 @@ export function StepsList({ messages, agent, sessionId, streamingText, allExpand
   // renders as a single "done" chip instead of a duplicate "Running…" + "done"
   // pair. In-flight tools (no matching tool_complete) keep their tool_start.
   const completedToolIds = new Set<string>();
+  const resolvedPromptIds = new Set<string>();
   for (const msg of messages) {
     if (msg.type === 'tool_complete') {
       const id = (msg.payload as { toolCallId?: string }).toolCallId;
       if (id) completedToolIds.add(id);
+    } else if (msg.type === 'permission') {
+      const p = msg.payload as { id?: string; decision?: string; cancelled?: boolean };
+      if (p.id && (p.decision || p.cancelled)) resolvedPromptIds.add(`permission:${p.id}`);
+    } else if (msg.type === 'question') {
+      const p = msg.payload as { id?: string; answer?: string; cancelled?: boolean };
+      if (p.id && (p.answer !== undefined || p.cancelled)) resolvedPromptIds.add(`question:${p.id}`);
     }
   }
   const visible = messages.filter((msg) => {
-    if (msg.type !== 'tool_start') return true;
-    const id = (msg.payload as { toolCallId?: string }).toolCallId;
-    return !(id && completedToolIds.has(id));
+    if (msg.type === 'tool_start') {
+      const id = (msg.payload as { toolCallId?: string }).toolCallId;
+      return !(id && completedToolIds.has(id));
+    }
+    if (msg.type === 'permission' || msg.type === 'question') {
+      const p = msg.payload as { id?: string; decision?: string; answer?: string; cancelled?: boolean };
+      const resolved = !!p.decision || p.answer !== undefined || !!p.cancelled;
+      return resolved || !p.id || !resolvedPromptIds.has(`${msg.type}:${p.id}`);
+    }
+    return true;
   });
 
   return (

@@ -21,6 +21,7 @@ interface ToolActivityProps {
   /** Fired with a sessionId/id when the cache misses and we need to pull. */
   requestPull: (sessionId: string, id: string) => void;
   success?: boolean;
+  termination?: 'cancelled' | 'interrupted';
   cancelled?: boolean;
   forceExpanded?: boolean;
 }
@@ -28,7 +29,7 @@ interface ToolActivityProps {
 export function ToolActivity({
   type, toolName, headline, argsRef, resultRef,
   sessionId, requestPull,
-  success, cancelled, forceExpanded,
+  success, termination, cancelled, forceExpanded,
 }: ToolActivityProps) {
   const [expanded, setExpanded] = useState(false);
   const isExpanded = forceExpanded ?? expanded;
@@ -46,13 +47,15 @@ export function ToolActivity({
           ? (cancelled
             ? <CircleSlash className="h-3.5 w-3.5 shrink-0 text-amber-500" />
             : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />)
-          : (success === false
-            ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
-            : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />)
+          : termination
+            ? <CircleSlash className={`h-3.5 w-3.5 shrink-0 ${termination === 'cancelled' ? 'text-amber-500' : 'text-red-500'}`} />
+            : (success === false
+              ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+              : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />)
         }
         <ToolIcon className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-0" aria-hidden="true" />
         <span className="shrink-0 text-xs font-medium text-text-secondary">
-          {isStart && 'Running '}
+          {isStart ? 'Running ' : termination === 'cancelled' ? 'Cancelled ' : termination === 'interrupted' ? 'Interrupted ' : ''}
           <span className="font-mono text-ocean-600 dark:text-ocean-400">{toolName}</span>
         </span>
         {headline && (

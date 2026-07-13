@@ -258,6 +258,9 @@ struct MessageBubbleView: View {
         case "agent_message":
             agentBubble
 
+        case "turn_status":
+            turnStatusBubble
+
         case "interrupted_turn":
             interruptedTurnBubble
 
@@ -313,6 +316,36 @@ struct MessageBubbleView: View {
 
         default:
             EmptyView()
+        }
+    }
+
+    // MARK: - Terminal Turn Status
+
+    private var turnStatusBubble: some View {
+        let action = message.terminalAction
+        let failed = action?["type"]?.stringValue == "failed"
+        let label = failed ? "Turn failed" : "User aborted"
+        let icon = failed ? "xmark.octagon.fill" : "stop.circle.fill"
+        let tint: Color = failed ? .red : .secondary
+        let detail = failed ? action?["payload"]?.dictValue?["message"]?.stringValue : nil
+        return HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let draft = message.interruptedDraft, !draft.isEmpty {
+                    messageBody(draft, foreground: .primary.opacity(0.8))
+                }
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Label(label, systemImage: icon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.secondary.opacity(0.08), in: bubbleShape(isUser: false))
+            Spacer(minLength: WindowSize.width * 0.05)
         }
     }
 

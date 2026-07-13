@@ -97,6 +97,7 @@ final class MessageRouter {
         "session_created",
         "agent_message",
         "interrupted_turn",
+        "turn_status",
         "user_message",
         "permission",
         "permission_resolved",
@@ -117,7 +118,7 @@ final class MessageRouter {
     /// `updatePreview` flips the card to the agent's final reply (or
     /// to permission / question / error text).
     private static let notifyWorthyTypes: Set<String> = [
-        "idle", "error", "permission", "question"
+        "idle", "error", "permission", "question", "turn_status"
     ]
 
     // MARK: Init
@@ -383,6 +384,15 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
+
+        case "turn_status":
+            appState.sessionStore.flushDelta(sessionId)
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            let draft = payload?["draft"] as? String ?? ""
+            let action = payload?["action"] as? [String: Any]
+            let failed = action?["type"] as? String == "failed"
+            updatePreview(sessionId, text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
+                          type: failed ? "error" : "agent", timestamp: timestamp)
 
         case "interrupted_turn":
             appState.sessionStore.flushDelta(sessionId)

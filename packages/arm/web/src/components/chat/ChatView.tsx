@@ -212,7 +212,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     for (const msg of spine) {
       const seq = getSeq(msg);
       const isFinalAgent = msg.type === 'agent_message' && finalAgentSeqs.has(seq);
-      if ((isFinalAgent || msg.type === 'interrupted_turn') && (msg.payload.steps ?? 0) > 0) {
+      if ((isFinalAgent || msg.type === 'interrupted_turn' || msg.type === 'turn_status') && (msg.payload.steps ?? 0) > 0) {
         messageProvider.requestTurnTrace(sessionId, seq);
       }
     }
@@ -236,7 +236,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
       }
     }
     for (let i = spine.length - 1; i >= 0; i--) {
-      if (spine[i].type === 'agent_message' || spine[i].type === 'interrupted_turn') return i;
+      if (spine[i].type === 'agent_message' || spine[i].type === 'interrupted_turn' || spine[i].type === 'turn_status') return i;
     }
     return -1;
   }, [spine, sessionIdle]);
