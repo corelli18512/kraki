@@ -289,6 +289,30 @@ async function main(): Promise<void> {
         case '/toolComplete': adapter.toolComplete(q.get('sid')!, q.get('tool') ?? 'bash', q.get('result') ?? 'done'); return json(200, { ok: true });
         case '/idle': adapter.idle(q.get('sid')!); return json(200, { ok: true });
         case '/error': adapter.error(q.get('sid')!, q.get('message') ?? 'error'); return json(200, { ok: true });
+        // Legacy-history compatibility: inject the old durable Abort message
+        // through RelayClient's real persistence + pulse broadcast path. The UI
+        // must normalize it to the modern frozen LiveAgentBubble renderer.
+        case '/legacyInterrupted': {
+          const sid = q.get('sid')!;
+          const interruptedAt = new Date().toISOString();
+          const reason = q.get('reason') === 'process_lost' ? 'process_lost' : 'user_aborted';
+          (relay as unknown as { send: (msg: Record<string, unknown>) => void }).send({
+            type: 'interrupted_turn',
+            sessionId: sid,
+            payload: {
+              reason,
+              draft: q.get('draft') ?? 'Legacy streamed draft',
+              action: {
+                type: 'tool_start',
+                payload: { toolName: 'bash', headline: 'npm test', toolCallId: 'legacy-tool-1' },
+              },
+              interruptedAt,
+              cancelled: true,
+              steps: 1,
+            },
+          });
+          return json(200, { ok: true });
+        }
         // ── debug: what does the tentacle see? ──
         case '/debug': {
           const r = relay as unknown as { consumerKeys?: Map<string, string>; onlineConsumers?: Set<string> };

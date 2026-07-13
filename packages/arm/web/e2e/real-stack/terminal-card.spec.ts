@@ -107,6 +107,44 @@ test.describe.serial('real-stack terminal status cards', () => {
     await page.screenshot({ path: '/tmp/kraki-terminal-abort-refreshed.png', fullPage: false });
   });
 
+  test('legacy interrupted_turn is normalized to the same frozen live bubble', async () => {
+    const legacyDraft = 'Legacy interrupted history uses the shared bubble';
+    await control('/legacyInterrupted', { sid: sessionId, draft: legacyDraft });
+
+    const legacyCard = page.locator('[data-terminal-card="user_abort"]')
+      .filter({ hasText: legacyDraft });
+    await expect(legacyCard).toBeVisible({ timeout: 10_000 });
+    await expect(legacyCard.getByText('User aborted')).toBeVisible();
+    await expect(legacyCard.getByText('npm test')).toHaveCount(0);
+    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+
+    await page.screenshot({ path: '/tmp/kraki-terminal-legacy-normalized.png', fullPage: false });
+
+    // Legacy storage must keep using the shared renderer after a full replay.
+    await page.reload();
+    await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
+    const replayedLegacyCard = page.locator('[data-terminal-card="user_abort"]')
+      .filter({ hasText: legacyDraft });
+    await expect(replayedLegacyCard).toBeVisible({ timeout: 10_000 });
+    await expect(replayedLegacyCard.getByText('User aborted')).toBeVisible();
+    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+
+    const lostDraft = 'Legacy process loss uses the shared failed bubble';
+    await control('/legacyInterrupted', {
+      sid: sessionId,
+      draft: lostDraft,
+      reason: 'process_lost',
+    });
+    const lostCard = page.locator('[data-terminal-card="failed"]')
+      .filter({ hasText: lostDraft });
+    await expect(lostCard).toBeVisible({ timeout: 10_000 });
+    await expect(lostCard.getByText('Turn failed')).toBeVisible();
+    await expect(lostCard.getByText('Agent process was lost')).toBeVisible();
+    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+
+    await page.screenshot({ path: '/tmp/kraki-terminal-legacy-process-lost.png', fullPage: false });
+  });
+
   test('backend error freezes a permanent failed card', async () => {
     await control('/idle', { sid: sessionId });
     await sendPrompt(page, 'Run the full test suite');
@@ -119,7 +157,8 @@ test.describe.serial('real-stack terminal status cards', () => {
     await control('/error', { sid: sessionId, message: '524 status code (no body)' });
     await control('/idle', { sid: sessionId });
 
-    const failedCard = page.locator('[data-terminal-card="failed"]');
+    const failedCard = page.locator('[data-terminal-card="failed"]')
+      .filter({ hasText: 'Compiling and running tests' });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
     await expect(failedCard.getByText('Turn failed')).toBeVisible();
     await expect(failedCard.getByText('524 status code (no body)')).toBeVisible();
@@ -132,7 +171,8 @@ test.describe.serial('real-stack terminal status cards', () => {
   test('failed card survives a full browser refresh', async () => {
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
-    const failedCard = page.locator('[data-terminal-card="failed"]');
+    const failedCard = page.locator('[data-terminal-card="failed"]')
+      .filter({ hasText: 'Compiling and running tests' });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
     await expect(failedCard.getByText('Turn failed')).toBeVisible();
 

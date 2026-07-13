@@ -151,6 +151,34 @@ describe('MessageBubble', () => {
     });
   });
 
+  describe('terminal status compatibility', () => {
+    it('normalizes legacy interrupted_turn through the frozen LiveAgentBubble renderer', () => {
+      const { container } = render(
+        <MemoryRouter>
+          <MessageBubble
+            message={makeMsg('interrupted_turn', {
+              reason: 'user_aborted',
+              draft: 'Partial streamed answer',
+              action: { type: 'tool_start', payload: { toolName: 'bash', headline: 'npm test' } },
+              interruptedAt: '2026-03-18T12:00:00.000Z',
+              cancelled: true,
+              steps: 1,
+            })}
+            sessionId="sess-1"
+          />
+        </MemoryRouter>,
+      );
+
+      expect(container.querySelector('[data-terminal-card="user_abort"]')).toBeTruthy();
+      expect(screen.getByText('Partial streamed answer')).toBeInTheDocument();
+      expect(screen.getByText('User aborted')).toBeInTheDocument();
+      expect(screen.queryByText('Turn aborted')).not.toBeInTheDocument();
+      // The former action belongs in Steps; the terminal action owns the card slot.
+      expect(screen.queryByText('npm test')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open steps' })).toBeInTheDocument();
+    });
+  });
+
   describe('system_message', () => {
     it('renders the default no_reply label, marked as Kraki', () => {
       renderMsg(makeMsg('system_message', { kind: 'no_reply' }));

@@ -227,9 +227,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'interrupted_turn': {
       store.appendMessage(sid, msg);
       const draft = typeof msg.payload.draft === 'string' ? msg.payload.draft : '';
+      const failed = msg.payload.reason === 'process_lost';
       updatePreview(sid, {
-        text: truncPreview(draft || 'Turn aborted'),
-        type: 'agent',
+        text: truncPreview(draft || (failed ? 'Turn failed' : 'User aborted')),
+        type: failed ? 'error' : 'agent',
         timestamp: msg.timestamp,
       }, !replaying);
       break;

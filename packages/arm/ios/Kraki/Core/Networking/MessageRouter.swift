@@ -398,8 +398,9 @@ final class MessageRouter {
             appState.sessionStore.flushDelta(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let draft = payload?["draft"] as? String ?? ""
-            updatePreview(sessionId, text: draft.isEmpty ? "Turn aborted" : draft,
-                          type: "agent", timestamp: timestamp)
+            let failed = payload?["reason"] as? String == "process_lost"
+            updatePreview(sessionId, text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
+                          type: failed ? "error" : "agent", timestamp: timestamp)
 
         case "agent_message_delta":
             if let content = payload?["content"] as? String {
