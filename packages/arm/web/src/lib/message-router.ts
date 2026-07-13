@@ -50,6 +50,15 @@ export interface RouterContext {
   onSessionList?: (msg: SessionListMessage) => void;
   /** Called when tentacle sends a range-fetch batch. */
   onSessionMessagesRangeBatch?: (msg: SessionMessagesRangeBatchMessage) => void;
+  /** Advances the paced attachment queue after a chunk is safely ingested. */
+  onAttachmentChunk?: (chunk: {
+    sessionId: string;
+    id: string;
+    index: number;
+    total: number;
+    paced?: true;
+    error?: string;
+  }) => void;
 }
 
 export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
@@ -78,8 +87,18 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // but we route it before the session-existence check because the chunk's
   // session may not be in our store yet during early load.
   if (msg.type === 'attachment_data') {
-    const payload = (msg as { payload: { id: string; index: number; total: number; mimeType: string; data: string; error?: string } }).payload;
-    void ingestChunk(payload.id, payload.index, payload.total, payload.mimeType, payload.data, payload.error);
+    const payload = (msg as { payload: { id: string; index: number; total: number; mimeType: string; data: string; paced?: true; error?: string } }).payload;
+    void ingestChunk(payload.id, payload.index, payload.total, payload.mimeType, payload.data, payload.error).then((accepted) => {
+      if (!accepted) return;
+      ctx.onAttachmentChunk?.({
+        sessionId: msg.sessionId,
+        id: payload.id,
+        index: payload.index,
+        total: payload.total,
+        paced: payload.paced,
+        error: payload.error,
+      });
+    });
     return;
   }
 

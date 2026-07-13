@@ -322,12 +322,6 @@ export class RelayClient {
 
   private readonly attachmentStore?: import('./attachment-store.js').AttachmentStore;
 
-  /** Track attachment ids already broadcast per session — prevents double-push
-   *  if the agent calls show_image twice with the same image bytes. The
-   *  receiving devices still see the ref each time (so the chat history is
-   *  correct); they just don't get a redundant byte broadcast. */
-  private broadcastedAttachmentIds = new Map<string, Set<string>>();
-
   /** Inline floor for offloading args. Below this we don't bother creating
    *  a ContentRef + chunk push — the round-trip overhead would exceed the
    *  bytes saved. Above it we always offload. */
@@ -1128,7 +1122,6 @@ export class RelayClient {
           this.sessionManager.deleteSession(sessionId);
           this.lastAgentContent.delete(sessionId);
           this.purgeSessionToolState(sessionId);
-          this.broadcastedAttachmentIds.delete(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
           this.eventsWatcher?.unwatch(sessionId);
           this.adapter.killSession(sessionId)
@@ -1700,11 +1693,6 @@ export class RelayClient {
           toolCallId: event.toolCallId,
         },
       });
-      if (argsRef) {
-        this.broadcastAttachmentBytes(sessionId, argsRef).catch((err) => {
-          logger.warn({ err, sessionId, attachmentId: argsRef.id }, 'failed to broadcast args bytes');
-        });
-      }
       // Track key files from tool usage
       if (event.toolName === 'read_file' || event.toolName === 'write_file' || event.toolName === 'view' ||
           event.toolName === 'edit' || event.toolName === 'create') {
@@ -1765,24 +1753,12 @@ export class RelayClient {
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
       });
-      if (resultRef) {
-        this.broadcastAttachmentBytes(sessionId, resultRef).catch((err) => {
-          logger.warn({ err, sessionId, attachmentId: resultRef.id }, 'failed to broadcast result bytes');
-        });
-      }
     };
 
-    this.adapter.onAttachmentBytes = (sessionId, event) => {
-      // Fire-and-forget — chunks are streamed from disk and pushed via the
-      // normal broadcast queue. We deliberately don't block onToolComplete
-      // on chunk delivery; both events ride the same WS queue so ordering
-      // (ref-first, chunks-after) is preserved naturally.
-      for (const ref of event.refs) {
-        this.broadcastAttachmentBytes(sessionId, ref).catch((err) => {
-          logger.warn({ err, sessionId, attachmentId: ref.id }, 'failed to broadcast attachment bytes');
-        });
-      }
-    };
+    // Bytes remain in AttachmentStore until an Arm actually renders the
+    // ContentRef. Broadcasting large results to every Arm blocked unrelated
+    // control and live messages in Pulse's ordered stream.
+    this.adapter.onAttachmentBytes = () => {};
 
     this.adapter.onIdle = (sessionId) => {
       if (this.steerAcceptanceInFlight.has(sessionId)) {
@@ -1840,7 +1816,6 @@ export class RelayClient {
       this.titleGenerationInFlight.delete(sessionId);
       this.lastAgentContent.delete(sessionId);
       this.purgeSessionToolState(sessionId);
-      this.broadcastedAttachmentIds.delete(sessionId);
       this.steerAcceptanceInFlight.delete(sessionId);
       this.idleDuringSteerAcceptance.delete(sessionId);
       this.resolveTurnIdle(sessionId);
@@ -2356,60 +2331,9 @@ export class RelayClient {
     }
   }
 
-  /** Plaintext chunk budget for `attachment_data` envelopes.
-   *  Stays under the relay's 10 MB frame cap after base64 + envelope. */
-  private static readonly ATTACHMENT_CHUNK_BYTES = 2 * 1024 * 1024;
-
-  /**
-   * Stream an attachment's bytes to all connected consumers as
-   * `attachment_data` chunks. Called immediately after the producer fires
-   * a `tool_complete` carrying the matching `ContentRef`. Skipped if
-   * we've already broadcast this id within the session.
-   */
-  private async broadcastAttachmentBytes(
-    sessionId: string,
-    ref: import('@kraki/protocol').ContentRef,
-  ): Promise<void> {
-    if (!this.attachmentStore) {
-      logger.warn({ sessionId, attachmentId: ref.id }, 'no attachment store — skipping broadcast');
-      return;
-    }
-    let seen = this.broadcastedAttachmentIds.get(sessionId);
-    if (!seen) {
-      seen = new Set();
-      this.broadcastedAttachmentIds.set(sessionId, seen);
-    }
-    if (seen.has(ref.id)) return;
-    seen.add(ref.id);
-
-    const total = Math.max(1, Math.ceil(ref.size / RelayClient.ATTACHMENT_CHUNK_BYTES));
-    let index = 0;
-    for (const chunk of this.attachmentStore.stream(sessionId, ref.id, RelayClient.ATTACHMENT_CHUNK_BYTES)) {
-      this.send({
-        type: 'attachment_data',
-        sessionId,
-        payload: {
-          id: ref.id,
-          index,
-          total,
-          mimeType: ref.mimeType,
-          data: chunk.toString('base64'),
-        },
-      });
-      index += 1;
-    }
-    if (index === 0) {
-      // The ref was emitted but bytes are no longer on disk — odd state, but
-      // notify consumers with a structured error so they don't sit on a
-      // pending placeholder forever.
-      logger.warn({ sessionId, attachmentId: ref.id }, 'no bytes on disk for ref, sending error chunk');
-      this.send({
-        type: 'attachment_data',
-        sessionId,
-        payload: { id: ref.id, index: 0, total: 0, mimeType: ref.mimeType, data: '', error: 'not_found' },
-      });
-    }
-  }
+  /** Keep encrypted frames small so control messages can interleave between
+   *  attachment chunks. */
+  private static readonly ATTACHMENT_CHUNK_BYTES = 256 * 1024;
 
   /**
    * Serve a `request_attachment` from a consumer device. Reads from the
@@ -2434,7 +2358,15 @@ export class RelayClient {
       return;
     }
     const total = Math.max(1, Math.ceil(got.bytes.length / RelayClient.ATTACHMENT_CHUNK_BYTES));
-    for (let i = 0; i < total; i++) {
+    const paced = msg.payload.mode === 'paced';
+    const requestedIndex = paced ? Math.floor(msg.payload.index ?? 0) : 0;
+    if (paced && (requestedIndex < 0 || requestedIndex >= total)) {
+      this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
+      return;
+    }
+    const first = paced ? requestedIndex : 0;
+    const end = paced ? requestedIndex + 1 : total;
+    for (let i = first; i < end; i++) {
       const slice = got.bytes.subarray(
         i * RelayClient.ATTACHMENT_CHUNK_BYTES,
         Math.min((i + 1) * RelayClient.ATTACHMENT_CHUNK_BYTES, got.bytes.length),
@@ -2451,6 +2383,7 @@ export class RelayClient {
           total,
           mimeType: got.meta.mimeType,
           data: slice.toString('base64'),
+          ...(paced && { paced: true as const }),
         },
       };
       this.sendReliableUnicastTo(requesterDeviceId, requesterKey, chunkMsg);

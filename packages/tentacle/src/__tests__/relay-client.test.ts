@@ -1129,7 +1129,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('tool_complete pushes attachment_data chunks for resultRef', () => {
+  it('tool_complete publishes a resultRef without broadcasting its bytes', () => {
     const { adapter, ws, cleanup } = buildClientWithStore();
     try {
       ws.sent.length = 0;
@@ -1139,17 +1139,59 @@ describe('RelayClient tool message lazy-load shape', () => {
         toolCallId: 'tc1',
       });
       const sent = decodePulseSends(ws.sent);
-      // The tool no longer broadcasts a tool_complete — it surfaces via
-      // card_action — but its result bytes still stream as attachment_data.
-      const cardIdx = sent.findIndex(m => m.type === 'card_action');
-      const chunkIdx = sent.findIndex(m => m.type === 'attachment_data');
-      expect(cardIdx).toBeGreaterThanOrEqual(0);
-      expect(chunkIdx).toBeGreaterThanOrEqual(0);
-      // Chunks ride after the card_action in send order
-      expect(chunkIdx).toBeGreaterThan(cardIdx);
-      const chunk = sent[chunkIdx];
-      expect(chunk.payload.mimeType).toBe('text/plain');
-      expect(Buffer.from(chunk.payload.data, 'base64').toString('utf-8')).toBe('hello world');
+      expect(sent.some(m => m.type === 'card_action')).toBe(true);
+      expect(sent.some(m => m.type === 'attachment_data')).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it('serves paced attachment requests one 256 KiB chunk at a time', () => {
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      const bytes = Buffer.alloc(600 * 1024, 0x61);
+      const ref = store.put('sess_1', bytes, 'application/octet-stream');
+      ws.sent.length = 0;
+
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 0 },
+      })));
+
+      let chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].payload).toMatchObject({ id: ref.id, index: 0, total: 3, paced: true });
+      expect(Buffer.from(chunks[0].payload.data, 'base64')).toHaveLength(256 * 1024);
+
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 2 },
+      })));
+      chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].payload).toMatchObject({ index: 2, total: 3, paced: true });
+      expect(Buffer.from(chunks[0].payload.data, 'base64')).toHaveLength(88 * 1024);
+    } finally { cleanup(); }
+  });
+
+  it('keeps complete attachment responses for legacy Arm requests', () => {
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      const ref = store.put('sess_1', Buffer.alloc(600 * 1024, 0x62), 'application/octet-stream');
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1' },
+      })));
+      const chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(chunks).toHaveLength(3);
+      expect(chunks.map(c => c.payload.index)).toEqual([0, 1, 2]);
+      expect(chunks.every(c => c.payload.paced === undefined)).toBe(true);
     } finally { cleanup(); }
   });
 
@@ -1166,7 +1208,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('purges lastArgs* + broadcastedAttachmentIds when a session ends with in-flight tool calls', () => {
+  it('purges in-flight tool argument state when a session ends', () => {
     const { adapter, client, cleanup } = buildClientWithStore();
     try {
       const bigArgs = { command: 'echo ' + 'x'.repeat(400) };
@@ -1182,12 +1224,10 @@ describe('RelayClient tool message lazy-load shape', () => {
         lastArgsByToolCallId: Map<string, unknown>;
         lastArgsRefByToolCallId: Map<string, unknown>;
         sessionToolCallIds: Map<string, Set<string>>;
-        broadcastedAttachmentIds: Map<string, Set<string>>;
       };
       expect(c.lastArgsByToolCallId.size).toBe(2);
       expect(c.lastArgsRefByToolCallId.size).toBe(2);
       expect(c.sessionToolCallIds.get('sess_1')?.size).toBe(2);
-      expect(c.broadcastedAttachmentIds.has('sess_1')).toBe(true);
 
       // Session ends.
       (adapter.onSessionEnded as ((sid: string, e: { reason: string }) => void))('sess_1', { reason: 'killed' });
@@ -1195,7 +1235,6 @@ describe('RelayClient tool message lazy-load shape', () => {
       expect(c.lastArgsByToolCallId.size).toBe(0);
       expect(c.lastArgsRefByToolCallId.size).toBe(0);
       expect(c.sessionToolCallIds.has('sess_1')).toBe(false);
-      expect(c.broadcastedAttachmentIds.has('sess_1')).toBe(false);
     } finally { cleanup(); }
   });
 });

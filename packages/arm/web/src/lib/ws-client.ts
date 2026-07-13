@@ -13,6 +13,7 @@ import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
 import { traceEvent } from './trace';
+import { AttachmentPullQueue } from './attachment-pull-queue';
 
 const logger = createLogger('ws-client');
 
@@ -24,6 +25,17 @@ export class KrakiWSClient {
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
+  private attachmentPulls = new AttachmentPullQueue(({ sessionId, id, index }) => {
+    if (getStore().status !== 'connected') return false;
+    const deviceId = getStore().deviceId;
+    this.sendEncrypted({
+      type: 'request_attachment',
+      deviceId,
+      sessionId,
+      payload: { id, sessionId, mode: 'paced', index },
+    });
+    return true;
+  });
 
   get url(): string { return this.transport.url; }
 
@@ -56,7 +68,11 @@ export class KrakiWSClient {
           this.handleMessage(msg);
           this.handlers.forEach((h) => h(msg));
         },
-        onClose: () => { this.clearReplayTracking(); this.pulse.onDisconnected(); },
+        onClose: () => {
+          this.clearReplayTracking();
+          this.attachmentPulls.disconnect();
+          this.pulse.onDisconnected();
+        },
       },
       url,
     );
@@ -151,6 +167,7 @@ export class KrakiWSClient {
       sendEncrypted: (m) => this.sendEncrypted(m),
       onSessionList: (m) => this.handleSessionList(m),
       onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
+      onAttachmentChunk: (chunk) => this.attachmentPulls.handleChunk(chunk),
     });
     this.handlers.forEach((h) => h(inner as unknown as Message));
   }
@@ -219,13 +236,7 @@ export class KrakiWSClient {
    *     which session dir to read from.
    */
   requestAttachment(sessionId: string, attachmentId: string) {
-    const deviceId = getStore().deviceId;
-    this.sendEncrypted({
-      type: 'request_attachment',
-      deviceId,
-      sessionId,
-      payload: { id: attachmentId, sessionId },
-    });
+    this.attachmentPulls.request(sessionId, attachmentId);
   }
 
   approve(permissionId: string, sessionId: string) {
@@ -693,6 +704,7 @@ export class KrakiWSClient {
         // Bring up the pulse endpoint + start the tick loop.
         this.pulse.onConnected();
         this.startPulseTick();
+        this.attachmentPulls.resume();
         break;
 
       case 'auth_challenge':
