@@ -785,10 +785,9 @@ export interface LocalSessionsListMessage extends BaseEnvelope {
   };
 }
 
-/** Chunk of attachment bytes — flows either as a broadcast (live, immediately
- *  after the message that referenced the attachment) or as a unicast response
- *  to `request_attachment`. The relay never sees the bytes; payload is inside
- *  the encrypted blob like any other message. */
+/** Chunk of attachment bytes returned as a unicast response to
+ *  `request_attachment`. The relay never sees the bytes; payload is inside the
+ *  encrypted blob like any other message. */
 export interface AttachmentDataMessage extends BaseEnvelope {
   type: 'attachment_data';
   payload: {
@@ -802,6 +801,8 @@ export interface AttachmentDataMessage extends BaseEnvelope {
     mimeType: string;
     /** base64 of this chunk's bytes. Empty when `error` is set. */
     data: string;
+    /** Set by tentacles that support one-chunk-at-a-time attachment pulls. */
+    paced?: true;
     /** When set, this chunk carries an error instead of bytes (index/total
      *  should be 0/0). */
     error?: 'not_found' | 'unauthorized' | 'too_large';
@@ -1060,6 +1061,10 @@ export interface RequestAttachmentMessage extends BaseEnvelope {
     id: string;
     /** Session the attachment belongs to (used for AttachmentStore scoping). */
     sessionId: string;
+    /** Opt into one-chunk-at-a-time delivery. Older tentacles ignore this. */
+    mode?: 'paced';
+    /** Chunk requested in paced mode. Defaults to the first chunk. */
+    index?: number;
   };
 }
 

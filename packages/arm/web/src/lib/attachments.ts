@@ -153,18 +153,18 @@ export async function ingestChunk(
   mimeType: string,
   data: string,
   error?: string,
-): Promise<void> {
+): Promise<boolean> {
   if (error) {
     states.set(id, { kind: 'error', reason: error });
     clearPushTimeout(id);
     notify(id);
-    return;
+    return true;
   }
 
   let current = states.get(id);
+  if (current?.kind === 'ready') return false;
   if (!current || (current.kind !== 'awaiting-chunks' && current.kind !== 'fetching')) {
-    // Either we already have it, or a stray chunk arrived. Initialize a
-    // fresh awaiting-chunks state defensively.
+    // No active assembly exists. Initialize one defensively for a stray chunk.
     current = {
       kind: 'awaiting-chunks',
       received: new Map(),
@@ -185,6 +185,7 @@ export async function ingestChunk(
     states.set(id, current);
   }
 
+  if (current.received.has(index)) return false;
   current.received.set(index, data);
   current.total = total;
   current.mimeType = mimeType;
@@ -206,6 +207,7 @@ export async function ingestChunk(
   } else {
     notify(id);
   }
+  return true;
 }
 
 function clearPushTimeout(id: string): void {
