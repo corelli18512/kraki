@@ -380,7 +380,16 @@ export type CardActionState =
       };
     }
   | Pick<PermissionRequest, 'type' | 'payload'>
-  | Pick<QuestionRequest, 'type' | 'payload'>;
+  | Pick<QuestionRequest, 'type' | 'payload'>
+  | {
+      /** Transient Pi runtime activity. Never persisted to the conversation or
+       *  trace; it only occupies the server-owned live status-card slot. */
+      type: 'compaction';
+      payload: {
+        phase: 'running';
+        reason?: 'manual' | 'threshold' | 'overflow';
+      };
+    };
 
 /**
  * The ACTION part of the server-owned status card — the single active

@@ -33,6 +33,8 @@ export function cardActionKey(a: CardActionState | null): string {
       return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
     case 'question':
       return `q:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer === undefined ? 'pending' : 'answered'}`;
+    case 'compaction':
+      return `compaction:${a.payload.reason ?? 'unknown'}`;
   }
 }
 

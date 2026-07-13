@@ -69,6 +69,16 @@ export interface ErrorEvent {
   message: string;
 }
 
+export type CompactionReason = 'manual' | 'threshold' | 'overflow';
+
+export interface CompactionEvent {
+  phase: 'start' | 'end';
+  reason?: CompactionReason;
+  aborted?: boolean;
+  willRetry?: boolean;
+  errorMessage?: string;
+}
+
 /** A Kraki-originated system notice (not the agent's words). See
  *  protocol `SystemMessage`. First use: `kind: 'no_reply'`. */
 export interface SystemMessageEvent {
@@ -159,6 +169,9 @@ export abstract class AgentAdapter {
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
+  /** Transient agent-runtime compaction activity. Never persisted to the spine
+   *  or TRACE; RelayClient maps it to the server-owned status-card slot. */
+  onCompaction: ((sessionId: string, event: CompactionEvent) => void) | null = null;
   /** Called when Kraki itself needs to leave a spine notice (not the agent's
    *  words) — e.g. `kind: 'no_reply'` when a turn ends without any reply.
    *  Rendered as a system-marked bubble that still anchors the turn's Steps. */

@@ -127,6 +127,7 @@ function createAdapter(): Record<string, unknown> {
     onToolComplete: null,
     onIdle: null,
     onError: null,
+    onCompaction: null,
     onSessionEnded: null,
     onTitleChanged: null,
     onUsageUpdate: null,
@@ -1835,6 +1836,35 @@ describe('RelayClient trace mirroring (off-spine)', () => {
     })));
     return { adapter, sm, ws: sockets[0], cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
+
+  it('keeps compaction transient: card_action only, never spine or trace', () => {
+    const { adapter, sm, ws, cleanup } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      ws.sent.length = 0;
+      (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        phase: 'start', reason: 'threshold',
+      });
+
+      expect(smMock.appendMessage).not.toHaveBeenCalled();
+      expect(smMock.appendTrace).not.toHaveBeenCalled();
+      const messages = decodePulseSends(ws.sent);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        type: 'card_action',
+        sessionId: 'sess_1',
+        payload: { action: { type: 'compaction', payload: { phase: 'running', reason: 'threshold' } } },
+      });
+
+      ws.sent.length = 0;
+      (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', { phase: 'end' });
+      expect(decodePulseSends(ws.sent)[0]).toMatchObject({
+        type: 'card_action', payload: { action: null },
+      });
+      expect(smMock.appendMessage).not.toHaveBeenCalled();
+      expect(smMock.appendTrace).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
 
   it('mirrors tool_start/tool_complete to appendTrace (off-spine), broadcasts card_action not raw tool events', () => {
     const { adapter, sm, ws, cleanup } = buildClient();

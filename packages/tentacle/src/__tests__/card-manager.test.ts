@@ -316,6 +316,52 @@ describe('CardManager action part', () => {
     card.onToolStart('s1', tool('tc1', 't'));
     expect(actions(sent)).toHaveLength(1);
   });
+
+  it('surfaces compaction transiently and includes it in reconnect snapshots', () => {
+    const { card, sent } = setup();
+    card.onCompactionStart('s1', 'threshold');
+    card.onCompactionStart('s1', 'threshold');
+    expect(actions(sent)).toEqual([
+      { type: 'compaction', payload: { phase: 'running', reason: 'threshold' } },
+    ]);
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
+      .toEqual({ type: 'compaction', payload: { phase: 'running', reason: 'threshold' } });
+    expect(card.activeSessions()).toEqual(['s1']);
+  });
+
+  it('does not let compaction hide a pending human prompt', () => {
+    const { card, sent } = setup();
+    card.onPrompt('s1', question('q1', 'choose?'));
+    sent.length = 0;
+    card.onCompactionStart('s1', 'threshold');
+    expect(actions(sent)).toEqual([]);
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
+      .toMatchObject({ type: 'question', payload: { id: 'q1' } });
+  });
+
+  it('late compaction end cannot clear a newer tool action', () => {
+    const { card, sent } = setup();
+    card.onCompactionStart('s1', 'threshold');
+    card.onToolStart('s1', tool('tc1', 'new work'));
+    sent.length = 0;
+    card.onCompactionEnd('s1');
+    expect(actions(sent)).toEqual([]);
+    expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
+      .toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc1' } });
+  });
+
+  it('clears compaction when it still owns the slot or narration resumes', () => {
+    const { card, sent } = setup();
+    card.onCompactionStart('s1');
+    sent.length = 0;
+    card.onCompactionEnd('s1');
+    expect(actions(sent)).toEqual([null]);
+
+    card.onCompactionStart('s1', 'overflow');
+    sent.length = 0;
+    card.onDelta('s1', 'continuing');
+    expect(actions(sent)).toEqual([null]);
+  });
 });
 
 describe('CardManager lifecycle', () => {
