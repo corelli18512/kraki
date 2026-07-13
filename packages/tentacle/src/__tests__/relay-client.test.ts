@@ -2014,6 +2014,156 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
   });
 
+  it('dispatches active-turn steer immediately without waiting for idle', async () => {
+    const { adapter, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 610,
+      timestamp: new Date().toISOString(), payload: { text: 'first' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 611,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(
+      2, 'sess_1', 'change direction', undefined, { delivery: 'steer' },
+    );
+  });
+
+  it('reasserts active after steer acceptance when the preceding work idles during its ACK', async () => {
+    const { adapter, ws, sm } = buildClient();
+    let accept!: () => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { accept = resolve; }),
+    );
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 612,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(sm.markIdle).not.toHaveBeenCalled();
+    accept();
+    await vi.waitFor(() => expect(sm.markActive).toHaveBeenCalledTimes(2));
+    expect(sm.markIdle).not.toHaveBeenCalled();
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(sm.markIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not release the normal prompt queue for an idle racing steer acceptance', async () => {
+    const { adapter, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 613,
+      timestamp: new Date().toISOString(), payload: { text: 'first' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    let accept!: () => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { accept = resolve; }),
+    );
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 614,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 615,
+      timestamp: new Date().toISOString(), payload: { text: 'next prompt' },
+    })));
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    accept();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.sendMessage).toHaveBeenCalledTimes(2);
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(3));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(3, 'sess_1', 'next prompt', undefined);
+  });
+
+  it('releases the normal prompt queue when a racing steer is rejected', async () => {
+    const { adapter, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 616,
+      timestamp: new Date().toISOString(), payload: { text: 'first' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    let reject!: (error: Error) => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((_resolve, fail) => { reject = fail; }),
+    );
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 617,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 618,
+      timestamp: new Date().toISOString(), payload: { text: 'next prompt' },
+    })));
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    reject(new Error('steer rejected'));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(3));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(3, 'sess_1', 'next prompt', undefined);
+  });
+
+  it('scopes idle ownership to each rapid steer submission', async () => {
+    const { adapter, ws, sm } = buildClient();
+    let acceptFirst!: () => void;
+    let rejectSecond!: (error: Error) => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { acceptFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectSecond = reject; }));
+
+    for (const [seq, text] of [[619, 'first steer'], [620, 'second steer']] as const) {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+        timestamp: new Date().toISOString(), payload: { text, delivery: 'steer' },
+      })));
+    }
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(sm.markIdle).not.toHaveBeenCalled();
+
+    acceptFirst();
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    rejectSecond(new Error('second steer rejected'));
+
+    await vi.waitFor(() => expect(sm.markIdle).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(
+      2, 'sess_1', 'second steer', undefined, { delivery: 'steer' },
+    );
+  });
+
+  it('preserves adapter acceptance order for a prompt immediately followed by steer', async () => {
+    const { adapter, ws } = buildClient();
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 621,
+      timestamp: new Date().toISOString(), payload: { text: 'first' },
+    })));
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 622,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.sendMessage.mock.calls).toEqual([
+      ['sess_1', 'first', undefined],
+      ['sess_1', 'change direction', undefined, { delivery: 'steer' }],
+    ]);
+  });
+
   it('routes ordinary composer input to the sole pending question', async () => {
     const { adapter, askQ, ws, sm } = buildClient();
     askQ('q1');

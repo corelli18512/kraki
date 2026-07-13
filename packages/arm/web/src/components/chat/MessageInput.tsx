@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react
 import { wsClient } from '../../lib/ws-client';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
-import { X, ImagePlus, Square } from 'lucide-react';
+import { ArrowRight, X, ImagePlus, Square } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 
 const MAX_INPUT_HEIGHT = 160;
@@ -218,16 +218,19 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   }, [text]);
 
   const handleSend = () => {
-    if (!isIdle) return;
     const trimmed = text.trim();
     if (!trimmed && !imageAttachment) return;
     const attachments = imageAttachment ? [imageAttachment] : undefined;
-    wsClient.sendInput(sessionId, trimmed || '[image]', attachments);
+    if (isIdle) {
+      wsClient.sendInput(sessionId, trimmed || '[image]', attachments);
+      setAwaitingActive(true);
+    } else {
+      wsClient.sendInput(sessionId, trimmed || '[image]', attachments, 'steer');
+    }
     setDraft(sessionId, '');
     clearImage();
-    setAwaitingActive(true);
     if (shouldAutoFocus) {
-      // Keep focus on desktop so user can type follow-up immediately
+      // Keep focus on desktop so user can type another correction immediately.
       requestAnimationFrame(() => textareaRef.current?.focus());
     } else {
       textareaRef.current?.blur();
@@ -352,32 +355,33 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
             enterKeyHint="send"
             className="min-w-0 flex-1 cursor-text resize-none overflow-hidden rounded-xl border border-border-primary bg-surface-secondary px-4 pt-[7px] pb-[9px] pr-9 text-base text-text-primary placeholder-text-muted focus:border-kraki-500 focus:outline-none focus:ring-1 focus:ring-kraki-500 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
           />
-          {isIdle && text && (
+          {text && (
             <button
               onClick={() => { setDraft(sessionId, ''); textareaRef.current?.focus(); }}
               aria-label="Clear input"
-              className="absolute right-[3.75rem] top-1/2 -translate-y-1/2 rounded-full p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+              className={`absolute top-1/2 -translate-y-1/2 rounded-full p-0.5 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary ${isIdle ? 'right-[3.75rem]' : 'right-[6.5rem]'}`}
             >
               <X className="h-4 w-4" />
             </button>
           )}
-          <button
-            onClick={isIdle ? handleSend : () => wsClient.abortSession(sessionId)}
-            disabled={isIdle && !text.trim() && !imageAttachment}
-            aria-label={isIdle ? 'Send message' : 'Stop'}
-            className={`relative flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-xl text-white transition-all duration-500 active:scale-95 ${
-              isIdle
-                ? 'bg-kraki-500 hover:bg-kraki-600 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100'
-                : 'animate-pulse-subtle bg-kraki-500 hover:bg-kraki-600'
-            }`}
-          >
-            <svg
-              className={`absolute h-4 w-4 transition-all duration-500 ${isIdle ? 'scale-100 opacity-100' : 'scale-0 opacity-0'}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          {!isIdle && (
+            <button
+              onClick={() => wsClient.abortSession(sessionId)}
+              aria-label="Stop"
+              title="Stop current turn"
+              className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-xl border border-border-primary bg-surface-secondary text-red-500 transition-colors hover:bg-red-500/10 active:scale-95"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-            <Square className={`absolute h-3.5 w-3.5 fill-current transition-all duration-500 ${isIdle ? 'scale-0 opacity-0' : 'scale-100 opacity-100'}`} />
+              <Square className="h-3.5 w-3.5 fill-current" />
+            </button>
+          )}
+          <button
+            onClick={handleSend}
+            disabled={!text.trim() && !imageAttachment}
+            aria-label={isIdle ? 'Send message' : 'Steer agent'}
+            title={isIdle ? 'Send message' : 'Steer active turn'}
+            className="flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-xl bg-kraki-500 text-white transition-colors hover:bg-kraki-600 active:scale-95 active:bg-kraki-700 disabled:opacity-40 disabled:hover:bg-kraki-500 disabled:active:scale-100"
+          >
+            <ArrowRight className="h-4 w-4" />
           </button>
         </div>
       </div>

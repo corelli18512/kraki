@@ -859,6 +859,10 @@ export interface SendInputMessage extends BaseEnvelope {
      *  reconnects, or multi-device scenarios. Optional for back-compat
      *  with older clients. */
     clientId?: string;
+    /** Delivery intent chosen by the app from its observed session state.
+     *  `steer` interjects into the current active turn; omitted/`prompt`
+     *  preserves the normal idle-session prompt behavior. */
+    delivery?: 'prompt' | 'steer';
   };
 }
 

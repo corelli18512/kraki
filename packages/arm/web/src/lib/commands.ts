@@ -84,11 +84,12 @@ export function sendInput(
   text: string,
   send: (msg: Record<string, unknown>) => void,
   attachments?: import('@kraki/protocol').Attachment[],
+  delivery?: 'prompt' | 'steer',
 ): void {
   const store = getStore();
   const timestamp = new Date().toISOString();
   const clientId = generateClientId();
-  traceEvent({ comp: 'arm', evt: 'USER-SEND-INPUT', sessionId, clientId, textLen: text.length, hasAttachments: !!attachments?.length });
+  traceEvent({ comp: 'arm', evt: 'USER-SEND-INPUT', sessionId, clientId, textLen: text.length, hasAttachments: !!attachments?.length, delivery: delivery ?? 'prompt' });
   store.appendMessage(sessionId, {
     type: 'pending_input',
     id: clientId,
@@ -103,7 +104,7 @@ export function sendInput(
   send({
     type: 'send_input',
     sessionId,
-    payload: { text, clientId, ...(attachments?.length && { attachments }) },
+    payload: { text, clientId, ...(attachments?.length && { attachments }), ...(delivery === 'steer' && { delivery }) },
   });
 }
 

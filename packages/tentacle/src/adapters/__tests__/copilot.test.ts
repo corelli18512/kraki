@@ -515,6 +515,18 @@ describe('CopilotAdapter', () => {
       expect(mockSessions[0].send).toHaveBeenCalledWith({ prompt: 'hello world' });
     });
 
+    it('uses immediate delivery to interject into an active turn', async () => {
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({});
+
+      await adapter.sendMessage(sessionId, 'change direction', undefined, { delivery: 'steer' });
+
+      expect(mockSessions[0].send).toHaveBeenCalledWith({
+        prompt: 'change direction',
+        mode: 'immediate',
+      });
+    });
+
     it('includes attachments when provided', async () => {
       await adapter.start();
       const { sessionId } = await adapter.createSession({});

@@ -395,18 +395,23 @@ describe('MessageInput', () => {
     expect(screen.getByLabelText('Send message')).toBeDisabled();
   });
 
-  it('renders stop button when session is active', async () => {
+  it('keeps send and stop as separate controls while the session is active', async () => {
     const user = userEvent.setup();
-    // Set session to active state
-    const { useStore } = await import('../hooks/useStore');
     useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'copilot', state: 'active', messageCount: 0 });
     render(
       <MemoryRouter>
         <MessageInput sessionId="sess-1" />
       </MemoryRouter>,
     );
+
+    const input = screen.getByPlaceholderText('Send a message…');
+    await user.type(input, 'change direction{Enter}');
+    expect(wsClient.sendInput).toHaveBeenCalledWith(
+      'sess-1', 'change direction', undefined, 'steer',
+    );
+
     const stopBtn = screen.getByLabelText('Stop');
-    expect(stopBtn).toBeInTheDocument();
+    expect(screen.getByLabelText('Steer agent')).toBeInTheDocument();
     await user.click(stopBtn);
     expect(wsClient.abortSession).toHaveBeenCalledWith('sess-1');
   });

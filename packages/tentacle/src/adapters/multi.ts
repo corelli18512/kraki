@@ -21,6 +21,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
@@ -281,8 +282,13 @@ export class MultiAgentAdapter extends AgentAdapter {
     return result;
   }
 
-  async sendMessage(sessionId: string, text: string, attachments?: Attachment[]): Promise<void> {
-    return this.getSessionAdapter(sessionId).sendMessage(sessionId, text, attachments);
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    attachments?: Attachment[],
+    options?: SendMessageOptions,
+  ): Promise<void> {
+    return this.getSessionAdapter(sessionId).sendMessage(sessionId, text, attachments, options);
   }
 
   async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {

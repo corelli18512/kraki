@@ -513,6 +513,18 @@ describe('KrakiWSClient', () => {
       expect(sent.payload.text).toBe('Hello agent');
     });
 
+    it('sendInput carries active-turn steer delivery', async () => {
+      const client = await setupClient();
+      client.sendInput('sess-1', 'Change direction', undefined, 'steer');
+
+      const sent = await waitForDecodedSend(lastWsInstance);
+      expect(sent).toMatchObject({
+        type: 'send_input',
+        sessionId: 'sess-1',
+        payload: { text: 'Change direction', delivery: 'steer' },
+      });
+    });
+
     it('approve sends correct message', async () => {
       const client = await setupClient();
 
