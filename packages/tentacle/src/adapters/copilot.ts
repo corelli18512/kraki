@@ -40,6 +40,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type SendMessageOptions,
 } from './base.js';
 import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
@@ -1029,12 +1030,20 @@ export class CopilotAdapter extends AgentAdapter {
     return { sessionId: newSessionId };
   }
 
-  async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
-    // Reset per-cycle tracking — a new user message starts a fresh cycle
-    this.cycleHasOutput.set(sessionId, false);
-    this.turnErrorReported.set(sessionId, false);
-    this.cycleUserAborted.delete(sessionId);
-    this.pendingNarration.delete(sessionId);
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+    options?: SendMessageOptions,
+  ): Promise<void> {
+    if (options?.delivery !== 'steer') {
+      // A normal prompt starts a fresh cycle. An immediate interjection remains
+      // part of the active cycle and must not reset its output/error tracking.
+      this.cycleHasOutput.set(sessionId, false);
+      this.turnErrorReported.set(sessionId, false);
+      this.cycleUserAborted.delete(sessionId);
+      this.pendingNarration.delete(sessionId);
+    }
     this.touchSession(sessionId);
 
     // Prepend mode-switch signal if mode changed since last message
@@ -1044,7 +1053,10 @@ export class CopilotAdapter extends AgentAdapter {
       text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
     }
 
-    const opts: MessageOptions = { prompt: text };
+    const opts: MessageOptions = {
+      prompt: text,
+      ...(options?.delivery === 'steer' && { mode: 'immediate' as const }),
+    };
     const tempFiles: string[] = [];
 
     // Convert image attachments to files in the SDK session directory

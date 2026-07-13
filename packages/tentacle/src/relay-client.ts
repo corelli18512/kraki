@@ -158,9 +158,16 @@ export class RelayClient {
    *  concurrent callers don't double-resume the same SDK session. */
   private resumeInFlight = new Map<string, Promise<boolean>>();
 
-  /** Per-session input chain. Distinct user sends are serialized until the
-   *  preceding turn reaches a real idle boundary. */
+  /** Normal prompts are serialized until the preceding turn reaches idle. */
   private inputChains = new Map<string, Promise<void>>();
+  /** All adapter submissions are serialized only until transport acceptance.
+   *  This lets an active-turn steer follow the original prompt ACK immediately
+   *  without waiting for the whole turn to become idle. */
+  private inputDispatches = new Map<string, Promise<void>>();
+  /** Idle has no turn identity. Hold it while a steer is awaiting adapter ACK so
+   *  pre-steer completion cannot settle the newly accepted interjection. */
+  private steerAcceptanceInFlight = new Set<string>();
+  private idleDuringSteerAcceptance = new Set<string>();
   private turnIdleWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
   /** Adapter errors become terminal only when the same logical turn reaches
    *  idle. Keeping them pending avoids freezing recoverable tool failures. */
@@ -180,6 +187,61 @@ export class RelayClient {
     if (!waiter) return;
     this.turnIdleWaiters.delete(sessionId);
     waiter.resolve();
+  }
+
+  private beginSteerAcceptance(sessionId: string): void {
+    this.steerAcceptanceInFlight.add(sessionId);
+  }
+
+  private finishSteerAcceptance(sessionId: string, accepted: boolean): void {
+    this.steerAcceptanceInFlight.delete(sessionId);
+    const deferredIdle = this.idleDuringSteerAcceptance.delete(sessionId);
+    if (!deferredIdle) return;
+    if (accepted) {
+      // The old provider error was already broadcast immediately. A successful
+      // interjection recovered the session, so it must not freeze as the outcome
+      // of the newer work when that work eventually idles.
+      this.pendingTerminalErrors.delete(sessionId);
+    } else {
+      this.settleAdapterIdle(sessionId);
+    }
+  }
+
+  private settleAdapterIdle(sessionId: string): void {
+    // Idle carries no run/turn identity. Never let a late idle callback erase
+    // a newer card. Permanent bubble boundaries retire settled card state;
+    // explicit abort owns its own freeze+clear path; pending questions stay.
+    const terminalError = this.pendingTerminalErrors.get(sessionId);
+    if (this.soleOpenQuestion(sessionId) && !terminalError) return;
+    if (terminalError) {
+      this.pendingTerminalErrors.delete(sessionId);
+      this.finishTurnWithStatus(sessionId, {
+        type: 'failed',
+        payload: {
+          ...terminalError,
+          failedAt: new Date().toISOString(),
+        },
+      });
+    } else {
+      this.clearOpenQuestions(sessionId);
+    }
+    this.resolveTurnIdle(sessionId);
+    this.sessionManager.markIdle(sessionId);
+    const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
+    if (usage) this.sessionManager.setUsage(sessionId, usage);
+    this.send({ type: 'idle', sessionId, payload: { usage, ...(terminalError && { reason: 'failed' as const }) } });
+    this.maybeGenerateTitle(sessionId);
+  }
+
+  private dispatchInput(sessionId: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.inputDispatches.get(sessionId);
+    const next = previous ? previous.catch(() => {}).then(task) : task();
+    this.inputDispatches.set(sessionId, next);
+    const cleanup = () => {
+      if (this.inputDispatches.get(sessionId) === next) this.inputDispatches.delete(sessionId);
+    };
+    next.then(cleanup, cleanup);
+    return next;
   }
 
   // ── Push preview state ─────────────────────────────
@@ -920,24 +982,50 @@ export class RelayClient {
             break;
           }
 
-          const previous = this.inputChains.get(sessionId) ?? Promise.resolve();
-          const next = previous
-            .catch(() => {})
-            .then(async () => {
-              this.send({ type: 'active', sessionId, payload: {} });
+          if (msg.payload.delivery === 'steer') {
+            void this.dispatchInput(sessionId, async () => {
+              this.beginSteerAcceptance(sessionId);
               await this.ensureSessionResumed(sessionId);
-              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId });
+              // Reassert active after resume so an idle/send race cannot leave a
+              // successfully accepted interjection running behind an idle UI.
+              this.send({ type: 'active', sessionId, payload: {} });
               this.sessionManager.markActive(sessionId);
-              const idle = this.waitForTurnIdle(sessionId);
-              try {
+              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId });
+              await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
+              // The adapter ACK is the ownership boundary for the interjection.
+              // Reassert active so an idle from the pre-steer work that raced the
+              // ACK cannot become the final visible state. A later provider idle
+              // still settles the steered work normally.
+              this.finishSteerAcceptance(sessionId, true);
+              this.send({ type: 'active', sessionId, payload: {} });
+              this.sessionManager.markActive(sessionId);
+            }).catch((err) => {
+              this.finishSteerAcceptance(sessionId, false);
+              logger.error({ err, sessionId }, 'steer input failed');
+              this.send({ type: 'error', sessionId, payload: { message: `Failed to steer agent: ${(err as Error).message}` } });
+            });
+            break;
+          }
+
+          const previous = this.inputChains.get(sessionId);
+          const deliver = async () => {
+            const idle = this.waitForTurnIdle(sessionId);
+            try {
+              await this.dispatchInput(sessionId, async () => {
+                await this.ensureSessionResumed(sessionId);
+                this.send({ type: 'active', sessionId, payload: {} });
+                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId });
+                this.sessionManager.markActive(sessionId);
                 await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
-                await idle;
-              } catch (err) {
-                this.resolveTurnIdle(sessionId);
-                throw err;
-              }
-            })
+              });
+              await idle;
+            } catch (err) {
+              this.resolveTurnIdle(sessionId);
+              throw err;
+            }
+          };
+          const next = (previous ? previous.catch(() => {}).then(deliver) : deliver())
             .catch((err) => {
               logger.error({ err, sessionId }, 'send input failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
@@ -1697,29 +1785,11 @@ export class RelayClient {
     };
 
     this.adapter.onIdle = (sessionId) => {
-      // Idle carries no run/turn identity. Never let a late idle callback erase
-      // a newer card. Permanent bubble boundaries retire settled card state;
-      // explicit abort owns its own freeze+clear path; pending questions stay.
-      const terminalError = this.pendingTerminalErrors.get(sessionId);
-      if (this.soleOpenQuestion(sessionId) && !terminalError) return;
-      if (terminalError) {
-        this.pendingTerminalErrors.delete(sessionId);
-        this.finishTurnWithStatus(sessionId, {
-          type: 'failed',
-          payload: {
-            ...terminalError,
-            failedAt: new Date().toISOString(),
-          },
-        });
-      } else {
-        this.clearOpenQuestions(sessionId);
+      if (this.steerAcceptanceInFlight.has(sessionId)) {
+        this.idleDuringSteerAcceptance.add(sessionId);
+        return;
       }
-      this.resolveTurnIdle(sessionId);
-      this.sessionManager.markIdle(sessionId);
-      const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
-      if (usage) this.sessionManager.setUsage(sessionId, usage);
-      this.send({ type: 'idle', sessionId, payload: { usage, ...(terminalError && { reason: 'failed' as const }) } });
-      this.maybeGenerateTitle(sessionId);
+      this.settleAdapterIdle(sessionId);
     };
 
     this.adapter.onFlushComplete = (sessionId) => {
@@ -1771,6 +1841,8 @@ export class RelayClient {
       this.lastAgentContent.delete(sessionId);
       this.purgeSessionToolState(sessionId);
       this.broadcastedAttachmentIds.delete(sessionId);
+      this.steerAcceptanceInFlight.delete(sessionId);
+      this.idleDuringSteerAcceptance.delete(sessionId);
       this.resolveTurnIdle(sessionId);
       this.card.delete(sessionId);
       this.send({

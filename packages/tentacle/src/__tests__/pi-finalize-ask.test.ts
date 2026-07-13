@@ -306,6 +306,21 @@ describe('pi prompt recovery', () => {
     expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
   });
 
+  it('uses race-safe prompt steering without resetting the active turn', async () => {
+    const { adapter, proc, session } = makeAdapter();
+    session.narrationSegments = 2;
+    session.lastNarration = 'working';
+
+    await adapter.sendMessage('s1', 'check the other file', undefined, { delivery: 'steer' });
+
+    expect(proc.request).toHaveBeenCalledWith('prompt', {
+      message: 'check the other file',
+      streamingBehavior: 'steer',
+    }, { timeoutMs: null });
+    expect(session.narrationSegments).toBe(2);
+    expect(session.lastNarration).toBe('working');
+  });
+
   it('treats isStreaming as accepted while retaining the late ACK cleanup', async () => {
     const { adapter, proc } = makeAdapter({ ackGraceMs: 1, intervalMs: 1 });
     const onError = vi.fn();

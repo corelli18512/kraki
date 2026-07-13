@@ -194,8 +194,13 @@ export class KrakiWSClient {
     });
   }
 
-  sendInput(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]) {
-    commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg), attachments);
+  sendInput(
+    sessionId: string,
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+    delivery?: 'prompt' | 'steer',
+  ) {
+    commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg), attachments, delivery);
   }
 
   /**

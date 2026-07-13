@@ -57,7 +57,7 @@ async function setupAndOpenSession(
 ): Promise<WebSocket> {
   await gotoWithRelay(page, server);
   const ws = await authenticateClient(server);
-  const sessionCard = page.getByText('Copilot').first();
+  const sessionCard = page.getByText('Copilot').filter({ visible: true }).first();
   await expect(sessionCard).toBeVisible({ timeout: 5000 });
   await sessionCard.click();
   await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 3000 });
@@ -121,4 +121,32 @@ test.describe('Feature fixes', () => {
     const approveButtons = chatArea(page).getByRole('button', { name: 'Approve' });
     await expect(approveButtons).toHaveCount(2);
   });
+
+  for (const viewport of [
+    { name: 'desktop', width: 1280, height: 800 },
+    { name: 'mobile', width: 375, height: 667 },
+  ]) {
+    test(`active composer controls remain usable without overlap on ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await setupAndOpenSession(page, server);
+      const input = page.getByPlaceholder('Send a message…');
+      const stop = page.getByRole('button', { name: 'Stop' });
+      const steer = page.getByRole('button', { name: 'Steer agent' });
+
+      await expect(input).toBeEditable();
+      await expect(stop).toBeVisible();
+      await expect(steer).toBeVisible();
+      await input.fill('change direction');
+
+      const boxes = await Promise.all([input, stop, steer].map(locator => locator.boundingBox()));
+      expect(boxes.every(Boolean)).toBe(true);
+      const [inputBox, stopBox, steerBox] = boxes as NonNullable<typeof boxes[number]>[];
+      expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(stopBox.x);
+      expect(stopBox.x + stopBox.width).toBeLessThanOrEqual(steerBox.x);
+      expect(steerBox.x + steerBox.width).toBeLessThanOrEqual(viewport.width);
+
+      await steer.click();
+      await expect(input).toHaveValue('');
+    });
+  }
 });

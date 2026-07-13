@@ -9,7 +9,7 @@
  * and every user answer was silently dropped.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeAdapter } from '../adapters/claude.js';
 
 type CapturedResult = {
@@ -33,6 +33,30 @@ const asSessions = (a: ClaudeAdapter) =>
   (a as unknown as { sessions: Map<string, EntryLike> }).sessions;
 const asModes = (a: ClaudeAdapter) =>
   (a as unknown as { sessionModes: Map<string, string> }).sessionModes;
+
+describe('Claude streaming input', () => {
+  it('pushes an active-turn steer without clearing the current draft', async () => {
+    const adapter = new ClaudeAdapter();
+    const push = vi.fn();
+    const entry = {
+      query: {},
+      inputChannel: { push, end: vi.fn() },
+      pendingPermissions: new Map(),
+      pendingQuestions: new Map(),
+      pendingText: 'working draft',
+    };
+    (adapter as unknown as { sessions: Map<string, typeof entry> }).sessions.set('s1', entry);
+
+    await adapter.sendMessage('s1', 'change direction', undefined, { delivery: 'steer' });
+
+    expect(push).toHaveBeenCalledWith({
+      type: 'user',
+      message: { role: 'user', content: 'change direction' },
+      parent_tool_use_id: null,
+    });
+    expect(entry.pendingText).toBe('working draft');
+  });
+});
 
 describe('Claude AskUserQuestion answers key', () => {
   it('respondToQuestion keys the answer by the question TEXT (not "answer")', async () => {

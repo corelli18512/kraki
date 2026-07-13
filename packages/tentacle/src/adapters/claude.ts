@@ -20,6 +20,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
@@ -703,15 +704,22 @@ export class ClaudeAdapter extends AgentAdapter {
     return { sessionId: newSessionId };
   }
 
-  async sendMessage(sessionId: string, text: string, _attachments?: Attachment[]): Promise<void> {
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    _attachments?: Attachment[],
+    options?: SendMessageOptions,
+  ): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'sendMessage: session not found');
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    // Reset the draft-bubble prose buffer for the new turn.
-    entry.pendingText = '';
+    // Streaming input accepts another user message while the query is running.
+    // Keep the active draft for an interjection; only a normal prompt opens a
+    // fresh turn and resets the draft-bubble prose buffer.
+    if (options?.delivery !== 'steer') entry.pendingText = '';
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);

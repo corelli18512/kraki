@@ -122,6 +122,11 @@ export interface QuestionAnswer {
   attachments?: import('@kraki/protocol').Attachment[];
 }
 
+export interface SendMessageOptions {
+  /** Normal prompt starts a turn; steer interjects into the active turn. */
+  delivery?: 'prompt' | 'steer';
+}
+
 export type QuestionResponseResult = 'accepted' | 'not_found' | 'session_gone';
 
 // ── The adapter interface ───────────────────────────────
@@ -210,8 +215,13 @@ export abstract class AgentAdapter {
   /** Resume a previously created session with recovery context. */
   abstract resumeSession(sessionId: string, context?: SessionContext): Promise<{ sessionId: string }>;
 
-  /** Send a user message to a session. */
-  abstract sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void>;
+  /** Send a user message to a session, optionally steering an active turn. */
+  abstract sendMessage(
+    sessionId: string,
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+    options?: SendMessageOptions,
+  ): Promise<void>;
 
   /** Respond to a pending permission request. */
   abstract respondToPermission(

@@ -25,6 +25,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
@@ -1276,7 +1277,12 @@ export class PiAdapter extends AgentAdapter {
     return { sessionId };
   }
 
-  async sendMessage(sessionId: string, text: string, attachments?: import('@kraki/protocol').Attachment[]): Promise<void> {
+  async sendMessage(
+    sessionId: string,
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+    options?: SendMessageOptions,
+  ): Promise<void> {
     // If the session was idle-evicted (proc killed but map entry retained) or
     // the daemon restarted, resume before sending — the proc's stdin is gone.
     const existing = this.sessions.get(sessionId);
@@ -1294,8 +1300,23 @@ export class PiAdapter extends AgentAdapter {
       this.pendingModeSignals.delete(sessionId);
       text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
     }
-    // A new user message opens a fresh logical turn: reset the finalize/skip
-    // tracking so the skip-finalize rule and finalize round apply per user message.
+    const images = (attachments ?? [])
+      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
+      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
+    const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
+
+    if (options?.delivery === 'steer') {
+      // `prompt + streamingBehavior: steer` is race-safe: while active it queues
+      // before the next LLM call; if Pi became idle between the app's state read
+      // and delivery, it starts a normal prompt instead of rejecting the input.
+      // It remains part of the current Kraki lifecycle, so do not reset/finalize
+      // local turn tracking or synthesize another idle.
+      await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+      return;
+    }
+
+    // A normal prompt opens a fresh logical turn: reset the finalize/skip
+    // tracking so the skip-finalize rule and finalize round apply per user prompt.
     s.narrationSegments = 0;
     s.toolSinceLastNarration = false;
     s.lastNarration = '';
@@ -1307,10 +1328,6 @@ export class PiAdapter extends AgentAdapter {
     s.finalizeNarration = '';
     s.finalizeStreamId = undefined;
     s.finalizeStreamLen = 0;
-    const images = (attachments ?? [])
-      .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
-      .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
-    const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
     // Submit exactly once. Pi only ACKs after prompt preflight, which may spend
     // minutes compacting even though the frame was delivered successfully. The
     // state-aware watchdog preserves the original request and never translates a
