@@ -317,6 +317,34 @@ final class TurnGrouperTests: XCTestCase {
         } else { XCTFail() }
     }
 
+    func testFailedStatusFoldsFinalReplyIntoOneTerminalBlock() {
+        let msgs = [
+            makeMsg(type: "user_message", seq: 70, payload: ["content": AnyCodable("retry")]),
+            makeMsg(type: "error", seq: 71, payload: ["message": AnyCodable("524 status code (no body)")]),
+            makeMsg(type: "error", seq: 72, payload: ["message": AnyCodable("524 status code (no body)")]),
+            makeMsg(type: "agent_message", seq: 73, payload: ["content": AnyCodable("Restarted successfully")]),
+            makeMsg(type: "turn_status", seq: 74, payload: [
+                "draft": AnyCodable(""),
+                "action": AnyCodable([
+                    "type": "failed",
+                    "payload": ["message": "524 status code (no body)"]
+                ]),
+                "finishedAt": AnyCodable("2026-07-14T00:00:00Z")
+            ]),
+            makeMsg(type: "idle", seq: 75),
+        ]
+
+        let result = groupMessagesIntoTurns(msgs)
+        XCTAssertEqual(result.count, 1)
+        guard case .block(let block) = result[0] else {
+            return XCTFail("Expected one activity block")
+        }
+        XCTAssertEqual(block.finalMessage?.type, "turn_status")
+        XCTAssertEqual(block.finalMessage?.payload["draft"]?.stringValue, "Restarted successfully")
+        XCTAssertEqual(block.thinkingMessages.filter { $0.type == "error" }.count, 2)
+        XCTAssertFalse(block.thinkingMessages.contains { $0.type == "agent_message" })
+    }
+
     // MARK: - System Messages
 
     func testSessionCreatedStandalone() {

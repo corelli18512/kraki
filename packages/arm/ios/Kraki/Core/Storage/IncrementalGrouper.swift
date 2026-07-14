@@ -526,7 +526,9 @@ struct SessionGrouperCache {
         } else {
             var lastAgentIdx = -1
             for i in stride(from: state.currentThinking.count - 1, through: 0, by: -1) {
-                if state.currentThinking[i].type == "agent_message" {
+                if state.currentThinking[i].type == "agent_message"
+                    || state.currentThinking[i].type == "interrupted_turn"
+                    || state.currentThinking[i].type == "turn_status" {
                     lastAgentIdx = i
                     break
                 }
@@ -542,10 +544,37 @@ struct SessionGrouperCache {
                     isActive: false
                 ))
             } else {
-                let thinking = state.currentThinking.enumerated()
+                var thinking = state.currentThinking.enumerated()
                     .filter { $0.offset != lastAgentIdx }
                     .map(\.element)
-                let finalMsg = state.currentThinking[lastAgentIdx]
+                var finalMsg = state.currentThinking[lastAgentIdx]
+
+                if finalMsg.type == "turn_status" || finalMsg.type == "interrupted_turn" {
+                    let existingDraft = finalMsg.payload["draft"]?.stringValue ?? ""
+                    let hasTerminalAttachments = finalMsg.payload["attachments"] != nil
+                    if let replyIdx = thinking.lastIndex(where: {
+                        $0.type == "agent_message"
+                            && (!($0.content ?? "").isEmpty || $0.payload["attachments"] != nil)
+                    }) {
+                        var payload = finalMsg.payload
+                        if existingDraft.isEmpty {
+                            payload["draft"] = AnyCodable(thinking[replyIdx].content ?? "")
+                        }
+                        if !hasTerminalAttachments,
+                           let attachments = thinking[replyIdx].payload["attachments"] {
+                            payload["attachments"] = attachments
+                        }
+                        finalMsg = ChatMessage(
+                            type: finalMsg.type,
+                            seq: finalMsg.seq,
+                            sessionId: finalMsg.sessionId,
+                            deviceId: finalMsg.deviceId,
+                            timestamp: finalMsg.timestamp,
+                            payload: payload
+                        )
+                        thinking.remove(at: replyIdx)
+                    }
+                }
                 closed.append(ActivityBlock(
                     id: blockId,
                     initiator: initiator,

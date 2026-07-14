@@ -9,12 +9,9 @@ import { messageProvider } from '../../lib/message-provider';
 import { getSessionStatus, cardActionKey } from '../../lib/session-status';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
+import { projectSpineMessages } from '../../lib/turn-projection';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
-
-/** TRACE / transient activity types — never on the spine; they live in the
- *  live bubble (live) or the Steps modal (pulled history). */
-const TRACE_TYPES = new Set(['tool_start', 'tool_complete', 'agent_narration', 'active']);
 
 /** Extract seq from a message, returning 0 for non-sequenced messages. */
 function getSeq(m: ChatMessage): number {
@@ -38,7 +35,7 @@ function collectTurnAttachments(
 ): Attachment[] {
   const directKeys = new Set(directAttachments.map(attachmentKey));
   const targetIdx = messages.findIndex((message) => getSeq(message) === bubbleSeq);
-  if (targetIdx < 0 || messages[targetIdx].type !== 'agent_message') return [];
+  if (targetIdx < 0 || !['agent_message', 'turn_status', 'interrupted_turn'].includes(messages[targetIdx].type)) return [];
   let turnStartIdx = -1;
   for (let i = targetIdx - 1; i >= 0; i--) {
     if (messages[i].type === 'user_message') {
@@ -118,13 +115,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // Persistent, replayed bubbles rendered directly in seq order. Excludes the
   // transient TRACE/activity axis (tool_start/tool_complete/agent_narration/
   // active), which is shown only from the Steps popover.
-  const spine = useMemo(
-    () => messages.filter((msg) => {
-      if (TRACE_TYPES.has(msg.type)) return false;
-      return true;
-    }),
-    [messages],
-  );
+  const spine = useMemo(() => projectSpineMessages(messages), [messages]);
   const finalAgentSeqs = useMemo(() => {
     const seqs = new Set<number>();
     let lastAgentSeq = 0;
@@ -143,11 +134,13 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     const images = new Map<number, Attachment[]>();
     const artifacts = new Map<number, ContentRef[]>();
     for (const msg of spine) {
-      if (msg.type !== 'agent_message') continue;
+      const terminal = msg.type === 'turn_status' || msg.type === 'interrupted_turn';
+      if (msg.type !== 'agent_message' && !terminal) continue;
       const seq = getSeq(msg);
-      if (!finalAgentSeqs.has(seq)) continue;
-      const turnImages = collectTurnImages(messages, seq, msg.payload.attachments);
-      const turnArtifacts = collectTurnHtmlArtifacts(messages, seq, msg.payload.attachments);
+      if (msg.type === 'agent_message' && !finalAgentSeqs.has(seq)) continue;
+      const directAttachments = (msg.payload as { attachments?: Attachment[] }).attachments ?? [];
+      const turnImages = collectTurnImages(messages, seq, directAttachments);
+      const turnArtifacts = collectTurnHtmlArtifacts(messages, seq, directAttachments);
       if (turnImages.length > 0) images.set(seq, turnImages);
       if (turnArtifacts.length > 0) artifacts.set(seq, turnArtifacts);
     }
@@ -297,8 +290,8 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
                   message={msg}
                   agent={session.agent}
                   sessionId={sessionId}
-                  turnImages={msg.type === 'agent_message' ? turnAttachmentsByBubbleSeq.images.get(getSeq(msg)) : undefined}
-                  turnArtifacts={msg.type === 'agent_message' ? turnAttachmentsByBubbleSeq.artifacts.get(getSeq(msg)) : undefined}
+                  turnImages={turnAttachmentsByBubbleSeq.images.get(getSeq(msg))}
+                  turnArtifacts={turnAttachmentsByBubbleSeq.artifacts.get(getSeq(msg))}
                   onOpenArtifact={onOpenArtifact}
                 />
               </div>

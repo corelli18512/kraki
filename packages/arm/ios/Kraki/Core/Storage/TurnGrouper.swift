@@ -342,10 +342,42 @@ func groupMessagesIntoTurns(
                     isActive: false
                 )))
             } else {
-                let thinking = currentThinking.enumerated()
+                var thinking = currentThinking.enumerated()
                     .filter { $0.offset != lastAgentIdx }
                     .map(\.element)
-                let finalMsg = currentThinking[lastAgentIdx]
+                var finalMsg = currentThinking[lastAgentIdx]
+
+                // A terminal status may arrive after Pi has already emitted its
+                // final agent_message, so CardManager's draft is empty. Fold
+                // that reply into the terminal bubble and remove it from Steps:
+                // one turn must render as one bubble, with errors/tools retained
+                // only in thinkingHistory.
+                if finalMsg.type == "turn_status" || finalMsg.type == "interrupted_turn" {
+                    let existingDraft = finalMsg.payload["draft"]?.stringValue ?? ""
+                    let hasTerminalAttachments = finalMsg.payload["attachments"] != nil
+                    if let replyIdx = thinking.lastIndex(where: {
+                        $0.type == "agent_message"
+                            && (!($0.content ?? "").isEmpty || $0.payload["attachments"] != nil)
+                    }) {
+                        var payload = finalMsg.payload
+                        if existingDraft.isEmpty {
+                            payload["draft"] = AnyCodable(thinking[replyIdx].content ?? "")
+                        }
+                        if !hasTerminalAttachments,
+                           let attachments = thinking[replyIdx].payload["attachments"] {
+                            payload["attachments"] = attachments
+                        }
+                        finalMsg = ChatMessage(
+                            type: finalMsg.type,
+                            seq: finalMsg.seq,
+                            sessionId: finalMsg.sessionId,
+                            deviceId: finalMsg.deviceId,
+                            timestamp: finalMsg.timestamp,
+                            payload: payload
+                        )
+                        thinking.remove(at: replyIdx)
+                    }
+                }
                 result.append(.block(ActivityBlock(
                     id: blockId,
                     initiator: initiator,

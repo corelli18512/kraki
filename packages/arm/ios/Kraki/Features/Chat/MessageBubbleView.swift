@@ -335,6 +335,7 @@ struct MessageBubbleView: View {
                 if let draft = message.interruptedDraft, !draft.isEmpty {
                     messageBody(draft, foreground: .primary.opacity(0.8))
                 }
+                imageGrid(attachments: message.attachments)
                 if let detail, !detail.isEmpty {
                     Text(detail)
                         .font(.subheadline)

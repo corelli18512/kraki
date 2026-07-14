@@ -119,6 +119,10 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
           }
         : { text: message.payload.draft ?? '', action: message.payload.action };
       const finishedAt = legacy ? message.payload.interruptedAt : message.payload.finishedAt;
+      const directImages = ((message.payload as { attachments?: Attachment[] }).attachments ?? []).filter(
+        (attachment) => attachment.type === 'image' ||
+          (attachment.type === 'content_ref' && attachment.mimeType.startsWith('image/')),
+      );
       return (
         <LiveAgentBubble
           sessionId={sessionId}
@@ -128,6 +132,9 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
             timestamp: message.timestamp ?? finishedAt ?? new Date().toISOString(),
             bubbleSeq: typeof message.seq === 'number' ? message.seq : 0,
             stepHint: message.payload.steps,
+            attachments: [...directImages, ...(turnImages ?? [])],
+            artifacts: turnArtifacts,
+            onOpenArtifact,
           }}
         />
       );
@@ -468,7 +475,7 @@ function CopyableBubble({ text, children }: { text: string; children: React.Reac
   );
 }
 
-function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onOpen?: (artifact: ContentRef) => void }) {
+export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onOpen?: (artifact: ContentRef) => void }) {
   return (
     <div className="mt-2 space-y-1.5" data-html-artifacts={artifacts.length}>
       {artifacts.map((artifact) => {
@@ -497,7 +504,7 @@ function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onO
   );
 }
 
-function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
+export function ImageAttachments({ attachments, sessionId }: { attachments?: Attachment[]; sessionId?: string }) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [resolvedRefs, setResolvedRefs] = useState<Record<number, string>>({});
   const images = attachments?.filter(

@@ -1790,6 +1790,11 @@ export class RelayClient {
         message: event.message,
         source: 'backend',
       });
+      this.recordTrace({
+        type: 'error',
+        sessionId,
+        payload: { message: event.message },
+      });
       this.send({
         type: 'error',
         sessionId,
@@ -2288,7 +2293,10 @@ export class RelayClient {
     // agent_message / system_message stamps this running total as payload.steps
     // (see send()), letting a concluded bubble show its "Steps" affordance from
     // replay alone — WITHOUT first pulling the transient trace.
-    if (msg.type === 'tool_start' || msg.type === 'agent_narration' || msg.type === 'permission' || msg.type === 'question') {
+    if (
+      msg.type === 'tool_start' || msg.type === 'agent_narration' ||
+      msg.type === 'permission' || msg.type === 'question' || msg.type === 'error'
+    ) {
       this.turnStepCounts.set(msg.sessionId, (this.turnStepCounts.get(msg.sessionId) ?? 0) + 1);
     }
     const enriched = { ...msg, timestamp: new Date().toISOString() };
