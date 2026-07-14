@@ -8,11 +8,12 @@ import { PermissionInput } from '../actions/PermissionInput';
 import { QuestionInput } from '../actions/QuestionInput';
 import { ToolActivity } from './ToolActivity';
 import { StepsButton, useTurnSteps } from './StepsModal';
-import { markdownComponents } from './MessageBubble';
+import { markdownComponents, ImageAttachments, HtmlArtifactCards } from './MessageBubble';
 import { messageProvider } from '../../lib/message-provider';
 import { formatTime } from '../../lib/format';
 import { cardActionKey } from '../../lib/session-status';
 import type { SessionCard } from '../../types/store';
+import type { Attachment, ContentRef } from '@kraki/protocol';
 
 /** Lazy attachment pull for tool args/result refs rendered in the status
  *  section (mirrors MessageBubble's ATTACHMENT_PULL). */
@@ -37,6 +38,9 @@ interface LiveAgentBubbleProps {
     timestamp: string;
     bubbleSeq: number;
     stepHint?: number;
+    attachments?: Attachment[];
+    artifacts?: ContentRef[];
+    onOpenArtifact?: (artifact: ContentRef) => void;
   };
 }
 
@@ -69,6 +73,8 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
   const live = !frozen;
   const draft = card.text ?? '';
   const hasContent = draft.length > 0;
+  const hasFrozenArtifacts = !!frozen?.attachments?.length || !!frozen?.artifacts?.length;
+  const showContentSection = hasContent || hasFrozenArtifacts;
   const a = card.action;
 
   const runningTool = a?.type === 'tool_start' ? a : null;
@@ -114,13 +120,19 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
         <AgentAvatar agent={agent ?? ''} sessionId={sessionId} size="sm" />
       </div>
       <div className="min-w-0 max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md bg-ocean-500/5 shadow-sm sm:max-w-[70%]">
-        {hasContent && (
+        {showContentSection && (
           <div className="overflow-x-auto px-4 py-2.5">
-            <div className="markdown-content text-sm leading-relaxed text-text-primary">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                {draft}
-              </Markdown>
-            </div>
+            {hasContent && (
+              <div className="markdown-content text-sm leading-relaxed text-text-primary">
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                  {draft}
+                </Markdown>
+              </div>
+            )}
+            <ImageAttachments attachments={frozen?.attachments} sessionId={sessionId} />
+            {frozen?.artifacts && frozen.artifacts.length > 0 && (
+              <HtmlArtifactCards artifacts={frozen.artifacts} onOpen={frozen.onOpenArtifact} />
+            )}
             {/* Settled tail (no live action): render a footer BYTE-IDENTICAL to
                the concluded agent bubble (MessageBubble's agent_message) — same
                `mt-1` row, same timestamp (HH:MM of ~now, which matches the
@@ -138,7 +150,7 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
         )}
 
         {hasAction && (
-          <div className={`bg-surface-tertiary/40 px-3 py-2 ${hasContent ? 'border-t border-border-primary/50' : ''}`}>
+          <div className={`bg-surface-tertiary/40 px-3 py-2 ${showContentSection ? 'border-t border-border-primary/50' : ''}`}>
             {tool && (
               <ToolActivity
                 type={runningTool ? 'start' : 'complete'}

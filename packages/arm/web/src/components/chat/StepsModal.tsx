@@ -5,7 +5,9 @@ import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
 import { StepsList } from './StepsList';
 
-const isTrace = (t: string) => t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' || t === 'permission' || t === 'question';
+const isTrace = (t: string) =>
+  t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
+  t === 'permission' || t === 'question' || t === 'error';
 
 /**
  * Collect the TRACE steps (narration + tool chips) belonging to one turn,

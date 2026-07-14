@@ -462,8 +462,23 @@ export const useStore = create<Store>()(persist((set) => ({
       );
       if (bubbleIdx < 0) return state; // bubble not loaded — nothing to attach to
 
+      // A final agent_message can briefly become the visible turn anchor before
+      // a following turn_status arrives. Its async trace pull may then complete
+      // after the terminal pull and re-inject the entire turn a second time.
+      // Once a terminal record exists later in the same user-bounded turn, that
+      // record exclusively owns Steps; discard stale agent-anchor responses.
+      if (existing[bubbleIdx].type === 'agent_message') {
+        for (let i = bubbleIdx + 1; i < existing.length; i++) {
+          const next = existing[i];
+          if (next.type === 'user_message' || next.type === 'send_input') break;
+          if (next.type === 'turn_status' || next.type === 'interrupted_turn') return state;
+        }
+      }
+
+      const replaceErrors = entries.some((entry) => entry.type === 'error');
       const isTrace = (t: string) =>
-        t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration';
+        t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
+        t === 'permission' || t === 'question' || (replaceErrors && t === 'error');
 
       // The target bubble is either the concluding agent_message (a concluded
       // turn — steps go BEFORE it) or the leading user_message of an in-progress

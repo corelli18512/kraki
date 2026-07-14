@@ -145,37 +145,50 @@ test.describe.serial('real-stack terminal status cards', () => {
     await page.screenshot({ path: '/tmp/kraki-terminal-legacy-process-lost.png', fullPage: false });
   });
 
-  test('backend error freezes a permanent failed card', async () => {
+  test('backend errors and final reply collapse into one permanent failed bubble', async () => {
     await control('/idle', { sid: sessionId });
     await sendPrompt(page, 'Run the full test suite');
 
-    // Active streaming draft.
-    await control('/delta', { sid: sessionId, text: 'Compiling and running tests' });
     await control('/toolStart', { sid: sessionId, tool: 'bash', cmd: 'npm test' });
 
-    // A terminal backend error arrives, then idle freezes it as `failed`.
+    // Reproduce mrhuha8u-tcpn1tz8: repeated backend errors, then a final Pi
+    // reply, then idle freezes the terminal status with an empty card draft.
     await control('/error', { sid: sessionId, message: '524 status code (no body)' });
+    await control('/error', { sid: sessionId, message: '524 status code (no body)' });
+    await control('/msg', { sid: sessionId, text: 'Restarted successfully after the backend errors' });
     await control('/idle', { sid: sessionId });
 
     const failedCard = page.locator('[data-terminal-card="failed"]')
-      .filter({ hasText: 'Compiling and running tests' });
+      .filter({ hasText: 'Restarted successfully after the backend errors' });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-terminal-card="failed"]')
+      .filter({ hasText: 'Restarted successfully after the backend errors' })).toHaveCount(1);
     await expect(failedCard.getByText('Turn failed')).toBeVisible();
     await expect(failedCard.getByText('524 status code (no body)')).toBeVisible();
-    // The streaming draft is preserved inside the frozen card.
-    await expect(failedCard.getByText('Compiling and running tests')).toBeVisible();
+    await expect(failedCard.getByText('Restarted successfully after the backend errors')).toBeVisible();
+    // Error wire records are turn details, never top-level chat bubbles.
+    await expect(page.getByText('Error', { exact: true })).toHaveCount(0);
 
-    await page.screenshot({ path: '/tmp/kraki-terminal-failed.png', fullPage: false });
+    await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble.png', fullPage: false });
+
+    // Both backend errors remain available inside Steps.
+    await failedCard.getByRole('button', { name: 'Open steps' }).click();
+    await expect(page.getByText('Error', { exact: true })).toHaveCount(2);
+    await expect(page.getByText('524 status code (no body)', { exact: true })).toHaveCount(3);
+    await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble-steps.png', fullPage: false });
+    await page.keyboard.press('Escape');
   });
 
   test('failed card survives a full browser refresh', async () => {
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 10_000 });
     const failedCard = page.locator('[data-terminal-card="failed"]')
-      .filter({ hasText: 'Compiling and running tests' });
+      .filter({ hasText: 'Restarted successfully after the backend errors' });
     await expect(failedCard).toBeVisible({ timeout: 10_000 });
+    await expect(failedCard).toHaveCount(1);
     await expect(failedCard.getByText('Turn failed')).toBeVisible();
+    await expect(page.getByText('Error', { exact: true })).toHaveCount(0);
 
-    await page.screenshot({ path: '/tmp/kraki-terminal-failed-refreshed.png', fullPage: false });
+    await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble-refreshed.png', fullPage: false });
   });
 });

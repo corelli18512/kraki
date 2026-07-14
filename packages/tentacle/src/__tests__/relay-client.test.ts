@@ -2330,7 +2330,11 @@ describe('RelayClient pending-question digest', () => {
     expect(status.payload).toMatchObject({
       action: { type: 'failed', payload: { message: '524 status code (no body)', source: 'backend' } },
     });
-    expect(status.payload.steps).toBe(1);
+    expect(status.payload.steps).toBe(2);
+    const tracedError = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
+      .find((entry) => entry.type === 'error' && entry.payload.message === '524 status code (no body)');
+    expect(tracedError).toBeDefined();
     // The running tool was closed as interrupted, not left dangling.
     const interruptedTool = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })

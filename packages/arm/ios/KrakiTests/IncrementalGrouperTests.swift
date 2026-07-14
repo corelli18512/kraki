@@ -71,6 +71,29 @@ final class IncrementalGrouperTests: XCTestCase {
         )
     }
 
+    private func terminalStatus(seq: Int, draft: String = "") -> ChatMessage {
+        ChatMessage(
+            type: "turn_status", seq: seq,
+            sessionId: "s", deviceId: "d", timestamp: "2024-01-01T00:00:00Z",
+            payload: [
+                "draft": AnyCodable(draft),
+                "action": AnyCodable([
+                    "type": "failed",
+                    "payload": ["message": "524 status code (no body)"]
+                ]),
+                "finishedAt": AnyCodable("2026-07-14T00:00:00Z")
+            ]
+        )
+    }
+
+    private func errorMsg(seq: Int) -> ChatMessage {
+        ChatMessage(
+            type: "error", seq: seq,
+            sessionId: "s", deviceId: "d", timestamp: "2024-01-01T00:00:00Z",
+            payload: ["message": AnyCodable("524 status code (no body)")]
+        )
+    }
+
     /// Convenience: extract blocks from a TurnItem array, skipping
     /// standalones.
     private func blocks(_ items: [TurnItem]) -> [ActivityBlock] {
@@ -78,6 +101,25 @@ final class IncrementalGrouperTests: XCTestCase {
     }
 
     // MARK: - Single-island, append-only
+
+    func testTerminalStatusFoldsReplyAndKeepsErrorsInThinking() {
+        var cache = SessionGrouperCache()
+        cache.ingest([
+            userMsg(seq: 70, text: "retry"),
+            errorMsg(seq: 71),
+            errorMsg(seq: 72),
+            agentMsg(seq: 73, text: "Restarted successfully"),
+            terminalStatus(seq: 74),
+            idle(seq: 75),
+        ])
+
+        let grouped = blocks(cache.items(streamingContent: nil))
+        XCTAssertEqual(grouped.count, 1)
+        XCTAssertEqual(grouped[0].finalMessage?.type, "turn_status")
+        XCTAssertEqual(grouped[0].finalMessage?.payload["draft"]?.stringValue, "Restarted successfully")
+        XCTAssertEqual(grouped[0].thinkingMessages.filter { $0.type == "error" }.count, 2)
+        XCTAssertFalse(grouped[0].thinkingMessages.contains { $0.type == "agent_message" })
+    }
 
     /// New cache + a complete turn arriving as one batch produces
     /// the same output as the non-incremental grouper.

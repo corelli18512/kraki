@@ -136,6 +136,25 @@ describe('setTurnSteps', () => {
     expect(tools).toHaveLength(2);
   });
 
+  it('rejects a stale final-agent trace response once terminal status owns the turn', () => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1));
+    store.appendMessage('s1', m('agent_message', 2, { content: 'done' }));
+    store.appendMessage('s1', m('turn_status', 3, {
+      draft: '',
+      action: { type: 'failed', payload: { message: '524', source: 'backend', failedAt: '' } },
+      finishedAt: '',
+    }));
+
+    const terminalTrace = [traceEntry('tool_start', 'tc1'), traceEntry('tool_complete', 'tc1')];
+    store.setTurnSteps('s1', 3, terminalTrace);
+    store.setTurnSteps('s1', 2, terminalTrace); // stale response races in later
+
+    const list = useStore.getState().messages.get('s1')!;
+    expect(list.filter(x => x.type === 'tool_start')).toHaveLength(1);
+    expect(list.filter(x => x.type === 'tool_complete')).toHaveLength(1);
+  });
+
   it('does not persist injected trace to IDB', async () => {
     const store = useStore.getState();
     store.appendMessage('s1', m('user_message', 1));
