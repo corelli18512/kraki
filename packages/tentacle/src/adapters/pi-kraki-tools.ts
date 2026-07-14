@@ -282,6 +282,16 @@ export default function krakiTools(pi) {
           reason: "Denied by Kraki: kraki stop, restart, and update cannot run inside an agent session because they would terminate the tentacle hosting this session."
         };
       }
+      // pi's bash tool accepts an optional 'timeout' (seconds) with NO default,
+      // so a command that hangs forever (deadlocked child, held handles) can
+      // wedge the whole turn until the idle-evicter mis-kills the session.
+      // Inject a sane default when the model didn't set one. pi kills the
+      // process tree on timeout and reports "Command timed out after N seconds"
+      // back to the model, so it can react. Mutating 'input' works because the
+      // SDK passes the same args object reference into the tool's execute().
+      if (input.timeout === undefined || input.timeout === null) {
+        input.timeout = 600;
+      }
     }
     let message;
     try {
