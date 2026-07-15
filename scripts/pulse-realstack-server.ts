@@ -414,6 +414,36 @@ async function main(): Promise<void> {
           return json(200, { ok: true, marker, sizeKb, chunkCount: Math.ceil((body.length) / (256 * 1024)) });
         }
         case '/attachmentReads': return json(200, { reads: attachmentReads });
+        // ── build one real turn with hundreds of trace entries. The browser's
+        //    lazy request_turn_trace gets a large turn_trace_batch over bulk
+        //    stream 1 while the test injects a concurrent live echo. ──
+        case '/traceFlood': {
+          const sid = q.get('sid')!;
+          const n = Number(q.get('n') ?? '220');
+          const reply = q.get('reply') ?? `TRACE-DONE-${Date.now().toString(36)}`;
+          // Seed directly into the real SessionManager trace store so this
+          // stresses one historical turn_trace_batch, not 2N live card_action
+          // transitions (which would be a different request-coalescing test).
+          for (let i = 0; i < n; i++) {
+            const tcid = `tc-trace-${sid}-${i}`;
+            sm.appendTrace(sid, 'tool_start', JSON.stringify({
+              type: 'tool_start', sessionId: sid,
+              payload: { toolName: 'bash', headline: `echo trace-${i}`, toolCallId: tcid },
+            }));
+            sm.appendTrace(sid, 'tool_complete', JSON.stringify({
+              type: 'tool_complete', sessionId: sid,
+              payload: { toolName: 'bash', headline: `echo trace-${i}`, toolCallId: tcid },
+            }));
+          }
+          // One real transition increments the turn's replay-visible `steps`
+          // hint, causing reload to lazily request the full persisted trace.
+          const hintCall = `tc-trace-hint-${sid}`;
+          adapter.toolStart(sid, 'bash', { command: 'echo trace-hint' }, hintCall);
+          adapter.toolComplete(sid, 'bash', 'trace hint result', hintCall);
+          adapter.msg(sid, reply);
+          adapter.idle(sid);
+          return json(200, { ok: true, entries: n * 2 + 2, reply });
+        }
         // ── generate a REAL multi-chunk PNG image (show_image path) so the spec
         //    proves image ContentRefs render via paced request_attachment pulls.
         //    Noise pixels keep the PNG > 256 KiB (multiple chunks) after compression. ──

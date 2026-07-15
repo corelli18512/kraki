@@ -13,7 +13,7 @@
  * relay holds durable messages for offline arms, not the tentacle.
  */
 
-import { decodeFrame, decodeFrameWithStream, type Effect, Endpoint, StreamSet } from '@coinfra/pulse';
+import { decodeFrameWithStream, type Effect, Endpoint, StreamSet } from '@coinfra/pulse';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('pulse');
@@ -75,6 +75,8 @@ const dec = new TextDecoder();
  *  echo / abort / status-card updates on the same downlink. */
 export function streamForType(type: string | undefined): number {
   switch (type) {
+    case 'session_replay_batch':
+    case 'session_messages_batch':
     case 'session_messages_range_batch':
     case 'turn_trace_batch':
     case 'attachment_data':
@@ -86,9 +88,13 @@ export function streamForType(type: string | undefined): number {
 
 export class TentaclePulse {
   private streams: StreamSet;
-  /** Target app for the frame currently being emitted (per send). Empty ⇒ the
-   *  frame fans out to all apps (broadcast); set ⇒ unicast to one app. */
-  private currentTarget = '';
+  /** Per-stream, per-seq unicast target. Retransmits happen outside send(), and
+   *  live/bulk have independent seq spaces (both can have seq=1), so neither a
+   *  mutable current target nor a seq-only map is sufficient. */
+  private targetByStream = new Map<number, Map<bigint, string>>();
+  /** Set after the current relay connection sends any stream-1 frame (normally
+   *  its HELLO). Until then bulk falls back to v1 stream 0 for old Heads. */
+  private bulkCapable = false;
 
   constructor(
     private readonly host: TentaclePulseHost,
@@ -112,15 +118,21 @@ export class TentaclePulse {
    *  sync snapshots self-heal on reconnect). */
   send(payloadJson: string, targetDeviceId = '', durable = false, coalesceKey?: string, stream = 0): void {
     const payload = enc.encode(payloadJson);
-    this.currentTarget = targetDeviceId;
-    const { seq, effects } = this.streams.send(stream, payload, { durable, coalesceKey });
-    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey, stream });
+    const actualStream = stream === 1 && !this.bulkCapable ? 0 : stream;
+    const { seq, effects } = this.streams.send(actualStream, payload, { durable, coalesceKey });
+    let targets = this.targetByStream.get(actualStream);
+    if (!targets) {
+      targets = new Map();
+      this.targetByStream.set(actualStream, targets);
+    }
+    targets.set(seq, targetDeviceId);
+    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey, stream: actualStream, requestedStream: stream });
     this.run(effects);
-    this.currentTarget = '';
   }
 
   /** The relay connection is up — resume every stream. */
   onConnected(): void {
+    this.bulkCapable = false;
     trace('CONNECTED', 0, 0);
     this.run(this.streams.onConnected(this.host.now()));
   }
@@ -136,6 +148,7 @@ export class TentaclePulse {
     const bytes = new Uint8Array(Buffer.from(pulseB64, 'base64'));
     const d = decodeFrameWithStream(bytes);
     if (d) {
+      if (d.streamId === 1) this.bulkCapable = true;
       trace('RX', d.frame.t === 'data' ? d.frame.seq : 0, bytes.length, { kind: d.frame.t, stream: d.streamId });
     } else {
       trace('RX', 0, bytes.length, { kind: '?' });
@@ -152,9 +165,14 @@ export class TentaclePulse {
     for (const e of effects) {
       switch (e.t) {
         case 'transmit': {
-          const frame = decodeFrame(e.bytes);
-          trace('TX', frame?.t === 'data' ? frame.seq : 0, e.bytes.length, { kind: frame?.t ?? '?', to: this.currentTarget || '(broadcast)' });
-          this.host.sendPulseFrame(b64(e.bytes), this.currentTarget || undefined);
+          const decoded = decodeFrameWithStream(e.bytes);
+          const frame = decoded?.frame;
+          const stream = decoded?.streamId ?? 0;
+          const target = frame?.t === 'data'
+            ? (this.targetByStream.get(stream)?.get(frame.seq) ?? '')
+            : '';
+          trace('TX', frame?.t === 'data' ? frame.seq : 0, e.bytes.length, { kind: frame?.t ?? '?', to: target || '(broadcast)', stream });
+          this.host.sendPulseFrame(b64(e.bytes), target || undefined);
           break;
         }
         case 'deliver':
@@ -162,11 +180,31 @@ export class TentaclePulse {
           // The delivered payload is the JSON {blob, keys} string.
           this.host.onDelivered(dec.decode(e.payload));
           break;
+        case 'acked': {
+          const stream = e.streamId ?? 0;
+          const targets = this.targetByStream.get(stream);
+          if (targets) {
+            for (const seq of targets.keys()) {
+              if (seq <= e.seqUpTo) targets.delete(seq);
+            }
+            if (targets.size === 0) this.targetByStream.delete(stream);
+          }
+          break;
+        }
+        case 'purged': {
+          const stream = e.streamId ?? 0;
+          const targets = this.targetByStream.get(stream);
+          if (targets) {
+            for (const seq of e.droppedSeqs) targets.delete(seq);
+            if (targets.size === 0) this.targetByStream.delete(stream);
+          }
+          break;
+        }
         case 'reset-inbound':
           trace('RESET-INBOUND', e.fromSeq, 0, { peerEpoch: e.peerEpoch });
           logger.warn({ fromSeq: String(e.fromSeq) }, 'pulse reset-inbound (relay stream reset)');
           break;
-        // acked/store/unstore/open/close: nothing for the tentacle to do here
+        // store/unstore/open/close: nothing for the tentacle to do here
         // (not durable-supported; link lifecycle driven explicitly).
       }
     }

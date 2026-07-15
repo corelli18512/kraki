@@ -150,9 +150,19 @@ class MessageProvider {
   private loadingThroughSeq = new Map<string, number>();
   /** Latest tail reconciliation requested beyond an in-flight range. */
   private pendingTailReconciles = new Map<string, number>();
-  /** Turn-trace pulls already issued, keyed `${sessionId}:${bubbleSeq}`.
-   *  Prevents re-pulling the same concluded turn's TRACE on every render. */
+  /** Turn-trace pulls already completed or scheduled, keyed
+   *  `${sessionId}:${bubbleSeq}`. */
   private tracePulled = new Set<string>();
+  /** Only one potentially-large trace response may be in flight globally.
+   *  This prevents reconnect-time cross-bubble pulls from flooding Tentacle
+   *  encryption and the Head WebSocket before stream 1 can apply backpressure. */
+  private traceInFlight: string | null = null;
+  private traceQueue: Array<{ sessionId: string; bubbleSeq: number }> = [];
+  private traceQueued = new Set<string>();
+  /** Invalidations that arrived while the same key was in flight collapse into
+   *  one authoritative refresh after its response. */
+  private traceRefresh = new Set<string>();
+  private traceTimeout: ReturnType<typeof setTimeout> | null = null;
   private cardRequested = new Set<string>();
 
   setSend(fn: (msg: Record<string, unknown>) => void): void {
@@ -370,6 +380,12 @@ class MessageProvider {
     this.loadingThroughSeq.clear();
     this.pendingTailReconciles.clear();
     this.tracePulled.clear();
+    this.traceInFlight = null;
+    this.traceQueue = [];
+    this.traceQueued.clear();
+    this.traceRefresh.clear();
+    if (this.traceTimeout) clearTimeout(this.traceTimeout);
+    this.traceTimeout = null;
     this.cardRequested.clear();
   }
 
@@ -405,34 +421,69 @@ class MessageProvider {
   requestTurnTrace(sessionId: string, bubbleSeq: number): void {
     const key = `${sessionId}:${bubbleSeq}`;
     if (this.tracePulled.has(key)) return;
+    if (!this.canPullTurnTrace(sessionId, bubbleSeq)) return;
+
+    this.tracePulled.add(key);
+    if (this.traceInFlight === null) {
+      this.dispatchTurnTrace(sessionId, bubbleSeq);
+    } else if (!this.traceQueued.has(key)) {
+      this.traceQueued.add(key);
+      this.traceQueue.push({ sessionId, bubbleSeq });
+    }
+  }
+
+  private canPullTurnTrace(sessionId: string, bubbleSeq: number): boolean {
     const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
     if (!tentacleDeviceId || !this.sendFn) {
       logger.warn('cannot request turn trace', {
         sessionId, bubbleSeq, hasSend: !!this.sendFn, hasDevice: !!tentacleDeviceId,
       });
-      return;
+      return false;
     }
-    const store = getStore();
-    // A turn-trace pull is a best-effort background reconcile. If the tentacle
-    // device has no known encryption key yet (offline / no key exchange this
-    // session), the encrypted-send path would surface a user-facing
-    // "Cannot send: target device has no encryption key" banner — wrong for a
-    // silent background operation. Skip without marking as pulled so it retries
-    // once the key arrives.
-    const targetDev = store.devices.get(tentacleDeviceId);
+    const targetDev = getStore().devices.get(tentacleDeviceId);
     if (!(targetDev?.encryptionKey ?? targetDev?.publicKey)) {
       logger.debug('skip turn trace pull — tentacle not encryptable yet', {
         sessionId, bubbleSeq, tentacleDeviceId,
       });
+      return false;
+    }
+    return true;
+  }
+
+  private dispatchTurnTrace(sessionId: string, bubbleSeq: number): void {
+    const key = `${sessionId}:${bubbleSeq}`;
+    const tentacleDeviceId = this.tentacleDeviceMap.get(sessionId);
+    if (!tentacleDeviceId || !this.sendFn || !this.canPullTurnTrace(sessionId, bubbleSeq)) {
+      this.tracePulled.delete(key);
+      this.dispatchNextTurnTrace();
       return;
     }
-    this.tracePulled.add(key);
+    this.traceInFlight = key;
     this.sendFn({
       type: 'request_turn_trace',
-      deviceId: store.deviceId ?? '',
+      deviceId: getStore().deviceId ?? '',
       payload: { sessionId, bubbleSeq, targetDeviceId: tentacleDeviceId },
     });
+    if (this.traceTimeout) clearTimeout(this.traceTimeout);
+    this.traceTimeout = setTimeout(() => {
+      if (this.traceInFlight !== key) return;
+      logger.warn('turn trace pull timed out', { sessionId, bubbleSeq });
+      this.traceInFlight = null;
+      this.traceTimeout = null;
+      this.tracePulled.delete(key);
+      this.traceRefresh.delete(key);
+      this.dispatchNextTurnTrace();
+    }, 15_000);
     logger.info('requested turn trace', { sessionId, bubbleSeq });
+  }
+
+  private dispatchNextTurnTrace(): void {
+    if (this.traceInFlight !== null) return;
+    const next = this.traceQueue.shift();
+    if (!next) return;
+    const key = `${next.sessionId}:${next.bubbleSeq}`;
+    this.traceQueued.delete(key);
+    this.dispatchTurnTrace(next.sessionId, next.bubbleSeq);
   }
 
   /**
@@ -441,7 +492,15 @@ class MessageProvider {
    * persisted list).
    */
   invalidateTurnTrace(sessionId: string, bubbleSeq: number): void {
-    this.tracePulled.delete(`${sessionId}:${bubbleSeq}`);
+    const key = `${sessionId}:${bubbleSeq}`;
+    if (this.traceInFlight === key) {
+      this.traceRefresh.add(key);
+      return;
+    }
+    // A queued request has not been sent yet, so it already observes the newest
+    // persisted trace and needs no duplicate queue entry.
+    if (this.traceQueued.has(key)) return;
+    this.tracePulled.delete(key);
   }
 
   /**
@@ -460,9 +519,20 @@ class MessageProvider {
       sessionId, bubbleSeq, count: list.length, complete,
     });
     getStore().setTurnSteps(sessionId, bubbleSeq, list);
-    if (!complete) {
-      // Turn not finished — let a subsequent pull (e.g. at idle) refresh it.
-      this.tracePulled.delete(`${sessionId}:${bubbleSeq}`);
+    const key = `${sessionId}:${bubbleSeq}`;
+    const refresh = this.traceRefresh.delete(key);
+    if (!complete || refresh) this.tracePulled.delete(key);
+
+    if (this.traceInFlight === key) {
+      this.traceInFlight = null;
+      if (this.traceTimeout) clearTimeout(this.traceTimeout);
+      this.traceTimeout = null;
+      if (refresh && this.canPullTurnTrace(sessionId, bubbleSeq)) {
+        this.tracePulled.add(key);
+        this.traceQueued.add(key);
+        this.traceQueue.push({ sessionId, bubbleSeq });
+      }
+      this.dispatchNextTurnTrace();
     }
   }
 

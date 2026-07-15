@@ -21,8 +21,9 @@
  * envelopes keep the fire-and-forget path.
  */
 
+import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
+import { decodeFrame, decodeFrameWithStream, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 import { getLogger } from './logger.js';
 import { fp, trace } from './trace.js';
@@ -99,7 +100,16 @@ interface PerDevice {
 
 export class PulseHub {
   private readonly devices = new Map<string, PerDevice>();
+  /** Capability is tracked both historically and for the concrete connection.
+   *  While offline, a previously-v2 device keeps bulk in stream 1. On reconnect,
+   *  current capability must be re-advertised, allowing a rolled-back/cached v1
+   *  client under the same device id to receive a stream-0 fallback. */
+  private readonly bulkCapableEver = new Set<string>();
+  private readonly bulkCapableNow = new Set<string>();
+  private readonly connectedDevices = new Set<string>();
   private readonly gc: Required<PulseHubGcConfig>;
+  /** Unique even when two hub processes start in the same millisecond. */
+  private readonly processEpoch = randomUUID();
   private gcTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -109,27 +119,60 @@ export class PulseHub {
   ) {
     this.gc = { ...DEFAULT_GC, ...(gc ?? {}) };
     this.initSchema();
+    this.loadCapabilities();
     this.startGc();
   }
 
   private initSchema(): void {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS pulse_outbox (
+    const createOutbox = `CREATE TABLE pulse_outbox (
       device TEXT NOT NULL, stream INTEGER NOT NULL DEFAULT 0,
       seq TEXT NOT NULL, payload BLOB NOT NULL,
       dest TEXT NOT NULL, durable_dest INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (device, stream, seq))`);
-    this.db.exec(`CREATE TABLE IF NOT EXISTS pulse_meta (
+      PRIMARY KEY (device, stream, seq))`;
+    const createMeta = `CREATE TABLE pulse_meta (
       device TEXT NOT NULL, stream INTEGER NOT NULL DEFAULT 0, snapshot TEXT NOT NULL,
-      PRIMARY KEY (device, stream))`);
-    // Migrate pre-§13 single-stream schemas: both tables keyed by device only
-    // (stream implicit 0). Add the stream column defaulting to 0 so restored
-    // live-stream rows keep working. Idempotent across boots.
-    for (const table of ['pulse_outbox', 'pulse_meta']) {
-      try {
-        this.db.exec(`ALTER TABLE ${table} ADD COLUMN stream INTEGER NOT NULL DEFAULT 0`);
-      } catch { /* column already exists */ }
-    }
-    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pulse_meta_device_stream ON pulse_meta (device, stream)`);
+      PRIMARY KEY (device, stream))`;
+
+    this.db.exec(createOutbox.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '));
+    this.db.exec(createMeta.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '));
+    this.db.exec(`CREATE TABLE IF NOT EXISTS pulse_capabilities (
+      device TEXT PRIMARY KEY, bulk INTEGER NOT NULL DEFAULT 0)`);
+
+    type Column = { name: string; pk: number };
+    const columns = (table: string): Column[] =>
+      this.db.prepare(`PRAGMA table_info(${table})`).all() as Column[];
+    const hasPrimaryKey = (cols: Column[], expected: string[]): boolean =>
+      expected.every((name, index) => cols.find((col) => col.name === name)?.pk === index + 1);
+
+    const outboxColumns = columns('pulse_outbox');
+    const metaColumns = columns('pulse_meta');
+    const migrateOutbox = !outboxColumns.some((col) => col.name === 'stream')
+      || !hasPrimaryKey(outboxColumns, ['device', 'stream', 'seq']);
+    const migrateMeta = !metaColumns.some((col) => col.name === 'stream')
+      || !hasPrimaryKey(metaColumns, ['device', 'stream']);
+    if (!migrateOutbox && !migrateMeta) return;
+
+    // Adding `stream` alone is insufficient: SQLite keeps the old primary key
+    // (`device,seq` / `device`), so live seq=5 still collides with bulk seq=5.
+    // Rebuild atomically and preserve every legacy row as stream 0.
+    this.db.transaction(() => {
+      if (migrateOutbox) {
+        const sourceStream = outboxColumns.some((col) => col.name === 'stream') ? 'stream' : '0';
+        this.db.exec('ALTER TABLE pulse_outbox RENAME TO pulse_outbox_legacy');
+        this.db.exec(createOutbox);
+        this.db.exec(`INSERT INTO pulse_outbox (device, stream, seq, payload, dest, durable_dest)
+          SELECT device, ${sourceStream}, seq, payload, dest, durable_dest FROM pulse_outbox_legacy`);
+        this.db.exec('DROP TABLE pulse_outbox_legacy');
+      }
+      if (migrateMeta) {
+        const sourceStream = metaColumns.some((col) => col.name === 'stream') ? 'stream' : '0';
+        this.db.exec('ALTER TABLE pulse_meta RENAME TO pulse_meta_legacy');
+        this.db.exec(createMeta);
+        this.db.exec(`INSERT INTO pulse_meta (device, stream, snapshot)
+          SELECT device, ${sourceStream}, snapshot FROM pulse_meta_legacy`);
+        this.db.exec('DROP TABLE pulse_meta_legacy');
+      }
+    })();
   }
 
   /** Ensure a per-device StreamSet exists (live + bulk endpoints, restoring
@@ -148,13 +191,13 @@ export class PulseHub {
     // live stream's cursor.
     const ts = this.host.now();
     const live = new Endpoint({
-      epoch: `head:${deviceId}:live:${ts}`,
+      epoch: `head:${this.processEpoch}:${deviceId}:live:${ts}`,
       durable: { supported: true },
       streamId: STREAM_LIVE,
       restore: this.loadSnapshot(deviceId, STREAM_LIVE),
     });
     const bulk = new Endpoint({
-      epoch: `head:${deviceId}:bulk:${ts}`,
+      epoch: `head:${this.processEpoch}:${deviceId}:bulk:${ts}`,
       durable: { supported: true },
       streamId: STREAM_BULK,
       restore: this.loadSnapshot(deviceId, STREAM_BULK),
@@ -166,6 +209,8 @@ export class PulseHub {
 
   /** A device connected — bring up its stream set (resume any persisted outbox). */
   onDeviceConnected(deviceId: string): void {
+    this.connectedDevices.add(deviceId);
+    this.bulkCapableNow.delete(deviceId);
     const d = this.ep(deviceId);
     this.run(deviceId, d.streams.onConnected(this.host.now()));
     this.saveSnapshot(deviceId);
@@ -173,6 +218,8 @@ export class PulseHub {
 
   /** A device disconnected — its outboxes persist for resume. */
   onDeviceDisconnected(deviceId: string): void {
+    this.connectedDevices.delete(deviceId);
+    this.bulkCapableNow.delete(deviceId);
     const d = this.devices.get(deviceId);
     if (!d) return;
     d.streams.onDisconnected(this.host.now());
@@ -205,11 +252,22 @@ export class PulseHub {
       ? []
       : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
     const inLen = env.pulse.length;
-    trace('WS-RX', { from: fromDevice, to: env.to, selfBound, destCount: dests.length, pulseB64Len: inLen });
+    const bytes = b64decode(env.pulse);
+    const decoded = decodeFrameWithStream(bytes);
+    if (decoded?.streamId === STREAM_BULK) {
+      if (!this.bulkCapableEver.has(fromDevice)) {
+        this.bulkCapableEver.add(fromDevice);
+        this.db.prepare(
+          'INSERT OR REPLACE INTO pulse_capabilities (device, bulk) VALUES (?, 1)',
+        ).run(fromDevice);
+      }
+      this.bulkCapableNow.add(fromDevice);
+    }
+    trace('WS-RX', { from: fromDevice, to: env.to, selfBound, destCount: dests.length, pulseB64Len: inLen, stream: decoded?.streamId ?? 0 });
     // StreamSet demuxes by the v2 header's streamId and dispatches to the
     // owning per-stream endpoint. The deliver effect carries that streamId so
     // forward() can route onto the SAME stream on the destination device.
-    const effects = d.streams.onBytes(b64decode(env.pulse), this.host.now());
+    const effects = d.streams.onBytes(bytes, this.host.now());
     const delivered = effects.filter((e) => e.t === 'deliver');
     if (delivered.length > 0) {
       for (const e of delivered) {
@@ -274,8 +332,15 @@ export class PulseHub {
    *  and resends on reconnect. */
   private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey: string | undefined, stream: number): void {
     const d = this.ep(destDevice);
-    const { effects } = d.streams.send(stream, payload, { durable, coalesceKey });
-    trace('FWD-SEND', { dest: destDevice, stream, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
+    // Compatibility during rolling deploys and for stale cached Web clients:
+    // v1 peers do not understand stream-1 frames. Default to stream 0 until
+    // this concrete connection advertises v2 by sending a stream-1 frame.
+    const supportsBulk = this.connectedDevices.has(destDevice)
+      ? this.bulkCapableNow.has(destDevice)
+      : this.bulkCapableEver.has(destDevice);
+    const actualStream = stream === STREAM_BULK && !supportsBulk ? STREAM_LIVE : stream;
+    const { effects } = d.streams.send(actualStream, payload, { durable, coalesceKey });
+    trace('FWD-SEND', { dest: destDevice, stream: actualStream, requestedStream: stream, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
     // The destination endpoint's transmits go to the destination device; its
     // deliveries would bridge back (not used in one-way flows). No secondary
     // dest — a forwarded message is terminal at the destination device.
@@ -301,6 +366,13 @@ export class PulseHub {
   }
 
   // ── SQLite persistence ──────────────────────────────────────────────────────
+
+  private loadCapabilities(): void {
+    const rows = this.db.prepare(
+      'SELECT device FROM pulse_capabilities WHERE bulk = 1',
+    ).all() as Array<{ device: string }>;
+    for (const { device } of rows) this.bulkCapableEver.add(device);
+  }
 
   private storeOutbox(device: string, stream: number, seq: bigint, payload: Uint8Array, dest?: string): void {
     this.db
