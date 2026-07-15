@@ -334,7 +334,7 @@ describe('PulseHub GC (spec §11.4)', () => {
     const held = db.prepare('SELECT COUNT(*) AS n FROM pulse_meta WHERE device = ?').get(TENT) as {
       n: number;
     };
-    expect(held.n).toBe(1); // snapshot on disk
+    expect(held.n).toBe(2); // live + bulk snapshots on disk (per-stream, §13)
 
     // Tentacle reconnects — hub lazily rebuilds its endpoint from snapshot
     // and resends the durable.

@@ -1703,6 +1703,9 @@ export class HeadServer {
       clearInterval(this.pulseTickTimer);
       this.pulseTickTimer = null;
     }
+    // Stop Pulse before closing sockets. WebSocket close callbacks are async
+    // and may otherwise persist capability state after Storage has closed.
+    this.pulseHub.close();
     for (const ws of this.clients.keys()) {
       ws.close();
     }

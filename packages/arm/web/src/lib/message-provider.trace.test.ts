@@ -56,11 +56,62 @@ describe('MessageProvider — TRACE axis', () => {
     expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(1);
   });
 
-  it('invalidateTurnTrace allows a fresh re-pull (idle reconciliation)', () => {
+  it('coalesces an in-flight invalidation into one refresh after the response', () => {
     messageProvider.requestTurnTrace('s1', 5);
     messageProvider.invalidateTurnTrace('s1', 5);
     messageProvider.requestTurnTrace('s1', 5);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(1);
+
+    messageProvider.handleTurnTraceBatch('s1', 5, [], true);
     expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+  });
+
+  it('allows only one cross-bubble trace pull in flight', () => {
+    messageProvider.setTentacleInfo('s2', 10, 'tentacle-dev');
+    messageProvider.setTentacleInfo('s3', 10, 'tentacle-dev');
+    messageProvider.requestTurnTrace('s1', 5);
+    messageProvider.requestTurnTrace('s2', 6);
+    messageProvider.requestTurnTrace('s3', 7);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(1);
+
+    messageProvider.handleTurnTraceBatch('s1', 5, [], true);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+    expect(sent.at(-1)?.payload).toMatchObject({ sessionId: 's2', bubbleSeq: 6 });
+
+    messageProvider.handleTurnTraceBatch('s2', 6, [], true);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(3);
+    expect(sent.at(-1)?.payload).toMatchObject({ sessionId: 's3', bubbleSeq: 7 });
+  });
+
+  it('collapses repeated in-flight invalidations to one refresh', () => {
+    messageProvider.requestTurnTrace('s1', 5);
+    for (let i = 0; i < 100; i++) {
+      messageProvider.invalidateTurnTrace('s1', 5);
+      messageProvider.requestTurnTrace('s1', 5);
+    }
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(1);
+
+    messageProvider.handleTurnTraceBatch('s1', 5, [], true);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+    messageProvider.handleTurnTraceBatch('s1', 5, [], true);
+    expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+  });
+
+  it('releases the global trace window after a response timeout', () => {
+    vi.useFakeTimers();
+    try {
+      messageProvider.setTentacleInfo('s2', 10, 'tentacle-dev');
+      messageProvider.requestTurnTrace('s1', 5);
+      messageProvider.requestTurnTrace('s2', 6);
+      expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(1);
+
+      vi.advanceTimersByTime(15_000);
+      expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+      expect(sent.at(-1)?.payload).toMatchObject({ sessionId: 's2', bubbleSeq: 6 });
+    } finally {
+      messageProvider.clear();
+      vi.useRealTimers();
+    }
   });
 
   it('does not send when the tentacle device is unknown', () => {

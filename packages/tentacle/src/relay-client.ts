@@ -27,7 +27,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
-import { TentaclePulse } from './tentacle-pulse.js';
+import { TentaclePulse, streamForType } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
 
 const logger = createLogger('relay-client');
@@ -2710,7 +2710,7 @@ export class RelayClient {
       // envelope — the head reads `pushPreview` off it in its broadcast branch — so
       // there is no separate raw send.
       this.pendingPushPreview = this.buildPushPreview(msg, recipients);
-      this.pulse.send(JSON.stringify({ blob, keys }), '', false, coalesceKeyFor(msg));
+      this.pulse.send(JSON.stringify({ blob, keys }), '', false, coalesceKeyFor(msg), streamForType(msg.type));
       this.pendingPushPreview = undefined;
     } catch (err) {
       logger.error({ err }, 'Encrypted broadcast failed');
@@ -2866,7 +2866,7 @@ export class RelayClient {
       const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
         { deviceId: targetDeviceId, publicKey: recipientPubKey },
       ]);
-      this.pulse.send(JSON.stringify({ blob, keys }), targetDeviceId, durable);
+      this.pulse.send(JSON.stringify({ blob, keys }), targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
