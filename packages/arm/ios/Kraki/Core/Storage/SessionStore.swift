@@ -243,7 +243,16 @@ final class SessionStore {
     /// disk. Called after any mutation that changes a card-visible field.
     /// Safe to call frequently — the cache coalesces.
     fileprivate func scheduleSave() {
-        pendingSnapshot = Snapshot(sessions: sessions, previews: sessionPreviews)
+        // Compacting is runtime-only. Persist the underlying working fallback
+        // so a cold launch cannot resurrect stale compaction before the next
+        // authoritative session_list arrives.
+        let persistedSessions = sessions.mapValues { session in
+            guard session.state == .compacting else { return session }
+            var normalized = session
+            normalized.state = .active
+            return normalized
+        }
+        pendingSnapshot = Snapshot(sessions: persistedSessions, previews: sessionPreviews)
         let wasScheduled = saveTask != nil
         saveTask?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.flushCache() }
@@ -558,6 +567,18 @@ final class SessionStore {
     }
 
     func setState(_ id: String, _ state: SessionState) {
+        applyState(id, state)
+        scheduleSave()
+    }
+
+    /// Apply a live state transition without persisting the metadata snapshot.
+    /// `active`, `idle`, and `compacting` envelopes carry a global transport seq
+    /// and are reconciled authoritatively by session_list after reconnect.
+    func setTransientState(_ id: String, _ state: SessionState) {
+        applyState(id, state)
+    }
+
+    private func applyState(_ id: String, _ state: SessionState) {
         sessions[id]?.state = state
         // Idle clears any lingering tool-in-flight marker AND the
         // activity snapshot — at idle, the session-card row falls back
@@ -567,7 +588,6 @@ final class SessionStore {
             sessions[id]?.currentToolHeadline = nil
             sessions[id]?.activity = .none
         }
-        scheduleSave()
     }
 
     /// Record the tool whose `tool_start` event just arrived. The icon

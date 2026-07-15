@@ -218,7 +218,18 @@ private struct SessionCardBody: View {
     /// now reads as the description of what's being asked.
     @ViewBuilder
     private var activityOrPreview: some View {
-        if session.state == .active && !hasPendingPermission && !hasPendingQuestion {
+        if session.state == .compacting && !hasPendingPermission && !hasPendingQuestion {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Color(hex: 0x06B6D4))
+                Text("Compacting context…")
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if session.state == .active && !hasPendingPermission && !hasPendingQuestion {
             ActivityRow(
                 activity: session.activity,
                 lastUserMessage: appState.messageProvider?.lastUserMessageContent(session.id)

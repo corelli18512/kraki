@@ -159,7 +159,9 @@ export const useStore = create<Store>()(persist((set) => ({
     const isTransient = message.type === 'pending_input'
       || message.type === 'tool_start'
       || message.type === 'tool_complete'
-      || message.type === 'agent_narration';
+      || message.type === 'agent_narration'
+      || message.type === 'active'
+      || message.type === 'compacting';
     if (!isTransient) {
       // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
       import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
@@ -425,23 +427,31 @@ export const useStore = create<Store>()(persist((set) => ({
   setLocalSessionsLoading: (loading) => set({ localSessionsLoading: loading }),
 
   prependMessages: (sessionId, older) => {
-    // Write to IndexedDB (idempotent by [sessionId, seq] key)
+    // Range batches are authoritative for their session seqs. Besides normal
+    // deduplication, they must replace stale rows written by older clients
+    // (for example a transient `active` row occupying an agent reply's seq).
     import('../lib/message-db').then(db => db.putMessages(sessionId, older)).catch((e) => { console.error('[Kraki:idb]', e); });
     set((state) => {
       const existing = state.messages.get(sessionId) ?? [];
-      // Deduplicate by seq
-      const existingSeqs = new Set<number>();
-      for (const m of existing) {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        if (typeof seq === 'number') existingSeqs.add(seq);
-      }
-      const unique = older.filter(m => {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        return typeof seq === 'number' && !existingSeqs.has(seq);
+      const incomingSeqs = new Set<number>();
+      const incoming = older.filter((message) => {
+        const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
+        if (typeof seq !== 'number' || seq <= 0 || incomingSeqs.has(seq)) return false;
+        incomingSeqs.add(seq);
+        return true;
       });
-      if (unique.length === 0) return state;
-      const merged = [...unique, ...existing];
+      if (incoming.length === 0) return state;
+
+      const retained = existing.filter((message) => {
+        const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
+        return typeof seq !== 'number' || !incomingSeqs.has(seq);
+      });
+      const merged = [...incoming, ...retained];
       merged.sort((a, b) => {
+        const pendingA = a.type === 'pending_input';
+        const pendingB = b.type === 'pending_input';
+        if (pendingA && !pendingB) return 1;
+        if (!pendingA && pendingB) return -1;
         const seqA = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
         const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
         return seqA - seqB;
@@ -582,7 +592,13 @@ export const useStore = create<Store>()(persist((set) => ({
     reviver,
   }),
   partialize: (state) => ({
-    sessions: state.sessions,
+    // Compacting is runtime-only. Persist the underlying working fallback so a
+    // cold launch cannot resurrect a stale compacting state before session_list
+    // delivers the authoritative live snapshot.
+    sessions: new Map([...state.sessions].map(([id, session]) => [
+      id,
+      session.state === 'compacting' ? { ...session, state: 'active' as const } : session,
+    ])),
     devices: state.devices,
     unreadCount: state.unreadCount,
     pinnedSessions: state.pinnedSessions,

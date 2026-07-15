@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
@@ -430,7 +430,7 @@ export class KrakiWSClient {
         model: ts.model,
         title: ts.title,
         autoTitle: ts.autoTitle,
-        state: ts.state as 'active' | 'idle',
+        state: ts.state as SessionState,
         messageCount: ts.messageCount,
       });
 
@@ -535,7 +535,7 @@ export class KrakiWSClient {
       const previewTs = preview?.timestamp ? new Date(preview.timestamp).getTime() : 0;
 
       const entry: WarmupEntry = { id: ts.id, lastSeq: ts.lastSeq, previewTs };
-      const isEager = ts.state === 'active' || pinnedIds.has(ts.id) || (previewTs > 0 && now - previewTs < WARMUP_RECENCY_MS);
+      const isEager = ts.state === 'active' || ts.state === 'compacting' || pinnedIds.has(ts.id) || (previewTs > 0 && now - previewTs < WARMUP_RECENCY_MS);
 
       if (isEager) {
         eager.push(entry);

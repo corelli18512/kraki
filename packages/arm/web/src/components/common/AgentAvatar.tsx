@@ -1,11 +1,12 @@
 import { stringToHue } from '../../lib/color';
 import { ShieldQuestion, MessageCircleQuestion } from 'lucide-react';
+import type { SessionState } from '@kraki/protocol';
 
 interface AgentAvatarProps {
   agent: string;
   sessionId?: string;
   size?: 'sm' | 'md';
-  status?: 'active' | 'idle';
+  status?: SessionState;
   badge?: 'question' | 'permission';
   pinned?: boolean;
 }

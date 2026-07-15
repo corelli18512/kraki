@@ -1876,7 +1876,7 @@ describe('RelayClient trace mirroring (off-spine)', () => {
     return { adapter, sm, ws: sockets[0], cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
 
-  it('keeps compaction transient: card_action only, never spine or trace', () => {
+  it('keeps compaction transient: compacting message only, never spine or trace', () => {
     const { adapter, sm, ws, cleanup } = buildClient();
     try {
       const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -1890,15 +1890,16 @@ describe('RelayClient trace mirroring (off-spine)', () => {
       const messages = decodePulseSends(ws.sent);
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject({
-        type: 'card_action',
+        type: 'compacting',
         sessionId: 'sess_1',
-        payload: { action: { type: 'compaction', payload: { phase: 'running', reason: 'threshold' } } },
+        payload: { phase: 'start', reason: 'threshold' },
       });
 
       ws.sent.length = 0;
+      smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'active' });
       (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', { phase: 'end' });
       expect(decodePulseSends(ws.sent)[0]).toMatchObject({
-        type: 'card_action', payload: { action: null },
+        type: 'compacting', payload: { phase: 'end', nextState: 'active' },
       });
       expect(smMock.appendMessage).not.toHaveBeenCalled();
       expect(smMock.appendTrace).not.toHaveBeenCalled();
@@ -1950,6 +1951,7 @@ describe('RelayClient pending-question digest', () => {
     const adapter = createAdapter();
     const sm = {
       ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_1', state: 'active' })),
       getSessionList: vi.fn(() => [{
         id: 'sess_1', agent: 'pi', state: 'active', mode: 'execute',
         lastSeq: 1, readSeq: 0, messageCount: 1, createdAt: '2024-01-01T00:00:00Z',
@@ -1991,8 +1993,18 @@ describe('RelayClient pending-question digest', () => {
       return undefined;
     };
     const preview = () => digest()?.preview as { type: string; text: string } | undefined;
-    return { adapter, sm, ws, askQ, answerQ, preview };
+    return { adapter, sm, ws, askQ, answerQ, digest, preview };
   }
+
+  it('restores compacting from session_list state without replaying runtime events', () => {
+    const { adapter, ws, digest } = buildClient();
+    (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+      phase: 'start', reason: 'threshold',
+    });
+
+    expect(digest()?.state).toBe('compacting');
+    expect(decodePulseSends(ws.sent).some((message) => message.type === 'compacting')).toBe(false);
+  });
 
   it('overrides the digest preview with the open question while it is pending', () => {
     const { askQ, preview } = buildClient();

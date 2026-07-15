@@ -16,7 +16,7 @@ import type { SessionCard } from '../types/store';
  * entry — so `previewType === 'question'` seeds the pending status until the
  * live card arrives.
  */
-export type SessionStatus = 'idle' | 'working' | 'pending' | 'ended';
+export type SessionStatus = 'idle' | 'working' | 'compacting' | 'pending' | 'ended';
 
 /** A stable identity for a card action — changes when the slot's meaningful
  *  state changes (tool start/complete, prompt open/resolve, batch count). Used
@@ -33,8 +33,6 @@ export function cardActionKey(a: CardActionState | null): string {
       return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
     case 'question':
       return `q:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer === undefined ? 'pending' : 'answered'}`;
-    case 'compaction':
-      return `compaction:${a.payload.reason ?? 'unknown'}`;
     case 'user_abort':
       return `user_abort:${a.payload.abortedAt}`;
     case 'failed':
@@ -58,6 +56,9 @@ export function getSessionStatus(
 ): SessionStatus {
   if ((session.state as string) === 'ended') return 'ended';
   if (session.state === 'idle') return 'idle';
+  // A blocking human affordance remains the highest-priority visible status;
+  // compacting is independent and must not displace it.
   if (livePendingCount > 0 || previewType === 'question') return 'pending';
+  if (session.state === 'compacting') return 'compacting';
   return 'working';
 }

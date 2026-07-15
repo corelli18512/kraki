@@ -340,6 +340,12 @@ struct IdlePayload: Codable, Sendable {
     var usage: SessionUsage?
 }
 
+struct CompactingPayload: Codable, Sendable {
+    let phase: String
+    var reason: String?
+    var nextState: SessionState?
+}
+
 struct ErrorPayload: Codable, Sendable {
     let message: String
 }
@@ -433,6 +439,7 @@ enum ProducerMessage: Sendable {
     // State
     case idle(IdlePayload)
     case active
+    case compacting(CompactingPayload)
     case error(ErrorPayload)
 
     // Session metadata
@@ -466,6 +473,7 @@ enum ProducerMessage: Sendable {
         case .toolComplete:         return "tool_complete"
         case .idle:                 return "idle"
         case .active:               return "active"
+        case .compacting:           return "compacting"
         case .error:                return "error"
         case .sessionModeSet:       return "session_mode_set"
         case .sessionModelSet:      return "session_model_set"
@@ -525,6 +533,8 @@ extension ProducerMessage: Codable {
             return .idle(try container.decode(IdlePayload.self, forKey: .payload))
         case "active":
             return .active
+        case "compacting":
+            return .compacting(try container.decode(CompactingPayload.self, forKey: .payload))
         case "error":
             return .error(try container.decode(ErrorPayload.self, forKey: .payload))
         case "session_mode_set":
@@ -570,6 +580,7 @@ extension ProducerMessage: Codable {
         case .toolComplete(let p):         try container.encode(p, forKey: .payload)
         case .idle(let p):                 try container.encode(p, forKey: .payload)
         case .active:                      try container.encode([String: String](), forKey: .payload)
+        case .compacting(let p):           try container.encode(p, forKey: .payload)
         case .error(let p):                try container.encode(p, forKey: .payload)
         case .sessionModeSet(let p):       try container.encode(p, forKey: .payload)
         case .sessionModelSet(let p):      try container.encode(p, forKey: .payload)

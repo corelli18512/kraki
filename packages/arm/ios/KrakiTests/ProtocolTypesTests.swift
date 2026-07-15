@@ -170,8 +170,10 @@ final class ProtocolEnumTests: XCTestCase {
     func testSessionStateRawValues() {
         XCTAssertEqual(SessionState.active.rawValue, "active")
         XCTAssertEqual(SessionState.idle.rawValue, "idle")
+        XCTAssertEqual(SessionState.compacting.rawValue, "compacting")
         XCTAssertEqual(SessionState(rawValue: "active"), .active)
         XCTAssertEqual(SessionState(rawValue: "idle"), .idle)
+        XCTAssertEqual(SessionState(rawValue: "compacting"), .compacting)
         XCTAssertNil(SessionState(rawValue: "unknown"))
     }
 

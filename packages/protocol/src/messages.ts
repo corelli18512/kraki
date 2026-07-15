@@ -388,15 +388,6 @@ export type CardActionState =
   | Pick<PermissionRequest, 'type' | 'payload'>
   | Pick<QuestionRequest, 'type' | 'payload'>
   | {
-      /** Transient Pi runtime activity. Never persisted to the conversation or
-       *  trace; it only occupies the server-owned live status-card slot. */
-      type: 'compaction';
-      payload: {
-        phase: 'running';
-        reason?: 'manual' | 'threshold' | 'overflow';
-      };
-    }
-  | {
       type: 'user_abort';
       payload: {
         abortedAt: string;
@@ -425,6 +416,32 @@ export interface CardAction extends BaseEnvelope {
   payload: {
     action: CardActionState | null;
   };
+}
+
+/**
+ * The agent runtime is compacting its context. This is a peer of
+ * {@link ActiveMessage} / {@link IdleMessage} on the session-state axis: it is
+ * transient (never persisted to the spine or trace, never replayed) and may
+ * occur before streaming starts (prompt preflight) or after output completes
+ * (finalize / auto-retry continuation), so it is NOT a subset of `active`.
+ *
+ * `phase: 'start'` enters the compacting state; `phase: 'end'` carries the
+ * authoritative state to restore. The session's current compacting state is
+ * also reflected in {@link SessionState} (carried by the session-list digest)
+ * so reconnects recover it authoritatively.
+ */
+export interface CompactingMessage extends BaseEnvelope {
+  type: 'compacting';
+  sessionId: string;
+  payload:
+    | {
+        phase: 'start';
+        reason?: 'manual' | 'threshold' | 'overflow';
+      }
+    | {
+        phase: 'end';
+        nextState: 'active' | 'idle';
+      };
 }
 
 export interface IdleMessage extends BaseEnvelope {
@@ -822,6 +839,7 @@ export type ProducerMessage =
   | ToolCompleteMessage
   | AgentNarrationMessage
   | CardAction
+  | CompactingMessage
   | TurnTraceBatchMessage
   | IdleMessage
   | ActiveMessage

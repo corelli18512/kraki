@@ -38,6 +38,11 @@ describe('coalesceKeyFor: state-covering messages are keyed, events are not', ()
     expect(coalesceKeyFor({ type: 'card_action', sessionId: 'sess1' })).toBe('card_action:sess1');
   });
 
+  it('keys compacting runtime state by session', () => {
+    expect(coalesceKeyFor({ type: 'compacting', sessionId: 'sess1' })).toBe('compacting:sess1');
+    expect(coalesceKeyFor({ type: 'compacting' })).toBeUndefined();
+  });
+
   it('leaves durable/event messages un-keyed so pulse retains each', () => {
     for (const type of ['agent_message', 'user_message', 'tool_start', 'tool_complete',
       'session_list', 'attachment_data', 'idle', 'active', 'error'] as const) {
@@ -72,6 +77,19 @@ describe('queue dedup: same-key sends collapse to the latest', () => {
     expect(q).toHaveLength(6);
     expect(q.filter((m) => m.type === 'agent_message_delta')).toHaveLength(1);
     expect(q.filter((m) => m.type === 'user_message')).toHaveLength(5);
+  });
+
+  it('compacting phases collapse to the latest state per session', () => {
+    const q = simulateQueue([
+      { type: 'compacting', sessionId: 'a', payload: { phase: 'start' } },
+      { type: 'compacting', sessionId: 'b', payload: { phase: 'start' } },
+      { type: 'compacting', sessionId: 'a', payload: { phase: 'end', nextState: 'idle' } },
+    ]);
+    expect(q).toHaveLength(2);
+    expect(q.find((message) => message.sessionId === 'a')?.payload).toEqual({
+      phase: 'end',
+      nextState: 'idle',
+    });
   });
 
   it('distinct sessions do not coalesce each other', () => {

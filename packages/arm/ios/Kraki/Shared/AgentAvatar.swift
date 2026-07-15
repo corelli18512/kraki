@@ -135,17 +135,16 @@ struct AgentAvatar: View {
                            color: Color(hex: 0xF97316))
                     .offset(x: 4, y: -1)
                     .transition(.opacity)
-            } else if status == .active {
-                // Active-turn spinner. The default `krakiPrimary`
-                // adaptively shifts to `kraki300` in dark mode, which
-                // washes out the spinner strokes against the avatar's
-                // pale-pastel hue. Pin a more solid blue for the
-                // dark case so the spinner reads as a confident
-                // affordance in both themes.
+            } else if status == .active || status == .compacting {
+                // Active and compacting are peer runtime states. Use a distinct
+                // cyan tint for compaction while keeping the same stable badge
+                // dimensions as the active-turn spinner.
                 ProgressView()
                     .controlSize(.mini)
-                    .tint(Color(light: UIColor(Color.kraki500),
-                                dark:  UIColor(Color.kraki400)))
+                    .tint(status == .compacting
+                          ? Color(hex: 0x06B6D4)
+                          : Color(light: UIColor(Color.kraki500),
+                                  dark: UIColor(Color.kraki400)))
                     .offset(x: 4, y: -1)
                     .transition(.opacity)
             }

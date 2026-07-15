@@ -18,6 +18,7 @@ vi.mock('./message-db', () => ({
 
 import { useStore } from '../hooks/useStore';
 import { CommandState } from './commands';
+import { messageProvider } from './message-provider';
 import { handleDataMessage } from './message-router';
 import type { InnerMessage } from '@kraki/protocol';
 
@@ -88,6 +89,69 @@ describe('handleDataMessage card messages', () => {
       cmdState: new CommandState(),
     });
     expect(useStore.getState().cards.get('s1')?.action?.type).toBe('question');
+  });
+
+  it('routes compacting start/end through session state without touching the card or IndexedDB', async () => {
+    seedSession('runtime-s1');
+    useStore.getState().setCardAction('runtime-s1', {
+      type: 'question',
+      payload: { id: 'q1', question: 'Proceed?' },
+    });
+
+    handleDataMessage({
+      type: 'compacting', deviceId: 'dev-tentacle', seq: 8,
+      timestamp: new Date().toISOString(), sessionId: 'runtime-s1',
+      payload: { phase: 'start', reason: 'threshold' },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+
+    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('compacting');
+    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
+
+    handleDataMessage({
+      type: 'compacting', deviceId: 'dev-tentacle', seq: 9,
+      timestamp: new Date().toISOString(), sessionId: 'runtime-s1',
+      payload: { phase: 'end', nextState: 'idle' },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+
+    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('idle');
+    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
+    await new Promise((r) => setTimeout(r, 5));
+    expect(putMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not let real card or active updates end new-protocol compacting state', () => {
+    seedSession('mixed-s1');
+    handleDataMessage({
+      type: 'compacting', deviceId: 'dev-tentacle', seq: 12,
+      timestamp: new Date().toISOString(), sessionId: 'mixed-s1',
+      payload: { phase: 'start' },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+    handleDataMessage({
+      type: 'card_action', deviceId: 'dev-tentacle', seq: 13,
+      timestamp: new Date().toISOString(), sessionId: 'mixed-s1',
+      payload: { action: { type: 'tool_start', payload: { toolName: 'bash', headline: 'test' } } },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+    handleDataMessage({
+      type: 'active', deviceId: 'dev-tentacle', seq: 14,
+      timestamp: new Date().toISOString(), sessionId: 'mixed-s1', payload: {},
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+
+    expect(useStore.getState().sessions.get('mixed-s1')?.state).toBe('compacting');
+    expect(useStore.getState().cards.get('mixed-s1')?.action?.type).toBe('tool_start');
+  });
+
+  it('reconciles the persistent tail when idle arrives after a missed reply', () => {
+    seedSession('gap-s1');
+    const reconcile = vi.spyOn(messageProvider, 'reconcileTail').mockImplementation(() => {});
+
+    handleDataMessage({
+      type: 'idle', deviceId: 'dev-tentacle', seq: 496,
+      timestamp: new Date().toISOString(), sessionId: 'gap-s1',
+      payload: { reason: 'completed' },
+    } as unknown as InnerMessage, { cmdState: new CommandState() });
+
+    expect(reconcile).toHaveBeenCalledWith('gap-s1', 496);
+    reconcile.mockRestore();
   });
 
   it('keeps card updates out of IndexedDB', async () => {

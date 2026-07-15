@@ -154,7 +154,9 @@ struct MessageInputView: View {
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
-    private var sessionActive: Bool { session?.state == .active }
+    private var sessionActive: Bool {
+        session?.state == .active || session?.state == .compacting
+    }
     private var text: String { sessionStore.drafts[sessionId] ?? "" }
     private var isIdle: Bool { !sessionActive && !awaitingActive }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

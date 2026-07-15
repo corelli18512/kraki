@@ -100,7 +100,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
         }`}
       >
         <div className="relative self-start shrink-0">
-          <AgentAvatar agent={session.agent} sessionId={session.id} status={session.state as 'active' | 'idle'} badge={avatarBadge} pinned={pinned} />
+          <AgentAvatar agent={session.agent} sessionId={session.id} status={session.state} badge={avatarBadge} pinned={pinned} />
           {unreadCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-kraki-500 ring-2 ring-surface-secondary" />
           )}
@@ -125,6 +125,7 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     !isDeviceOnline ? 'bg-slate-400'
                     : status === 'pending' ? 'bg-amber-400 animate-pulse'
+                    : status === 'compacting' ? 'bg-cyan-500 animate-pulse'
                     : status === 'working' ? 'bg-blue-400 animate-pulse'
                     : 'bg-emerald-400'
                   }`}
@@ -133,6 +134,11 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
                 {isDeviceOnline && status === 'pending' && (
                   <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
                     waiting{livePending > 1 ? ` ·${livePending}` : ''}
+                  </span>
+                )}
+                {isDeviceOnline && status === 'compacting' && (
+                  <span className="shrink-0 rounded-full bg-cyan-500/15 px-1.5 py-0.5 text-[9px] font-medium text-cyan-700 dark:text-cyan-300">
+                    compacting
                   </span>
                 )}
               </>

@@ -23,7 +23,7 @@ export function MessageInput({ sessionId }: { sessionId: string }) {
   const setDraft = useStore((s) => s.setDraft);
   const sessionMode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss') as typeof MODES[number];
   const session = useStore((s) => s.sessions.get(sessionId));
-  const sessionActive = session?.state === 'active';
+  const sessionActive = session?.state === 'active' || session?.state === 'compacting';
   const [awaitingActive, setAwaitingActive] = useState(false);
   const isIdle = !sessionActive && !awaitingActive;
 
