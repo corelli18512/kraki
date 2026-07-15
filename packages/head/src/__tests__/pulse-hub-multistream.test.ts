@@ -384,7 +384,7 @@ describe('PulseHub multi-stream persistence and forwarding', () => {
     world.hub.close();
   });
 
-  it('ignores late socket events after the hub and database close', () => {
+  it('ignores late socket events when the database closed before the hub', () => {
     const db = new Database(':memory:');
     const hub = new PulseHub(db, {
       now: () => 0,
@@ -393,7 +393,8 @@ describe('PulseHub multi-stream persistence and forwarding', () => {
       onDeliverToSelf: () => undefined,
     }, { intervalMs: 0 });
     hub.onDeviceConnected(ARM);
-    hub.close();
+    // Reproduce the integration-test teardown race: Storage closes while a
+    // WebSocket close callback is still queued and PulseHub is not yet closed.
     db.close();
 
     const lateEndpoint = new Endpoint({ epoch: 'late' });
