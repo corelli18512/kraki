@@ -69,11 +69,12 @@ export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' 
  * a burst of stale frames.
  *
  * Only state-covering messages get a key:
- *   - `agent_message_delta` — streaming tokens; only the latest chunk matters.
- *   - `card_action` — the current status-card state; stale actions are noise.
+ *   - `agent_message_delta` - streaming tokens; only the latest chunk matters.
+ *   - `card_action` - the current status-card state; stale actions are noise.
+ *   - `compacting` - the current runtime state; stale phases are noise.
  *
  * Event messages (`agent_message`, `user_message`, `tool_start`, etc.) return
- * `undefined` — every event must be delivered.
+ * `undefined` - every event must be delivered.
  */
 export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefined {
   if (msg.type === 'agent_message_delta' && msg.sessionId) {
@@ -81,6 +82,9 @@ export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefine
   }
   if (msg.type === 'card_action' && msg.sessionId) {
     return `card_action:${msg.sessionId}`;
+  }
+  if (msg.type === 'compacting' && msg.sessionId) {
+    return `compacting:${msg.sessionId}`;
   }
   return undefined;
 }
@@ -227,6 +231,9 @@ export class RelayClient {
     }
     this.resolveTurnIdle(sessionId);
     this.sessionManager.markIdle(sessionId);
+    // Idle ends the turn: any in-flight compaction is over. Clear before idle
+    // so clients never show compacting once idle lands.
+    this.clearCompacting(sessionId);
     const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
     if (usage) this.sessionManager.setUsage(sessionId, usage);
     this.send({ type: 'idle', sessionId, payload: { usage, ...(terminalError && { reason: 'failed' as const }) } });
@@ -269,6 +276,37 @@ export class RelayClient {
    *  verbatim. Broadcasts route back through {@link send} (which coalesces the
    *  `agent_message_delta` text deltas). */
   private card = new CardManager((msg) => this.send(msg as Partial<ProducerMessage>));
+
+  /** Sessions whose agent runtime is currently compacting context. This is the
+   *  single in-memory source of truth for the compacting session-state (a peer
+   *  of active/idle). It is NEVER written to meta.json - a tentacle restart
+   *  means the compacting process is gone, so no stale disk state survives.
+   *  {@link getSessionList} overlays it onto the digest `state`. */
+  private compactingSessions = new Set<string>();
+
+  /** Enter/leave the compacting session-state. Broadcasts a transient
+   *  `compacting` message (peer of active/idle) so clients update the runtime
+   *  indicator without it ever touching the card action slot, TRACE, or spine. */
+  private setCompacting(sessionId: string, active: boolean, reason?: 'manual' | 'threshold' | 'overflow'): void {
+    if (active) {
+      if (!this.compactingSessions.has(sessionId)) {
+        this.compactingSessions.add(sessionId);
+        this.send({ type: 'compacting', sessionId, payload: { phase: 'start', ...(reason && { reason }) } });
+      }
+    } else {
+      if (this.compactingSessions.delete(sessionId)) {
+        const metaState = this.sessionManager.getMeta(sessionId)?.state;
+        const nextState = metaState === 'active' ? 'active' : 'idle';
+        this.send({ type: 'compacting', sessionId, payload: { phase: 'end', nextState } });
+      }
+    }
+  }
+
+  /** Clear stale compacting for a session (idle / active turn start / end /
+   *  process loss). Safe no-op when not compacting. */
+  private clearCompacting(sessionId: string): void {
+    this.setCompacting(sessionId, false);
+  }
 
   // Stale connection detection — tracks last incoming message to detect sleep/network changes
   private lastActivityAt = 0;
@@ -1105,6 +1143,7 @@ export class RelayClient {
               this.pendingTerminalErrors.delete(sessionId);
               this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
+              this.clearCompacting(sessionId);
               this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
             })
             .catch((err) => {
@@ -1777,8 +1816,8 @@ export class RelayClient {
     };
 
     this.adapter.onCompaction = (sessionId, event) => {
-      if (event.phase === 'start') this.card.onCompactionStart(sessionId, event.reason);
-      else this.card.onCompactionEnd(sessionId);
+      if (event.phase === 'start') this.setCompacting(sessionId, true, event.reason);
+      else this.setCompacting(sessionId, false);
     };
 
     this.adapter.onError = (sessionId, event) => {
@@ -1824,6 +1863,7 @@ export class RelayClient {
       this.steerAcceptanceInFlight.delete(sessionId);
       this.idleDuringSteerAcceptance.delete(sessionId);
       this.resolveTurnIdle(sessionId);
+      this.clearCompacting(sessionId);
       this.card.delete(sessionId);
       this.send({
         type: 'session_ended',
@@ -1991,22 +2031,31 @@ export class RelayClient {
   }
 
   /** Override each digest's `preview` with the live open question (if any) so a
-   *  reloading arm can render the "pending" status — the question no longer
+   *  reloading arm can render the "pending" status - the question no longer
    *  persists to the spine, so the file-based preview can't surface it. Sessions
-   *  without an open question keep their file-derived preview untouched. */
-  private enrichSessionList<T extends { id: string; preview?: import('@kraki/protocol').SessionPreviewDigest }>(
-    sessions: T[],
-  ): T[] {
+   *  without an open question keep their file-derived preview untouched.
+   *
+   *  Also overlays the in-memory compacting state onto `state`: a session whose
+   *  agent runtime is currently compacting reports `state: 'compacting'`
+   *  (a peer of active/idle) regardless of the disk meta, so a reconnecting
+   *  arm recovers the runtime indicator from the session list alone. */
+  private enrichSessionList<
+    T extends { id: string; state: import('@kraki/protocol').SessionState; preview?: import('@kraki/protocol').SessionPreviewDigest },
+  >(sessions: T[]): T[] {
     return sessions.map((s) => {
+      const compacting = this.compactingSessions.has(s.id);
       const question = this.latestOpenQuestion(s.id);
-      if (question === undefined) return s;
+      if (!compacting && question === undefined) return s;
       return {
         ...s,
-        preview: {
-          type: 'question' as const,
-          text: question.slice(0, 200),
-          timestamp: new Date().toISOString(),
-        },
+        ...(compacting && { state: 'compacting' as const }),
+        ...(question !== undefined && {
+          preview: {
+            type: 'question' as const,
+            text: question.slice(0, 200),
+            timestamp: new Date().toISOString(),
+          },
+        }),
       };
     });
   }
@@ -2324,7 +2373,8 @@ export class RelayClient {
 
   /** Push the current card snapshot for every session with active card state to
    *  a freshly-joined consumer. Called from `device_joined` (fresh key in hand)
-   *  so a reconnecting arm re-seeds its status card without a pull round-trip. */
+   *  so a reconnecting arm re-seeds its status card without a pull round-trip.
+   *  Runtime state is carried independently by the preceding session_list. */
   private sendCardSnapshotsTo(deviceId: string, key: string): void {
     for (const sessionId of this.card.activeSessions()) {
       for (const snap of this.card.snapshot(sessionId)) {
@@ -2530,8 +2580,9 @@ export class RelayClient {
     }
 
     if (this.consumerKeys.size === 0) {
-      // No consumer keys at all — queue until a device registers
-      this.queuePendingE2e(msg);
+      // Runtime state is recovered authoritatively from session_list.state when
+      // a device joins. Never queue compacting start/end events for later replay.
+      if (type !== 'compacting') this.queuePendingE2e(msg);
       return;
     }
 
@@ -2540,8 +2591,10 @@ export class RelayClient {
     // always present; daemon-worker constructs one unconditionally).
     this.sendEncrypted(msg);
 
-    // Also queue if no online consumers, so new devices get it on connect
-    if (this.onlineConsumers.size === 0) {
+    // Also queue if no online consumers, so new devices get it on connect.
+    // Compacting is a current state, not an event backlog; session_list is its
+    // sole reconnect authority.
+    if (this.onlineConsumers.size === 0 && type !== 'compacting') {
       this.queuePendingE2e(msg);
     }
   }

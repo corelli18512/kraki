@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { decodeFrame } from '@coinfra/pulse';
 import { KrakiWSClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
+import { messageProvider } from './message-provider';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -84,6 +85,7 @@ const OriginalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   useStore.getState().reset();
+  messageProvider.clear();
   // Wrap WebSocket to capture instances
   globalThis.WebSocket = class extends OriginalWebSocket {
     constructor(url: string) {

@@ -534,7 +534,12 @@ final class MessageRouter {
             }
 
         case "active":
-            appState.sessionStore.updateState(sessionId, state: "active")
+            // Active may be reasserted during steer acceptance while Pi is still
+            // compacting. Only compacting-end, idle, or session_list may leave
+            // the independent compacting state.
+            if appState.sessionStore.sessions[sessionId]?.state != .compacting {
+                appState.sessionStore.updateState(sessionId, state: "active")
+            }
             // NOTE: We deliberately do NOT call `messageStore.append`
             // here. `active` is a TRANSIENT envelope (see the comment at
             // L297) whose `seq` field comes from the relay's GLOBAL event
@@ -546,6 +551,16 @@ final class MessageRouter {
             // after reconnect. Compounding fact: `MessageBubbleView`
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
+
+        case "compacting":
+            if payload?["phase"] as? String == "start" {
+                appState.sessionStore.setTransientState(sessionId, .compacting)
+            } else {
+                let nextState = SessionState(rawValue: payload?["nextState"] as? String ?? "active") ?? .active
+                appState.sessionStore.setState(sessionId, nextState)
+            }
+            // Deliberately no MessageStore/MessageProvider ingestion: this is a
+            // transient session state, not spine, TRACE, or a chat cell.
 
         case "error":
             appState.sessionStore.flushDelta(sessionId)

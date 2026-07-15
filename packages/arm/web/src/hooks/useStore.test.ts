@@ -217,6 +217,33 @@ describe('useStore', () => {
       expect((msgs![0] as typeof mockMessage).payload.content).toBe('updated content');
     });
 
+    it('range batches replace a stale transient row at the same session seq', () => {
+      useStore.getState().appendMessage('sess-1', {
+        type: 'active',
+        deviceId: 'dev-1',
+        seq: 495,
+        timestamp: '',
+        sessionId: 'sess-1',
+        payload: {},
+      } as ChatMessage);
+
+      useStore.getState().prependMessages('sess-1', [{
+        type: 'agent_message',
+        deviceId: 'dev-1',
+        seq: 495,
+        timestamp: '',
+        sessionId: 'sess-1',
+        payload: { content: 'recovered reply' },
+      } as ChatMessage]);
+
+      const messages = useStore.getState().messages.get('sess-1');
+      expect(messages).toHaveLength(1);
+      expect(messages?.[0].type).toBe('agent_message');
+      expect(messages?.[0] && 'payload' in messages[0] ? messages[0].payload : undefined).toMatchObject({
+        content: 'recovered reply',
+      });
+    });
+
     it('appendMessage does NOT dedup pending_input (seq=0)', () => {
       const pendingA = {
         type: 'pending_input' as const,

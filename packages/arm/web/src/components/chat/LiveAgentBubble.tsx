@@ -88,10 +88,9 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
   // completed tool). The input components render their own resolved read-only view.
   const permission = a?.type === 'permission' ? a : null;
   const question = a?.type === 'question' ? a : null;
-  const compaction = a?.type === 'compaction' ? a : null;
   const userAbort = a?.type === 'user_abort' ? a : null;
   const failed = a?.type === 'failed' ? a : null;
-  const hasAction = !!tool || batchRunning > 0 || !!permission || !!question || !!compaction || !!userAbort || !!failed;
+  const hasAction = !!tool || batchRunning > 0 || !!permission || !!question || !!userAbort || !!failed;
 
   const { steps, targetSeq } = useTurnSteps(sessionId, live, frozen?.bubbleSeq);
 
@@ -168,13 +167,6 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
               <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-surface-primary/40 px-3 py-2 text-xs text-text-secondary">
                 <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-ocean-500" />
                 <span>{batchRunning} 个工具并行运行中…</span>
-              </div>
-            )}
-
-            {compaction && (
-              <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-surface-primary/40 px-3 py-2 text-xs text-text-secondary">
-                <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-ocean-500" />
-                <span>Compacting context…</span>
               </div>
             )}
 

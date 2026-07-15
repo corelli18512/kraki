@@ -586,6 +586,47 @@ final class ProducerMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.message.typeString, "agent_message")
     }
 
+    func testCompactingEnvelopeRoundtrip() throws {
+        let start = ProducerEnvelope(
+            deviceId: "dev-1",
+            seq: 6,
+            timestamp: "2024-01-01T00:00:00Z",
+            sessionId: "sess-1",
+            message: .compacting(CompactingPayload(
+                phase: "start", reason: "threshold", nextState: nil
+            ))
+        )
+        let startDecoded = try JSONDecoder().decode(
+            ProducerEnvelope.self,
+            from: JSONEncoder().encode(start)
+        )
+        guard case .compacting(let startPayload) = startDecoded.message else {
+            return XCTFail("Expected compacting start")
+        }
+        XCTAssertEqual(startPayload.phase, "start")
+        XCTAssertEqual(startPayload.reason, "threshold")
+        XCTAssertNil(startPayload.nextState)
+
+        let end = ProducerEnvelope(
+            deviceId: "dev-1",
+            seq: 7,
+            timestamp: "2024-01-01T00:00:01Z",
+            sessionId: "sess-1",
+            message: .compacting(CompactingPayload(
+                phase: "end", reason: nil, nextState: .idle
+            ))
+        )
+        let endDecoded = try JSONDecoder().decode(
+            ProducerEnvelope.self,
+            from: JSONEncoder().encode(end)
+        )
+        guard case .compacting(let endPayload) = endDecoded.message else {
+            return XCTFail("Expected compacting end")
+        }
+        XCTAssertEqual(endPayload.phase, "end")
+        XCTAssertEqual(endPayload.nextState, .idle)
+    }
+
     func testConsumerEnvelopeRoundtrip() throws {
         let envelope = ConsumerEnvelope(
             deviceId: "dev-1",

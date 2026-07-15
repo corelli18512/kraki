@@ -122,7 +122,6 @@ export class CardManager {
     if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
     if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.decision ?? ''}`;
     if (a.type === 'question') return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
-    if (a.type === 'compaction') return `compaction:${a.payload.reason ?? 'unknown'}`;
     if (a.type === 'user_abort') return `user_abort:${a.payload.abortedAt}`;
     return `failed:${a.payload.failedAt}:${a.payload.code ?? ''}:${a.payload.message}`;
   }
@@ -157,9 +156,10 @@ export class CardManager {
   onDelta(sessionId: string, content: string): void {
     if (!content) return;
     const c = this.get(sessionId);
-    // Narration resumed → a SETTLED tail or stale compaction indicator is no
-    // longer the latest activity. Running tools and unresolved prompts remain.
-    if (this.isSettledTail(c) || c.action?.type === 'compaction') {
+    // Narration resumed → a SETTLED tail is no longer the latest activity.
+    // Running tools and unresolved prompts remain. (Compaction is no longer a
+    // card action - it lives in the separate compacting session-state.)
+    if (this.isSettledTail(c)) {
       c.action = null;
       this.syncAction(sessionId, c);
     }
@@ -187,9 +187,9 @@ export class CardManager {
    *  next delta to start a fresh segment (keep-last). */
   onNarrationFinal(sessionId: string, content: string): void {
     const c = this.get(sessionId);
-    // A narration segment is the latest activity now → retire a settled tail or
-    // stale compaction indicator (mirrors onDelta for no-stream edge cases).
-    if (this.isSettledTail(c) || c.action?.type === 'compaction') {
+    // A narration segment is the latest activity now → retire a settled tail
+    // (mirrors onDelta for no-stream edge cases).
+    if (this.isSettledTail(c)) {
       c.action = null;
       this.syncAction(sessionId, c);
     }
@@ -226,24 +226,6 @@ export class CardManager {
   }
 
   // ── Action part ───────────────────────────────────────
-
-  /** Pi started compacting before prompt acceptance. Do not hide a blocking
-   *  human affordance; otherwise compaction owns the transient action slot. */
-  onCompactionStart(sessionId: string, reason?: 'manual' | 'threshold' | 'overflow'): void {
-    const c = this.get(sessionId);
-    if (this.slotBlocksTool(c)) return;
-    c.action = { type: 'compaction', payload: { phase: 'running', ...(reason && { reason }) } };
-    this.syncAction(sessionId, c);
-  }
-
-  /** Clear only if compaction still owns the slot. A newer tool/prompt action
-   *  must survive a late native compaction_end or watchdog reconciliation. */
-  onCompactionEnd(sessionId: string): void {
-    const c = this.cards.get(sessionId);
-    if (!c || c.action?.type !== 'compaction') return;
-    c.action = null;
-    this.syncAction(sessionId, c);
-  }
 
   /** A tool started — track it as in-flight and (unless a pending prompt owns the
    *  slot) show the derived tool action: the single tool, or a `tool_batch` count

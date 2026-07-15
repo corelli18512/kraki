@@ -2,7 +2,7 @@
 // Session types — managed by tentacle and frontend, not relay
 // ------------------------------------------------------------
 
-export type SessionState = 'active' | 'idle';
+export type SessionState = 'active' | 'idle' | 'compacting';
 
 /** Permission mode that controls how the agent's tool usage and questions are handled. */
 export type SessionMode = 'safe' | 'discuss' | 'execute' | 'delegate';

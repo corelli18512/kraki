@@ -44,6 +44,15 @@ describe('getSessionStatus', () => {
     expect(getSessionStatus(session({ state: 'active' }), 0)).toBe('working');
   });
 
+  it('compacting when compacting and no human action is pending', () => {
+    expect(getSessionStatus(session({ state: 'compacting' }), 0)).toBe('compacting');
+  });
+
+  it('pending human action takes priority over compacting', () => {
+    expect(getSessionStatus(session({ state: 'compacting' }), 1)).toBe('pending');
+    expect(getSessionStatus(session({ state: 'compacting' }), 0, 'question')).toBe('pending');
+  });
+
   it('pending when there is a live open question (even while active)', () => {
     expect(getSessionStatus(session({ state: 'active' }), 1)).toBe('pending');
   });

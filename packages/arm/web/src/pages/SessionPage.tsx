@@ -128,7 +128,7 @@ export function SessionPage() {
           )}
         </button>
         <div className="relative">
-          <AgentAvatar agent={session.agent} sessionId={sessionId} size="sm" status={session.state as 'active' | 'idle'} />
+          <AgentAvatar agent={session.agent} sessionId={sessionId} size="sm" status={session.state} />
           {isReconnecting && (
             <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/30">
               <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-400 border-t-transparent" />
@@ -151,6 +151,7 @@ export function SessionPage() {
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     !isDeviceOnline ? 'bg-slate-400'
                     : sessionStatus === 'pending' ? 'bg-amber-400 animate-pulse'
+                    : sessionStatus === 'compacting' ? 'bg-cyan-500 animate-pulse'
                     : sessionStatus === 'working' ? 'bg-blue-400 animate-pulse'
                     : 'bg-emerald-400'
                   }`}
@@ -161,6 +162,11 @@ export function SessionPage() {
             {isDeviceOnline && sessionStatus === 'pending' && (
               <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
                 waiting for you{livePending > 1 ? ` · ${livePending}` : ''}
+              </span>
+            )}
+            {isDeviceOnline && sessionStatus === 'compacting' && (
+              <span className="shrink-0 rounded-full bg-cyan-500/15 px-1.5 py-0.5 text-[9px] font-medium text-cyan-700 dark:text-cyan-300">
+                compacting
               </span>
             )}
             {session.deviceName && session.model && (

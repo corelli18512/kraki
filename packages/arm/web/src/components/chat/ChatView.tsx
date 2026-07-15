@@ -182,7 +182,11 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // this bubble drops and the concluded spine bubble takes over in place, so
   // there is no card↔bubble morph and no lingering "answered" card.
   const draft = card?.text ?? '';
-  const cardEligible = status === 'working' || status === 'pending';
+  // Compacting is page/session chrome, not a card owner. It must not make an
+  // empty card eligible or create a live bubble by itself. Existing real card
+  // content/actions may continue rendering independently while compacting.
+  const cardEligible = status === 'working' || status === 'pending' || status === 'compacting';
+  const shouldSeedCard = status === 'working' || status === 'pending';
   const showLive = cardEligible && !!card && (draft.length > 0 || actionLive);
 
   // First seq for prepend tracking (passed to scroll controller)
@@ -195,10 +199,10 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // opening a non-idle session without local card state. Gated on the tentacle
   // being encryptable (its key may arrive after mount) and re-runs when it does.
   useEffect(() => {
-    if (!sessionId || !cardEligible || card) return;
+    if (!sessionId || !shouldSeedCard || card) return;
     if (!isConnected || !isTentacleEncryptable) return;
     messageProvider.requestCard(sessionId);
-  }, [sessionId, cardEligible, card, isConnected, isTentacleEncryptable]);
+  }, [sessionId, shouldSeedCard, card, isConnected, isTentacleEncryptable]);
 
   useEffect(() => {
     if (!sessionId || !isTentacleEncryptable) return;
@@ -323,6 +327,18 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
         )}
       </div>
 
+      {session.state === 'compacting' && (
+        <div
+          className="border-t border-border-primary bg-surface-secondary/70 px-3 py-2 sm:px-6"
+          data-session-runtime-status="compacting"
+          role="status"
+        >
+          <div className="mx-auto flex max-w-3xl items-center gap-2 text-xs text-text-secondary">
+            <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-cyan-500" />
+            <span>Compacting context…</span>
+          </div>
+        </div>
+      )}
       {isDeviceOnline && <MessageInput sessionId={sessionId} />}
     </div>
   );

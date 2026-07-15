@@ -107,7 +107,7 @@ struct ChatView: View {
                         // mid-typing on every reconnect would be far
                         // more disruptive than queueing for a few
                         // hundred ms.
-                        if isDeviceOnline {
+                        if isDeviceOnline || session?.state == .compacting {
                             bottomInputArea
                                 // Measure the rendered height so we
                                 // can mirror it into the collection
@@ -351,18 +351,42 @@ struct ChatView: View {
 
     @ViewBuilder
     private var bottomInputArea: some View {
-        // Pure floating liquid-glass capsule. The capsule itself owns
-        // its glass background (see `inputBoxGlassBackground` in
-        // MessageInputView); we deliberately do NOT add a band of
-        // material under the home-indicator strip — the chat
-        // collection view scrolls behind the input so messages blur
-        // through the capsule and the home-indicator area shows the
-        // underlying content directly, matching the web composer.
-        MessageInputView(
-            sessionId: sessionId,
-            pendingPermission: permissions.first,
-            pendingQuestion: permissions.isEmpty ? questions.first : nil
-        )
+        VStack(spacing: 0) {
+            // Session runtime chrome, independent from the UICollectionView and
+            // its chat cells. Compacting never becomes a bubble, TRACE row, or
+            // card action; it only occupies this lightweight page-level band.
+            if session?.state == .compacting {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Color(hex: 0x06B6D4))
+                    Text("Compacting context…")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.surfaceSecondary.opacity(0.78))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Compacting context")
+            }
+
+            // Pure floating liquid-glass capsule. The capsule itself owns
+            // its glass background (see `inputBoxGlassBackground` in
+            // MessageInputView); we deliberately do NOT add a band of
+            // material under the home-indicator strip — the chat
+            // collection view scrolls behind the input so messages blur
+            // through the capsule and the home-indicator area shows the
+            // underlying content directly, matching the web composer.
+            if isDeviceOnline {
+                MessageInputView(
+                    sessionId: sessionId,
+                    pendingPermission: permissions.first,
+                    pendingQuestion: permissions.isEmpty ? questions.first : nil
+                )
+            }
+        }
     }
 }
 #endif

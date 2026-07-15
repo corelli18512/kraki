@@ -15,6 +15,29 @@ const logger = createLogger('msg-provider');
 const PREVIEW_MAX = 80;
 const BATCH_TIMEOUT_MS = 10_000;
 
+// Rows written by older web clients before runtime/TRACE state was separated
+// from the persistent conversation spine. They must never count toward cache
+// range coverage, or a stale `active` row can hide a missing agent reply at the
+// same session seq.
+const NON_SPINE_CACHE_TYPES = new Set([
+  'pending_input',
+  'active',
+  'compacting',
+  'agent_message_delta',
+  'card_action',
+  'agent_narration',
+  'tool_start',
+  'tool_complete',
+  'permission',
+  'question',
+  'permission_resolved',
+  'question_resolved',
+]);
+
+function isSpineCacheMessage(message: ChatMessage): boolean {
+  return !NON_SPINE_CACHE_TYPES.has(message.type);
+}
+
 /** Strip common markdown syntax for clean preview display. */
 function stripMarkdown(text: string): string {
   return text
@@ -123,6 +146,10 @@ class MessageProvider {
   private pendingRequests = new Map<string, PendingRequest>();
   /** Sessions currently loading */
   private loadingSessions = new Set<string>();
+  /** Highest seq covered by each in-flight fetch. */
+  private loadingThroughSeq = new Map<string, number>();
+  /** Latest tail reconciliation requested beyond an in-flight range. */
+  private pendingTailReconciles = new Map<string, number>();
   /** Turn-trace pulls already issued, keyed `${sessionId}:${bubbleSeq}`.
    *  Prevents re-pulling the same concluded turn's TRACE on every render. */
   private tracePulled = new Set<string>();
@@ -133,7 +160,8 @@ class MessageProvider {
   }
 
   setTentacleInfo(sessionId: string, lastSeq: number, deviceId: string): void {
-    this.tentacleLastSeq.set(sessionId, lastSeq);
+    const currentLastSeq = this.tentacleLastSeq.get(sessionId) ?? 0;
+    this.tentacleLastSeq.set(sessionId, Math.max(currentLastSeq, lastSeq));
     this.tentacleDeviceMap.set(sessionId, deviceId);
   }
 
@@ -143,22 +171,45 @@ class MessageProvider {
   }
 
   /**
-   * Ensure a session's messages are loaded — called when user opens a session.
-   * If store already has messages, this is a no-op.
-   * Otherwise, fetches the last 50 messages (IDB first, then tentacle).
+   * Ensure a session's latest messages are loaded — called when user opens a
+   * session. Existing in-memory messages do not prove that the tail is complete:
+   * a client can receive the closing idle while missing the agent message just
+   * before it. Always reconcile the authoritative last-50 window from the
+   * session digest (IDB first, then tentacle).
    */
   ensureLoaded(sessionId: string): void {
-    const store = getStore();
-    const existing = store.messages.get(sessionId);
-    if (existing && existing.length > 0) return;
-    if (this.loadingSessions.has(sessionId)) return;
-
     const lastSeq = this.tentacleLastSeq.get(sessionId);
     if (!lastSeq || lastSeq <= 0) return;
 
-    const fromSeq = Math.max(1, lastSeq - 49);
-    logger.info('ensureLoaded: triggering on-demand fetch', { sessionId, fromSeq, lastSeq });
-    this.fetchRange(sessionId, fromSeq, lastSeq, { initial: true });
+    this.reconcileTail(sessionId, lastSeq);
+  }
+
+  /**
+   * Reconcile the latest persistent spine window against an authoritative
+   * session seq. Used both on session open and when a closing idle arrives.
+   */
+  reconcileTail(sessionId: string, lastSeq: number): void {
+    if (lastSeq <= 0) return;
+
+    const authoritativeLastSeq = Math.max(this.tentacleLastSeq.get(sessionId) ?? 0, lastSeq);
+    this.tentacleLastSeq.set(sessionId, authoritativeLastSeq);
+
+    if (this.loadingSessions.has(sessionId)) {
+      const loadingThrough = this.loadingThroughSeq.get(sessionId) ?? 0;
+      if (authoritativeLastSeq > loadingThrough) {
+        const pending = this.pendingTailReconciles.get(sessionId) ?? 0;
+        this.pendingTailReconciles.set(sessionId, Math.max(pending, authoritativeLastSeq));
+      }
+      return;
+    }
+
+    const fromSeq = Math.max(1, authoritativeLastSeq - 49);
+    logger.info('reconcileTail: checking authoritative tail', {
+      sessionId,
+      fromSeq,
+      lastSeq: authoritativeLastSeq,
+    });
+    void this.fetchRange(sessionId, fromSeq, authoritativeLastSeq, { initial: true });
   }
 
   /**
@@ -177,6 +228,7 @@ class MessageProvider {
     logger.info('fetchRange', { sessionId, fromSeq: clampedFrom, toSeq, initial: options?.initial });
 
     this.loadingSessions.add(sessionId);
+    this.loadingThroughSeq.set(sessionId, toSeq);
     if (options?.initial) {
       getStore().setSessionLoading(sessionId, true);
     }
@@ -186,8 +238,16 @@ class MessageProvider {
       let idbMessages: ChatMessage[] = [];
       try {
         const db = await import('./message-db');
-        idbMessages = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
-        logger.info('IDB range query', { sessionId, fromSeq: clampedFrom, toSeq, found: idbMessages.length, expected: toSeq - clampedFrom + 1 });
+        const cached = await db.getMessagesInRange(sessionId, clampedFrom, toSeq);
+        idbMessages = cached.filter(isSpineCacheMessage);
+        logger.info('IDB range query', {
+          sessionId,
+          fromSeq: clampedFrom,
+          toSeq,
+          found: idbMessages.length,
+          ignoredTransient: cached.length - idbMessages.length,
+          expected: toSeq - clampedFrom + 1,
+        });
       } catch {
         // IDB unavailable
       }
@@ -244,7 +304,13 @@ class MessageProvider {
       logger.error('fetchRange failed', { sessionId, error: (err as Error).message });
     } finally {
       this.loadingSessions.delete(sessionId);
+      this.loadingThroughSeq.delete(sessionId);
       getStore().setSessionLoading(sessionId, false);
+      const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
+      if (pendingLastSeq !== undefined) {
+        this.pendingTailReconciles.delete(sessionId);
+        this.reconcileTail(sessionId, pendingLastSeq);
+      }
     }
   }
 
@@ -301,6 +367,8 @@ class MessageProvider {
     this.tentacleLastSeq.clear();
     this.tentacleDeviceMap.clear();
     this.loadingSessions.clear();
+    this.loadingThroughSeq.clear();
+    this.pendingTailReconciles.clear();
     this.tracePulled.clear();
     this.cardRequested.clear();
   }
@@ -416,7 +484,8 @@ class MessageProvider {
     if (toSeq < fromSeq) return Promise.resolve([]);
 
     return new Promise<ChatMessage[]>((resolve) => {
-      this.pendingRequests.set(sessionId, { sessionId, resolve });
+      const pending: PendingRequest = { sessionId, resolve };
+      this.pendingRequests.set(sessionId, pending);
 
       const store = getStore();
       this.sendFn!({
@@ -429,7 +498,9 @@ class MessageProvider {
 
       // Safety timeout — resolve with empty if tentacle never responds
       setTimeout(() => {
-        if (this.pendingRequests.has(sessionId)) {
+        // A later tail reconcile may already have installed a new request for
+        // this session. Only the request that armed this timer may time out.
+        if (this.pendingRequests.get(sessionId) === pending) {
           logger.warn('tentacle range request timed out', { sessionId, fromSeq, toSeq });
           this.pendingRequests.delete(sessionId);
           resolve([]);

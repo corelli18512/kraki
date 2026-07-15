@@ -138,6 +138,7 @@ extension AnyCodable: ExpressibleByNilLiteral {
 enum SessionState: String, Codable, Sendable {
     case active
     case idle
+    case compacting
 }
 
 enum SessionMode: String, Codable, Sendable {

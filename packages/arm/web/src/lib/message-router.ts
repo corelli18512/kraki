@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction, CompactingMessage, SessionState } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -271,6 +271,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const idled = store.sessions.get(sid);
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
       store.appendMessage(sid, msg);
+      // A closing idle can arrive even if the immediately preceding agent
+      // message was dropped in transit. Reconcile the authoritative spine tail
+      // so the gap is recovered instead of leaving an idle session with no reply.
+      messageProvider.setTentacleInfo(sid, msg.seq, msg.deviceId);
+      messageProvider.reconcileTail(sid, msg.seq);
       // Extract usage from idle payload
       const idlePayload = (msg as IdleMessage).payload;
       const idleUsage = idlePayload?.usage;
@@ -321,8 +326,28 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'active': {
       const activated = store.sessions.get(sid);
-      if (activated) store.upsertSession({ ...activated, state: 'active' });
+      // Active can be reasserted during steer acceptance while Pi is still
+      // compacting. Only compacting-end, idle, or session_list may leave the
+      // independent compacting state.
+      if (activated && activated.state !== 'compacting') {
+        store.upsertSession({ ...activated, state: 'active' });
+      }
       store.appendMessage(sid, msg);
+      break;
+    }
+
+    case 'compacting': {
+      const compactingMsg = msg as CompactingMessage;
+      const session = store.sessions.get(sid);
+      if (session) {
+        // `compacting` is a peer of active/idle on the session-state axis. On
+        // `phase: 'start'` the session enters compacting; `end.nextState` is the
+        // authoritative state to restore. Never persists, never creates a bubble.
+        const next: SessionState = compactingMsg.payload.phase === 'start'
+          ? 'compacting'
+          : compactingMsg.payload.nextState;
+        store.upsertSession({ ...session, state: next });
+      }
       break;
     }
 
