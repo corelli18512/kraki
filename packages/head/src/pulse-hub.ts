@@ -115,6 +115,7 @@ export class PulseHub {
   /** Unique even when two hub processes start in the same millisecond. */
   private readonly processEpoch = randomUUID();
   private gcTimer: ReturnType<typeof setInterval> | null = null;
+  private closed = false;
 
   constructor(
     private readonly db: Database.Database,
@@ -213,6 +214,7 @@ export class PulseHub {
 
   /** A device connected — bring up its stream set (resume any persisted outbox). */
   onDeviceConnected(deviceId: string): void {
+    if (this.closed) return;
     this.connectedDevices.add(deviceId);
     this.bulkCapableNow.delete(deviceId);
     this.pulseSeenNow.delete(deviceId);
@@ -223,6 +225,7 @@ export class PulseHub {
 
   /** A device disconnected — its outboxes persist for resume. */
   onDeviceDisconnected(deviceId: string): void {
+    if (this.closed) return;
     this.connectedDevices.delete(deviceId);
     // A v2 StreamSet advertises stream 1 on every connection. If this complete
     // connection exchanged valid Pulse frames but never advertised stream 1,
@@ -241,6 +244,7 @@ export class PulseHub {
 
   /** Periodic tick for all stream sets (heartbeat, liveness, durable expiry). */
   tick(): void {
+    if (this.closed) return;
     const now = this.host.now();
     for (const [deviceId, d] of this.devices) {
       this.run(deviceId, d.streams.onTick(now));
@@ -253,7 +257,7 @@ export class PulseHub {
    * the frame to the source endpoint and carry out the effects.
    */
   onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string }): void {
-    if (!env.pulse) return;
+    if (this.closed || !env.pulse) return;
     const d = this.ep(fromDevice);
     // A frame addressed to HEAD_PULSE_TARGET is consumed by the head itself, not
     // forwarded to a device. It still rides the source stream (same seq/ack/
@@ -428,6 +432,7 @@ export class PulseHub {
   /** On head boot, rebuild endpoints from persisted snapshots so durable
    *  outbox entries resume delivery once their destination reconnects. */
   recoverOnBoot(): void {
+    if (this.closed) return;
     const rows = this.db.prepare('SELECT device FROM pulse_meta').all() as Array<{ device: string }>;
     for (const { device } of rows) this.ep(device); // constructs + restores
   }
@@ -448,6 +453,7 @@ export class PulseHub {
 
   /** Stop the periodic GC scan. Call on shutdown. */
   close(): void {
+    this.closed = true;
     if (this.gcTimer) {
       clearInterval(this.gcTimer);
       this.gcTimer = null;

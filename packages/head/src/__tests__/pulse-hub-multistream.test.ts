@@ -384,6 +384,30 @@ describe('PulseHub multi-stream persistence and forwarding', () => {
     world.hub.close();
   });
 
+  it('ignores late socket events after the hub and database close', () => {
+    const db = new Database(':memory:');
+    const hub = new PulseHub(db, {
+      now: () => 0,
+      sendPulseTo: () => false,
+      broadcastTargets: () => [],
+      onDeliverToSelf: () => undefined,
+    }, { intervalMs: 0 });
+    hub.onDeviceConnected(ARM);
+    hub.close();
+    db.close();
+
+    const lateEndpoint = new Endpoint({ epoch: 'late' });
+    const frame = lateEndpoint.onConnected(0)
+      .find((effect): effect is Extract<Effect, { t: 'transmit' }> => effect.t === 'transmit')?.bytes;
+    expect(frame).toBeDefined();
+    expect(() => hub.onDeviceDisconnected(ARM)).not.toThrow();
+    expect(() => hub.onDeviceConnected(ARM)).not.toThrow();
+    expect(() => hub.onPulseEnvelope(ARM, { pulse: b64(frame!) })).not.toThrow();
+    expect(() => hub.tick()).not.toThrow();
+    expect(() => hub.recoverOnBoot()).not.toThrow();
+    expect(() => hub.close()).not.toThrow();
+  });
+
   it('falls bulk back to stream 0 for a peer that never advertises v2', () => {
     const db = new Database(':memory:');
     databases.push(db);
