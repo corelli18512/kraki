@@ -277,6 +277,66 @@ describe('PulseHub multi-stream persistence and forwarding', () => {
     afterRestart.hub.close();
   });
 
+  it('forgets historical v2 capability after a confirmed v1 rollback', () => {
+    const db = new Database(':memory:');
+    databases.push(db);
+    const sentStreams: number[] = [];
+    const hub = new PulseHub(db, {
+      now: () => 0,
+      sendPulseTo: (device, pulse) => {
+        if (device === ARM) {
+          sentStreams.push(decodeFrameWithStream(unb64(pulse))?.streamId ?? -1);
+        }
+        return false;
+      },
+      broadcastTargets: () => [],
+      onDeliverToSelf: () => undefined,
+    }, { intervalMs: 0 });
+
+    db.prepare('INSERT INTO pulse_capabilities (device, bulk) VALUES (?, 1)').run(ARM);
+    hub.close();
+
+    const restarted = new PulseHub(db, {
+      now: () => 0,
+      sendPulseTo: (device, pulse) => {
+        if (device === ARM) {
+          sentStreams.push(decodeFrameWithStream(unb64(pulse))?.streamId ?? -1);
+        }
+        return false;
+      },
+      broadcastTargets: () => [],
+      onDeliverToSelf: () => undefined,
+    }, { intervalMs: 0 });
+    restarted.onDeviceConnected(ARM);
+
+    // A stream-0-only endpoint emits byte-compatible v1 frames and never
+    // advertises stream 1 during this connection.
+    const legacy = new Endpoint({ epoch: 'rolled-back-v1', streamId: 0 });
+    for (const effect of legacy.onConnected(0)) {
+      if (effect.t === 'transmit') {
+        restarted.onPulseEnvelope(ARM, { pulse: b64(effect.bytes), to: '@head' });
+      }
+    }
+    restarted.onDeviceDisconnected(ARM);
+    expect(db.prepare('SELECT bulk FROM pulse_capabilities WHERE device = ?').get(ARM))
+      .toBeUndefined();
+
+    // The separate fallback test below verifies that an unrecognized peer is
+    // routed over stream 0. This test locks the state transition that makes a
+    // rolled-back device unrecognized again, including persistence across a
+    // subsequent Head restart.
+    restarted.close();
+    const afterRollbackRestart = new PulseHub(db, {
+      now: () => 0,
+      sendPulseTo: () => false,
+      broadcastTargets: () => [],
+      onDeliverToSelf: () => undefined,
+    }, { intervalMs: 0 });
+    expect(db.prepare('SELECT bulk FROM pulse_capabilities WHERE device = ?').get(ARM))
+      .toBeUndefined();
+    afterRollbackRestart.close();
+  });
+
   it('purges disconnected non-durable entries independently on both streams', () => {
     const db = new Database(':memory:');
     databases.push(db);

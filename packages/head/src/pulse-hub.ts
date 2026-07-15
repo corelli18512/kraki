@@ -106,6 +106,10 @@ export class PulseHub {
    *  client under the same device id to receive a stream-0 fallback. */
   private readonly bulkCapableEver = new Set<string>();
   private readonly bulkCapableNow = new Set<string>();
+  /** Devices from which this concrete connection received any valid Pulse
+   *  frame. Used to distinguish a confirmed v1 rollback from a socket that
+   *  closed before capability negotiation completed. */
+  private readonly pulseSeenNow = new Set<string>();
   private readonly connectedDevices = new Set<string>();
   private readonly gc: Required<PulseHubGcConfig>;
   /** Unique even when two hub processes start in the same millisecond. */
@@ -211,6 +215,7 @@ export class PulseHub {
   onDeviceConnected(deviceId: string): void {
     this.connectedDevices.add(deviceId);
     this.bulkCapableNow.delete(deviceId);
+    this.pulseSeenNow.delete(deviceId);
     const d = this.ep(deviceId);
     this.run(deviceId, d.streams.onConnected(this.host.now()));
     this.saveSnapshot(deviceId);
@@ -219,6 +224,15 @@ export class PulseHub {
   /** A device disconnected — its outboxes persist for resume. */
   onDeviceDisconnected(deviceId: string): void {
     this.connectedDevices.delete(deviceId);
+    // A v2 StreamSet advertises stream 1 on every connection. If this complete
+    // connection exchanged valid Pulse frames but never advertised stream 1,
+    // the device was rolled back (or is a stale v1 client). Forget historical
+    // v2 capability so offline bulk remains byte-compatible on stream 0.
+    if (this.pulseSeenNow.has(deviceId) && !this.bulkCapableNow.has(deviceId)) {
+      this.bulkCapableEver.delete(deviceId);
+      this.db.prepare('DELETE FROM pulse_capabilities WHERE device = ?').run(deviceId);
+    }
+    this.pulseSeenNow.delete(deviceId);
     this.bulkCapableNow.delete(deviceId);
     const d = this.devices.get(deviceId);
     if (!d) return;
@@ -254,6 +268,7 @@ export class PulseHub {
     const inLen = env.pulse.length;
     const bytes = b64decode(env.pulse);
     const decoded = decodeFrameWithStream(bytes);
+    if (decoded) this.pulseSeenNow.add(fromDevice);
     if (decoded?.streamId === STREAM_BULK) {
       if (!this.bulkCapableEver.has(fromDevice)) {
         this.bulkCapableEver.add(fromDevice);
