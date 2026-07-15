@@ -13,7 +13,7 @@
  * relay holds durable messages for offline arms, not the tentacle.
  */
 
-import { decodeFrame, type Effect, Endpoint } from '@coinfra/pulse';
+import { decodeFrame, decodeFrameWithStream, type Effect, Endpoint, StreamSet } from '@coinfra/pulse';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('pulse');
@@ -68,8 +68,24 @@ const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64');
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+/** Classify a producer message type into a Pulse stream (spec §13).
+ *  Bulk = best-effort background / large (history replay, trace batches,
+ *  attachment chunks). Everything else is live. Splitting bulk off the live
+ *  stream is what stops a reconnect-time burst from head-of-line blocking
+ *  echo / abort / status-card updates on the same downlink. */
+export function streamForType(type: string | undefined): number {
+  switch (type) {
+    case 'session_messages_range_batch':
+    case 'turn_trace_batch':
+    case 'attachment_data':
+      return 1; // STREAM_BULK
+    default:
+      return 0; // STREAM_LIVE
+  }
+}
+
 export class TentaclePulse {
-  private endpoint: Endpoint;
+  private streams: StreamSet;
   /** Target app for the frame currently being emitted (per send). Empty ⇒ the
    *  frame fans out to all apps (broadcast); set ⇒ unicast to one app. */
   private currentTarget = '';
@@ -78,52 +94,58 @@ export class TentaclePulse {
     private readonly host: TentaclePulseHost,
     epoch: string,
   ) {
-    this.endpoint = new Endpoint({
-      epoch,
-      durable: { supported: false },
-    });
+    // Two independent streams on the single relay WebSocket (spec §13): live
+    // (control + real-time) gets its own seq space so it is never queued
+    // behind bulk (history replay, trace batches, attachment chunks). Each
+    // stream gets its own epoch so a RESET/burst on bulk cannot disturb live.
+    const base = epoch;
+    this.streams = new StreamSet([
+      new Endpoint({ epoch: `${base}:live`, durable: { supported: false }, streamId: 0 }),
+      new Endpoint({ epoch: `${base}:bulk`, durable: { supported: false }, streamId: 1 }),
+    ]);
   }
 
-  /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse.
-   *  `targetDeviceId` addresses one app (unicast); omit it to fan out to all
-   *  apps (broadcast). `durable` marks it for head persistence while the target
-   *  app is offline (default false — sync snapshots self-heal on reconnect). */
-  send(payloadJson: string, targetDeviceId = '', durable = false, coalesceKey?: string): void {
+  /** Send a reliable message (a JSON string carrying {blob, keys}) via pulse on
+   *  stream `stream` (0=live, 1=bulk). `targetDeviceId` addresses one app
+   *  (unicast); omit it to fan out to all apps (broadcast). `durable` marks it
+   *  for head persistence while the target app is offline (default false —
+   *  sync snapshots self-heal on reconnect). */
+  send(payloadJson: string, targetDeviceId = '', durable = false, coalesceKey?: string, stream = 0): void {
     const payload = enc.encode(payloadJson);
     this.currentTarget = targetDeviceId;
-    const { seq, effects } = this.endpoint.send(payload, { durable, coalesceKey });
-    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey });
+    const { seq, effects } = this.streams.send(stream, payload, { durable, coalesceKey });
+    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey, stream });
     this.run(effects);
     this.currentTarget = '';
   }
 
-  /** The relay connection is up — resume the stream. */
+  /** The relay connection is up — resume every stream. */
   onConnected(): void {
     trace('CONNECTED', 0, 0);
-    this.run(this.endpoint.onConnected(this.host.now()));
+    this.run(this.streams.onConnected(this.host.now()));
   }
 
   /** The relay connection dropped. */
   onDisconnected(): void {
     trace('DISCONNECTED', 0, 0);
-    this.endpoint.onDisconnected(this.host.now());
+    this.streams.onDisconnected(this.host.now());
   }
 
-  /** An inbound pulse frame arrived from the relay. */
+  /** An inbound pulse frame arrived from the relay — demux by streamId. */
   onFrame(pulseB64: string): void {
     const bytes = new Uint8Array(Buffer.from(pulseB64, 'base64'));
-    const frame = decodeFrame(bytes);
-    if (frame) {
-      trace('RX', frame.t === 'data' ? frame.seq : 0, bytes.length, { kind: frame.t });
+    const d = decodeFrameWithStream(bytes);
+    if (d) {
+      trace('RX', d.frame.t === 'data' ? d.frame.seq : 0, bytes.length, { kind: d.frame.t, stream: d.streamId });
     } else {
       trace('RX', 0, bytes.length, { kind: '?' });
     }
-    this.run(this.endpoint.onBytes(bytes, this.host.now()));
+    this.run(this.streams.onBytes(bytes, this.host.now()));
   }
 
-  /** Periodic tick (heartbeat + liveness). */
+  /** Periodic tick for every stream (heartbeat + liveness). */
   tick(): void {
-    this.run(this.endpoint.onTick(this.host.now()));
+    this.run(this.streams.onTick(this.host.now()));
   }
 
   private run(effects: Effect[]): void {

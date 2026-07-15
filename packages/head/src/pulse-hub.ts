@@ -22,10 +22,26 @@
  */
 
 import type Database from 'better-sqlite3';
-import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot } from '@coinfra/pulse';
+import { decodeFrame, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 import { getLogger } from './logger.js';
 import { fp, trace } from './trace.js';
+
+/** The two logical streams every head⇄device link carries (pulse spec §13).
+ *  Keeping bulk off the live stream is what stops a reconnect-time burst of
+ *  trace/range/attachment frames from head-of-line blocking live messages
+ *  (echo, abort, status card) on the same downlink. */
+const STREAM_LIVE = 0;
+const STREAM_BULK = 1;
+
+/** Head→device messages that are bulk (best-effort background / large):
+ *  history replay, turn-trace batches, attachment chunks. Everything else is
+ *  live. This classification runs at the FORWARD hop, keyed by the payload's
+ *  decoded message `type` (the payload is the encrypted {blob,keys} JSON, but
+ *  the head forwards the ORIGINAL delivered bytes from the source — which for
+ *  a same-epoch source carry the inner type in the clear only after decrypt;
+ *  so we instead classify by the SOURCE deliver's streamId, set by the
+ *  originating tentacle/arm). See {@link forward}. */
 
 /** GC policy — how aggressively the hub reclaims per-device outbox memory
  *  for peers that stay disconnected. Zero disables that step. Defaults tuned
@@ -74,11 +90,11 @@ const b64encode = (u: Uint8Array): string => Buffer.from(u).toString('base64');
 const b64decode = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
 
 interface PerDevice {
-  endpoint: Endpoint;
-  /** Destination for messages this device sends us (the `to` of its unicasts).
-   *  A device streams to exactly one peer per logical connection in Kraki's
-   *  model (arm→its tentacle, tentacle→its arms); we forward each delivered
-   *  payload to the destination recorded for the in-flight envelope. */
+  streams: StreamSet;
+  /** live(0) and bulk(1) endpoints, cached for direct access (snapshot, GC).
+   *  Both share the device's connection via the StreamSet. */
+  live: Endpoint;
+  bulk: Endpoint;
 }
 
 export class PulseHub {
@@ -98,59 +114,75 @@ export class PulseHub {
 
   private initSchema(): void {
     this.db.exec(`CREATE TABLE IF NOT EXISTS pulse_outbox (
-      device TEXT NOT NULL, seq TEXT NOT NULL, payload BLOB NOT NULL,
+      device TEXT NOT NULL, stream INTEGER NOT NULL DEFAULT 0,
+      seq TEXT NOT NULL, payload BLOB NOT NULL,
       dest TEXT NOT NULL, durable_dest INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (device, seq))`);
+      PRIMARY KEY (device, stream, seq))`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS pulse_meta (
-      device TEXT PRIMARY KEY, snapshot TEXT NOT NULL)`);
+      device TEXT NOT NULL, stream INTEGER NOT NULL DEFAULT 0, snapshot TEXT NOT NULL,
+      PRIMARY KEY (device, stream))`);
+    // Migrate pre-§13 single-stream schemas: both tables keyed by device only
+    // (stream implicit 0). Add the stream column defaulting to 0 so restored
+    // live-stream rows keep working. Idempotent across boots.
+    for (const table of ['pulse_outbox', 'pulse_meta']) {
+      try {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN stream INTEGER NOT NULL DEFAULT 0`);
+      } catch { /* column already exists */ }
+    }
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pulse_meta_device_stream ON pulse_meta (device, stream)`);
   }
 
-  /** Ensure an endpoint exists for a device (restoring from SQLite if present).
-   *  head endpoints are durable-supported (head is always-on + has disk). */
+  /** Ensure a per-device StreamSet exists (live + bulk endpoints, restoring
+   *  each from SQLite if present). head endpoints are durable-supported (head
+   *  is always-on + has disk). */
   private ep(deviceId: string): PerDevice {
     let d = this.devices.get(deviceId);
-    if (!d) {
-      const restore = this.loadSnapshot(deviceId);
-      // ALWAYS mint a fresh epoch for this process, even when restoring. A
-      // process restart is a new send-stream identity (spec §9): non-durable
-      // sends in flight were lost, so the peer MUST learn the discontinuity
-      // and reset its recvCursor, else our post-restart seq=1..N collide
-      // with the pre-crash seq=1..N it already delivered and get silently
-      // dropped as duplicates (2026-07-11 relay-restart device_joined-loss
-      // bug). The durable outbox entries we restore still resend correctly:
-      // the peer resets and accepts them under our new epoch. `this.host.now()`
-      // is process-scoped, so within one process run the cached endpoint keeps
-      // its epoch; only a real restart produces a new one.
-      const endpoint = new Endpoint({
-        epoch: `head:${deviceId}:${this.host.now()}`,
-        durable: { supported: true },
-        restore,
-      });
-      d = { endpoint };
-      this.devices.set(deviceId, d);
-    }
+    if (d) return d;
+    // ALWAYS mint a fresh epoch for this process, even when restoring. A
+    // process restart is a new send-stream identity (spec §9): non-durable
+    // sends in flight were lost, so the peer MUST learn the discontinuity
+    // and reset its recvCursor, else our post-restart seq=1..N collide with
+    // the pre-crash seq=1..N it already delivered and get silently dropped as
+    // duplicates (2026-07-11 relay-restart device_joined-loss bug). Each
+    // stream gets its own epoch so a RESET/burst on bulk cannot disturb the
+    // live stream's cursor.
+    const ts = this.host.now();
+    const live = new Endpoint({
+      epoch: `head:${deviceId}:live:${ts}`,
+      durable: { supported: true },
+      streamId: STREAM_LIVE,
+      restore: this.loadSnapshot(deviceId, STREAM_LIVE),
+    });
+    const bulk = new Endpoint({
+      epoch: `head:${deviceId}:bulk:${ts}`,
+      durable: { supported: true },
+      streamId: STREAM_BULK,
+      restore: this.loadSnapshot(deviceId, STREAM_BULK),
+    });
+    d = { streams: new StreamSet([live, bulk]), live, bulk };
+    this.devices.set(deviceId, d);
     return d;
   }
 
-  /** A device connected — bring up its endpoint (resume any persisted stream). */
+  /** A device connected — bring up its stream set (resume any persisted outbox). */
   onDeviceConnected(deviceId: string): void {
     const d = this.ep(deviceId);
-    this.run(deviceId, d.endpoint.onConnected(this.host.now()));
+    this.run(deviceId, d.streams.onConnected(this.host.now()));
     this.saveSnapshot(deviceId);
   }
 
-  /** A device disconnected — its endpoint's outbox persists for resume. */
+  /** A device disconnected — its outboxes persist for resume. */
   onDeviceDisconnected(deviceId: string): void {
     const d = this.devices.get(deviceId);
     if (!d) return;
-    d.endpoint.onDisconnected(this.host.now());
+    d.streams.onDisconnected(this.host.now());
   }
 
-  /** Periodic tick for all endpoints (heartbeat, liveness, durable expiry). */
+  /** Periodic tick for all stream sets (heartbeat, liveness, durable expiry). */
   tick(): void {
     const now = this.host.now();
     for (const [deviceId, d] of this.devices) {
-      this.run(deviceId, d.endpoint.onTick(now));
+      this.run(deviceId, d.streams.onTick(now));
     }
   }
 
@@ -163,7 +195,7 @@ export class PulseHub {
     if (!env.pulse) return;
     const d = this.ep(fromDevice);
     // A frame addressed to HEAD_PULSE_TARGET is consumed by the head itself, not
-    // forwarded to a device. It still rides the source endpoint (same seq/ack/
+    // forwarded to a device. It still rides the source stream (same seq/ack/
     // resume as everything else) — only the `deliver` handling differs.
     const selfBound = env.to === HEAD_PULSE_TARGET;
     // Destinations for anything this device delivers: an explicit unicast `to`,
@@ -174,11 +206,14 @@ export class PulseHub {
       : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
     const inLen = env.pulse.length;
     trace('WS-RX', { from: fromDevice, to: env.to, selfBound, destCount: dests.length, pulseB64Len: inLen });
-    const effects = d.endpoint.onBytes(b64decode(env.pulse), this.host.now());
+    // StreamSet demuxes by the v2 header's streamId and dispatches to the
+    // owning per-stream endpoint. The deliver effect carries that streamId so
+    // forward() can route onto the SAME stream on the destination device.
+    const effects = d.streams.onBytes(b64decode(env.pulse), this.host.now());
     const delivered = effects.filter((e) => e.t === 'deliver');
     if (delivered.length > 0) {
       for (const e of delivered) {
-        if (e.t === 'deliver') trace('HUB-DELIVER', { from: fromDevice, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, selfBound });
+        if (e.t === 'deliver') trace('HUB-DELIVER', { from: fromDevice, stream: e.streamId ?? 0, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, selfBound });
       }
     }
     this.run(fromDevice, effects, dests, selfBound);
@@ -206,22 +241,26 @@ export class PulseHub {
             // source connection's auth context, instead of forwarding.
             this.host.onDeliverToSelf(deviceId, e.payload);
           } else {
-            trace('HUB-FORWARD', { from: deviceId, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, dests: dests ?? [] });
+            trace('HUB-FORWARD', { from: deviceId, stream: e.streamId ?? 0, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, dests: dests ?? [] });
             // Store-and-forward bridge: forward the reliable payload onto each
-            // destination device's endpoint, preserving durable intent AND the
-            // send-time coalesce hint (pulse §12) so state-covering streams
-            // (deltas, card state) collapse on the arm-facing outbox if the arm
-            // is offline, instead of bursting on reconnect.
-            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable, e.coalesceKey);
+            // destination device's SAME stream (live or bulk), preserving
+            // durable intent AND the send-time coalesce hint (pulse §12) so
+            // state-covering streams (deltas, card state) collapse on the
+            // arm-facing outbox if the arm is offline, instead of bursting on
+            // reconnect. Routing onto the matching stream is what keeps bulk
+            // (trace/range/attachment) from head-of-line blocking live
+            // (echo/abort/card) on the downlink.
+            const stream = e.streamId ?? STREAM_LIVE;
+            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable, e.coalesceKey, stream);
           }
           break;
         case 'store':
-          trace('HUB-STORE', { device: deviceId, seq: String(e.seq), len: e.payload.length, dests: dests ?? [] });
-          this.storeOutbox(deviceId, e.seq, e.payload, (dests ?? []).join(','));
+          trace('HUB-STORE', { device: deviceId, stream: e.streamId ?? 0, seq: String(e.seq), len: e.payload.length, dests: dests ?? [] });
+          this.storeOutbox(deviceId, e.streamId ?? STREAM_LIVE, e.seq, e.payload, (dests ?? []).join(','));
           break;
         case 'unstore':
-          trace('HUB-UNSTORE', { device: deviceId, seqUpTo: String(e.seqUpTo) });
-          this.unstoreOutbox(deviceId, e.seqUpTo);
+          trace('HUB-UNSTORE', { device: deviceId, stream: e.streamId ?? 0, seqUpTo: String(e.seqUpTo) });
+          this.unstoreOutbox(deviceId, e.streamId ?? STREAM_LIVE, e.seqUpTo);
           break;
         // reset-inbound / acked / open / close: nothing for the hub to do —
         // acked pruning already emits unstore; open/close are driven by the WS.
@@ -229,13 +268,14 @@ export class PulseHub {
     }
   }
 
-  /** Forward a payload onto the destination device's outbound endpoint. If the
-   *  destination is offline, the pulse endpoint keeps it in its outbox (durable
-   *  → also persisted to SQLite via the store effect) and resends on reconnect. */
-  private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey?: string): void {
+  /** Forward a payload onto the destination device's outbound endpoint on the
+   *  given stream. If the destination is offline, that stream's endpoint keeps
+   *  it in its outbox (durable → also persisted to SQLite via the store effect)
+   *  and resends on reconnect. */
+  private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey: string | undefined, stream: number): void {
     const d = this.ep(destDevice);
-    const { effects } = d.endpoint.send(payload, { durable, coalesceKey });
-    trace('FWD-SEND', { dest: destDevice, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
+    const { effects } = d.streams.send(stream, payload, { durable, coalesceKey });
+    trace('FWD-SEND', { dest: destDevice, stream, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
     // The destination endpoint's transmits go to the destination device; its
     // deliveries would bridge back (not used in one-way flows). No secondary
     // dest — a forwarded message is terminal at the destination device.
@@ -255,43 +295,46 @@ export class PulseHub {
    *  head-originated control (e.g. "device X joined") is ephemeral and must not
    *  be redelivered stale after the target reconnects. */
   sendToDevice(destDevice: string, payload: Uint8Array, opts?: { durable?: boolean; coalesceKey?: string }): void {
-    this.forward(destDevice, payload, opts?.durable ?? false, opts?.coalesceKey);
+    // Head-originated control (presence, preferences, voice) is live traffic —
+    // it must never queue behind bulk on the downlink.
+    this.forward(destDevice, payload, opts?.durable ?? false, opts?.coalesceKey, STREAM_LIVE);
   }
 
   // ── SQLite persistence ──────────────────────────────────────────────────────
 
-  private storeOutbox(device: string, seq: bigint, payload: Uint8Array, dest?: string): void {
+  private storeOutbox(device: string, stream: number, seq: bigint, payload: Uint8Array, dest?: string): void {
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO pulse_outbox (device, seq, payload, dest) VALUES (?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO pulse_outbox (device, stream, seq, payload, dest) VALUES (?, ?, ?, ?, ?)',
       )
-      .run(device, seq.toString(), Buffer.from(payload), dest ?? '');
+      .run(device, stream, seq.toString(), Buffer.from(payload), dest ?? '');
   }
 
-  private unstoreOutbox(device: string, seqUpTo: bigint): void {
+  private unstoreOutbox(device: string, stream: number, seqUpTo: bigint): void {
     this.db
-      .prepare('DELETE FROM pulse_outbox WHERE device = ? AND CAST(seq AS INTEGER) <= ?')
-      .run(device, Number(seqUpTo));
+      .prepare('DELETE FROM pulse_outbox WHERE device = ? AND stream = ? AND CAST(seq AS INTEGER) <= ?')
+      .run(device, stream, Number(seqUpTo));
   }
 
   private saveSnapshot(device: string): void {
     const d = this.devices.get(device);
     if (!d) return;
-    // Use snapshotDurable() (pulse §11.3) — persisting non-durable entries to
-    // disk both violates their "in-memory only, may be lost on restart"
-    // contract AND is the exact root cause of the 2026-07-07 head OOM
-    // (each save re-serialized an ever-growing in-memory outbox for offline
-    // peers). Durable entries (currently just delete_session in kraki) are
-    // preserved so a future reconnect delivers them.
-    this.db
-      .prepare('INSERT OR REPLACE INTO pulse_meta (device, snapshot) VALUES (?, ?)')
-      .run(device, JSON.stringify(d.endpoint.snapshotDurable()));
+    // Persist EACH stream's durable snapshot separately (pulse §11.3 + §13).
+    // Non-durable entries are not persisted (same rationale as before: in-memory
+    // only, may be lost on restart; persisting them caused the 2026-07-07 head
+    // OOM). Each stream has its own seq space, so each must be snapshotted and
+    // restored independently — mixing them would corrupt cursors.
+    const stmt = this.db.prepare(
+      'INSERT OR REPLACE INTO pulse_meta (device, stream, snapshot) VALUES (?, ?, ?)',
+    );
+    stmt.run(device, STREAM_LIVE, JSON.stringify(d.live.snapshotDurable()));
+    stmt.run(device, STREAM_BULK, JSON.stringify(d.bulk.snapshotDurable()));
   }
 
-  private loadSnapshot(device: string): Snapshot | undefined {
-    const row = this.db.prepare('SELECT snapshot FROM pulse_meta WHERE device = ?').get(device) as
-      | { snapshot: string }
-      | undefined;
+  private loadSnapshot(device: string, stream: number): Snapshot | undefined {
+    const row = this.db
+      .prepare('SELECT snapshot FROM pulse_meta WHERE device = ? AND stream = ?')
+      .get(device, stream) as { snapshot: string } | undefined;
     return row ? (JSON.parse(row.snapshot) as Snapshot) : undefined;
   }
 
@@ -302,7 +345,8 @@ export class PulseHub {
     for (const { device } of rows) this.ep(device); // constructs + restores
   }
 
-  /** Test/introspection: how many durable rows are held for a device. */
+  /** Test/introspection: how many durable rows are held for a device across
+   *  all streams. */
   outboxCount(device: string): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS n FROM pulse_outbox WHERE device = ?')
@@ -359,30 +403,34 @@ export class PulseHub {
     let purged = 0;
     let evicted = 0;
     for (const [deviceId, d] of this.devices) {
-      const disconnectedAt = d.endpoint.disconnectedAtMs;
-      if (d.endpoint.link !== 'disconnected' || disconnectedAt === null) continue;
+      // Both streams share the device's connection, so they disconnect together;
+      // use the live stream's liveness as the proxy (bulk has the same timing).
+      const disconnectedAt = d.live.disconnectedAtMs;
+      if (d.live.link !== 'disconnected' || disconnectedAt === null) continue;
       const offlineMs = now - disconnectedAt;
 
       if (this.gc.evictEndpointAfterMs > 0 && offlineMs >= this.gc.evictEndpointAfterMs) {
-        // L2: release the endpoint. Durable state stays in pulse_meta.
+        // L2: release the whole per-device set. Durable state stays in pulse_meta.
         trace('GC-EVICT', { device: deviceId, offlineMs });
         this.devices.delete(deviceId);
         evicted += 1;
         continue;
       }
-      if (
-        this.gc.purgeNonDurableAfterMs > 0
-        && offlineMs >= this.gc.purgeNonDurableAfterMs
-        && d.endpoint.nonDurableCount > 0
-      ) {
-        // L1: drop non-durable outbox entries only.
-        const { droppedSeqs } = d.endpoint.purgeNonDurable('gc-idle');
-        if (droppedSeqs.length > 0) {
-          purged += droppedSeqs.length;
-          trace('GC-PURGE', { device: deviceId, dropped: droppedSeqs.length, offlineMs });
-          this.saveSnapshot(deviceId);
+      // L1: drop non-durable outbox entries on BOTH streams.
+      for (const ep of [d.live, d.bulk]) {
+        if (
+          this.gc.purgeNonDurableAfterMs > 0
+          && offlineMs >= this.gc.purgeNonDurableAfterMs
+          && ep.nonDurableCount > 0
+        ) {
+          const { droppedSeqs } = ep.purgeNonDurable('gc-idle');
+          if (droppedSeqs.length > 0) {
+            purged += droppedSeqs.length;
+            trace('GC-PURGE', { device: deviceId, stream: ep.stream, dropped: droppedSeqs.length, offlineMs });
+          }
         }
       }
+      if (purged > 0 || evicted > 0) this.saveSnapshot(deviceId);
     }
     if (purged > 0 || evicted > 0) {
       getLogger().info('pulse-hub gc', {

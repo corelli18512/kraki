@@ -32,7 +32,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.3.3",
+    "@coinfra/pulse": "^0.4.1",
     "@kraki/crypto": "workspace:*",
     "@kraki/protocol": "workspace:*",
     "better-sqlite3": "^11.0.0",

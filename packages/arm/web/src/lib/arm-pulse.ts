@@ -1,4 +1,4 @@
-import { decodeFrame, type Effect, Endpoint } from '@coinfra/pulse';
+import { decodeFrame, type Effect, Endpoint, StreamSet } from '@coinfra/pulse';
 import type { InnerMessage } from '@kraki/protocol';
 import { createLogger } from './logger';
 import { traceEvent } from './trace';
@@ -45,7 +45,11 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 export class ArmPulse {
-  private endpoint: Endpoint;
+  private streams: StreamSet;
+  /** The live endpoint (stream 0) — the one this arm SENDS on. Arm-originated
+   *  traffic (input, approvals, aborts, card pulls) is always live; only the
+   *  tentacle produces bulk (trace/range/attachment responses). */
+  private live: Endpoint;
   /** Per-send target, keyed by the DATA frame's seq. A single mutable
    *  "currentTarget" is WRONG: retransmits (from onConnected/onFrame/tick, e.g.
    *  after packet loss or reconnect) fire OUTSIDE the synchronous send() window,
@@ -61,7 +65,9 @@ export class ArmPulse {
     private readonly host: ArmPulseHost,
     epoch: string,
   ) {
-    this.endpoint = new Endpoint({ epoch, durable: { supported: false } });
+    this.live = new Endpoint({ epoch: `${epoch}:live`, durable: { supported: false }, streamId: 0 });
+    const bulk = new Endpoint({ epoch: `${epoch}:bulk`, durable: { supported: false }, streamId: 1 });
+    this.streams = new StreamSet([this.live, bulk]);
   }
 
   /** Send a reliable message (a JSON string {blob, keys}, or plaintext control
@@ -70,7 +76,7 @@ export class ArmPulse {
    *  seq so the caller can track it for rollback. */
   send(payloadJson: string, targetDeviceId: string, durable: boolean): bigint {
     const payload = enc.encode(payloadJson);
-    const { seq, effects } = this.endpoint.send(payload, { durable });
+    const { seq, effects } = this.live.send(payload, { durable });
     this.targetBySeq.set(seq, targetDeviceId);
     traceEvent({ comp: 'arm', evt: 'PULSE-SEND', seq: String(seq), len: payload.length, target: targetDeviceId, durable });
     this.run(effects);
@@ -79,20 +85,20 @@ export class ArmPulse {
 
   onConnected(): void {
     traceEvent({ comp: 'arm', evt: 'PULSE-CONNECTED' });
-    this.run(this.endpoint.onConnected(this.host.now()));
+    this.run(this.streams.onConnected(this.host.now()));
   }
   onDisconnected(): void {
     traceEvent({ comp: 'arm', evt: 'PULSE-DISCONNECTED' });
-    this.endpoint.onDisconnected(this.host.now());
+    this.streams.onDisconnected(this.host.now());
   }
   onFrame(pulseB64: string): void {
     const bytes = unb64(pulseB64);
     const frame = decodeFrame(bytes);
     traceEvent({ comp: 'arm', evt: 'PULSE-RX', seq: frame?.t === 'data' ? String(frame.seq) : '0', len: bytes.length, kind: frame?.t ?? '?' });
-    this.run(this.endpoint.onBytes(bytes, this.host.now()));
+    this.run(this.streams.onBytes(bytes, this.host.now()));
   }
   tick(): void {
-    this.run(this.endpoint.onTick(this.host.now()));
+    this.run(this.streams.onTick(this.host.now()));
   }
 
   private run(effects: Effect[]): void {
