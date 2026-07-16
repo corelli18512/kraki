@@ -269,6 +269,46 @@ export function sendToTentacle(app: MockApp, inner: Record<string, unknown>): vo
   app.sendUnicast(t.id, inner, t.key);
 }
 
+/** Establish the single-session subscription required for live card/delta data. */
+export async function subscribeApp(app: MockApp, sessionId: string | null): Promise<Record<string, unknown>> {
+  // Resolve the tentacle target. The initial auth_ok snapshot may not yet
+  // include the tentacle (it connected after this app), so fall back to the
+  // device_joined control frame the head broadcasts when the tentacle joins.
+  let target: { id: string; key: string } | undefined;
+  const fromRoster = (() => {
+    const devs = (app.authOk.devices as Array<Record<string, unknown>>) ?? [];
+    const t = devs.find((d) => d.role === 'tentacle');
+    if (!t) return undefined;
+    const key = (t.encryptionKey ?? t.publicKey) as string | undefined;
+    return key ? { id: t.id as string, key } : undefined;
+  })();
+  target = fromRoster;
+  if (!target) {
+    for (;;) {
+      const joined = await app.waitFor('device_joined');
+      const device = joined.device as Record<string, unknown>;
+      const key = device.encryptionKey ?? device.publicKey;
+      if (device.role === 'tentacle' && typeof device.id === 'string' && typeof key === 'string') {
+        target = { id: device.id, key };
+        break;
+      }
+    }
+  }
+  app.sendUnicast(target.id, {
+    type: 'set_session_subscription',
+    deviceId: app.deviceId,
+    seq: 0,
+    timestamp: new Date().toISOString(),
+    payload: { sessionId },
+  }, target.key);
+  const ack = await app.waitFor('session_subscription_set');
+  const acceptedSession = (ack.payload as Record<string, unknown>).sessionId;
+  if (acceptedSession !== sessionId) {
+    throw new Error(`subscription ACK mismatch: expected ${sessionId}, got ${String(acceptedSession)}`);
+  }
+  return ack;
+}
+
 /**
  * Connect a mock app client with E2E crypto support.
  * Generates a keypair, authenticates, and auto-decrypts broadcast/unicast envelopes.
