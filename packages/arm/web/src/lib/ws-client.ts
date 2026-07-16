@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
@@ -13,6 +13,7 @@ import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
 import { traceEvent } from './trace';
+import { SessionSubscriptionController } from './session-subscription';
 import { AttachmentPullQueue } from './attachment-pull-queue';
 
 const logger = createLogger('ws-client');
@@ -24,6 +25,7 @@ export class KrakiWSClient {
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
+  private subscription: SessionSubscriptionController;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
   private attachmentPulls = new AttachmentPullQueue(({ sessionId, id, index }) => {
     if (getStore().status !== 'connected') return false;
@@ -47,6 +49,13 @@ export class KrakiWSClient {
   constructor(url?: string) {
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
+    this.subscription = new SessionSubscriptionController({
+      isConnected: () => getStore().status === 'connected',
+      resolveTentacle: (sessionId) => getStore().sessions.get(sessionId)?.deviceId,
+      send: (tentacleId, sessionId) => this.sendSessionSubscription(tentacleId, sessionId),
+      applySnapshot: (msg) => this.applySubscriptionSnapshot(msg),
+      reportError: (message) => getStore().setLastError(message),
+    });
 
     // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
     this.pulse = new ArmPulse(
@@ -70,6 +79,7 @@ export class KrakiWSClient {
         },
         onClose: () => {
           this.clearReplayTracking();
+          this.subscription.onDisconnected();
           this.attachmentPulls.disconnect();
           this.pulse.onDisconnected();
         },
@@ -98,6 +108,56 @@ export class KrakiWSClient {
     return () => {
       this.handlers = this.handlers.filter((h) => h !== handler);
     };
+  }
+
+  setDesiredSession(sessionId: string | null): void {
+    this.subscription.setDesired(sessionId);
+  }
+
+  isLiveReady(sessionId: string): boolean {
+    return this.subscription.confirmed === sessionId;
+  }
+
+  private async sendSessionSubscription(tentacleId: string, sessionId: string | null): Promise<boolean> {
+    const deviceId = getStore().deviceId;
+    if (!deviceId) return false;
+    const msg = {
+      type: 'set_session_subscription',
+      deviceId,
+      seq: 0,
+      timestamp: new Date().toISOString(),
+      payload: { sessionId },
+    };
+    const encrypted = await this.encryption.encryptForDevice(msg, tentacleId);
+    if (!encrypted) return false;
+    this.pulse.send(JSON.stringify({ blob: encrypted.blob, keys: encrypted.keys }), encrypted.to, false);
+    return true;
+  }
+
+  private applySubscriptionSnapshot(msg: SessionSubscriptionSetMessage): void {
+    if (!msg.payload.accepted || msg.payload.sessionId === null) return;
+    const { digest, spineHeadSeq, card } = msg.payload.snapshot;
+    const store = getStore();
+    const device = store.devices.get(msg.deviceId);
+    store.upsertSession({
+      id: digest.id,
+      deviceId: msg.deviceId,
+      deviceName: device?.name ?? msg.deviceId,
+      agent: digest.agent,
+      model: digest.model,
+      title: digest.title,
+      autoTitle: digest.autoTitle,
+      state: digest.state,
+      messageCount: digest.messageCount,
+    });
+    store.setSessionMode(digest.id, digest.mode);
+    if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
+    if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
+    store.clearCard(digest.id);
+    store.applyCardMessage(digest.id, card.draft, true);
+    store.setCardAction(digest.id, card.action);
+    messageProvider.setTentacleInfo(digest.id, spineHeadSeq, msg.deviceId);
+    messageProvider.reconcileTail(digest.id, spineHeadSeq);
   }
 
   // --- Actions ---
@@ -160,8 +220,19 @@ export class KrakiWSClient {
     }
   }
 
-  /** Route a decrypted inner message through the normal pipeline. */
+  /** Route a decrypted inner message through subscription gating and the normal pipeline. */
   private dispatchInner(inner: InnerMessage) {
+    if (inner.type === 'session_subscription_set') {
+      this.subscription.onAck(inner as SessionSubscriptionSetMessage);
+      this.handlers.forEach((h) => h(inner as unknown as Message));
+      return;
+    }
+    if (
+      (inner.type === 'agent_message_delta' || inner.type === 'card_action')
+      && (!inner.sessionId || !this.subscription.acceptsLive(inner.sessionId))
+    ) {
+      return;
+    }
     handleDataMessage(inner, {
       cmdState: this.cmdState,
       sendEncrypted: (m) => this.sendEncrypted(m),
@@ -480,6 +551,7 @@ export class KrakiWSClient {
     }
     store.setPinnedSessions(currentPinned);
 
+    this.subscription.onSessionList(tentacleDeviceId);
     // Tier 1: Budget warm-up — pre-fetch messages for likely-needed sessions
     this.runWarmup(tentacleSessions, pinnedFromTentacle);
   }
@@ -657,13 +729,8 @@ export class KrakiWSClient {
 
   private encryptionCallbacks() {
     return {
-      handleDataMessage: (msg: InnerMessage) => handleDataMessage(msg, {
-        cmdState: this.cmdState,
-        sendEncrypted: (m) => this.sendEncrypted(m),
-        onSessionList: (m) => this.handleSessionList(m),
-        onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
-      }),
-      getHandlers: () => this.handlers,
+      handleDataMessage: (msg: InnerMessage) => this.dispatchInner(msg),
+      getHandlers: () => [],
     };
   }
 
@@ -682,6 +749,7 @@ export class KrakiWSClient {
     switch (msg.type) {
       // --- Encrypted envelopes ---
       case 'unicast':
+      case 'multicast':
       case 'broadcast': {
         // Pulse-framed? Feed the frame to our endpoint; a `deliver` calls
         // handlePulseDelivered with the blob to decrypt.
@@ -804,12 +872,7 @@ export class KrakiWSClient {
         // in production but as plaintext from mock relay in E2E tests.
         // Route them to the message router so both paths work.
         if ('sessionId' in msg || 'payload' in msg) {
-          handleDataMessage(msg as InnerMessage, {
-            cmdState: this.cmdState,
-            sendEncrypted: (m) => this.sendEncrypted(m),
-            onSessionList: (m) => this.handleSessionList(m),
-            onSessionMessagesRangeBatch: (m) => this.handleRangeBatch(m),
-          });
+          this.dispatchInner(msg as InnerMessage);
         }
         break;
     }

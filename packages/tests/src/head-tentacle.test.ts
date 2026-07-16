@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
 import {
   createTestEnv, connectApp, connectAppWithCrypto, createRelayClient,
-  createTmpSessionDir, waitMs, createPulseAppLayer, type TestEnv, type MockApp,
+  createTmpSessionDir, waitMs, createPulseAppLayer, type TestEnv, type MockApp, subscribeApp,
 } from "./helpers.js";
 import { SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
 import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from "@kraki/tentacle";
@@ -206,6 +206,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.simulatePermissionRequest(sessionId, "perm_1", "shell", "Run npm test");
     const ca = await app.waitFor("card_action");
@@ -233,6 +234,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.simulateQuestion(sessionId, "q_1", "Which DB?", ["Postgres", "SQLite"]);
     const q = await app.waitFor("card_action");
@@ -260,6 +262,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.simulatePermissionRequest(sessionId, "perm_2", "write_file", "Write app.js");
     const perm = await app.waitFor("card_action");
@@ -284,6 +287,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     // Burst within the debounce window — tentacle coalesces these into
     // one merged agent_message_delta to amortize per-recipient RSA encryption cost.
@@ -329,6 +333,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const { sessionId } = await adapter.createSession();
     await app1.waitFor("session_created");
     await app2.waitFor("session_created");
+    await subscribeApp(app1, sessionId);
+    await subscribeApp(app2, sessionId);
 
     adapter.simulateAgentMessage(sessionId, "broadcast to all");
     const m1 = await app1.waitFor("agent_message");
@@ -371,6 +377,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const s2 = await adapter2.createSession();
     await app.waitFor("session_created");
     await app.waitFor("session_created");
+    await subscribeApp(app, s1.sessionId);
 
     adapter1.simulateAgentMessage(s1.sessionId, "from laptop");
     adapter2.simulateAgentMessage(s2.sessionId, "from workpc");
@@ -461,25 +468,21 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.simulateAgentMessage(sessionId, "before disconnect");
     await app.waitFor("agent_message");
 
-    // App disconnects
+    // App disconnects. Transient messages during the gap are intentionally not
+    // replayed; spine/session_list/card snapshot are the reconnect authorities.
     app.close();
     await waitMs(200);
-
-    // Tentacle sends another message — should not crash (queued in E2E queue)
     adapter.simulateAgentMessage(sessionId, "after disconnect");
     await waitMs(200);
 
-    // Verify relay is still alive by connecting a new app
+    // Verify relay is still alive by connecting a new app and subscribing it.
     const app2 = await connectApp(env.port);
-
-    // Tentacle receives device_joined for app2 — keys update automatically (no reconnect needed)
-    // The queued "after disconnect" message gets flushed to app2
-    const flushed = await app2.waitFor("agent_message");
-    expect(flushed.payload.content).toBe("after disconnect");
+    await subscribeApp(app2, sessionId);
 
     adapter.simulateAgentMessage(sessionId, "to new app");
     const msg = await app2.waitFor("agent_message");
@@ -506,7 +509,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     });
     expect(relay.getState()).toBe("connected");
 
-    // Verify messages still flow after reconnect
+    // Verify messages still flow after reconnect. agent_message is a global
+    // low-frequency broadcast (not subscriber-only), so no subscription needed.
     const { sessionId } = await adapter.createSession();
     await waitMs(100);
     adapter.simulateAgentMessage(sessionId, "post-reconnect");
@@ -570,6 +574,9 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     // Verify paired app can receive broadcasts
     const { sessionId } = await adapter.createSession();
     await waitMs(100);
+    // The raw paired app is intentionally outside MockApp; exercise its
+    // subscription through the normal encrypted test client in the scenarios
+    // above. This legacy pairing assertion only covers auth and device setup.
     adapter.simulateAgentMessage(sessionId, "to paired app");
     const received = await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("No message received")), 5000);
@@ -632,6 +639,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await waitMs(100);
+    await subscribeApp(app2, sessionId);
     adapter.simulateAgentMessage(sessionId, "post-challenge message");
     const msg = await app2.waitFor("agent_message");
     expect(msg.payload.content).toBe("post-challenge message");
@@ -647,6 +655,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     const bigContent = "x".repeat(100_000);
     adapter.simulateAgentMessage(sessionId, bigContent);
@@ -664,6 +673,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     const secretContent = "top secret agent code";
     adapter.simulateAgentMessage(sessionId, secretContent);
@@ -1109,6 +1119,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     // Trigger a permission — tentacle should build pushPreview
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.onPermissionRequest?.(sessionId, {
       id: "perm-1",
@@ -1132,6 +1143,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.onPermissionRequest?.(sessionId, {
       id: "perm-preview",
@@ -1169,6 +1181,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     // Send an agent message first
     adapter.onMessage?.(sessionId, { content: "I fixed the bug in auth module" });
@@ -1207,6 +1220,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     adapter.onMessage?.(sessionId, { content: "hello world" });
     await app.waitFor("agent_message");
@@ -1227,6 +1241,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
     const { sessionId } = await adapter.createSession();
     await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
 
     const longDescription = "This is a very long permission description that should definitely be truncated to fit the lock screen";
     adapter.onPermissionRequest?.(sessionId, {

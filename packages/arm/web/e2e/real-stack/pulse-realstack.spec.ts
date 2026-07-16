@@ -137,6 +137,18 @@ test.describe.serial('real-stack pulse: a complete dev conversation', () => {
   });
 
   test('3. agent runs a tool → tool activity renders', async () => {
+    // A real trace-bearing turn starts with a user_message. The previous test's
+    // turn is already idle, so begin a fresh one through the browser before the
+    // adapter emits tool activity.
+    const prompt = 'run the auth tests now';
+    const input = page.getByPlaceholder('Send a message…');
+    await input.fill(prompt);
+    await input.press('Enter');
+    await expect.poll(async () => {
+      const { messages } = await control('/received');
+      return (messages as Array<{ text: string }>).some((m) => m.text === prompt);
+    }, { timeout: 15_000 }).toBe(true);
+
     await control('/toolStart', { sid: sessionId, tool: 'bash', cmd: 'npm test -- auth' });
     // The tool chip renders the toolName + command headline. During the running
     // phase it's prefixed with "Running"; once complete the prefix drops but the
@@ -145,10 +157,17 @@ test.describe.serial('real-stack pulse: a complete dev conversation', () => {
     const chip = page.locator('[data-chat-scroll]').getByText(/npm test -- auth/i);
     await expect(chip).toBeVisible({ timeout: 15_000 });
     await control('/toolComplete', { sid: sessionId, tool: 'bash', result: '1 failing: auth.test.ts' });
+    await control('/msg', { sid: sessionId, text: 'The auth test still has one failing assertion.' });
     await control('/idle', { sid: sessionId });
-    // Still present after completion.
-    await expect(page.locator('[data-chat-scroll]').getByText(/bash/i).first())
-      .toBeVisible({ timeout: 10_000 });
+    // Completed tool activity moves under the concluding bubble's TRACE-axis
+    // Steps affordance. Open it and verify the command survives there.
+    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Open steps' }).last();
+    await expect(steps).toBeVisible({ timeout: 10_000 });
+    await steps.click();
+    const stepsDialog = page.getByRole('dialog');
+    await expect(stepsDialog.getByText(/npm test -- auth/i)).toBeVisible({ timeout: 10_000 });
+    await stepsDialog.click({ position: { x: 4, y: 4 } });
+    await expect(stepsDialog).toHaveCount(0);
   });
 
   test('4. agent asks a question → user clicks a choice → answer reaches tentacle over pulse', async () => {
@@ -401,14 +420,21 @@ test.describe.serial('real-stack pulse: session metadata round-trips', () => {
     // would target a missing button).
     await page.reload();
     await expect(metaCard(page)).toBeVisible({ timeout: 20_000 });
-    await expect(async () => {
-      await openCardMenu(page, metaCard(page));
-      await expect(page.getByRole('button', { name: /Mark unread/i })).toBeVisible({ timeout: 2_000 });
-    }).toPass({ timeout: 20_000 });
+    await page.evaluate(() => (window as unknown as { _pulseTraceEnable?: () => void })._pulseTraceEnable?.());
+    // Open once and click immediately. Retrying the whole open operation toggles
+    // an already-open context menu closed and can make the later click hit an
+    // unrelated control at the same screen position.
+    await openCardMenu(page, metaCard(page));
+    const markUnread = page.getByRole('button', { name: 'Mark unread', exact: true });
+    await expect(markUnread).toBeVisible({ timeout: 20_000 });
 
     // Mark it UNREAD → mark_unread rides pulse to the tentacle, which rolls readSeq
     // back below lastSeq. Reading the tentacle's own session list back proves it.
-    await page.getByRole('button', { name: /Mark unread/i }).click();
+    await markUnread.evaluate((button: HTMLButtonElement) => button.click());
+    const sendTrace = await page.evaluate(() => (window as unknown as { _pulseTrace?: Array<Record<string, unknown>> })._pulseTrace ?? []);
+    expect(sendTrace.some((e) => e.evt === 'APP-SEND-ENCRYPTED' && e.type === 'mark_unread')).toBe(true);
+    expect(sendTrace.some((e) => e.evt === 'APP-ENCRYPT-OK' && e.type === 'mark_unread')).toBe(true);
+    expect(sendTrace.some((e) => e.evt === 'PULSE-SEND')).toBe(true);
     await expect.poll(async () => {
       const s = await session(sessionId);
       return s ? (s.readSeq as number) < (s.lastSeq as number) : false;
@@ -421,13 +447,16 @@ test.describe.serial('real-stack pulse: session metadata round-trips', () => {
     // panel for THIS session. Open the chat first so that button is present.
     const newTitle = `Renamed ${Date.now().toString(36)}`;
     await page.goto(`${WEB_URL}/session/${sessionId}`);
-    await page.getByRole('button', { name: 'Session settings' }).click();
+    const settingsButton = page.getByRole('button', { name: 'Session settings' });
+    await expect(settingsButton).toBeVisible({ timeout: 10_000 });
+    await settingsButton.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(page).toHaveURL(new RegExp(`/devices\\?.*session=${sessionId}`), { timeout: 10_000 });
 
     // The panel's title is a button; click it to reveal the edit input.
-    const input = page.getByPlaceholder('Session title…');
+    const panel = page.locator('main');
+    const input = panel.getByPlaceholder('Session title…');
     if (!(await input.isVisible().catch(() => false))) {
-      // Title shows as a button until clicked (SessionInfoPanel startEditing).
-      await page.getByRole('button', { name: /Mock-agent|metadata round-trip session/ }).first().click();
+      await panel.getByRole('button', { name: /mock-agent · mock-v1/i }).last().click();
     }
     await expect(input).toBeVisible({ timeout: 10_000 });
     await input.fill(newTitle);
@@ -484,9 +513,20 @@ test.describe.serial('real-stack pulse: request/reply payloads', () => {
     // streams attachment_data back — a deterministic pull (no push race).
     const marker = `ATTACH-${Date.now().toString(36)}`;
     const result = `${marker} ${'x'.repeat(2000)}`; // offloaded to a ref (single chunk)
-    await page.goto(`${WEB_URL}/session/realstack-1`);
+    const attachmentSession = `attachment-${Date.now().toString(36)}`;
+    await control('/createSession', { id: attachmentSession });
+    await control('/idle', { sid: attachmentSession });
+    await page.goto(`${WEB_URL}/session/${attachmentSession}`);
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
-    const ref = await control('/toolRef', { sid: 'realstack-1', tool: 'bash', cmd: 'cat big.txt', result });
+    const input = page.getByPlaceholder('Send a message…');
+    const prompt = `inspect attachment ${marker}`;
+    await input.fill(prompt);
+    await input.press('Enter');
+    await expect.poll(async () => {
+      const { messages } = await control('/received');
+      return (messages as Array<{ text: string }>).some((m) => m.text === prompt);
+    }, { timeout: 15_000 }).toBe(true);
+    const ref = await control('/toolRef', { sid: attachmentSession, tool: 'bash', cmd: 'cat big.txt', result });
     // The tentacle must have offloaded the result to its AttachmentStore, else
     // there is no ref to pull and the test is meaningless.
     expect(ref.stored as number).toBeGreaterThan(0);
@@ -494,11 +534,14 @@ test.describe.serial('real-stack pulse: request/reply payloads', () => {
     // Reload so the resultRef renders from replay with no cached bytes → pull.
     await page.reload();
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
-    const chip = page.locator('[data-chat-scroll]').getByRole('button', { name: /cat big\.txt/i }).first();
+    const steps = page.locator('[data-chat-scroll]').getByRole('button', { name: 'Open steps' }).last();
+    await expect(steps).toBeVisible({ timeout: 20_000 });
+    await steps.click();
+    const chip = page.getByRole('dialog').getByRole('button', { name: /cat big\.txt/i }).first();
     await expect(chip).toBeVisible({ timeout: 20_000 });
-    // Expand the chip → ToolResultBody pulls the bytes over pulse and renders the
-    // offloaded result text (the marker lives only inside the attachment bytes).
-    const markerText = page.locator('[data-chat-scroll]').getByText(marker, { exact: false }).first();
+    // Expand the tool row → ToolResultBody pulls the bytes over pulse and renders
+    // the offloaded result text (the marker lives only inside attachment bytes).
+    const markerText = page.getByRole('dialog').getByText(marker, { exact: false }).first();
     await expect(async () => {
       if (!(await markerText.isVisible().catch(() => false))) {
         await chip.click();

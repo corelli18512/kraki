@@ -352,6 +352,23 @@ describe('HeadServer (thin relay)', () => {
   // ── Broadcast isolation ───────────────────────────────
 
   describe('broadcast isolation', () => {
+    it('targets only same-user online app devices', async () => {
+      head = await createHead();
+      const { ws: source, authOk: sourceAuth } = await authConnect(head.port, 'Source Tentacle', 'tentacle', { deviceId: 'tentacle-source' });
+      const { ws: app, authOk: appAuth } = await authConnect(head.port, 'Phone', 'app', { deviceId: 'app-online' });
+      const { ws: peerTentacle, authOk: peerAuth } = await authConnect(head.port, 'Peer Tentacle', 'tentacle', { deviceId: 'tentacle-peer' });
+
+      const targets = (head.server as unknown as {
+        pulseBroadcastTargets(fromDevice: string): string[];
+      }).pulseBroadcastTargets(sourceAuth.deviceId as string);
+
+      expect(targets).toEqual([appAuth.deviceId as string]);
+
+      source.close();
+      app.close();
+      peerTentacle.close();
+    });
+
     it('should NOT deliver broadcast to devices of another user', async () => {
       const fetcher = mockGitHubFetcher({
         tok_alice: { id: 'alice', login: 'alice' },

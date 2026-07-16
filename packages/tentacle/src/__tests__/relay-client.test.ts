@@ -114,6 +114,23 @@ function decodePulseSends(sent: string[]): Array<Record<string, unknown>> {
   return out;
 }
 
+function decodeHeadControls(sent: string[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const raw of sent) {
+    const env = JSON.parse(raw) as Record<string, unknown>;
+    if (env.type !== 'unicast' || env.to !== '@head' || typeof env.pulse !== 'string') continue;
+    const frame = decodeFrame(new Uint8Array(Buffer.from(env.pulse, 'base64')));
+    if (!frame || frame.t !== 'data') continue;
+    try { out.push(JSON.parse(new TextDecoder().decode(frame.payload))); } catch { /* ignore */ }
+  }
+  return out;
+}
+
+function subscribeForTest(client: RelayClient, sessionId: string, deviceId = 'consumer-dev'): void {
+  (client as unknown as { currentSessionByArm: Map<string, string | null> })
+    .currentSessionByArm.set(deviceId, sessionId);
+}
+
 function createAdapter(): Record<string, unknown> {
   return {
     onSessionCreated: null,
@@ -162,6 +179,7 @@ function createSessionManager(): Record<string, unknown> {
     setMode: vi.fn(),
     deleteSession: vi.fn(),
     markRead: vi.fn(),
+    markUnread: vi.fn(() => 41),
     getSessionList: vi.fn(() => []),
     getPendingHumanAction: vi.fn(() => null),
     savePendingHumanAction: vi.fn(),
@@ -590,6 +608,7 @@ describe('RelayClient set_session_model', () => {
       markIdle: vi.fn(),
       markActive: vi.fn(),
       markRead: vi.fn(),
+      markUnread: vi.fn(() => 41),
       deleteSession: vi.fn(),
       removeLinkByKrakiId: vi.fn(),
       appendMessage: vi.fn(() => 1),
@@ -973,6 +992,29 @@ describe('RelayClient set_session_model', () => {
     expect(readMsg.sessionId).toBe('sess_1');
   });
 
+  it('rolls readSeq back and broadcasts session_read on mark_unread', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'mark_unread',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: {},
+    })));
+
+    expect(sm.markUnread).toHaveBeenCalledWith('sess_1');
+
+    const sent = decodePulseSends(ws.sent);
+    const readMsg = sent.find(m => m.type === 'session_read');
+    expect(readMsg).toBeDefined();
+    expect(readMsg.payload.seq).toBe(41);
+    expect(readMsg.sessionId).toBe('sess_1');
+  });
+
   it('delete_session removes from sessionManager SYNCHRONOUSLY before any awaits', () => {
     // Regression for: pre-fix, session removal happened in adapter.killSession()'s
     // .finally(), so a broadcastSessionList fired immediately after would still see
@@ -1069,6 +1111,7 @@ describe('RelayClient tool message lazy-load shape', () => {
       type: 'device_joined',
       device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
+    subscribeForTest(client, 'sess_1');
     return { adapter, sm, client, ws: sockets[0], store, tmp, cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
 
@@ -1389,6 +1432,7 @@ describe('RelayClient delta debounce', () => {
       device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
     sockets[0].sent.length = 0;
+    subscribeForTest(client, 's1');
     return { adapter, sm, client };
   }
 
@@ -1433,8 +1477,14 @@ describe('RelayClient delta debounce', () => {
     expect(delta.payload.content).toBe('streaming text');
   });
 
-  it('keeps separate buffers per session', () => {
-    const { adapter } = connectClient();
+  it('only delivers each session buffer to its subscribed Arm', () => {
+    const { adapter, client } = connectClient();
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined',
+      device: { id: 'consumer-dev-2', role: 'app', encryptionKey: 'consumer-pub-2' },
+    })));
+    subscribeForTest(client, 's2', 'consumer-dev-2');
+    sockets[0].sent.length = 0;
     const onDelta = adapter.onMessageDelta as (sid: string, e: { content: string }) => void;
 
     onDelta('s1', { content: 'a' });
@@ -1443,11 +1493,11 @@ describe('RelayClient delta debounce', () => {
 
     vi.advanceTimersByTime(40);
 
-    const deltas = decodePulseSends(sockets[0].sent)
-      .filter(m => m.type === 'agent_message_delta');
-    const bySession = new Map(deltas.map(d => [d.sessionId, d.payload.content]));
-    expect(bySession.get('s1')).toBe('aa');
-    expect(bySession.get('s2')).toBe('b');
+    const envelopes = sockets[0].sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    const multicasts = envelopes.filter((env) => env.type === 'multicast' && Array.isArray(env.to));
+    expect(multicasts).toHaveLength(2);
+    expect(multicasts.some((env) => (env.to as string[]).length === 1 && (env.to as string[])[0] === 'consumer-dev')).toBe(true);
+    expect(multicasts.some((env) => (env.to as string[]).length === 1 && (env.to as string[])[0] === 'consumer-dev-2')).toBe(true);
   });
 
   it('disconnect() clears pending delta timers', () => {
@@ -1873,7 +1923,8 @@ describe('RelayClient trace mirroring (off-spine)', () => {
       type: 'device_joined',
       device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
     })));
-    return { adapter, sm, ws: sockets[0], cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
+    subscribeForTest(client, 'sess_1');
+    return { adapter, sm, client, ws: sockets[0], cleanup: () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } } };
   }
 
   it('keeps compaction transient: compacting message only, never spine or trace', () => {
@@ -1993,7 +2044,7 @@ describe('RelayClient pending-question digest', () => {
       return undefined;
     };
     const preview = () => digest()?.preview as { type: string; text: string } | undefined;
-    return { adapter, sm, ws, askQ, answerQ, digest, preview };
+    return { adapter, sm, client, ws, askQ, answerQ, digest, preview };
   }
 
   it('restores compacting from session_list state without replaying runtime events', () => {
@@ -2354,20 +2405,68 @@ describe('RelayClient pending-question digest', () => {
     expect(interruptedTool).toBeDefined();
   });
 
-  it('pushes the active card snapshot to a freshly-joined device', () => {
-    const { askQ, ws } = buildClient();
+  it('dispatches push through @head when every consumer is offline', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(
+      adapter as unknown as Parameters<typeof RelayClient>[0],
+      sm as unknown as Parameters<typeof RelayClient>[1],
+      { relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10 },
+      createKeyManager() as unknown as Parameters<typeof RelayClient>[3],
+    );
+    client.connect();
+    const ws = sockets[0];
+    ws.emit('open');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [{ id: 'app-offline', name: 'Phone', role: 'app', online: false, encryptionKey: 'app-key' }],
+    })));
+    ws.sent.length = 0;
+
+    (adapter.onQuestionRequest as (sid: string, event: Record<string, unknown>) => void)(
+      'sess_1',
+      { id: 'q-offline', question: 'Need a decision?', choices: ['yes', 'no'] },
+    );
+
+    const controls = decodeHeadControls(ws.sent);
+    expect(controls).toHaveLength(1);
+    expect(controls[0]).toMatchObject({ type: 'dispatch_push', payload: { preview: { blob: expect.any(String) } } });
+  });
+
+  it('does not replay queued card events or push every active-session snapshot on device_joined', () => {
+    const { adapter, askQ, ws } = buildClient();
+    askQ('q1');
+    const ask = adapter.onQuestionRequest as (sid: string, event: Record<string, unknown>) => void;
+    ask('sess_2', { id: 'q2', question: 'Q q2', choices: ['a', 'b'] });
+    ask('sess_3', { id: 'q3', question: 'Q q3', choices: ['a', 'b'] });
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', relaySeq: 9001,
+      device: { id: 'app-fresh', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
+    })));
+    const snapshots = decodePulseSends(ws.sent).filter((m) => m.type === 'card_action' || m.type === 'agent_message_delta');
+    expect(snapshots).toEqual([]);
+  });
+
+  it('returns the active card in the subscription ACK snapshot', () => {
+    const { askQ, client, ws } = buildClient();
     askQ('q1');
     ws.sent.length = 0;
     ws.emit('message', Buffer.from(JSON.stringify({
       type: 'device_joined', relaySeq: 9001,
       device: { id: 'app-fresh', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
     })));
-    const inners = decodePulseSends(ws.sent);
-    const action = inners.find((m) => m.type === 'card_action');
-    expect(action).toBeDefined();
-    expect(action.sessionId).toBe('sess_1');
-    expect(action.payload.action).toMatchObject({ type: 'question', payload: { id: 'q1' } });
-    expect(inners.some((m) => m.type === 'agent_message_delta' && m.sessionId === 'sess_1')).toBe(true);
+    (client as unknown as { handleConsumerMessage: (msg: Record<string, unknown>) => void }).handleConsumerMessage({
+      type: 'set_session_subscription', deviceId: 'app-fresh', seq: 1, timestamp: '', payload: { sessionId: 'sess_1' },
+    });
+    const ack = decodePulseSends(ws.sent).find((m) => m.type === 'session_subscription_set');
+    expect(ack).toBeDefined();
+    expect(ack.payload).toMatchObject({
+      accepted: true,
+      sessionId: 'sess_1',
+      snapshot: { card: { action: { type: 'question', payload: { id: 'q1' } } } },
+    });
   });
 
   it('does not push a card snapshot for sessions with no active card', () => {

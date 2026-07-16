@@ -9,6 +9,7 @@ import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 import { messageProvider } from '../lib/message-provider';
 import { HtmlArtifactPanel } from '../components/chat/HtmlArtifactPanel';
 import type { ContentRef } from '@kraki/protocol';
+import { setDesiredSessionSubscription } from '../lib/session-subscription-lifecycle';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -57,6 +58,15 @@ export function SessionPage() {
     setSelectedArtifact(null);
     return () => setActiveSessionId(null);
   }, [sessionId, setActiveSessionId]);
+
+  // Session changes replace the desired value directly (A→B is one atomic
+  // set on the same tentacle; do not emit an intermediate null from effect cleanup).
+  useEffect(() => {
+    if (sessionId) setDesiredSessionSubscription(sessionId);
+  }, [sessionId]);
+
+  // Only leaving the SessionPage route entirely unsubscribes.
+  useEffect(() => () => setDesiredSessionSubscription(null), []);
 
   // Tier 2: on-demand message loading when user opens a session
   useEffect(() => {

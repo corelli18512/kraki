@@ -100,6 +100,7 @@ const DEFAULT_VOICE_DAILY_QUOTA_SEC = 7_200;
 const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
+const MAX_MULTICAST_TARGETS = 64;
 
 /** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
  *  device_pending detection latency tracks the recipient's ping cadence
@@ -488,6 +489,50 @@ export class HeadServer {
       return;
     }
 
+    if (msg.type === 'multicast') {
+      if (typeof msg.pulse !== 'string' || !state.deviceId || !state.userId) {
+        this.sendError(ws, 'multicast requires a pulse frame');
+        return;
+      }
+      const sender = this.storage.getDevice(state.deviceId);
+      if (sender?.role !== 'tentacle') {
+        this.sendError(ws, 'multicast is only allowed from tentacle devices');
+        return;
+      }
+      if (!Array.isArray(msg.to)) {
+        this.sendError(ws, 'multicast requires a target array');
+        return;
+      }
+      if (msg.to.some((target) => typeof target !== 'string' || target.length === 0)) {
+        this.sendError(ws, 'multicast targets must be non-empty strings');
+        return;
+      }
+      const requested = [...new Set(msg.to)];
+      if (requested.length === 0 || requested.length > MAX_MULTICAST_TARGETS) {
+        this.sendError(ws, `multicast target count must be between 1 and ${MAX_MULTICAST_TARGETS}`);
+        return;
+      }
+      for (const targetId of requested) {
+        const target = this.storage.getDevice(targetId);
+        if (
+          targetId === state.deviceId
+          || targetId === HEAD_PULSE_TARGET
+          || !target
+          || target.userId !== state.userId
+          || target.role !== 'app'
+        ) {
+          this.sendError(ws, 'multicast contains a forbidden target');
+          return;
+        }
+      }
+      const onlineTargets = requested.filter((targetId) => this.connections.has(targetId));
+      this.pulseHub.onPulseEnvelope(state.deviceId, {
+        pulse: msg.pulse,
+        to: onlineTargets,
+      });
+      return;
+    }
+
     if (msg.type === 'broadcast') {
       // Pulse broadcast frames (control: hello/ack/heartbeat) are addressed to a
       // specific hop via the hub too; a producer fans out per-device unicasts.
@@ -699,6 +744,13 @@ export class HeadServer {
       case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
       case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
       case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
+      case 'dispatch_push': {
+        const sender = state.deviceId ? this.storage.getDevice(state.deviceId) : undefined;
+        const payload = msg.payload as { preview?: BlobPayload } | undefined;
+        if (sender?.role !== 'tentacle' || !payload?.preview) return true;
+        this.firePushPreview(state, payload.preview);
+        return true;
+      }
       default: return false;
     }
   }
@@ -745,7 +797,7 @@ export class HeadServer {
     if (!userId) return [];
     const targets: string[] = [];
     for (const device of this.storage.getDevicesByUser(userId)) {
-      if (device.id === fromDevice) continue;
+      if (device.id === fromDevice || device.role !== 'app') continue;
       // Only include devices currently connected — see comment above.
       if (!this.connections.has(device.id)) continue;
       targets.push(device.id);

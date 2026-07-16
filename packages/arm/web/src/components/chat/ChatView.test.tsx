@@ -446,7 +446,7 @@ describe('ChatView', () => {
     expect(screen.queryByText('Other session perm')).not.toBeInTheDocument();
   });
 
-  it('requests a card snapshot when opening a working session without a card', async () => {
+  it('does not issue a separate card pull when opening a working session', async () => {
     const spy = vi.spyOn(messageProvider, 'requestCard').mockImplementation(() => {});
     useStore.getState().setStatus('connected');
     useStore.getState().upsertDevice({
@@ -456,9 +456,8 @@ describe('ChatView', () => {
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', state: 'active', messageCount: 0 },
     ]);
     renderChatView('s1');
-    await vi.waitFor(() => {
-      expect(spy).toHaveBeenCalledWith('s1');
-    });
+    await Promise.resolve();
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 

@@ -256,7 +256,7 @@ export class PulseHub {
    * the routing destination the delivered payload should be forwarded to. Feed
    * the frame to the source endpoint and carry out the effects.
    */
-  onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string }): void {
+  onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string | string[] }): void {
     if (this.closed || !this.db.open || !env.pulse) return;
     const d = this.ep(fromDevice);
     // A frame addressed to HEAD_PULSE_TARGET is consumed by the head itself, not
@@ -264,11 +264,14 @@ export class PulseHub {
     // resume as everything else) — only the `deliver` handling differs.
     const selfBound = env.to === HEAD_PULSE_TARGET;
     // Destinations for anything this device delivers: an explicit unicast `to`,
-    // or (for a broadcast) the fan-out targets from the host. '@head' is a
-    // routing sentinel, never a forward destination.
+    // an explicit multicast target set, or (for a legacy broadcast) the fan-out
+    // targets from the host. '@head' is a routing sentinel, never a forward
+    // destination. Server-side validation has already normalized multicast.
     const dests = selfBound
       ? []
-      : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice));
+      : (Array.isArray(env.to)
+          ? env.to
+          : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice)));
     const inLen = env.pulse.length;
     const bytes = b64decode(env.pulse);
     const decoded = decodeFrameWithStream(bytes);

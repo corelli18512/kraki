@@ -66,6 +66,9 @@ vi.mock('./encryption', () => ({
       const to = (payload?.targetDeviceId as string) ?? 'test-tentacle';
       return { blob: JSON.stringify(msg), keys: {}, to };
     }
+    async encryptForDevice(msg: Record<string, unknown>, targetDeviceId: string) {
+      return { blob: JSON.stringify(msg), keys: {}, to: targetDeviceId };
+    }
     async drainEncryptedQueue() {}
   },
 }));
@@ -237,11 +240,27 @@ describe('KrakiWSClient', () => {
       lastWsInstance._receive({
         type: 'auth_ok',
         deviceId: 'dev-web-123',
-        devices: [],
+        devices: [{ id: 'dev-1', name: 'MacBook', role: 'tentacle', online: true, encryptionKey: 'mock-key' }],
       });
-      useStore.getState().upsertSession({
-        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
-        agent: 'copilot', state: 'active', messageCount: 0,
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-1', seq: 1, timestamp: '',
+        payload: { sessions: [{ id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] },
+      });
+      client.setDesiredSession('sess-1');
+      await vi.waitFor(() => {
+        const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean);
+        expect(sent.some((m) => m?.type === 'set_session_subscription')).toBe(true);
+      });
+      receiveInner({
+        type: 'session_subscription_set', deviceId: 'dev-1', seq: 2, timestamp: '',
+        payload: {
+          accepted: true, sessionId: 'sess-1',
+          snapshot: {
+            digest: { id: 'sess-1', agent: 'copilot', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' },
+            spineHeadSeq: 0,
+            card: { draft: '', action: null },
+          },
+        },
       });
     }
 

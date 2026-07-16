@@ -13,7 +13,8 @@ import { homedir } from 'node:os';
 import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
-  BroadcastEnvelope, UnicastEnvelope, CardActionState,
+  BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
+  SessionLiveSnapshot, SessionDigest,
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -27,7 +28,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
-import { TentaclePulse, streamForType } from './tentacle-pulse.js';
+import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
 
 const logger = createLogger('relay-client');
@@ -102,10 +103,25 @@ export class RelayClient {
   private authInfo: AuthOkMessage | null = null;
   /** Cached consumer public keys for E2E encryption (includes offline devices for pushPreview) */
   private consumerKeys = new Map<string, string>();
-  /** Device IDs of currently connected consumers (for queue decision) */
+  /** Device IDs of currently connected consumers. */
   private onlineConsumers = new Set<string>();
-  /** Messages queued when E2E is enabled but no consumer keys are available yet */
-  private pendingE2eQueue: Partial<ProducerMessage>[] = [];
+  /** Accepted in-memory single-session subscription for each connected Arm. */
+  private currentSessionByArm = new Map<string, string | null>();
+  /** High-frequency live card types filtered by current session subscription. */
+  private static readonly SUBSCRIBER_ONLY_TYPES = new Set(['agent_message_delta', 'card_action']);
+
+  /** Messages with explicit reconnect authorities; never replay as generic events. */
+  private static readonly NO_OFFLINE_REPLAY_TYPES = new Set([
+    'agent_message_delta',
+    'card_action',
+    'compacting',
+    'session_list',
+    'active',
+    'idle',
+    'user_message',
+    'agent_message',
+  ]);
+
   /** Maps pre-generated sessionId → requestId for concurrent create_session correlation */
   private pendingRequestIds = new Map<string, string>();
   /** Message types that write to events.jsonl and should be persisted to messages.jsonl.
@@ -254,10 +270,6 @@ export class RelayClient {
   // ── Push preview state ─────────────────────────────
   /** Last agent message content per session (for idle push preview) */
   private lastAgentContent = new Map<string, string>();
-  /** Push preview to attach to the next pulse broadcast envelope (set just
-   *  before pulse.send for a notification-worthy message, consumed by
-   *  sendPulseEnvelope). */
-  private pendingPushPreview: { blob: string; keys: Record<string, string> } | undefined;
 
   // ── Streaming delta debounce ───────────────────────
   // Each agent_message_delta otherwise triggers a full hybrid encryption
@@ -348,7 +360,7 @@ export class RelayClient {
     this.pulse = new TentaclePulse(
       {
         now: () => Date.now(),
-        sendPulseFrame: (pulseB64, targetDeviceId) => this.sendPulseEnvelope(pulseB64, targetDeviceId),
+        sendPulseFrame: (pulseB64, target) => this.sendPulseEnvelope(pulseB64, target),
         onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
       },
       `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
@@ -376,6 +388,9 @@ export class RelayClient {
    *  keyed maps leak entries permanently (Phase 1 had the identical issue
    *  in the Copilot adapter; same fix here). */
   private sessionToolCallIds = new Map<string, Set<string>>();
+
+  /** Pending permissions used for stable sidebar attention previews. */
+  private openPermissions = new Map<string, Map<string, { text: string; openedAt: string }>>();
 
   /** Open ask_user question ids per session. A session with a non-empty set is
    *  "pending" — its current turn is blocked waiting on human input. Populated
@@ -414,10 +429,11 @@ export class RelayClient {
     }
   }
 
-  /** Clear all open questions for a session (turn ended / session gone). */
+  /** Clear all open human attention for a session (turn ended / session gone). */
   private clearOpenQuestions(sessionId: string): void {
-    this.openQuestions.delete(sessionId);
+    const changed = this.openQuestions.delete(sessionId) || this.openPermissions.delete(sessionId);
     this.sessionManager.clearPendingHumanAction(sessionId);
+    if (changed) this.broadcastSessionList();
   }
 
   private soleOpenQuestion(sessionId: string): PendingHumanAction | null {
@@ -426,13 +442,17 @@ export class RelayClient {
     return map.values().next().value ?? null;
   }
 
-  /** The newest open (human-blocking) question's text, or undefined if none. */
-  private latestOpenQuestion(sessionId: string): string | undefined {
-    const map = this.openQuestions.get(sessionId);
-    if (!map || map.size === 0) return undefined;
-    let last: string | undefined;
-    for (const q of map.values()) last = q.question;
-    return last;
+  /** The newest open human attention item, preserving its original openedAt. */
+  private latestOpenAttention(sessionId: string): { type: 'permission' | 'question'; text: string; openedAt: string } | undefined {
+    let latest: { type: 'permission' | 'question'; text: string; openedAt: string } | undefined;
+    for (const permission of this.openPermissions.get(sessionId)?.values() ?? []) {
+      if (!latest || permission.openedAt >= latest.openedAt) latest = { type: 'permission', ...permission };
+    }
+    for (const question of this.openQuestions.get(sessionId)?.values() ?? []) {
+      const candidate = { type: 'question' as const, text: question.question, openedAt: question.createdAt };
+      if (!latest || candidate.openedAt >= latest.openedAt) latest = candidate;
+    }
+    return latest;
   }
 
   /** Rehydrate durable pending cards before session-list/card snapshots. */
@@ -479,6 +499,7 @@ export class RelayClient {
 
     this.removeOpenQuestion(sessionId, pending.questionId);
     this.card.resolvePrompt(sessionId, pending.questionId, { answer: answer.text || 'Answered with image' });
+    this.broadcastSessionList();
     this.recordTrace({ type: 'question', sessionId, payload: { id: pending.questionId, question: pending.question, answer: answer.text || 'Answered with image' } });
     this.send({
       type: 'question_resolved',
@@ -799,15 +820,11 @@ export class RelayClient {
         if (key) {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
-          this.flushE2eQueue();
+          this.currentSessionByArm.set(device.id, null);
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
-          // Send session list so the app can sync
+          // Send session list so the app can sync and establish its reconnect barrier.
           this.sendSessionListTo(device.id, key);
-          // Push any active card snapshots so a mid-turn reconnect re-seeds its
-          // status card immediately, using the fresh key we just learned (avoids
-          // a client-pull race where request_card outruns key sync on reload).
-          this.sendCardSnapshotsTo(device.id, key);
         }
       }
       return;
@@ -816,7 +833,7 @@ export class RelayClient {
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
       this.onlineConsumers.delete(deviceId);
-      // Keep consumerKeys — offline devices still need pushPreview encrypted for them.
+      this.currentSessionByArm.delete(deviceId);
       return;
     }
 
@@ -824,6 +841,7 @@ export class RelayClient {
       const deviceId = msg.deviceId as string;
       this.consumerKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
+      this.currentSessionByArm.delete(deviceId);
       return;
     }
 
@@ -929,8 +947,15 @@ export class RelayClient {
       return;
     }
 
-    // request_card — pull the current status-card snapshot (message + action)
-    // for a session, used to seed a (re)joining client mid-turn.
+    // set_session_subscription — atomically replace this Arm's one current
+    // session and return the bounded live-ready snapshot in the ACK.
+    if (msg.type === 'set_session_subscription') {
+      this.handleSetSessionSubscription(msg.deviceId, msg.payload.sessionId);
+      return;
+    }
+
+    // request_card — legacy explicit card pull. Subscription ACK is the normal
+    // reconnect/session-open authority, but keep this endpoint for diagnostics.
     if (msg.type === 'request_card') {
       this.handleRequestCard(msg.deviceId, msg.payload.sessionId);
       return;
@@ -1076,6 +1101,8 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
+              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
+              this.broadcastSessionList();
               this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
             })
@@ -1088,6 +1115,8 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
+              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
+              this.broadcastSessionList();
               this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'deny' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
             })
@@ -1100,6 +1129,8 @@ export class RelayClient {
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
+              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
+              this.broadcastSessionList();
               this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'always_allow' } });
               this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
             })
@@ -1175,10 +1206,8 @@ export class RelayClient {
           });
           break;
         case 'mark_unread': {
-          const meta = this.sessionManager.getMeta(sessionId);
-          if (meta && meta.lastSeq > 0) {
-            const rolledBack = Math.max(0, meta.lastSeq - 1);
-            this.sessionManager.markRead(sessionId, rolledBack);
+          const rolledBack = this.sessionManager.markUnread(sessionId);
+          if (rolledBack !== null) {
             this.send({
               type: 'session_read',
               sessionId,
@@ -1652,12 +1681,24 @@ export class RelayClient {
         payload: { ...event.toolArgs, id: event.id, description: event.description },
       };
       this.card.onPrompt(sessionId, action);
+      let permissions = this.openPermissions.get(sessionId);
+      if (!permissions) {
+        permissions = new Map();
+        this.openPermissions.set(sessionId, permissions);
+      }
+      permissions.set(event.id, {
+        text: event.description || event.toolArgs.toolName,
+        openedAt: new Date().toISOString(),
+      });
+      this.broadcastSessionList();
       this.recordTrace({ type: 'permission', sessionId, payload: action.payload });
     };
 
     // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
     this.adapter.onPermissionAutoResolved = (sessionId, permissionId) => {
       this.card.resolvePrompt(sessionId, permissionId, { decision: 'approve' });
+      this.openPermissions.get(sessionId)?.delete(permissionId);
+      this.broadcastSessionList();
       this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
     };
 
@@ -1665,6 +1706,7 @@ export class RelayClient {
     this.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
       this.removeOpenQuestion(sessionId, questionId);
       this.card.resolvePrompt(sessionId, questionId);
+      this.broadcastSessionList();
       this.recordTrace({ type: 'question', sessionId, payload: { id: questionId, question: '', cancelled: true } });
     };
 
@@ -1692,6 +1734,7 @@ export class RelayClient {
         action,
         createdAt: new Date().toISOString(),
       });
+      this.broadcastSessionList();
     };
 
     this.adapter.onToolStart = (sessionId, event) => {
@@ -2044,16 +2087,16 @@ export class RelayClient {
   >(sessions: T[]): T[] {
     return sessions.map((s) => {
       const compacting = this.compactingSessions.has(s.id);
-      const question = this.latestOpenQuestion(s.id);
-      if (!compacting && question === undefined) return s;
+      const attention = this.latestOpenAttention(s.id);
+      if (!compacting && attention === undefined) return s;
       return {
         ...s,
         ...(compacting && { state: 'compacting' as const }),
-        ...(question !== undefined && {
+        ...(attention !== undefined && {
           preview: {
-            type: 'question' as const,
-            text: question.slice(0, 200),
-            timestamp: new Date().toISOString(),
+            type: attention.type,
+            text: attention.text.slice(0, 200),
+            timestamp: attention.openedAt,
           },
         }),
       };
@@ -2352,6 +2395,60 @@ export class RelayClient {
     this.sessionManager.appendTrace(msg.sessionId, msg.type, JSON.stringify(enriched));
   }
 
+  private handleSetSessionSubscription(requesterDeviceId: string, sessionId: string | null): void {
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (!requesterKey) {
+      logger.warn({ requesterDeviceId, sessionId }, 'Session subscription requested without requester key');
+      return;
+    }
+
+    if (sessionId === null) {
+      this.currentSessionByArm.set(requesterDeviceId, null);
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
+        type: 'session_subscription_set',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: { accepted: true, sessionId: null, snapshot: null },
+      });
+      return;
+    }
+
+    const digest = this.enrichSessionList(this.sessionManager.getSessionList())
+      .find((session) => session.id === sessionId) as SessionDigest | undefined;
+    if (!digest) {
+      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
+        type: 'session_subscription_set',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: {
+          accepted: false,
+          sessionId,
+          error: { code: 'session_not_found', message: 'Session not found' },
+        },
+      });
+      return;
+    }
+
+    // Replace membership before capturing/enqueuing the ACK. Any subsequent
+    // card event for this session is sent after the snapshot on stream 0.
+    this.currentSessionByArm.set(requesterDeviceId, sessionId);
+    const card = this.card.state(sessionId);
+    const snapshot: SessionLiveSnapshot = {
+      digest,
+      spineHeadSeq: digest.lastSeq,
+      card: { draft: card.draft, action: card.action },
+    };
+    this.sendReliableUnicastTo(requesterDeviceId, requesterKey, {
+      type: 'session_subscription_set',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { accepted: true, sessionId, snapshot },
+    });
+  }
+
   /** Reply to `request_card` — unicast the session's current card snapshot
    *  (agent_message_delta full text + current card_action) to the requester. */
   private handleRequestCard(requesterDeviceId: string, sessionId: string): void {
@@ -2368,24 +2465,6 @@ export class RelayClient {
         timestamp: new Date().toISOString(),
       };
       this.sendReliableUnicastTo(requesterDeviceId, requesterKey, enriched);
-    }
-  }
-
-  /** Push the current card snapshot for every session with active card state to
-   *  a freshly-joined consumer. Called from `device_joined` (fresh key in hand)
-   *  so a reconnecting arm re-seeds its status card without a pull round-trip.
-   *  Runtime state is carried independently by the preceding session_list. */
-  private sendCardSnapshotsTo(deviceId: string, key: string): void {
-    for (const sessionId of this.card.activeSessions()) {
-      for (const snap of this.card.snapshot(sessionId)) {
-        const enriched = {
-          ...snap,
-          deviceId: this.authInfo?.deviceId ?? '',
-          seq: ++this.seqCounter,
-          timestamp: new Date().toISOString(),
-        };
-        this.sendReliableUnicastTo(deviceId, key, enriched);
-      }
     }
   }
 
@@ -2579,24 +2658,19 @@ export class RelayClient {
       this.eventsWatcher.skipToEnd(sessionId);
     }
 
-    if (this.consumerKeys.size === 0) {
-      // Runtime state is recovered authoritatively from session_list.state when
-      // a device joins. Never queue compacting start/end events for later replay.
-      if (type !== 'compacting') this.queuePendingE2e(msg);
-      return;
+    if (msg.type === 'agent_message' && msg.sessionId) {
+      const content = (msg.payload as { content?: string } | undefined)?.content;
+      if (content) this.lastAgentContent.set(msg.sessionId, content);
     }
 
-    // Broadcast to all known devices (online get it via WS, offline via pushPreview).
-    // Everything rides pulse — there is no non-E2E plaintext path (a keyManager is
-    // always present; daemon-worker constructs one unconditionally).
+    // Push is a separate Head-bound operation and must happen even when there
+    // are zero online live recipients.
+    this.dispatchPushPreview(msg);
+
+    // Everything with a reconnect authority is recovered by session_list,
+    // subscription snapshot, spine range, or TRACE/attachment pull. Do not keep
+    // a generic offline event queue.
     this.sendEncrypted(msg);
-
-    // Also queue if no online consumers, so new devices get it on connect.
-    // Compacting is a current state, not an event backlog; session_list is its
-    // sole reconnect authority.
-    if (this.onlineConsumers.size === 0 && type !== 'compacting') {
-      this.queuePendingE2e(msg);
-    }
   }
 
   /** Append to a session's card-text buffer, arming a flush timer on first
@@ -2644,103 +2718,71 @@ export class RelayClient {
     this.deltaBuffers.clear();
   }
 
-  /**
-   * Encrypt a producer message to all consumers and send it over pulse.
-   */
+  /** Encrypt a producer message once for its explicit online target set. */
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
-    // Encrypt for ONLINE consumers only. Offline consumers can't receive the
-    // message anyway (head filters broadcastTargets to online devices), and
-    // adding them here wastes CPU + bytes: each recipient costs one RSA-4096
-    // wrap (~15-30 ms) and adds a ~700-byte base64 RSA blob to the on-wire
-    // frame. For a user with N total registered devices (mostly stale web
-    // tabs), each broadcast frame was N × wrap + N × ~700 B ⇒ a 40 KB
-    // user_message echo on the wire even for a "OK" reply, and hundreds of
-    // ms of RSA CPU per streaming delta. Pushed E2E deltas to offline devices
-    // wouldn't decrypt anyway (offline endpoint state=disconnected on head
-    // side after v0.15.2), so the extra keys were pure overhead.
-    // The pushPreview side-channel (see buildPushPreview) still encrypts to
-    // offline devices with its own tiny AES key wrap — that's the correct
-    // place for offline delivery.
-    const recipients: RecipientKey[] = [];
-    for (const deviceId of this.onlineConsumers) {
-      const compactKey = this.consumerKeys.get(deviceId);
-      if (!compactKey) {
-        traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, sessionId: (msg as { sessionId?: string }).sessionId, seq: (msg as { seq?: number }).seq, droppedReason: 'no-online-key', deviceId });
-        continue;
-      }
-      try {
-        recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
-      } catch (err) {
-        traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, droppedReason: 'invalid-key', deviceId });
-        logger.warn({ err, deviceId }, 'Skipping device with invalid public key');
-      }
-    }
-    if (recipients.length === 0) {
-      // No usable online recipient key. The caller's `send()` already handles
-      // `onlineConsumers.size === 0`, but we can also arrive here when an
-      // online device's key is invalid (test fixture or key rotation race).
-      // Do NOT queue in that case — the message would loop forever in
-      // flushE2eQueue on every reconnect because the key never becomes valid.
-      // The original message is still preserved locally (events.jsonl + card
-      // state), so a reconnecting arm picks it up via session replay.
-      traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, droppedReason: 'recipients-empty', onlineConsumers: this.onlineConsumers.size, consumerKeys: this.consumerKeys.size });
+    const type = msg.type;
+    const sessionId = msg.sessionId;
+    const targetIds = type && RelayClient.SUBSCRIBER_ONLY_TYPES.has(type)
+      ? [...this.onlineConsumers].filter((deviceId) => this.currentSessionByArm.get(deviceId) === sessionId)
+      : [...this.onlineConsumers];
+
+    if (targetIds.length === 0) {
+      traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type, sessionId, droppedReason: 'targets-empty' });
       return;
     }
 
-    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-OK', type: (msg as { type?: string }).type, seq: (msg as { seq?: number }).seq, recipients: recipients.map((r) => r.deviceId), coalesceKey: coalesceKeyFor(msg) });
+    const recipients: RecipientKey[] = [];
+    const usableTargets: string[] = [];
+    for (const deviceId of targetIds) {
+      const compactKey = this.consumerKeys.get(deviceId);
+      if (!compactKey) continue;
+      try {
+        recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
+        usableTargets.push(deviceId);
+      } catch (err) {
+        logger.warn({ err, deviceId }, 'Skipping device with invalid public key');
+      }
+    }
+    if (recipients.length === 0) return;
+
+    traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-OK', type, sessionId, recipients: usableTargets, coalesceKey: coalesceKeyFor(msg) });
 
     try {
       const plaintext = JSON.stringify(msg);
       const { blob, keys } = encryptToBlob(plaintext, recipients);
-
-      // Track last agent message for idle push preview (needed by both paths).
       if (msg.type === 'agent_message' && msg.sessionId) {
         const content = (msg.payload as Record<string, unknown>).content as string;
-        if (content) this.lastAgentContent.set(msg.sessionId as string, content);
+        if (content) this.lastAgentContent.set(msg.sessionId, content);
       }
-
-      // All producer messages ride the per-hop pulse endpoint to head (head fans
-      // out + acks + durably holds for offline arms). The pulse frame's payload
-      // carries BOTH the ciphertext blob AND the per-recipient keys, so everything
-      // the receiver needs travels together through head (head never touches keys).
-      //
-      // The push preview (for notification-worthy messages) rides the SAME pulse
-      // envelope — the head reads `pushPreview` off it in its broadcast branch — so
-      // there is no separate raw send.
-      this.pendingPushPreview = this.buildPushPreview(msg, recipients);
-      this.pulse.send(JSON.stringify({ blob, keys }), '', false, coalesceKeyFor(msg), streamForType(msg.type));
-      this.pendingPushPreview = undefined;
+      this.pulse.send(
+        JSON.stringify({ blob, keys }),
+        usableTargets,
+        false,
+        coalesceKeyFor(msg),
+        streamForType(msg.type),
+      );
     } catch (err) {
-      logger.error({ err }, 'Encrypted broadcast failed');
+      logger.error({ err }, 'Encrypted multicast failed');
     }
   }
 
-  /** Put a pulse frame on the wire. With no target it rides a BROADCAST envelope
-   *  (head fans out to all the user's apps); with a `targetDeviceId` it rides a
-   *  UNICAST envelope so head forwards it to exactly that one app. head reads
-   *  `pulse` for transport (+ `to` for unicast routing); the payload ({blob,keys})
-   *  is inside the frame. */
-  private sendPulseEnvelope(pulseB64: string, targetDeviceId?: string): void {
+  /** Put a pulse frame on the wire using the sender-retained delivery target. */
+  private sendPulseEnvelope(pulseB64: string, target?: PulseDeliveryTarget): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const envelope: Record<string, unknown> = targetDeviceId
-      ? { type: 'unicast', to: targetDeviceId, pulse: pulseB64, blob: '', keys: {} }
-      : { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
-    // Attach a pending push preview (broadcast messages only) to this same
-    // envelope so the head's push manager reaches offline devices — no separate
-    // raw send. Consume it so it rides exactly one frame.
-    if (!targetDeviceId && this.pendingPushPreview) {
-      envelope.pushPreview = this.pendingPushPreview;
-      this.pendingPushPreview = undefined;
-    }
+    const envelope: UnicastEnvelope | MulticastEnvelope | BroadcastEnvelope = Array.isArray(target)
+      ? { type: 'multicast', to: target, pulse: pulseB64, blob: '', keys: {} }
+      : target
+        ? { type: 'unicast', to: target, pulse: pulseB64, blob: '', keys: {} }
+        : { type: 'broadcast', pulse: pulseB64, blob: '', keys: {} };
     const raw = JSON.stringify(envelope);
     traceLog.info({
       ns: process.hrtime.bigint().toString(),
       comp: 'tentacle',
       evt: 'WS-TX',
       type: envelope.type,
-      to: targetDeviceId,
+      to: Array.isArray(target) ? target : target,
       rawLen: raw.length,
     });
     this.ws.send(raw);
@@ -2789,19 +2831,23 @@ export class RelayClient {
     }
   }
 
-  /** Build the encrypted push preview for a notification-worthy message, or
-   *  undefined if the message isn't one. The preview rides the SAME pulse
-   *  envelope as the reliable message (attached by sendPulseEnvelope), so the
-   *  head's push manager can notify offline devices without a separate raw send.
-   *
-   *  IMPORTANT: the preview is encrypted to ALL consumerKeys (online + offline),
-   *  NOT just the online `recipients`. Offline devices are the entire point of
-   *  push notifications — if we only encrypt to online devices, the head's
-   *  PushManager finds `keys[offlineDeviceId] === undefined` and bails, so no
-   *  push is ever sent. (This was the ec6a255c regression.) */
+  /** Build and dispatch an encrypted push preview over the Head self-channel.
+   *  This operation is independent of live subscribers and online targets. */
+  private dispatchPushPreview(msg: Partial<ProducerMessage>): void {
+    const preview = this.buildPushPreview(msg);
+    if (!preview) return;
+    this.pulse.send(
+      JSON.stringify({ type: 'dispatch_push', payload: { preview } }),
+      HEAD_PULSE_TARGET,
+      false,
+      undefined,
+      0,
+    );
+  }
+
+  /** Build the encrypted push preview for a notification-worthy message. */
   private buildPushPreview(
     msg: Partial<ProducerMessage>,
-    _recipients: RecipientKey[],
   ): { blob: string; keys: Record<string, string> } | undefined {
     let previewType: string | undefined;
     let previewSummary: string | undefined;
@@ -2909,51 +2955,23 @@ export class RelayClient {
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
   }
 
-  /**
-   * Enqueue a producer message for later delivery (no consumer keys/online
-   * consumers yet). State-covering messages (deltas, card actions) coalesce
-   * via {@link coalesceKeyFor}: only the latest per-key is kept, so a
-   * reconnecting arm receives one current snapshot per key rather than a
-   * burst of stale frames. Event messages always append.
-   */
-  private queuePendingE2e(msg: Partial<ProducerMessage>): void {
-    const key = coalesceKeyFor(msg);
-    if (key) {
-      this.pendingE2eQueue = this.pendingE2eQueue.filter((m) => coalesceKeyFor(m) !== key);
-    }
-    if (this.pendingE2eQueue.length < 1000) {
-      this.pendingE2eQueue.push(msg);
-    } else {
-      logger.warn({ type: msg.type }, 'E2E queue full (1000) — dropping message');
-    }
-  }
-
-  /**
-   * Flush queued E2E messages once consumer keys become available.
-   */
-  private flushE2eQueue(): void {
-    if (this.onlineConsumers.size === 0 || this.pendingE2eQueue.length === 0) return;
-    const queued = this.pendingE2eQueue.splice(0);
-    for (const msg of queued) {
-      this.sendEncrypted(msg);
-    }
-  }
-
   private updateConsumerKeys(devices: DeviceSummary[]): void {
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
+    this.currentSessionByArm.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {
       if (d.role === 'app') {
         const key = d.encryptionKey ?? d.publicKey;
         if (key) {
           this.consumerKeys.set(d.id, key);
-          if (d.online) this.onlineConsumers.add(d.id);
+          if (d.online) {
+            this.onlineConsumers.add(d.id);
+            this.currentSessionByArm.set(d.id, null);
+          }
         }
       }
     }
-    // Flush queued messages now that we have consumer keys
-    this.flushE2eQueue();
   }
 
   // ── Title generation scheduling ──────────────────────

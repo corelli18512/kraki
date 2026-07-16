@@ -957,6 +957,26 @@ describe('SessionManager', () => {
       sm.markRead(sessionId, 1);
       expect(sm.getMeta(sessionId)!.readSeq).toBe(3);
     });
+
+    it('markUnread rolls back a fully-read session by one item', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.markRead(sessionId, 2);
+      expect(sm.markUnread(sessionId)).toBe(1);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(1);
+    });
+
+    it('markUnread is idempotent and never advances an already-unread cursor', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.markRead(sessionId, 1);
+      expect(sm.markUnread(sessionId)).toBe(1);
+      expect(sm.markUnread(sessionId)).toBe(1);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(1);
+    });
   });
 
   describe('clampOverflowReadSeq migration', () => {

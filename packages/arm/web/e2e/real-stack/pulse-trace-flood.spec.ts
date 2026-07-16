@@ -34,7 +34,10 @@ async function pairBrowser(page: Page): Promise<string> {
 }
 
 test('live echo stays responsive while a large turn trace is pulled on bulk', async ({ page }) => {
-  const sessionId = await pairBrowser(page);
+  await pairBrowser(page);
+  const sessionId = `trace-flood-${Date.now().toString(36)}`;
+  await control('/createSession', { id: sessionId });
+  await control('/idle', { sid: sessionId });
   await page.goto(`${WEB_URL}/session/${sessionId}`);
   await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
   await control('/idle', { sid: sessionId });

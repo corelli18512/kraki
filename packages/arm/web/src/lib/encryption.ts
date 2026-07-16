@@ -54,6 +54,27 @@ export class EncryptionHandler {
     }
   }
 
+  /** Encrypt an inner message for an explicitly routed device without adding a
+   *  targetDeviceId field to the encrypted protocol payload. */
+  async encryptForDevice(
+    msg: Record<string, unknown>,
+    targetDeviceId: string,
+  ): Promise<{ blob: string; keys: Record<string, string>; to: string } | null> {
+    if (!this.keyStore.isReady()) return null;
+    const targetDev = getStore().devices.get(targetDeviceId);
+    const targetKey = targetDev?.encryptionKey ?? targetDev?.publicKey;
+    if (!targetKey) return null;
+    try {
+      const { blob, keys } = await this.keyStore.encryptToBlob(JSON.stringify(msg), [
+        { deviceId: targetDeviceId, publicKeyBase64: targetKey },
+      ]);
+      return { blob, keys, to: targetDeviceId };
+    } catch (err) {
+      logger.error('encryptForDevice failed:', err);
+      return null;
+    }
+  }
+
   /** Decrypt a raw blob+keys (used by the pulse inbound path). */
   async decryptBlob(blob: string, keys: Record<string, string>): Promise<InnerMessage | null> {
     const store = getStore();
