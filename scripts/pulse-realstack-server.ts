@@ -58,6 +58,7 @@ class MockAdapter extends AgentAdapter {
   /** Records inbound-from-browser calls (over pulse) so the spec can prove the
    *  browser's reliable sends actually reached the tentacle adapter. */
   readonly receivedMessages: Array<{ sid: string; text: string }> = [];
+  private readonly activeToolCalls = new Map<string, string>();
   readonly permissionResponses: Array<{ sid: string; pid: string; decision: string }> = [];
   readonly questionAnswers: Array<{ sid: string; qid: string; answer: string; freeform: boolean }> = [];
 
@@ -77,7 +78,10 @@ class MockAdapter extends AgentAdapter {
   }
   async sendMessage(sid: string, text: string) { this.receivedMessages.push({ sid, text }); }
   async respondToPermission(sid: string, pid: string, d: PermissionDecision) { this.permissionResponses.push({ sid, pid, decision: d }); }
-  async respondToQuestion(sid: string, qid: string, answer: string, freeform: boolean) { this.questionAnswers.push({ sid, qid, answer, freeform }); }
+  async respondToQuestion(sid: string, qid: string, answer: { text: string } | string, freeform: boolean) {
+    this.questionAnswers.push({ sid, qid, answer: typeof answer === 'string' ? answer : answer.text, freeform });
+    return 'accepted' as const;
+  }
   async killSession(sessionId: string) {
     const s = this.sessions.get(sessionId);
     if (s) s.ended = true;
@@ -92,19 +96,30 @@ class MockAdapter extends AgentAdapter {
   async listModels(): Promise<string[]> { return ['mock-v1']; }
 
   // Simulation helpers (control plane calls these to drive the agent side)
+  active(sid: string) {
+    sessionManagerForControl?.markActive(sid);
+    (relay as unknown as { send: (msg: Record<string, unknown>) => void }).send({ type: 'active', sessionId: sid, payload: {} });
+  }
   msg(sid: string, content: string) { this.onMessage?.(sid, { content }); }
-  delta(sid: string, content: string) { this.onMessageDelta?.(sid, { content }); }
+  delta(sid: string, content: string) { this.active(sid); this.onMessageDelta?.(sid, { content }); }
   perm(sid: string, id: string, tool: string, desc: string) {
+    this.active(sid);
     this.onPermissionRequest?.(sid, { id, toolArgs: { toolName: tool, args: {} }, description: desc });
   }
   question(sid: string, id: string, q: string, choices?: string[]) {
+    this.active(sid);
     this.onQuestionRequest?.(sid, { id, question: q, choices, allowFreeform: true });
   }
   toolStart(sid: string, tool: string, args: Record<string, unknown> = {}, toolCallId?: string) {
-    this.onToolStart?.(sid, { toolName: tool, args, ...(toolCallId && { toolCallId }) });
+    this.active(sid);
+    const id = toolCallId ?? `tc-${sid}-${Date.now().toString(36)}`;
+    this.activeToolCalls.set(sid, id);
+    this.onToolStart?.(sid, { toolName: tool, args, toolCallId: id });
   }
   toolComplete(sid: string, tool: string, result: string, toolCallId?: string, attachments?: unknown[]) {
-    this.onToolComplete?.(sid, { toolName: tool, result, ...(toolCallId && { toolCallId }), ...(attachments && { attachments }) });
+    const id = toolCallId ?? this.activeToolCalls.get(sid);
+    this.onToolComplete?.(sid, { toolName: tool, result, ...(id && { toolCallId: id }), ...(attachments && { attachments }) });
+    this.activeToolCalls.delete(sid);
   }
   idle(sid: string) { this.onIdle?.(sid); }
   error(sid: string, message: string) { this.onError?.(sid, { message }); }
@@ -112,6 +127,7 @@ class MockAdapter extends AgentAdapter {
 
 const children: ChildProcess[] = [];
 let relay: RelayClient | null = null;
+let sessionManagerForControl: SessionManager | null = null;
 // Second tentacle (same open-auth user) — connected on demand by the presence
 // tests to prove device_joined/left/removed reach the browser over pulse.
 let relay2: RelayClient | null = null;
@@ -233,6 +249,7 @@ async function main(): Promise<void> {
   // 2. Embedded tentacle (MockAdapter + RelayClient)
   const adapter = new MockAdapter();
   const sm = new SessionManager(mkdtempSync(join(tmpdir(), 'kraki-realstack-sess-')));
+  sessionManagerForControl = sm;
   // A real KeyManager is REQUIRED: without it RelayClient.sendUnicastTo()
   // early-returns, so the tentacle silently never sends session_list / greeting
   // / replay to apps — the browser would pair but see no sessions. dev-demo gets
@@ -307,6 +324,7 @@ async function main(): Promise<void> {
         case '/question': adapter.question(q.get('sid')!, q.get('id') ?? 'q-1', q.get('text') ?? 'which one?', q.get('choices') ? q.get('choices')!.split('|') : undefined); return json(200, { ok: true });
         case '/toolStart': adapter.toolStart(q.get('sid')!, q.get('tool') ?? 'bash', q.get('cmd') ? { command: q.get('cmd')! } : {}); return json(200, { ok: true });
         case '/toolComplete': adapter.toolComplete(q.get('sid')!, q.get('tool') ?? 'bash', q.get('result') ?? 'done'); return json(200, { ok: true });
+        case '/active': adapter.active(q.get('sid')!); return json(200, { ok: true });
         case '/idle': adapter.idle(q.get('sid')!); return json(200, { ok: true });
         case '/error': adapter.error(q.get('sid')!, q.get('message') ?? 'error'); return json(200, { ok: true });
         // Legacy-history compatibility: inject the old durable Abort message
@@ -335,11 +353,16 @@ async function main(): Promise<void> {
         }
         // ── debug: what does the tentacle see? ──
         case '/debug': {
-          const r = relay as unknown as { consumerKeys?: Map<string, string>; onlineConsumers?: Set<string> };
+          const r = relay as unknown as {
+            consumerKeys?: Map<string, string>;
+            onlineConsumers?: Set<string>;
+            currentSessionByArm?: Map<string, string | null>;
+          };
           return json(200, {
             sessions: sm.getSessionList(),
             consumerKeys: r.consumerKeys ? Array.from(r.consumerKeys.keys()) : 'n/a',
             onlineConsumers: r.onlineConsumers ? Array.from(r.onlineConsumers) : 'n/a',
+            subscriptions: r.currentSessionByArm ? Object.fromEntries(r.currentSessionByArm) : 'n/a',
           });
         }
         // ── tentacle link control ──
@@ -377,6 +400,7 @@ async function main(): Promise<void> {
           const tcid = `tc-${q.get('sid')}-${q.get('cmd') ?? 'x'}`;
           adapter.toolStart(sid, tool, q.get('cmd') ? { command: q.get('cmd')! } : {}, tcid);
           adapter.toolComplete(sid, tool, result, tcid);
+          adapter.msg(sid, q.get('reply') ?? 'Done — open the step to inspect the full tool result.');
           adapter.idle(sid);
           // Diagnostic: confirm the tentacle offloaded the result to the store.
           let stored = 0;

@@ -67,6 +67,19 @@ export interface UnicastEnvelope extends PulseFrameField {
   ref?: string;
 }
 
+/** Tentacle → explicit same-user app target set. Relay reads only `to` for routing. */
+export interface MulticastEnvelope extends PulseFrameField {
+  type: 'multicast';
+  /** Explicit target device IDs. Must be non-empty after de-duplication. */
+  to: string[];
+  /** Unused in pulse mode; ciphertext is inside the pulse DATA payload. */
+  blob: string;
+  /** Unused in pulse mode; recipient keys are inside the pulse DATA payload. */
+  keys: Record<string, string>;
+  /** Optional reference ID, echoed back in server_error responses. */
+  ref?: string;
+}
+
 /** Tentacle → all devices. Relay broadcasts to all other devices under the user. */
 export interface BroadcastEnvelope extends PulseFrameField {
   type: 'broadcast';
@@ -80,7 +93,7 @@ export interface BroadcastEnvelope extends PulseFrameField {
   pushPreview?: BlobPayload;
 }
 
-export type RelayEnvelope = UnicastEnvelope | BroadcastEnvelope;
+export type RelayEnvelope = UnicastEnvelope | MulticastEnvelope | BroadcastEnvelope;
 
 /** Encrypted blob payload — shared between crypto and app layers. */
 export interface BlobPayload {
@@ -743,6 +756,48 @@ export interface TurnTraceBatchMessage extends BaseEnvelope {
   };
 }
 
+/** Atomic subscribe/replace/unsubscribe request for one Arm's visible session. */
+export interface SetSessionSubscriptionMessage extends BaseEnvelope {
+  type: 'set_session_subscription';
+  payload: {
+    sessionId: string | null;
+  };
+}
+
+/** Bounded live-state snapshot returned with a successful subscription ACK. */
+export interface SessionLiveSnapshot {
+  digest: import('./sessions.js').SessionDigest;
+  spineHeadSeq: number;
+  card: {
+    draft: string;
+    action: CardActionState | null;
+  };
+}
+
+/** Tentacle acknowledgement and live-ready barrier for session subscription. */
+export interface SessionSubscriptionSetMessage extends BaseEnvelope {
+  type: 'session_subscription_set';
+  payload:
+    | {
+        accepted: true;
+        sessionId: string;
+        snapshot: SessionLiveSnapshot;
+      }
+    | {
+        accepted: true;
+        sessionId: null;
+        snapshot: null;
+      }
+    | {
+        accepted: false;
+        sessionId: string;
+        error: {
+          code: 'session_not_found';
+          message: string;
+        };
+      };
+}
+
 /** Sent by tentacle to app with metadata for all active sessions. */
 export interface SessionListMessage extends BaseEnvelope {
   type: 'session_list';
@@ -856,6 +911,7 @@ export type ProducerMessage =
   | SessionReplayBatchMessage
   | SessionMessagesBatchMessage
   | SessionMessagesRangeBatchMessage
+  | SessionSubscriptionSetMessage
   | SessionListMessage
   | PermissionResolvedMessage
   | QuestionResolvedMessage
@@ -1110,7 +1166,8 @@ export type ConsumerMessage =
   | PinSessionMessage
   | RequestLocalSessionsMessage
   | ImportSessionMessage
-  | RequestAttachmentMessage;
+  | RequestAttachmentMessage
+  | SetSessionSubscriptionMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
@@ -1344,6 +1401,14 @@ export interface UnregisterPushTokenMessage {
   };
 }
 
+/** Head-terminated encrypted push dispatch, sent over the existing @head Pulse channel. */
+export interface DispatchPushMessage {
+  type: 'dispatch_push';
+  payload: {
+    preview: BlobPayload;
+  };
+}
+
 export type ControlMessage =
   | AuthMessage
   | AuthOkMessage
@@ -1365,7 +1430,8 @@ export type ControlMessage =
   | PreferencesUpdatedMessage
   | RegisterPushTokenMessage
   | PushTokenRegisteredMessage
-  | UnregisterPushTokenMessage;
+  | UnregisterPushTokenMessage
+  | DispatchPushMessage;
 
 // ============================================================
 // Union of all messages

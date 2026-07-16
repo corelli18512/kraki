@@ -53,11 +53,12 @@ function fp(u: Uint8Array): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
+export type PulseDeliveryTarget = string | string[];
+
 export interface TentaclePulseHost {
-  /** Send a pulse frame to the relay. When `targetDeviceId` is set, the frame
-   *  rides a unicast envelope so head forwards it to exactly that one app;
-   *  otherwise a broadcast envelope so head fans it out to all the user's apps. */
-  sendPulseFrame(pulseB64: string, targetDeviceId?: string): void;
+  /** Send a pulse frame to the relay. A string is unicast, a string[] is
+   *  explicit multicast, and undefined is legacy broadcast/control. */
+  sendPulseFrame(pulseB64: string, target?: PulseDeliveryTarget): void;
   /** A reliable payload was delivered in order — the JSON string carrying
    *  {blob, keys} for the normal decrypt+dispatch path. */
   onDelivered(payloadJson: string): void;
@@ -88,10 +89,9 @@ export function streamForType(type: string | undefined): number {
 
 export class TentaclePulse {
   private streams: StreamSet;
-  /** Per-stream, per-seq unicast target. Retransmits happen outside send(), and
-   *  live/bulk have independent seq spaces (both can have seq=1), so neither a
-   *  mutable current target nor a seq-only map is sufficient. */
-  private targetByStream = new Map<number, Map<bigint, string>>();
+  /** Per-stream, per-seq delivery target. Retransmits happen outside send(),
+   *  and live/bulk have independent seq spaces (both can have seq=1). */
+  private targetByStream = new Map<number, Map<bigint, PulseDeliveryTarget | undefined>>();
   /** Set after the current relay connection sends any stream-1 frame (normally
    *  its HELLO). Until then bulk falls back to v1 stream 0 for old Heads. */
   private bulkCapable = false;
@@ -116,7 +116,7 @@ export class TentaclePulse {
    *  (unicast); omit it to fan out to all apps (broadcast). `durable` marks it
    *  for head persistence while the target app is offline (default false —
    *  sync snapshots self-heal on reconnect). */
-  send(payloadJson: string, targetDeviceId = '', durable = false, coalesceKey?: string, stream = 0): void {
+  send(payloadJson: string, target: PulseDeliveryTarget | undefined = undefined, durable = false, coalesceKey?: string, stream = 0): void {
     const payload = enc.encode(payloadJson);
     const actualStream = stream === 1 && !this.bulkCapable ? 0 : stream;
     const { seq, effects } = this.streams.send(actualStream, payload, { durable, coalesceKey });
@@ -125,8 +125,8 @@ export class TentaclePulse {
       targets = new Map();
       this.targetByStream.set(actualStream, targets);
     }
-    targets.set(seq, targetDeviceId);
-    trace('SEND', seq, payload.length, { fp: fp(payload), to: targetDeviceId || '(broadcast)', durable, coalesceKey, stream: actualStream, requestedStream: stream });
+    targets.set(seq, target);
+    trace('SEND', seq, payload.length, { fp: fp(payload), to: Array.isArray(target) ? target : target ?? '(broadcast)', durable, coalesceKey, stream: actualStream, requestedStream: stream });
     this.run(effects);
   }
 
@@ -169,10 +169,10 @@ export class TentaclePulse {
           const frame = decoded?.frame;
           const stream = decoded?.streamId ?? 0;
           const target = frame?.t === 'data'
-            ? (this.targetByStream.get(stream)?.get(frame.seq) ?? '')
-            : '';
-          trace('TX', frame?.t === 'data' ? frame.seq : 0, e.bytes.length, { kind: frame?.t ?? '?', to: target || '(broadcast)', stream });
-          this.host.sendPulseFrame(b64(e.bytes), target || undefined);
+            ? this.targetByStream.get(stream)?.get(frame.seq)
+            : undefined;
+          trace('TX', frame?.t === 'data' ? frame.seq : 0, e.bytes.length, { kind: frame?.t ?? '?', to: Array.isArray(target) ? target : target ?? '(broadcast)', stream });
+          this.host.sendPulseFrame(b64(e.bytes), target);
           break;
         }
         case 'deliver':

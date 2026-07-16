@@ -56,7 +56,10 @@ test.describe.serial('real-stack terminal status cards', () => {
 
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
-    sessionId = await pairBrowser(page);
+    await pairBrowser(page);
+    sessionId = `terminal-${Date.now().toString(36)}`;
+    await control('/createSession', { id: sessionId });
+    await control('/idle', { sid: sessionId });
     await openSessionChat(page, sessionId);
   });
 
@@ -90,9 +93,11 @@ test.describe.serial('real-stack terminal status cards', () => {
     const stepsBtn = abortCard.getByRole('button', { name: /Steps/i });
     if (await stepsBtn.isVisible()) {
       await stepsBtn.click();
-      await expect(page.getByText(/Cancelled.*read_file|read_file.*Cancelled/i).or(page.getByText(/Cancelled/i))).toBeVisible({ timeout: 5_000 });
+      const dialog = page.getByRole('dialog').filter({ visible: true }).last();
+      await expect(dialog.getByRole('button', { name: /read_file/i })).toBeVisible({ timeout: 5_000 });
       await page.screenshot({ path: '/tmp/kraki-terminal-abort-steps.png', fullPage: false });
-      await page.keyboard.press('Escape');
+      await dialog.click({ position: { x: 4, y: 4 } });
+      await expect(dialog).toHaveCount(0);
     }
   });
 
@@ -173,10 +178,12 @@ test.describe.serial('real-stack terminal status cards', () => {
 
     // Both backend errors remain available inside Steps.
     await failedCard.getByRole('button', { name: 'Open steps' }).click();
-    await expect(page.getByText('Error', { exact: true })).toHaveCount(2);
-    await expect(page.getByText('524 status code (no body)', { exact: true })).toHaveCount(3);
+    const dialog = page.getByRole('dialog').filter({ visible: true }).last();
+    await expect(dialog.getByText('Error', { exact: true })).toHaveCount(2);
+    await expect(dialog.getByText('524 status code (no body)', { exact: true })).toHaveCount(2);
     await page.screenshot({ path: '/tmp/kraki-terminal-single-failed-bubble-steps.png', fullPage: false });
-    await page.keyboard.press('Escape');
+    await dialog.click({ position: { x: 4, y: 4 } });
+    await expect(dialog).toHaveCount(0);
   });
 
   test('two consecutive failed turns each render exactly one bubble (mrhuha8u-tcpn1tz8 replay)', async () => {

@@ -186,7 +186,6 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // empty card eligible or create a live bubble by itself. Existing real card
   // content/actions may continue rendering independently while compacting.
   const cardEligible = status === 'working' || status === 'pending' || status === 'compacting';
-  const shouldSeedCard = status === 'working' || status === 'pending';
   const showLive = cardEligible && !!card && (draft.length > 0 || actionLive);
 
   // First seq for prepend tracking (passed to scroll controller)
@@ -194,15 +193,6 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     const seqs = spine.map(getSeq).filter(s => s > 0);
     return seqs.length > 0 ? seqs[0] : 0;
   }, [spine]);
-
-  // Reload mid-turn seed: the server owns the card, so request a snapshot when
-  // opening a non-idle session without local card state. Gated on the tentacle
-  // being encryptable (its key may arrive after mount) and re-runs when it does.
-  useEffect(() => {
-    if (!sessionId || !shouldSeedCard || card) return;
-    if (!isConnected || !isTentacleEncryptable) return;
-    messageProvider.requestCard(sessionId);
-  }, [sessionId, shouldSeedCard, card, isConnected, isTentacleEncryptable]);
 
   useEffect(() => {
     if (!sessionId || !isTentacleEncryptable) return;

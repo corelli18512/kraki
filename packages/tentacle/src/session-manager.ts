@@ -939,6 +939,23 @@ export class SessionManager {
   }
 
   /**
+   * Mark at least the latest spine item unread without ever advancing readSeq.
+   * Returns the authoritative cursor to echo to Arms, or null when the session
+   * has no spine entries.
+   */
+  markUnread(sessionId: string): number | null {
+    const meta = this.readMeta(sessionId);
+    if (!meta || (meta.lastSeq ?? 0) <= 0) return null;
+    const rolledBack = Math.min(meta.readSeq ?? 0, Math.max(0, meta.lastSeq - 1));
+    if (rolledBack !== (meta.readSeq ?? 0)) {
+      meta.readSeq = rolledBack;
+      meta.updatedAt = new Date().toISOString();
+      this.writeMeta(sessionId, meta);
+    }
+    return rolledBack;
+  }
+
+  /**
    * Get digests for all existing sessions (for session_list sync).
    */
   getSessionList(): Array<{
