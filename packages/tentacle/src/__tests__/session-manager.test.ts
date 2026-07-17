@@ -1150,12 +1150,13 @@ describe('SessionManager', () => {
       const { sessionId } = sm.createSession('pi');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'render' } }));
       const image = { type: 'content_ref', id: 'img-1', mimeType: 'image/png', size: 10, name: 'a.png', width: 2, height: 3 };
+      const imageWithUnknownField = { ...image, localPath: '/private/result.png' };
       const html = { type: 'content_ref', id: 'html-1', mimeType: 'text/html', size: 20, name: 'report.html', caption: 'Report' };
       const appendComplete = (payload: Record<string, unknown>) => sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
         type: 'tool_complete', sessionId, payload,
       }));
 
-      appendComplete({ toolName: 'show_image', success: true, attachments: [image] });
+      appendComplete({ toolName: 'show_image', success: true, attachments: [imageWithUnknownField] });
       appendComplete({ toolName: 'show_html', attachments: [html, html] });
       appendComplete({ toolName: 'show_image', success: false, attachments: [{ ...image, id: 'failed' }] });
       appendComplete({ toolName: 'show_image', termination: 'cancelled', attachments: [{ ...image, id: 'cancelled' }] });

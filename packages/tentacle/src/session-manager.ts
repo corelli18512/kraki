@@ -972,14 +972,24 @@ export class SessionManager {
     if (ref.type !== 'content_ref') return null;
     if (typeof ref.id !== 'string' || ref.id.trim().length === 0) return null;
     if (typeof ref.mimeType !== 'string') return null;
-    if (!Number.isFinite(ref.size) || (ref.size ?? -1) < 0) return null;
+    if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size < 0) return null;
     if (toolName === 'show_image' && !ref.mimeType.startsWith('image/')) return null;
     if (toolName === 'show_html' && ref.mimeType !== 'text/html') return null;
     if (ref.name !== undefined && typeof ref.name !== 'string') return null;
     if (ref.caption !== undefined && typeof ref.caption !== 'string') return null;
-    if (ref.width !== undefined && (!Number.isFinite(ref.width) || ref.width < 0)) return null;
-    if (ref.height !== undefined && (!Number.isFinite(ref.height) || ref.height < 0)) return null;
-    return ref as ContentRef;
+    if (ref.width !== undefined && (typeof ref.width !== 'number' || !Number.isFinite(ref.width) || ref.width < 0)) return null;
+    if (ref.height !== undefined && (typeof ref.height !== 'number' || !Number.isFinite(ref.height) || ref.height < 0)) return null;
+    const sanitized: ContentRef = {
+      type: 'content_ref',
+      id: ref.id,
+      mimeType: ref.mimeType,
+      size: ref.size,
+      ...(ref.caption !== undefined && { caption: ref.caption }),
+      ...(ref.name !== undefined && { name: ref.name }),
+      ...(ref.width !== undefined && { width: ref.width }),
+      ...(ref.height !== undefined && { height: ref.height }),
+    };
+    return sanitized;
   }
 
   /**
