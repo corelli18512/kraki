@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rename
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
-import type { CardActionState } from '@kraki/protocol';
+import type { CardActionState, ContentRef } from '@kraki/protocol';
 
 const PREVIEW_MAX = 80;
 
@@ -894,30 +894,102 @@ export class SessionManager {
 
     const complete = (meta.idleSeqs ?? []).some(s => s >= bubbleSeq);
 
-    const tracePath = join(this.sessionDir(sessionId), 'trace.jsonl');
-    if (turnStartSeq === 0 || !existsSync(tracePath)) {
-      return { entries: [], complete, turnStartSeq };
+    return {
+      entries: this.readTraceEntriesForTurnStart(sessionId, turnStartSeq),
+      complete,
+      turnStartSeq,
+    };
+  }
+
+  /**
+   * Read durable user-visible artifact refs produced in the current turn.
+   * Persisted TRACE is the authority so a Tentacle restart between tool
+   * completion and idle does not lose the refs.
+   */
+  readCurrentTurnArtifacts(sessionId: string): ContentRef[] {
+    const meta = this.readMeta(sessionId);
+    const turnStartSeq = meta?.currentTurnStartSeq ?? 0;
+    if (turnStartSeq <= 0) return [];
+    if ((meta?.idleSeqs ?? []).some((idleSeq) => idleSeq > turnStartSeq)) return [];
+
+    const entries = this.readTraceEntriesForTurnStart(sessionId, turnStartSeq);
+    const seen = new Set<string>();
+    const artifacts: ContentRef[] = [];
+
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const message = entry as { type?: unknown; payload?: unknown };
+      if (message.type !== 'tool_complete' || !message.payload || typeof message.payload !== 'object') continue;
+      const payload = message.payload as {
+        toolName?: unknown;
+        success?: unknown;
+        termination?: unknown;
+        attachments?: unknown;
+      };
+      if (payload.success === false || payload.termination !== undefined) continue;
+      if (payload.toolName !== 'show_image' && payload.toolName !== 'show_html') continue;
+      if (!Array.isArray(payload.attachments)) continue;
+
+      for (const candidate of payload.attachments) {
+        const ref = this.validTurnArtifact(candidate, payload.toolName);
+        if (!ref || seen.has(ref.id)) continue;
+        seen.add(ref.id);
+        artifacts.push(ref);
+      }
     }
+    return artifacts;
+  }
+
+  private readTraceEntriesForTurnStart(sessionId: string, turnStartSeq: number): unknown[] {
+    if (turnStartSeq <= 0) return [];
+    const tracePath = join(this.sessionDir(sessionId), 'trace.jsonl');
+    if (!existsSync(tracePath)) return [];
 
     let content: string;
     try {
       content = readFileSync(tracePath, 'utf8');
     } catch {
-      return { entries: [], complete, turnStartSeq };
+      return [];
     }
 
     const entries: unknown[] = [];
     for (const line of content.split('\n')) {
       if (!line) continue;
       try {
-        const t = JSON.parse(line) as TraceLine;
-        if (t.turnStartSeq !== turnStartSeq) continue;
-        entries.push(JSON.parse(t.payload));
+        const trace = JSON.parse(line) as TraceLine;
+        if (trace.turnStartSeq !== turnStartSeq) continue;
+        entries.push(JSON.parse(trace.payload));
       } catch {
-        // Skip corrupted lines
+        // Skip corrupted lines.
       }
     }
-    return { entries, complete, turnStartSeq };
+    return entries;
+  }
+
+  private validTurnArtifact(candidate: unknown, toolName: 'show_image' | 'show_html'): ContentRef | null {
+    if (!candidate || typeof candidate !== 'object') return null;
+    const ref = candidate as Partial<ContentRef>;
+    if (ref.type !== 'content_ref') return null;
+    if (typeof ref.id !== 'string' || ref.id.trim().length === 0) return null;
+    if (typeof ref.mimeType !== 'string') return null;
+    if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size < 0) return null;
+    if (toolName === 'show_image' && !ref.mimeType.startsWith('image/')) return null;
+    if (toolName === 'show_html' && ref.mimeType !== 'text/html') return null;
+    if (ref.name !== undefined && typeof ref.name !== 'string') return null;
+    if (ref.caption !== undefined && typeof ref.caption !== 'string') return null;
+    if (ref.width !== undefined && (typeof ref.width !== 'number' || !Number.isFinite(ref.width) || ref.width < 0)) return null;
+    if (ref.height !== undefined && (typeof ref.height !== 'number' || !Number.isFinite(ref.height) || ref.height < 0)) return null;
+    const sanitized: ContentRef = {
+      type: 'content_ref',
+      id: ref.id,
+      mimeType: ref.mimeType,
+      size: ref.size,
+      ...(ref.caption !== undefined && { caption: ref.caption }),
+      ...(ref.name !== undefined && { name: ref.name }),
+      ...(ref.width !== undefined && { width: ref.width }),
+      ...(ref.height !== undefined && { height: ref.height }),
+    };
+    return sanitized;
   }
 
   /**

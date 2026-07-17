@@ -464,6 +464,9 @@ export interface IdleMessage extends BaseEnvelope {
     usage?: import('./sessions.js').SessionUsage;
     /** Why the session went idle */
     reason?: 'completed' | 'aborted' | 'failed';
+    /** User-visible image/HTML artifacts produced during the turn closed by
+     *  this idle. Durable spine authority; bytes remain in AttachmentStore. */
+    turnArtifacts?: ContentRef[];
   };
 }
 

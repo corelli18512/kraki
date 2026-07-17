@@ -45,6 +45,7 @@ import {
 import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
+import { canonicalArtifactToolName } from './tool-name.js';
 
 const logger = createLogger('copilot-adapter');
 type CopilotSdkModule = typeof import('@github/copilot-sdk');
@@ -1677,8 +1678,13 @@ export class CopilotAdapter extends AgentAdapter {
         }
         inflight.add(toolCallId);
       }
+      const protocolToolName = canonicalArtifactToolName(
+        data.toolName as string,
+        data.mcpServerName as string | undefined,
+        data.mcpToolName as string | undefined,
+      );
       this.onToolStart?.(sessionId, {
-        toolName: data.toolName as string,
+        toolName: protocolToolName,
         args,
         toolCallId,
       });
@@ -1688,7 +1694,8 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as unknown as Record<string, unknown>;
       const toolCallId = data.toolCallId as string | undefined;
       const identity = toolCallId ? this.pendingToolIdentity.get(toolCallId) : undefined;
-      const toolName = identity?.toolName ?? (data.toolName as string | undefined) ?? 'tool';
+      const rawToolName = identity?.toolName ?? (data.toolName as string | undefined) ?? 'tool';
+      const toolName = canonicalArtifactToolName(rawToolName, identity?.mcpServerName, identity?.mcpToolName);
       const clearInflight = () => {
         if (!toolCallId) return;
         this.pendingToolIdentity.delete(toolCallId);

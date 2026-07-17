@@ -14,7 +14,7 @@ import type {
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
-  SessionLiveSnapshot, SessionDigest,
+  SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -252,8 +252,26 @@ export class RelayClient {
     this.clearCompacting(sessionId);
     const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
     if (usage) this.sessionManager.setUsage(sessionId, usage);
-    this.send({ type: 'idle', sessionId, payload: { usage, ...(terminalError && { reason: 'failed' as const }) } });
+    this.sendTurnIdle(sessionId, { usage, ...(terminalError && { reason: 'failed' as const }) });
     this.maybeGenerateTitle(sessionId);
+  }
+
+  /** Persist the durable user-visible outputs of a genuine completed turn on
+   *  its closing idle. Initialization/import/fork idles deliberately bypass
+   *  this helper because they do not close a user turn. */
+  private sendTurnIdle(
+    sessionId: string,
+    payload: Omit<IdleMessage['payload'], 'turnArtifacts'>,
+  ): void {
+    const turnArtifacts = this.sessionManager.readCurrentTurnArtifacts(sessionId);
+    this.send({
+      type: 'idle',
+      sessionId,
+      payload: {
+        ...payload,
+        ...(turnArtifacts.length > 0 && { turnArtifacts }),
+      },
+    });
   }
 
   private dispatchInput(sessionId: string, task: () => Promise<void>): Promise<void> {
@@ -1175,7 +1193,7 @@ export class RelayClient {
               this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.clearCompacting(sessionId);
-              this.send({ type: 'idle', sessionId, payload: { reason: 'aborted' } });
+              this.sendTurnIdle(sessionId, { reason: 'aborted' });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'abortSession failed');

@@ -7,7 +7,7 @@ import { MessageInput } from './MessageInput';
 import { useScrollController } from '../../hooks/useScrollController';
 import { messageProvider } from '../../lib/message-provider';
 import { getSessionStatus, cardActionKey } from '../../lib/session-status';
-import type { Attachment, ContentRef } from '@kraki/protocol';
+import type { ContentRef } from '@kraki/protocol';
 import type { ChatMessage } from '../../types/store';
 import { projectSpineMessages } from '../../lib/turn-projection';
 
@@ -18,73 +18,13 @@ function getSeq(m: ChatMessage): number {
   return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
 }
 
-function attachmentKey(attachment: Attachment): string {
-  if (attachment.type === 'content_ref') return `ref:${attachment.id}`;
-  if (attachment.type === 'image') return `image:${attachment.mimeType}:${attachment.data}`;
-  return JSON.stringify(attachment);
-}
-
-/** Images produced by show_image/tool steps in the turn concluding at
- *  `bubbleSeq`. They stay on the TRACE axis for history, but are also rendered
- *  inside that turn's final agent bubble. */
-function collectTurnAttachments(
-  messages: ChatMessage[],
-  bubbleSeq: number,
-  directAttachments: Attachment[],
-  matches: (attachment: Attachment) => boolean,
-): Attachment[] {
-  const directKeys = new Set(directAttachments.map(attachmentKey));
-  const targetIdx = messages.findIndex((message) => getSeq(message) === bubbleSeq);
-  if (targetIdx < 0 || !['agent_message', 'turn_status', 'interrupted_turn'].includes(messages[targetIdx].type)) return [];
-  let turnStartIdx = -1;
-  for (let i = targetIdx - 1; i >= 0; i--) {
-    if (messages[i].type === 'user_message') {
-      turnStartIdx = i;
-      break;
-    }
-  }
-  const seen = new Set<string>();
-  const attachments: Attachment[] = [];
-  for (let i = turnStartIdx + 1; i < targetIdx; i++) {
-    const step = messages[i];
-    if (step.type !== 'tool_complete') continue;
-    for (const attachment of step.payload.attachments ?? []) {
-      if (!matches(attachment)) continue;
-      const key = attachmentKey(attachment);
-      if (directKeys.has(key) || seen.has(key)) continue;
-      seen.add(key);
-      attachments.push(attachment);
-    }
-  }
-  return attachments;
-}
-
-/** Images produced by tool steps in the turn concluding at `bubbleSeq`. */
-export function collectTurnImages(
-  messages: ChatMessage[],
-  bubbleSeq: number,
-  directAttachments: Attachment[] = [],
-): Attachment[] {
-  return collectTurnAttachments(messages, bubbleSeq, directAttachments, (attachment) =>
-    attachment.type === 'image' ||
-    (attachment.type === 'content_ref' && attachment.mimeType.startsWith('image/')),
+function htmlArtifacts(message: ChatMessage): ContentRef[] {
+  const attachments = (message.payload as { attachments?: unknown[] }).attachments ?? [];
+  return attachments.filter((attachment): attachment is ContentRef =>
+    !!attachment && typeof attachment === 'object'
+    && (attachment as ContentRef).type === 'content_ref'
+    && (attachment as ContentRef).mimeType === 'text/html',
   );
-}
-
-/** HTML reports produced by show_html in the turn concluding at `bubbleSeq`. */
-export function collectTurnHtmlArtifacts(
-  messages: ChatMessage[],
-  bubbleSeq: number,
-  directAttachments: Attachment[] = [],
-): ContentRef[] {
-  const directArtifacts = directAttachments.filter(
-    (attachment): attachment is ContentRef =>
-      attachment.type === 'content_ref' && attachment.mimeType === 'text/html',
-  );
-  const tracedArtifacts = collectTurnAttachments(messages, bubbleSeq, directAttachments, (attachment) =>
-    attachment.type === 'content_ref' && attachment.mimeType === 'text/html',
-  ) as ContentRef[];
-  return [...directArtifacts, ...tracedArtifacts];
 }
 
 export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtifact?: (artifact: ContentRef) => void }) {
@@ -101,51 +41,21 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
   );
   const isConnected = useStore((s) => s.status === 'connected');
-  // Whether the tentacle device is encryptable yet — a `request_card` snapshot
-  // pull needs its key, which may arrive AFTER this view first mounts (fresh
-  // reload). Gate + re-trigger the seed effect on this so the pull isn't lost.
-  const isTentacleEncryptable = useStore(
-    useCallback((s) => {
-      const d = deviceId ? s.devices.get(deviceId) : undefined;
-      return !!(d?.encryptionKey ?? d?.publicKey);
-    }, [deviceId]),
-  );
 
   // ── SPINE ─────────────────────────────────────────────
   // Persistent, replayed bubbles rendered directly in seq order. Excludes the
   // transient TRACE/activity axis (tool_start/tool_complete/agent_narration/
   // active), which is shown only from the Steps popover.
   const spine = useMemo(() => projectSpineMessages(messages), [messages]);
-  const finalAgentSeqs = useMemo(() => {
-    const seqs = new Set<number>();
-    let lastAgentSeq = 0;
-    for (const msg of spine) {
-      if (msg.type === 'user_message') {
-        if (lastAgentSeq > 0) seqs.add(lastAgentSeq);
-        lastAgentSeq = 0;
-      } else if (msg.type === 'agent_message') {
-        lastAgentSeq = getSeq(msg);
-      }
-    }
-    if (lastAgentSeq > 0) seqs.add(lastAgentSeq);
-    return seqs;
-  }, [spine]);
-  const turnAttachmentsByBubbleSeq = useMemo(() => {
-    const images = new Map<number, Attachment[]>();
+  const turnArtifactsByBubbleSeq = useMemo(() => {
     const artifacts = new Map<number, ContentRef[]>();
     for (const msg of spine) {
-      const terminal = msg.type === 'turn_status' || msg.type === 'interrupted_turn';
-      if (msg.type !== 'agent_message' && !terminal) continue;
-      const seq = getSeq(msg);
-      if (msg.type === 'agent_message' && !finalAgentSeqs.has(seq)) continue;
-      const directAttachments = (msg.payload as { attachments?: Attachment[] }).attachments ?? [];
-      const turnImages = collectTurnImages(messages, seq, directAttachments);
-      const turnArtifacts = collectTurnHtmlArtifacts(messages, seq, directAttachments);
-      if (turnImages.length > 0) images.set(seq, turnImages);
-      if (turnArtifacts.length > 0) artifacts.set(seq, turnArtifacts);
+      if (msg.type !== 'agent_message' && msg.type !== 'turn_status' && msg.type !== 'interrupted_turn' && msg.type !== 'system_message') continue;
+      const refs = htmlArtifacts(msg);
+      if (refs.length > 0) artifacts.set(getSeq(msg), refs);
     }
-    return { images, artifacts };
-  }, [finalAgentSeqs, messages, spine]);
+    return artifacts;
+  }, [spine]);
 
   // Derived human-facing status decides card visibility.
   const cardAction = card?.action;
@@ -193,17 +103,6 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     const seqs = spine.map(getSeq).filter(s => s > 0);
     return seqs.length > 0 ? seqs[0] : 0;
   }, [spine]);
-
-  useEffect(() => {
-    if (!sessionId || !isTentacleEncryptable) return;
-    for (const msg of spine) {
-      const seq = getSeq(msg);
-      const isFinalAgent = msg.type === 'agent_message' && finalAgentSeqs.has(seq);
-      if ((isFinalAgent || msg.type === 'interrupted_turn' || msg.type === 'turn_status') && (msg.payload.steps ?? 0) > 0) {
-        messageProvider.requestTurnTrace(sessionId, seq);
-      }
-    }
-  }, [sessionId, isTentacleEncryptable, finalAgentSeqs, spine]);
 
   // `idle` here is the message-level marker (last spine entry is an idle
   // event), used by the scroll controller for the working→idle reposition. It
@@ -284,8 +183,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
                   message={msg}
                   agent={session.agent}
                   sessionId={sessionId}
-                  turnImages={turnAttachmentsByBubbleSeq.images.get(getSeq(msg))}
-                  turnArtifacts={turnAttachmentsByBubbleSeq.artifacts.get(getSeq(msg))}
+                  turnArtifacts={turnArtifactsByBubbleSeq.get(getSeq(msg))}
                   onOpenArtifact={onOpenArtifact}
                 />
               </div>

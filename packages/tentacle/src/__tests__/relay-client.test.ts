@@ -188,6 +188,7 @@ function createSessionManager(): Record<string, unknown> {
     appendMessage: vi.fn(() => 1),
     appendTrace: vi.fn(),
     readTurnTrace: vi.fn(() => ({ entries: [], complete: false, turnStartSeq: 0 })),
+    readCurrentTurnArtifacts: vi.fn(() => []),
     setUsage: vi.fn(),
     getAllLinks: vi.fn(() => []),
     getLink: vi.fn(() => null),
@@ -527,6 +528,23 @@ describe('RelayClient title generation', () => {
     expect(adapter.generateTitle).toHaveBeenCalledWith(
       expect.objectContaining({ lastUserMessage: 'fix the login bug' }),
     );
+  });
+
+  it('persists current-turn artifacts on a normal adapter idle', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const artifacts = [
+      { type: 'content_ref', id: 'img', mimeType: 'image/png', size: 3 },
+      { type: 'content_ref', id: 'html', mimeType: 'text/html', size: 4 },
+    ];
+    smMock.readCurrentTurnArtifacts.mockReturnValue(artifacts);
+
+    (adapter.onIdle as (sessionId: string) => void)('s1');
+
+    const idleCall = smMock.appendMessage.mock.calls.find((call) => call[1] === 'idle');
+    expect(idleCall).toBeDefined();
+    expect(JSON.parse(idleCall![2]).payload).toEqual({ turnArtifacts: artifacts });
+    expect(smMock.readCurrentTurnArtifacts).toHaveBeenCalledWith('s1');
   });
 
   it('skips title generation when manual title is set', () => {
@@ -2378,8 +2396,27 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
   });
 
+  it('writes current-turn artifacts on explicit abort idle', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const artifact = { type: 'content_ref', id: 'abort-img', mimeType: 'image/png', size: 4 };
+    (sm.readCurrentTurnArtifacts as ReturnType<typeof vi.fn>).mockReturnValue([artifact]);
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 508,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    await vi.runAllTimersAsync();
+
+    const idleCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((call) => call[1] === 'idle');
+    expect(idleCall).toBeDefined();
+    expect(JSON.parse(idleCall![2]).payload).toEqual({ reason: 'aborted', turnArtifacts: [artifact] });
+    expect(sm.readCurrentTurnArtifacts).toHaveBeenCalledWith('sess_1');
+    expect(adapter.abortSession).toHaveBeenCalledWith('sess_1');
+  });
+
   it('freezes an adapter error as failed only when the turn reaches idle and stamps step count', async () => {
     const { adapter, sm } = buildClient();
+    const artifact = { type: 'content_ref', id: 'failed-report', mimeType: 'text/html', size: 9 };
+    (sm.readCurrentTurnArtifacts as ReturnType<typeof vi.fn>).mockReturnValue([artifact]);
     // Drive a tool_start so the turn has a chip-producing step before failing.
     (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', { toolName: 'bash', args: { command: 'npm test' }, toolCallId: 'tc-1' });
     (adapter.onError as (sid: string, event: { message: string }) => void)('sess_1', { message: '524 status code (no body)' });
@@ -2403,6 +2440,8 @@ describe('RelayClient pending-question digest', () => {
       .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
       .find((e) => e.type === 'tool_complete' && e.payload.toolCallId === 'tc-1' && e.payload.termination === 'interrupted');
     expect(interruptedTool).toBeDefined();
+    const idleCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((call) => call[1] === 'idle');
+    expect(JSON.parse(idleCall![2]).payload).toEqual({ reason: 'failed', turnArtifacts: [artifact] });
   });
 
   it('dispatches push through @head when every consumer is offline', () => {
