@@ -74,7 +74,9 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
                   {message.payload.content}
                 </Markdown>
               </div>
-              <ImageAttachments attachments={message.payload.attachments as Attachment[] | undefined} sessionId={sessionId} />
+              <ImageAttachments attachments={(message.payload.attachments as Attachment[] | undefined)?.filter(
+                (attachment) => attachment.type === 'image' || (attachment.type === 'content_ref' && attachment.mimeType.startsWith('image/')),
+              )} sessionId={sessionId} />
               {turnImages && turnImages.length > 0 && <ImageAttachments attachments={turnImages} sessionId={sessionId} />}
               {turnArtifacts && turnArtifacts.length > 0 && (
                 <HtmlArtifactCards artifacts={turnArtifacts} onOpen={onOpenArtifact} />
@@ -153,6 +155,12 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
           <div className="min-w-0 max-w-[85%] overflow-x-auto rounded-2xl rounded-bl-md border border-dashed border-border-primary bg-surface-secondary px-4 py-2.5 sm:max-w-[70%]">
             <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Kraki</p>
             <p className="mt-0.5 text-sm italic leading-relaxed text-text-secondary">{text}</p>
+            <ImageAttachments attachments={((message.payload as { attachments?: Attachment[] }).attachments ?? []).filter(
+              (attachment) => attachment.type === 'image' || (attachment.type === 'content_ref' && attachment.mimeType.startsWith('image/')),
+            )} sessionId={sessionId} />
+            {turnArtifacts && turnArtifacts.length > 0 && (
+              <HtmlArtifactCards artifacts={turnArtifacts} onOpen={onOpenArtifact} />
+            )}
             <div className="mt-1 flex items-center gap-2">
               <p className="text-[10px] text-text-muted">{formatTime(message.timestamp)}</p>
               {sessionId && typeof message.seq === 'number' && message.seq > 0 && (

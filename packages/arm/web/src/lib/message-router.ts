@@ -301,26 +301,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       if (!replaying && isViewingSession(sid) && document.hasFocus()) {
         import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid)).catch(() => {});
       }
-      // The turn just concluded — pull the authoritative TRACE for its bubble
-      // once (reconciles/replaces whatever live steps we accumulated). Find the
-      // concluding agent_message (the bubble that crystallized this turn).
-      {
-        const sessionMsgs = store.messages.get(sid);
-        if (sessionMsgs) {
-          for (let i = sessionMsgs.length - 1; i >= 0; i--) {
-            const m = sessionMsgs[i];
-            if (m.type === 'agent_message' && 'seq' in m) {
-              const bubbleSeq = (m as { seq?: number }).seq;
-              if (typeof bubbleSeq === 'number') {
-                messageProvider.invalidateTurnTrace(sid, bubbleSeq);
-                messageProvider.requestTurnTrace(sid, bubbleSeq);
-              }
-              break;
-            }
-            if (m.type === 'user_message' || m.type === 'idle') break;
-          }
-        }
-      }
       break;
     }
 

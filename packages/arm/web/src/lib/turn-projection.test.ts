@@ -62,4 +62,44 @@ describe('projectSpineMessages', () => {
 
     expect(projected.map((message) => message.type)).toEqual(['user_message', 'agent_message', 'idle']);
   });
+
+  it('projects closing idle artifacts onto the final agent outcome and deduplicates direct refs', () => {
+    const image = { type: 'content_ref' as const, id: 'img', mimeType: 'image/png', size: 1 };
+    const html = { type: 'content_ref' as const, id: 'html', mimeType: 'text/html', size: 2 };
+    const projected = projectSpineMessages([
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'go' } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'first' } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { content: 'final', attachments: [image] } } as ChatMessage,
+      { type: 'idle', deviceId: 'd1', seq: 4, timestamp: '', sessionId: 's1', payload: { turnArtifacts: [image, html] } } as ChatMessage,
+    ]);
+
+    expect((projected[2].payload as { attachments?: unknown[] }).attachments).toEqual([image, html]);
+    expect((projected[1].payload as { attachments?: unknown[] }).attachments).toBeUndefined();
+  });
+
+  it.each(['turn_status', 'interrupted_turn'] as const)('projects idle artifacts onto %s terminal outcome once', (type) => {
+    const artifact = { type: 'content_ref' as const, id: type, mimeType: 'image/png', size: 1 };
+    const outcome = type === 'turn_status'
+      ? { type, deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { draft: '', action: { type: 'user_abort', payload: { abortedAt: '' } }, finishedAt: '' } }
+      : { type, deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { reason: 'user_aborted', draft: '', action: null, interruptedAt: '', cancelled: true } };
+    const projected = projectSpineMessages([
+      { type: 'agent_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'draft' } } as ChatMessage,
+      outcome as ChatMessage,
+      { type: 'idle', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { turnArtifacts: [artifact] } } as ChatMessage,
+    ]);
+
+    expect(projected.map((message) => message.type)).toEqual([type, 'idle']);
+    expect((projected[0].payload as { attachments?: unknown[] }).attachments).toEqual([artifact]);
+  });
+
+  it('projects idle artifacts onto a no-reply system outcome', () => {
+    const report = { type: 'content_ref' as const, id: 'report', mimeType: 'text/html', size: 4 };
+    const projected = projectSpineMessages([
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'go' } } as ChatMessage,
+      { type: 'system_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { kind: 'no_reply' } } as ChatMessage,
+      { type: 'idle', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { turnArtifacts: [report] } } as ChatMessage,
+    ]);
+
+    expect((projected[1].payload as { attachments?: unknown[] }).attachments).toEqual([report]);
+  });
 });

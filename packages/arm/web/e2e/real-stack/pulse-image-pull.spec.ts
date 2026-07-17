@@ -1,4 +1,4 @@
-import { test, expect, type Page, request } from '@playwright/test';
+import { test, expect, type Browser, type Page, request } from '@playwright/test';
 
 /**
  * REAL-STACK image regression for paced attachment pulls.
@@ -29,10 +29,21 @@ async function control(path: string, params: Record<string, string> = {}): Promi
 async function pairBrowser(page: Page): Promise<string> {
   const { token, web, sessionId } = await control('/token');
   await page.goto(web as string);
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('kraki_pulse_trace', '1');
+  });
   await page.goto(`${web}?relay=${encodeURIComponent(RELAY)}&token=${token}`);
   await expect(page.getByText('RealStack Tentacle').first()).toBeVisible({ timeout: 20_000 });
   return sessionId as string;
+}
+
+async function newPairedPage(browser: Browser, pageErrors: string[]): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+  await pairBrowser(page);
+  return { page, close: () => context.close() };
 }
 
 test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
@@ -49,7 +60,7 @@ test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
     await page?.close();
   });
 
-  test('a multi-chunk PNG image renders in the chat via paced request_attachment', async () => {
+  test('a multi-chunk PNG image renders in the chat via paced request_attachment', async ({ browser }) => {
     const sessionId = 'realstack-1';
     await page.goto(`${WEB_URL}/session/${sessionId}`);
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
@@ -72,29 +83,52 @@ test.describe.serial('real-stack pulse: image rendering via paced pull', () => {
     const chunkCount = img.chunkCount as number;
     expect(chunkCount).toBeGreaterThan(1);
 
-    // 3. Reload so the image ContentRef renders from replay with no cached
-    //    bytes — the only way the PNG arrives is a paced pull.
-    await page.reload();
-    await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-chat-scroll]').getByText(reply, { exact: false }).first())
+    // 3. The durable idle ref is live too. Let the producer's initial pull
+    //    settle, then open a completely fresh Arm identity with no attachment
+    //    cache or Pulse repair state.
+    const liveImg = page.locator('[data-chat-scroll] img[alt="gen.png"]');
+    await expect(liveImg).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => liveImg.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
+      timeout: 30_000,
+    }).toBeGreaterThan(0);
+    const readsBeforeRecovery = ((await control('/attachmentReads')).reads as unknown[]).length;
+
+    // 4. A fresh browser learns the ContentRef only from durable spine replay,
+    //    then pulls the bytes. TRACE must not be used for artifact discovery.
+    const recovery = await newPairedPage(browser, pageErrors);
+    const recoveryPage = recovery.page;
+    await recoveryPage.goto(`${WEB_URL}/session/${sessionId}`);
+    await expect(recoveryPage.locator('[data-chat-scroll]')).toBeVisible({ timeout: 15_000 });
+    await expect(recoveryPage.locator('[data-chat-scroll]').getByText(reply, { exact: false }).first())
       .toBeVisible({ timeout: 20_000 });
 
-    // 4. The PNG <img> loads successfully — naturalWidth > 0 proves the
+    // 5. The PNG <img> loads successfully — naturalWidth > 0 proves the
     //    browser reassembled all chunks into a valid, displayable PNG blob.
-    const imgEl = page.locator('[data-chat-scroll] img[alt="gen.png"]');
+    const imgEl = recoveryPage.locator('[data-chat-scroll] img[alt="gen.png"]');
     await expect(imgEl).toBeVisible({ timeout: 30_000 });
     await expect.poll(async () => imgEl.evaluate((el) => (el as HTMLImageElement).naturalWidth), {
       timeout: 30_000,
       message: 'image never decoded (naturalWidth stayed 0)',
     }).toBeGreaterThan(0);
 
-    // 5. The paced pull served every chunk (one request_attachment per chunk).
+    // 6. Artifact discovery is spine-only: no automatic TRACE pull occurred,
+    //    while the bytes still arrived through the attachment path.
+    const sentTypes = await recoveryPage.evaluate(() => ((window as unknown as { _pulseTrace?: Array<{ evt?: string; type?: string }> })._pulseTrace ?? [])
+      .filter((event) => event.evt === 'APP-SEND-ENCRYPTED')
+      .map((event) => event.type));
+    expect(sentTypes).not.toContain('request_turn_trace');
+    expect(sentTypes).toContain('request_attachment');
+
+    // 7. The cold recovery pull served every chunk beyond the producer's live
+    //    pull baseline.
     await expect.poll(async () => {
       const { reads } = await control('/attachmentReads');
-      return (reads as unknown[]).length;
-    }, { timeout: 30_000, message: 'paced image pull did not serve all chunks' }).toBe(chunkCount);
+      return (reads as unknown[]).length - readsBeforeRecovery;
+    }, { timeout: 30_000, message: 'paced image recovery did not serve all chunks' }).toBe(chunkCount);
 
-    // 6. No browser errors.
+    await recovery.close();
+
+    // 8. No browser errors.
     expect(pageErrors).toEqual([]);
   });
 });

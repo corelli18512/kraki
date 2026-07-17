@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionManager } from '../session-manager.js';
-import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -1144,6 +1144,65 @@ describe('SessionManager', () => {
 
       const sm2 = new SessionManager(dir);
       expect(sm2.readTurnTrace(sessionId, bubble).entries).toHaveLength(2);
+    });
+
+    it('extracts only successful show_image/show_html ContentRefs from the current persisted turn', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'render' } }));
+      const image = { type: 'content_ref', id: 'img-1', mimeType: 'image/png', size: 10, name: 'a.png', width: 2, height: 3 };
+      const html = { type: 'content_ref', id: 'html-1', mimeType: 'text/html', size: 20, name: 'report.html', caption: 'Report' };
+      const appendComplete = (payload: Record<string, unknown>) => sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete', sessionId, payload,
+      }));
+
+      appendComplete({ toolName: 'show_image', success: true, attachments: [image] });
+      appendComplete({ toolName: 'show_html', attachments: [html, html] });
+      appendComplete({ toolName: 'show_image', success: false, attachments: [{ ...image, id: 'failed' }] });
+      appendComplete({ toolName: 'show_image', termination: 'cancelled', attachments: [{ ...image, id: 'cancelled' }] });
+      appendComplete({ toolName: 'bash', attachments: [{ ...image, id: 'unrelated' }] });
+      appendComplete({ toolName: 'show_image', attachments: [{ ...html, id: 'wrong-image-mime' }] });
+      appendComplete({ toolName: 'show_html', attachments: [{ ...image, id: 'wrong-html-mime' }] });
+      appendComplete({ toolName: 'show_image', resultRef: { ...image, id: 'result-ref' }, argsRef: { ...image, id: 'args-ref' } });
+      appendComplete({ toolName: 'show_image', attachments: [{ type: 'content_ref', id: '', mimeType: 'image/png', size: 1 }] });
+      appendComplete({ toolName: 'show_image', attachments: [{ type: 'content_ref', id: 'bad-size', mimeType: 'image/png', size: -1 }] });
+
+      expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([image, html]);
+    });
+
+    it('reads current-turn artifacts after restart and never leaks previous-turn refs', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'first' } }));
+      sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete', sessionId, payload: {
+          toolName: 'show_image', attachments: [{ type: 'content_ref', id: 'old', mimeType: 'image/png', size: 1 }],
+        },
+      }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ type: 'agent_message', payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'second' } }));
+      const current = { type: 'content_ref' as const, id: 'current', mimeType: 'text/html', size: 2 };
+      sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete', sessionId, payload: { toolName: 'show_html', attachments: [current] },
+      }));
+
+      const restarted = new SessionManager(dir);
+      expect(restarted.readCurrentTurnArtifacts(sessionId)).toEqual([current]);
+      restarted.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: { turnArtifacts: [current] } }));
+      expect(restarted.readCurrentTurnArtifacts(sessionId)).toEqual([]);
+    });
+
+    it('returns no current-turn artifacts without a durable user turn id or with corrupt trace', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
+        type: 'tool_complete', sessionId, payload: {
+          toolName: 'show_image', attachments: [{ type: 'content_ref', id: 'unscoped', mimeType: 'image/png', size: 1 }],
+        },
+      }));
+      expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([]);
+
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
+      appendFileSync(join(dir, sessionId, 'trace.jsonl'), '{bad json\n');
+      expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([]);
     });
   });
 });

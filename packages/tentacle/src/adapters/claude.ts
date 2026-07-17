@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
+import { canonicalArtifactToolName } from './tool-name.js';
 
 const logger = createLogger('claude-adapter');
 
@@ -1186,10 +1187,11 @@ export class ClaudeAdapter extends AgentAdapter {
               sessionTools = new Map();
               this.pendingToolCalls.set(sessionId, sessionTools);
             }
-            sessionTools.set(toolBlock.id, { toolName: toolBlock.name, args });
+            const canonicalToolName = canonicalArtifactToolName(toolBlock.name);
+            sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args });
 
             this.onToolStart?.(sessionId, {
-              toolName: toolBlock.name,
+              toolName: canonicalToolName,
               args,
               toolCallId: toolBlock.id,
             });
@@ -1280,9 +1282,11 @@ export class ClaudeAdapter extends AgentAdapter {
                   .map(c => c.text as string)
                   .join('\n');
 
-                // Extract image blocks from MCP tool results (e.g. kraki-show_image)
-                if (this.attachmentStore) {
-                  const isKrakiShowImage = tracked?.toolName?.includes('show_image') ?? false;
+                // Extract image blocks only from Kraki's explicit show_image
+                // tool. Other tools may return image-shaped diagnostic blocks,
+                // but they do not own user-visible artifact semantics.
+                const isKrakiShowImage = tracked?.toolName === 'show_image';
+                if (this.attachmentStore && isKrakiShowImage) {
                   for (const c of blocks) {
                     if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
                       try {
