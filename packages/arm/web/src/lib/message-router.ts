@@ -294,7 +294,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
               }
               break;
             }
-            if (m.type === 'user_message' || m.type === 'idle') break;
+            if ((m.type === 'user_message' && m.payload.delivery !== 'steer') || m.type === 'idle') break;
           }
         }
       }

@@ -15,9 +15,13 @@ import PackageDescription
 let package = Package(
     name: "Kraki",
     platforms: [.iOS(.v18)],
+    dependencies: [
+        .package(url: "https://github.com/raspu/Highlightr.git", exact: "2.3.0"),
+    ],
     targets: [
         .target(
             name: "Kraki",
+            dependencies: ["Highlightr"],
             path: "Kraki"
         ),
         .testTarget(

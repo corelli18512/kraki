@@ -19,6 +19,7 @@ struct SettingsView: View {
             preferencesSection
             aboutSection
             rateSection
+            diagnosticsSection
         }
         .formStyle(.grouped)
         .contentMargins(.top, 0)
@@ -327,6 +328,36 @@ struct SettingsView: View {
     /// version row in About.
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }
+
+    // MARK: - Diagnostics (developer-only data-layer test page)
+
+    /// Entry point for the sliding-window diagnostic page. The page
+    /// itself lives in `Features/Diagnostics/SlidingWindowTestView`
+    /// and exercises MessageStore + MessageProvider in isolation
+    /// from `ChatView` rendering.
+    private var diagnosticsSection: some View {
+        Section("Diagnostics") {
+            NavigationLink {
+                BubbleCatalogTestView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.grid.2x2")
+                        .foregroundStyle(Color.krakiPrimary)
+                    Text("Bubble Catalog")
+                }
+            }
+
+            NavigationLink {
+                LiveBubbleTestView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
+                        .foregroundStyle(Color.krakiPrimary)
+                    Text("Live Bubble Test")
+                }
+            }
+        }
     }
 }
 

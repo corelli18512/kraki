@@ -23,6 +23,10 @@ struct AnyCodable: Codable, Equatable, @unchecked Sendable, CustomStringConverti
     var stringValue: String? { value as? String }
     var intValue: Int? {
         if let i = value as? Int { return i }
+        // JSONSerialization parses JSON `1` into an NSNumber that Swift may
+        // bridge as Bool (NSNumber objCType 'c'), so `as? Int` fails even
+        // though the value is numeric. Go through NSNumber.intValue directly.
+        if let n = value as? NSNumber, CFGetTypeID(n) == CFNumberGetTypeID() { return n.intValue }
         if let d = value as? Double { return Int(d) }
         return nil
     }
@@ -45,12 +49,15 @@ struct AnyCodable: Codable, Equatable, @unchecked Sendable, CustomStringConverti
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             value = nil
-        } else if let b = try? container.decode(Bool.self) {
-            value = b
         } else if let i = try? container.decode(Int.self) {
             value = i
         } else if let d = try? container.decode(Double.self) {
             value = d
+        } else if let b = try? container.decode(Bool.self) {
+            // Bool AFTER Int/Double: JSONDecoder treats JSON `1`/`0` as a
+            // valid Bool (`true`/`false`), so trying Bool first silently
+            // turns a numeric `steps: 1` into `true`. Numbers must win.
+            value = b
         } else if let s = try? container.decode(String.self) {
             value = s
         } else if let arr = try? container.decode([AnyCodable].self) {
@@ -66,6 +73,19 @@ struct AnyCodable: Codable, Equatable, @unchecked Sendable, CustomStringConverti
         var container = encoder.singleValueContainer()
         switch value {
         case nil:                            try container.encodeNil()
+        case let n as NSNumber:
+            // Disambiguate BEFORE Bool/Int: values arriving via JSONSerialization
+            // (the WS path) are NSNumber, and `as? Bool` matches a JSON `1` —
+            // round-tripping it as `true` (e.g. corrupting `payload.steps: 1`).
+            // objCType 'c'/'B' is a real bool; everything else is a number.
+            let t = String(cString: n.objCType)
+            if t == "c" || t == "B" {
+                try container.encode(n.boolValue)
+            } else if n.doubleValue.truncatingRemainder(dividingBy: 1) == 0 {
+                try container.encode(n.intValue)
+            } else {
+                try container.encode(n.doubleValue)
+            }
         case let b as Bool:                  try container.encode(b)
         case let i as Int:                   try container.encode(i)
         case let d as Double:                try container.encode(d)

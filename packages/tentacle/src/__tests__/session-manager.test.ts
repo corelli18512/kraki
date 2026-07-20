@@ -1038,9 +1038,31 @@ describe('SessionManager', () => {
       // A mid-turn permission (also persistent) must NOT move the turn start.
       sm.appendMessage(sessionId, 'permission', JSON.stringify({ type: 'permission', payload: { id: 'p1' } }));
       expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u1);
-      // Next user_message starts a new turn.
+      // Next normal user_message starts a new turn.
       const u2 = sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'b' } }));
       expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u2);
+    });
+
+    it('keeps steer user messages inside the current TRACE turn', () => {
+      const { sessionId } = sm.createSession('pi');
+      const prompt = sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', payload: { content: 'run tests' },
+      }));
+      tool(sm, sessionId, 'before', 'read_file');
+      const steer = sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', payload: { content: 'only iOS', delivery: 'steer' },
+      }));
+      expect(steer).toBeGreaterThan(prompt);
+      expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(prompt);
+      tool(sm, sessionId, 'after', 'shell');
+      const bubble = sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', payload: { content: 'done' },
+      }));
+
+      const { entries, turnStartSeq } = sm.readTurnTrace(sessionId, bubble);
+      expect(turnStartSeq).toBe(prompt);
+      expect(entries.map((entry) => (entry as { payload: { toolCallId: string } }).payload.toolCallId))
+        .toEqual(['before', 'before', 'after', 'after']);
     });
 
     it('does NOT assign a spine seq to trace entries (messages.jsonl unchanged)', () => {

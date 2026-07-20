@@ -170,7 +170,6 @@ final class SessionStore {
     /// "Session not found" placeholder. Counter (not boolean) so two
     /// rapid deletes don't share the same value and get coalesced.
     var popToSessionListSignal: Int = 0
-    var streamingContent: [String: String] = [:]
 
     // MARK: - Disk snapshot
 
@@ -216,12 +215,12 @@ final class SessionStore {
     init() {
         let path = Self.snapshotURL.path
         guard FileManager.default.fileExists(atPath: path) else {
-            KLog.chat("📂 [snapshot] init: no file at \(path) — starting empty")
+            KLog.d("📂 [snapshot] init: no file at \(path) — starting empty")
             return
         }
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1
         guard let data = try? Data(contentsOf: Self.snapshotURL) else {
-            KLog.chat("📂 [snapshot] init: read FAILED size=\(fileSize) path=\(path)")
+            KLog.d("📂 [snapshot] init: read FAILED size=\(fileSize) path=\(path)")
             return
         }
         do {
@@ -233,9 +232,9 @@ final class SessionStore {
                 if let u = s.usage { sessionUsage[id] = u }
                 if s.pinned { pinnedSessions.insert(id) }
             }
-            KLog.chat("📂 [snapshot] init: hydrated sessions=\(snapshot.sessions.count) previews=\(snapshot.previews.count) bytes=\(data.count)")
+            KLog.d("📂 [snapshot] init: hydrated sessions=\(snapshot.sessions.count) previews=\(snapshot.previews.count) bytes=\(data.count)")
         } catch {
-            KLog.chat("📂 [snapshot] init: DECODE FAILED bytes=\(data.count) error=\(error)")
+            KLog.d("📂 [snapshot] init: DECODE FAILED bytes=\(data.count) error=\(error)")
         }
     }
 
@@ -262,7 +261,7 @@ final class SessionStore {
             // Only log when a *new* debounce window opens — not every
             // coalesced call. With debounce=10s we'd otherwise emit a
             // log on every mutation in a burst.
-            KLog.chat("📂 [snapshot] scheduleSave: debounce=\(Self.saveDebounce)s pending=\(pendingSnapshot?.sessions.count ?? 0)")
+            KLog.d("📂 [snapshot] scheduleSave: debounce=\(Self.saveDebounce)s pending=\(pendingSnapshot?.sessions.count ?? 0)")
         }
     }
 
@@ -276,20 +275,20 @@ final class SessionStore {
         guard let snapshot = pendingSnapshot else { return }
         pendingSnapshot = nil
         guard let data = try? JSONEncoder().encode(snapshot) else {
-            KLog.chat("📂 [snapshot] flush: encode FAILED sessions=\(snapshot.sessions.count)")
+            KLog.d("📂 [snapshot] flush: encode FAILED sessions=\(snapshot.sessions.count)")
             return
         }
         let hash = data.hashValue
         if hash == lastFlushedHash {
-            KLog.chat("📂 [snapshot] flush: skip identical sessions=\(snapshot.sessions.count) bytes=\(data.count)")
+            KLog.d("📂 [snapshot] flush: skip identical sessions=\(snapshot.sessions.count) bytes=\(data.count)")
             return
         }
         do {
             try data.write(to: Self.snapshotURL, options: .atomic)
             lastFlushedHash = hash
-            KLog.chat("📂 [snapshot] flush: wrote sessions=\(snapshot.sessions.count) bytes=\(data.count)")
+            KLog.d("📂 [snapshot] flush: wrote sessions=\(snapshot.sessions.count) bytes=\(data.count)")
         } catch {
-            KLog.chat("📂 [snapshot] flush: write FAILED error=\(error)")
+            KLog.d("📂 [snapshot] flush: write FAILED error=\(error)")
         }
     }
 
@@ -302,7 +301,7 @@ final class SessionStore {
         pendingSnapshot = nil
         lastFlushedHash = nil
         try? FileManager.default.removeItem(at: Self.snapshotURL)
-        KLog.chat("📂 [snapshot] clearPersistentSnapshot: file removed")
+        KLog.d("📂 [snapshot] clearPersistentSnapshot: file removed")
     }
 
     /// Sessions for which a `create_session` / `fork_session` /
@@ -446,18 +445,27 @@ final class SessionStore {
         // can compare across mixed "Z" vs "+00:00" timestamp shapes
         // without string-compare bugs. Falls back to createdAt when
         // the preview hasn't been seeded yet.
-        func effectiveDate(_ s: SessionInfo) -> Date {
+        //
+        // PERF: `ISO8601.parse` is ~20µs per call. A naive comparator
+        // that parses inside the closure runs it O(n·log n) times
+        // (~17k parses for 865 sessions ≈ 340ms) — a per-websocket-push
+        // main-thread hang. Precompute each session's effective date
+        // ONCE (a Schwartzian transform), so the comparator does zero
+        // parsing: ~865 parses total, ~20x fewer.
+        var effective: [String: Date] = Dictionary(minimumCapacity: sessions.count)
+        for s in sessions.values {
             if let t = sessionPreviews[s.id]?.timestamp,
                !t.isEmpty,
                let d = ISO8601.parse(t) {
-                return d
+                effective[s.id] = d
+            } else {
+                effective[s.id] = s.createdAt
             }
-            return s.createdAt
         }
         return sessions.values.sorted { a, b in
             if a.pinned != b.pinned { return a.pinned }
-            let aDate = effectiveDate(a)
-            let bDate = effectiveDate(b)
+            let aDate = effective[a.id] ?? a.createdAt
+            let bDate = effective[b.id] ?? b.createdAt
             if aDate != bDate { return aDate > bDate }
             return a.createdAt > b.createdAt
         }
@@ -543,7 +551,6 @@ final class SessionStore {
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
         drafts.removeValue(forKey: id)
-        streamingContent.removeValue(forKey: id)
         scheduleSave()
     }
 
@@ -697,104 +704,10 @@ final class SessionStore {
         }
     }
 
-    // MARK: - Streaming Deltas
-
-    /// Per-session pending text buffered between flushes. Holds bytes
-    /// that have arrived from the relay but haven't yet been promoted
-    /// into the observed `streamingContent` dict (which is what views
-    /// read).
-    private var pendingDeltaBuffer: [String: String] = [:]
-    /// Per-session debounce task. Each `appendDelta` cancels the
-    /// previous task and schedules a fresh one.
-    private var pendingDeltaTasks: [String: Task<Void, Never>] = [:]
-    /// Window between buffer-write and observed-state-update. Tuned
-    /// so each session re-renders its chat at most ~4 times/sec
-    /// during streaming. Captures the full speed of the underlying
-    /// `agent_message_delta` firehose without making the UI re-parse
-    /// and re-layout per token.
-    private static let deltaCoalesceWindow: Duration = .milliseconds(250)
-
-    /// Append streaming text from an `agent_message_delta` event.
-    ///
-    /// Coalesces bursts: bytes go into `pendingDeltaBuffer` immediately
-    /// but `streamingContent` (the observed state every chat view
-    /// reads) only ticks after a 250 ms quiet window. With the
-    /// previous unbatched implementation, a fast burst of 30–50
-    /// deltas/sec produced 30–50 full chat re-renders per second on
-    /// the same growing string. Now the views see roughly four
-    /// updates per second instead, regardless of how fast the agent
-    /// emits tokens. Final-turn `flushDelta` empties the buffer
-    /// cleanly so no bytes are lost across the idle boundary.
-    func appendDelta(_ id: String, _ content: String) {
-        pendingDeltaBuffer[id, default: ""] += content
-        pendingDeltaTasks[id]?.cancel()
-        pendingDeltaTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.deltaCoalesceWindow)
-            guard !Task.isCancelled, let self else { return }
-            self.promotePendingDelta(id)
-        }
-    }
-
-    /// Promote any buffered bytes for `id` into the observable
-    /// `streamingContent` so views re-render once with the new
-    /// suffix appended. Called by the debounce task and again
-    /// synchronously from `flushDelta` so a finalised turn always
-    /// shows its complete pre-idle text right up until the bubble
-    /// swaps to the canonical agent_message rendering.
-    ///
-    /// Also drives the session-card activity row: each promotion
-    /// updates the `.agentText(running)` snapshot with the FULL
-    /// accumulated content, not just the latest chunk. Doing it here
-    /// (instead of per-event in MessageRouter) means the card
-    /// preview is debounced for free — it ticks at ~4 Hz instead of
-    /// per-delta — AND it shows the entire running reply so far
-    /// instead of just the last chunk.
-    private func promotePendingDelta(_ id: String) {
-        guard let buffered = pendingDeltaBuffer.removeValue(forKey: id),
-              !buffered.isEmpty else { return }
-        let running = (streamingContent[id] ?? "") + buffered
-        streamingContent[id] = running
-        // Refresh the activity preview with the accumulated text.
-        // Trimmed/single-line conversion is done by the card view
-        // (`collapseWhitespace`) on read, so we keep the raw blob
-        // here. Guard the activity write with the same "session
-        // must be active" check `setAgentTextActivity` enforces.
-        if sessions[id]?.state == .active {
-            sessions[id]?.activity = .agentText(running)
-        }
-    }
-
-    /// Flush and return accumulated delta content, or nil if none.
-    @discardableResult
-    func flushDelta(_ id: String) -> String? {
-        // Cancel any in-flight debounce so the pending bytes don't
-        // land AFTER the flush and resurrect a stale streaming
-        // bubble. Then drain the buffer synchronously so callers
-        // see a fully-up-to-date final blob before removal.
-        pendingDeltaTasks.removeValue(forKey: id)?.cancel()
-        promotePendingDelta(id)
-        return streamingContent.removeValue(forKey: id)
-    }
-
-    /// Test-only synchronous promotion of pending deltas. Production
-    /// code drives this via the debounce task (~250ms) or `flushDelta`
-    /// at turn end. Exposed so tests can deterministically observe
-    /// the buffer landing in `streamingContent` without sleeping.
-    func promotePendingDeltaForTesting(_ id: String) {
-        promotePendingDelta(id)
-    }
-
     // MARK: - Reset
 
-    func clearTransientState() {
-        cancelAllDeltaTasks()
-        streamingContent.removeAll()
-        sessionUsage.removeAll()
-    }
-
     func reset() {
-        KLog.chat("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
-        cancelAllDeltaTasks()
+        KLog.d("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
         sessions.removeAll()
         activeSessionId = nil
         pinnedSessions.removeAll()
@@ -803,20 +716,10 @@ final class SessionStore {
         sessionPreviews.removeAll()
         drafts.removeAll()
         navigateToSession = nil
-        streamingContent.removeAll()
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
         clearPersistentSnapshot()
-    }
-
-    /// Cancel every in-flight delta debounce + drop buffered bytes.
-    /// Called from reset paths so we don't leak Tasks that wake up
-    /// after the session has been torn down.
-    private func cancelAllDeltaTasks() {
-        for (_, task) in pendingDeltaTasks { task.cancel() }
-        pendingDeltaTasks.removeAll()
-        pendingDeltaBuffer.removeAll()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)

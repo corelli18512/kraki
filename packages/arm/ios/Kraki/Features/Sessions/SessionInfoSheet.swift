@@ -29,7 +29,10 @@ struct SessionInfoSheet: View {
     }
 
     private var availableModels: [String] {
-        appState.deviceStore.deviceModels[session.deviceId] ?? []
+        // Prefer the slice for this session's agent; fall back to the
+        // device-wide union if the session predates multi-agent or
+        // the tentacle hasn't yet re-greeted with the new shape.
+        appState.deviceStore.models(for: session.deviceId, agentId: session.agent)
     }
 
     var body: some View {
@@ -209,11 +212,13 @@ struct SessionInfoSheet: View {
     }
 
     /// Hard ceiling for the session's current model, if the adapter
-    /// publishes one. Read from `deviceModelDetails` keyed by the
-    /// session's deviceId + model id.
+    /// publishes one. Looked up via the session's agent slice on the
+    /// device (so two agents on the same tentacle can advertise the
+    /// same model id with different context windows).
     private var contextWindow: Int? {
         guard let model = session.model else { return nil }
-        return appState.deviceStore.deviceModelDetails[session.deviceId]?
+        return appState.deviceStore
+            .modelDetails(for: session.deviceId, agentId: session.agent)
             .first(where: { $0.id == model })?.contextWindow
     }
 
@@ -426,11 +431,11 @@ private struct ModelPickerScreen: View {
     }
 
     private var models: [String] {
-        appState.deviceStore.deviceModels[session.deviceId] ?? []
+        appState.deviceStore.models(for: session.deviceId, agentId: session.agent)
     }
 
     private var modelDetails: [ModelDetail] {
-        appState.deviceStore.deviceModelDetails[session.deviceId] ?? []
+        appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
     }
 
     var body: some View {
@@ -442,7 +447,11 @@ private struct ModelPickerScreen: View {
                 reasoningEffort: $reasoningEffort,
                 onSelect: { model in
                     selectedModel = model
-                    SessionPrefs.saveLastModel(deviceId: session.deviceId, model: model)
+                    SessionPrefs.saveLastModel(
+                        deviceId: session.deviceId,
+                        agentId: session.agent,
+                        model: model
+                    )
                     appState.commandSender?.setSessionModel(
                         sessionId: session.id,
                         model: model,

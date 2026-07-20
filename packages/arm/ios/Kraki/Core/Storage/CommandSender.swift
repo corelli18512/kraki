@@ -46,20 +46,36 @@ final class CommandSender {
 
     /// Send an encrypted message through the WebSocket.
     /// The actual encryption + routing is handled by AppState/networking layer.
-    private func send(_ payload: [String: Any], sessionId: String? = nil) {
-        guard let appState else { return }
+    @discardableResult
+    private func send(
+        _ payload: [String: Any],
+        sessionId: String? = nil,
+        connectionScoped: Bool = false
+    ) -> Bool {
+        guard let appState else { return false }
         var msg = payload
         if let sessionId { msg["sessionId"] = sessionId }
         msg["deviceId"] = appState.deviceId ?? ""
         msg["seq"] = 0
         msg["timestamp"] = ISO8601.now()
-        appState.sendEncryptedMessage(msg)
+        return appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
+    }
+
+    enum InputDelivery: String {
+        case prompt
+        case steer
     }
 
     // MARK: - Input
 
-    func sendInput(sessionId: String, text: String, attachments: [ImageAttachment]? = nil) {
-        guard let appState else { return }
+    @discardableResult
+    func sendInput(
+        sessionId: String,
+        text: String,
+        attachments: [ImageAttachment]? = nil,
+        delivery: InputDelivery = .prompt
+    ) -> Bool {
+        guard let appState else { return false }
 
         // Generate a correlation id. Tentacle echoes this back inside
         // the resulting `user_message.payload.clientId`, letting us
@@ -86,6 +102,7 @@ final class CommandSender {
             "content": AnyCodable(text),
             "clientId": AnyCodable(clientId),
         ]
+        if delivery == .steer { pendingPayload["delivery"] = AnyCodable(delivery.rawValue) }
         if let attachments, !attachments.isEmpty {
             let encodedAttachments = attachments.map { att -> [String: String] in
                 ["type": att.type, "mimeType": att.mimeType, "data": att.data]
@@ -100,18 +117,21 @@ final class CommandSender {
             timestamp: ISO8601.now(),
             payload: pendingPayload
         )
-        var bucket = outbox[sessionId] ?? [:]
-        bucket[clientId] = pending
-        outbox[sessionId] = bucket
-
         var payload: [String: Any] = ["text": text, "clientId": clientId]
+        if delivery == .steer { payload["delivery"] = delivery.rawValue }
         if let attachments, !attachments.isEmpty {
             let encoded = attachments.map { att -> [String: String] in
                 ["type": att.type, "mimeType": att.mimeType, "data": att.data]
             }
             payload["attachments"] = encoded
         }
-        send(["type": "send_input", "payload": payload], sessionId: sessionId)
+        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+            return false
+        }
+        var bucket = outbox[sessionId] ?? [:]
+        bucket[clientId] = pending
+        outbox[sessionId] = bucket
+        return true
     }
 
     // MARK: - Outbox queries / mutators
@@ -147,12 +167,10 @@ final class CommandSender {
 
     // MARK: - Permissions
 
-    // Permission / question resolve buttons send the command and
-    // rely on tentacle's `permission_resolved` / `question_resolved`
-    // echo to materialise the badge on the bubble (grouper folds the
-    // resolver into the originating row). Round-trip is ~100-300ms;
-    // future work could layer in optimistic UI via the pending_input
-    // pattern (see the storage-refactor discussion).
+    // Permission / question resolve buttons send the command and rely on
+    // tentacle's resolved event to refresh the corresponding live card.
+    // Round-trip is ~100-300ms; future work could layer in optimistic UI via
+    // the pending_input pattern (see the storage-refactor discussion).
     func approve(sessionId: String, permissionId: String) {
         send(["type": "approve", "payload": ["permissionId": permissionId]], sessionId: sessionId)
     }
@@ -186,8 +204,13 @@ final class CommandSender {
         send(["type": "kill_session", "payload": [:] as [String: Any]], sessionId: sessionId)
     }
 
-    func abortSession(sessionId: String) {
-        send(["type": "abort_session", "payload": [:] as [String: Any]], sessionId: sessionId)
+    @discardableResult
+    func abortSession(sessionId: String) -> Bool {
+        send(
+            ["type": "abort_session", "payload": [:] as [String: Any]],
+            sessionId: sessionId,
+            connectionScoped: true
+        )
     }
 
     // MARK: - Session Mode
@@ -304,6 +327,7 @@ final class CommandSender {
     @discardableResult
     func createSession(
         targetDeviceId: String,
+        agentId: AgentId = "copilot",
         model: String,
         reasoningEffort: ReasoningEffort? = nil,
         prompt: String? = nil,
@@ -334,6 +358,7 @@ final class CommandSender {
         var payload: [String: Any] = [
             "requestId": requestId,
             "targetDeviceId": targetDeviceId,
+            "agentId": agentId,
             "model": model,
         ]
         if let reasoningEffort { payload["reasoningEffort"] = reasoningEffort.rawValue }
@@ -543,6 +568,26 @@ final class CommandSender {
         ]
         send(["type": "request_session_messages_range", "payload": payload], sessionId: sessionId)
     }
+
+    /// Pull one turn's TRACE steps (tool/narration detail) for the "Steps"
+    /// popup, keyed by the concluding bubble's spine seq. Reply arrives as a
+    /// `turn_trace_batch` envelope → `MessageProvider.handleTurnTraceBatch`.
+    func requestTurnTrace(sessionId: String, bubbleSeq: Int) {
+        let payload: [String: Any] = ["sessionId": sessionId, "bubbleSeq": bubbleSeq]
+        send(["type": "request_turn_trace", "payload": payload], sessionId: sessionId)
+    }
+
+    /// Ask for the current status-card snapshot (draft + action slot) on
+    /// session-open / reconnect while a turn is in progress. Reply is a
+    /// unicast `agent_message_delta`(reset) + `card_action`.
+    func requestCard(sessionId: String) {
+        send(["type": "request_card", "payload": ["sessionId": sessionId]], sessionId: sessionId)
+    }
+
+    /// Resolve every optimistic action whose pulse send seq ≤ `seqUpTo` as
+    /// confirmed delivered (the peer acked the frame). Mirrors arm-web's
+    /// `resolvePulseAcked`.
+    func resolvePulseAcked(seqUpTo: UInt64) {}
 
     // MARK: - Cleanup
 

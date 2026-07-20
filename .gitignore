@@ -41,5 +41,6 @@ xcuserdata/
 *.bak
 .claude/
 .claude-worktrees
+build/
 packages/arm/web/probe-latency.mjs
 packages/arm/web/analyze-latency.mjs

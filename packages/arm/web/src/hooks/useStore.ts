@@ -49,6 +49,7 @@ const initialState = {
   devices: new Map<string, DeviceSummary>(),
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
+  runtimeStatuses: new Map<string, import('../types/store').SessionRuntimeStatus>(),
   pinnedSessions: new Set<string>(),
   unreadCount: new Map<string, number>(),
   lastError: null,
@@ -104,6 +105,8 @@ export const useStore = create<Store>()(persist((set) => ({
       messages.delete(sessionId);
       const cards = new Map(state.cards);
       cards.delete(sessionId);
+      const runtimeStatuses = new Map(state.runtimeStatuses);
+      runtimeStatuses.delete(sessionId);
       const unreadCount = new Map(state.unreadCount);
       unreadCount.delete(sessionId);
       const drafts = new Map(state.drafts);
@@ -116,7 +119,7 @@ export const useStore = create<Store>()(persist((set) => ({
       sessionUsage.delete(sessionId);
       const sessionPreviews = new Map(state.sessionPreviews);
       sessionPreviews.delete(sessionId);
-      return { sessions, messages, cards, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
+      return { sessions, messages, cards, runtimeStatuses, unreadCount, drafts, pinnedSessions, sessionModes, sessionUsage, sessionPreviews };
     });
   },
 
@@ -287,6 +290,14 @@ export const useStore = create<Store>()(persist((set) => ({
       const existing = next.get(sessionId) ?? { text: '', action: null };
       next.set(sessionId, { text: existing.text, action });
       return { cards: next };
+    }),
+
+  setRuntimeStatus: (sessionId, status) =>
+    set((state) => {
+      const next = new Map(state.runtimeStatuses);
+      if (status) next.set(sessionId, status);
+      else next.delete(sessionId);
+      return { runtimeStatuses: next };
     }),
 
   clearCard: (sessionId) => {
@@ -480,7 +491,7 @@ export const useStore = create<Store>()(persist((set) => ({
       if (existing[bubbleIdx].type === 'agent_message') {
         for (let i = bubbleIdx + 1; i < existing.length; i++) {
           const next = existing[i];
-          if (next.type === 'user_message' || next.type === 'send_input') break;
+          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') break;
           if (next.type === 'turn_status' || next.type === 'interrupted_turn') return state;
         }
       }
@@ -493,7 +504,8 @@ export const useStore = create<Store>()(persist((set) => ({
       // The target bubble is either the concluding agent_message (a concluded
       // turn — steps go BEFORE it) or the leading user_message of an in-progress
       // turn (no conclusion yet — steps go AFTER it, at the tail).
-      const inProgress = existing[bubbleIdx].type === 'user_message';
+      const inProgress = existing[bubbleIdx].type === 'user_message'
+        && existing[bubbleIdx].payload.delivery !== 'steer';
 
       // Trace region (exclusive index bounds) whose live/previous entries are
       // dropped so a re-pull replaces rather than duplicates.
@@ -505,7 +517,10 @@ export const useStore = create<Store>()(persist((set) => ({
       } else {
         let turnStartIdx = -1;
         for (let i = bubbleIdx - 1; i >= 0; i--) {
-          if (existing[i].type === 'user_message') { turnStartIdx = i; break; }
+          if (existing[i].type === 'user_message' && existing[i].payload.delivery !== 'steer') {
+            turnStartIdx = i;
+            break;
+          }
         }
         regionStart = turnStartIdx;      // steps live after the prior user_message
         regionEnd = bubbleIdx;           // …up to (before) the concluding bubble
@@ -550,6 +565,7 @@ export const useStore = create<Store>()(persist((set) => ({
   clearTransientState: () => set({
     lastError: null,
     cards: new Map(),
+    runtimeStatuses: new Map(),
     sessionUsage: new Map(),
     loadingSessions: new Set(),
     pendingSessions: new Set(),
@@ -566,6 +582,7 @@ export const useStore = create<Store>()(persist((set) => ({
     devices: new Map(),
     messages: new Map(),
     cards: new Map(),
+    runtimeStatuses: new Map(),
     pinnedSessions: new Set(),
     unreadCount: new Map(),
     lastError: null,

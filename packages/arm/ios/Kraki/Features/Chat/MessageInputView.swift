@@ -25,10 +25,28 @@
 import SwiftUI
 import PhotosUI
 
+enum MessageComposerIntent: Equatable {
+    case prompt
+    case steer
+    case answerQuestion
+    case denyPermission
+}
+
+enum MessageComposerPolicy {
+    static func intent(isBusy: Bool, hasPermission: Bool, hasQuestion: Bool) -> MessageComposerIntent {
+        if hasPermission { return .denyPermission }
+        if hasQuestion { return .answerQuestion }
+        return isBusy ? .steer : .prompt
+    }
+}
+
 struct MessageInputView: View {
     let sessionId: String
     var pendingPermission: PendingPermission? = nil
     var pendingQuestion: PendingQuestion? = nil
+    var isCompacting: Bool = false
+    var hasLiveCard: Bool = false
+    var onHeightChange: (CGFloat) -> Void = { _ in }
 
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
@@ -40,6 +58,7 @@ struct MessageInputView: View {
     /// didn't silently swallow their selection.
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
+    @State private var abortPending = false
     @FocusState private var isFocused: Bool
 
     // Voice
@@ -158,10 +177,22 @@ struct MessageInputView: View {
         session?.state == .active || session?.state == .compacting
     }
     private var text: String { sessionStore.drafts[sessionId] ?? "" }
-    private var isIdle: Bool { !sessionActive && !awaitingActive }
+    private var isBusy: Bool { sessionActive || isCompacting || awaitingActive }
+    private var isIdle: Bool { !isBusy }
+    private var isStructuredResponse: Bool { pendingPermission != nil || pendingQuestion != nil }
+    private var submissionIntent: MessageComposerIntent {
+        MessageComposerPolicy.intent(
+            isBusy: isBusy,
+            hasPermission: pendingPermission != nil,
+            hasQuestion: pendingQuestion != nil
+        )
+    }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { imageData != nil }
-    private var canSend: Bool { isIdle && (hasText || hasImage) }
+    private var canSend: Bool {
+        isStructuredResponse ? hasText : (hasText || hasImage)
+    }
+    private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
 
     /// True when we can actually deliver a message right now —
     /// tentacle is online AND the relay channel is up. Drives the
@@ -201,6 +232,12 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                guard height > 0 else { return }
+                onHeightChange(height)
+            }
             .overlay(alignment: .top) {
                 if isPressing {
                     recordingOverlay
@@ -225,8 +262,15 @@ struct MessageInputView: View {
                     .allowsHitTesting(false)
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isPressing)
-            .onChange(of: sessionActive) { _, active in
-                if active { awaitingActive = false }
+            .onChange(of: session?.state) { _, newState in
+                // A normal prompt's local latch ends at the first authoritative
+                // session-state transition. Once active, subsequent submissions
+                // are explicit steers; once idle, they are normal prompts.
+                awaitingActive = false
+                if newState == .idle { abortPending = false }
+            }
+            .onChange(of: appState.isFullyOnline) { _, online in
+                if !online { abortPending = false }
             }
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
@@ -287,16 +331,11 @@ struct MessageInputView: View {
     @ViewBuilder
     private var composeCard: some View {
         VStack(spacing: 8) {
-            // ① Pending action row (permission / question)
-            if let perm = pendingPermission {
-                permissionActionRow(perm)
-            } else if let q = pendingQuestion, let choices = q.choices, !choices.isEmpty {
-                questionChoicesRow(q, choices: choices)
-            }
+            // Permission/question controls live in the production live bubble.
+            // The composer only changes its textual submission intent (answer
+            // or deny-with-reason); it must not duplicate those action rows.
 
-            // ② Single unified input row:
-            //    [image attach] [voice/keyboard toggle + text field or
-            //    hold-to-talk pill] [send button with mode swipe]
+            // Single unified input row:
             inputRow
         }
         .padding(.horizontal, 16)
@@ -311,6 +350,7 @@ struct MessageInputView: View {
         HStack(spacing: 8) {
             imageAttachButton
             inputBox
+            if canShowAbort { abortButton }
         }
         .animation(.easeInOut(duration: 0.2), value: voiceMode)
     }
@@ -512,56 +552,81 @@ struct MessageInputView: View {
 
     // MARK: - Send Icon (trailing edge of input box)
     //
-    // Inline icon button — tap to send (or stop while active). The
-    // horizontal mode-swipe gesture lives on the parent input box
-    // (`inputBoxModeSwipeGesture`), so this button only needs to
-    // handle the tap action; SwiftUI's simultaneousGesture coordinator
-    // routes taps here and drags to the parent.
+    // The arrow always submits the composer's contextual action. Session-level
+    // abort lives in the navigation bar, so active turns no longer replace the
+    // send affordance or disable the text field.
 
     private var sendIconButton: some View {
-        Button(action: handleSendOrStopTap) {
+        Button(action: handleModeSubmit) {
             sendIconGlyph
                 .frame(width: 34, height: Self.inputBoxHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Three-stage opacity:
-        //   - Idle + nothing to send → 40% (greyed regardless of network)
-        //   - Idle + has content + device unreachable → 50% (greyed but tappable;
-        //     tap will enqueue and show the offline hint)
-        //   - Anything else (fully ready, or stop button) → 100%
+        .accessibilityLabel(sendAccessibilityLabel)
+        .accessibilityHint(sendAccessibilityHint)
         .opacity(sendButtonOpacity)
-        // Nudge inward from the trailing edge — mirrors the toggle's
-        // leading inset so the two icons sit symmetric and don't
-        // crowd the capsule's rounded ends.
         .padding(.trailing, 6)
     }
 
+    private var sendAccessibilityLabel: String {
+        switch submissionIntent {
+        case .answerQuestion: return "Submit answer"
+        case .denyPermission: return "Deny with reason"
+        case .steer: return "Steer agent"
+        case .prompt: return "Send message"
+        }
+    }
+
+    private var sendAccessibilityHint: String {
+        switch submissionIntent {
+        case .answerQuestion: return "Answers the pending question"
+        case .denyPermission: return "Denies the permission with this reason"
+        case .steer: return "Interjects into the active agent turn"
+        case .prompt: return "Sends the current message"
+        }
+    }
+
     private var sendButtonOpacity: Double {
-        if isIdle && !canSend { return 0.4 }
-        if isIdle && !isDeviceReachable { return 0.5 }
+        if !canSend { return 0.4 }
+        if !isDeviceReachable { return 0.5 }
         return 1
     }
 
-    @ViewBuilder
     private var sendIconGlyph: some View {
-        let tint = Color.modeColor(currentSessionMode)
-        ZStack {
-            Image(systemName: "arrow.right")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(tint)
-                .scaleEffect(isIdle ? 1 : 0)
-                .opacity(isIdle ? 1 : 0)
+        Image(systemName: "arrow.right")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(Color.modeColor(currentSessionMode))
+            .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+    }
 
-            LucideIcon(.square, size: 12, strokeWidth: 0, color: tint)
-                .frame(width: 12, height: 12)
-                .background(tint)
-                .clipShape(RoundedRectangle(cornerRadius: 2))
-                .scaleEffect(isIdle ? 0 : 1)
-                .opacity(isIdle ? 0 : 1)
+    private var abortButton: some View {
+        Button(action: requestAbort) {
+            Group {
+                if abortPending {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.red)
+                }
+            }
+            .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
+            .contentShape(Circle())
         }
-        .animation(.easeInOut(duration: 0.4), value: isIdle)
-        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+        .buttonStyle(.plain)
+        .background(.ultraThinMaterial, in: Circle())
+        .disabled(abortPending || !isDeviceReachable)
+        .opacity(isDeviceReachable ? 1 : 0.5)
+        .accessibilityLabel("Stop agent")
+        .accessibilityHint("Aborts the current agent turn")
+    }
+
+    private func requestAbort() {
+        guard canShowAbort, !abortPending, isDeviceReachable else { return }
+        if appState.commandSender?.abortSession(sessionId: sessionId) == true {
+            abortPending = true
+        }
     }
 
     // MARK: - Hold to Talk Prompt
@@ -665,7 +730,7 @@ struct MessageInputView: View {
                 switch pivot {
                 case .record:
                     let cancelled = cancelArmed
-                    NSLog("[VOICE] release pivot=record cancelArmed=\(cancelled) transcriptAtRelease=\"\(speech.transcript)\"")
+                    NSLog("[VOICE] release pivot=record cancelArmed=\(cancelled)")
                     Task { @MainActor in
                         if cancelled {
                             NSLog("[VOICE] cancelled → cancelRecording, no send")
@@ -678,16 +743,16 @@ struct MessageInputView: View {
                         await speech.finishRecording()
                         let captured = speech.transcript
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                        NSLog("[VOICE] finishRecording done. transcript=\"\(speech.transcript)\" captured=\"\(captured)\" isRecording=\(speech.isRecording)")
+                        NSLog("[VOICE] finishRecording done hasTranscript=\(!captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) isRecording=\(speech.isRecording)")
                         if !captured.isEmpty {
                             let prior = text
                             let merged = prior.isEmpty ? captured : (prior + " " + captured)
-                            NSLog("[VOICE] merged=\"\(merged)\" calling setDraft + handleSend (canSend=\(canSend) hasText=\(hasText) isIdle=\(isIdle) awaitingActive=\(awaitingActive) sessionActive=\(sessionActive))")
+                            NSLog("[VOICE] submitting captured transcript")
                             sessionStore.setDraft(sessionId, merged)
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                 voiceMode = false
                             }
-                            NSLog("[VOICE] post-setDraft text=\"\(text)\" canSend=\(canSend)")
+                            NSLog("[VOICE] transcript staged for send")
                             handleSend()
                             NSLog("[VOICE] handleSend returned")
                         } else {
@@ -793,13 +858,12 @@ struct MessageInputView: View {
 
     private var textFieldForMode: some View {
         let placeholder: String = {
-            if pendingPermission != nil { return "Deny with reason…" }
-            if pendingQuestion != nil { return "Type your answer…" }
-            return "Send a message…"
-        }()
-        let isEnabled: Bool = {
-            if pendingPermission != nil || pendingQuestion != nil { return true }
-            return isIdle
+            switch submissionIntent {
+            case .denyPermission: return "Deny with reason…"
+            case .answerQuestion: return "Type your answer…"
+            case .steer: return "Steer the agent…"
+            case .prompt: return "Send a message…"
+            }
         }()
 
         return TextField(placeholder, text: Binding(
@@ -836,8 +900,6 @@ struct MessageInputView: View {
         .padding(.trailing, 6)
         .padding(.vertical, 6)
         .focused($isFocused)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.6)
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }
     }
@@ -881,35 +943,15 @@ struct MessageInputView: View {
         }
     }
 
-    // MARK: - Question Choices Row
-
-    private func questionChoicesRow(_ question: PendingQuestion, choices: [String]) -> some View {
-        VStack(spacing: 6) {
-            ForEach(choices, id: \.self) { choice in
-                Button {
-                    appState.commandSender?.answer(sessionId: sessionId, questionId: question.id, answer: choice)
-                    sessionStore.setDraft(sessionId, "")
-                    isFocused = false
-                } label: {
-                    Text(choice)
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                }
-                .modifier(GlassChoiceButtonModifier(tint: .krakiPrimary))
-            }
-        }
-    }
-
     // MARK: - Mode Submit Handlers
 
     private func handleModeSubmit() {
-        if pendingPermission != nil {
+        switch submissionIntent {
+        case .denyPermission:
             handlePermissionDenyWithReason()
-        } else if pendingQuestion != nil {
+        case .answerQuestion:
             handleQuestionAnswer()
-        } else {
+        case .prompt, .steer:
             handleSend()
         }
     }
@@ -930,20 +972,7 @@ struct MessageInputView: View {
         isFocused = false
     }
 
-    // MARK: - Send-icon action handlers (wired to the UIKit gesture capture)
-
-    private func handleSendOrStopTap() {
-        if pendingPermission != nil {
-            handlePermissionDenyWithReason()
-        } else if pendingQuestion != nil {
-            handleQuestionAnswer()
-        } else if isIdle {
-            guard canSend else { return }
-            handleSend()
-        } else {
-            appState.commandSender?.abortSession(sessionId: sessionId)
-        }
-    }
+    // MARK: - Send action
 
     private func handleModeSwipeChanged(_ dx: CGFloat) {
         if dragStartMode == nil { dragStartMode = currentSessionMode }
@@ -1084,14 +1113,9 @@ struct MessageInputView: View {
     // MARK: - Actions
 
     private func handleSend() {
-        NSLog("[VOICE] handleSend entry canSend=\(canSend) text=\"\(text)\" hasText=\(hasText) hasImage=\(hasImage) isIdle=\(isIdle) sessionActive=\(sessionActive) awaitingActive=\(awaitingActive)")
-        guard canSend else {
-            NSLog("[VOICE] handleSend BAILED — canSend false")
-            return
-        }
+        guard canSend else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendText = trimmed.isEmpty ? "[image]" : trimmed
-        NSLog("[VOICE] handleSend sending: \"\(sendText)\"")
 
         var attachments: [ImageAttachment]?
         if let imageData {
@@ -1099,12 +1123,18 @@ struct MessageInputView: View {
             attachments = [ImageAttachment(type: "image", mimeType: imageMimeType, data: base64)]
         }
 
-        appState.commandSender?.sendInput(sessionId: sessionId, text: sendText, attachments: attachments)
+        let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
+        guard appState.commandSender?.sendInput(
+            sessionId: sessionId,
+            text: sendText,
+            attachments: attachments,
+            delivery: delivery
+        ) == true else { return }
+
         sessionStore.setDraft(sessionId, "")
         clearImage()
-        awaitingActive = true
+        if delivery == .prompt { awaitingActive = true }
         isFocused = false
-        NSLog("[VOICE] handleSend done (commandSender=\(appState.commandSender != nil))")
     }
 
     private func clearImage() {

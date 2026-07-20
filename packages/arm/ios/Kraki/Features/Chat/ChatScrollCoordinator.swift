@@ -85,6 +85,30 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
     /// being held. Stage 6.
     @Published var anchoredScreenY: CGFloat? = nil
 
+    // MARK: - Debug surface (spinner visibility tracking)
+
+    /// True while UIKit reports the top supplementary view is
+    /// currently in the visible viewport. Flipped by
+    /// `willDisplaySupplementaryView` / `didEndDisplayingSupplementaryView`.
+    /// Drives the on-device debug overlay so we can see what the
+    /// collection view thinks the spinner state is in real time.
+    @Published private(set) var headerSpinnerVisible: Bool = false
+
+    /// Mirror of the above for the bottom supplementary view.
+    @Published private(set) var footerSpinnerVisible: Bool = false
+
+    /// Setters for the controller to drive the spinner-visibility
+    /// debug flags. The spinners are now scroll-content subviews (not
+    /// supplementary views), so visibility is computed by the
+    /// controller's `updateEdgeSpinnerViewportState`, not UIKit's
+    /// supplementary display callbacks.
+    func setHeaderSpinnerVisible(_ visible: Bool) {
+        if headerSpinnerVisible != visible { headerSpinnerVisible = visible }
+    }
+    func setFooterSpinnerVisible(_ visible: Bool) {
+        if footerSpinnerVisible != visible { footerSpinnerVisible = visible }
+    }
+
     // MARK: - Configuration
 
     /// Distance from the bottom edge (in points) within which the
@@ -94,25 +118,64 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
     /// `.defaultScrollAnchor(.bottom)`.
     private let bottomThreshold: CGFloat = 40
 
-    // MARK: - Load-trigger hooks (driven by supplementary visibility)
+    // MARK: - Load-trigger hooks (driven by edge-spinner visibility)
 
-    /// Fires every time the top supplementary spinner enters the
-    /// viewport. The controller installs this to call into the view
-    /// model's `loadOlderIfPossible()`. Dedup is delegated to
-    /// MessageProvider (in-flight set + `reachedTail` short-circuit)
-    /// so repeated fires during a steady dwell are harmless.
-    var onHeaderSpinnerWillDisplay: (() -> Void)?
+    /// Invoked on every `scrollViewDidScroll` so the controller can
+    /// keep the scroll-content edge spinners positioned (bottom one
+    /// tracks `contentSize.height`) and recompute their viewport
+    /// visibility / load triggers.
+    var onScroll: (() -> Void)?
 
-    /// Fires every time the bottom supplementary spinner enters the
-    /// viewport. The controller installs this to call into the view
-    /// model's `ensureTailLoaded()`. Same dedup story as the header
-    /// hook — provider-level guards make repeat fires safe.
-    var onFooterSpinnerWillDisplay: (() -> Void)?
+    /// Fired when the user begins a drag. The controller uses this to
+    /// pause idle height-warming so an expensive measurement can't land
+    /// on a scroll frame.
+    var onWillBeginScroll: (() -> Void)?
+
+    /// Fired when all scroll motion (drag + deceleration) has stopped,
+    /// so the controller can resume idle height-warming.
+    var onDidEndScroll: (() -> Void)?
+
+    /// Explicit per-item height provider (flow-layout `sizeForItemAt`).
+    /// The list uses a plain `UICollectionViewFlowLayout` with
+    /// `estimatedItemSize = .zero` (NO self-sizing), exactly like the
+    /// validated scroll-perf harness: every cell's height is an
+    /// authoritative value from the sizing cache, so all geometry
+    /// (`contentSize`, `frame.minY`) is exact at apply time. That is what
+    /// makes prepend anchoring jump-free — a self-sizing layout only
+    /// *estimates* off-screen cells, which corrupts both the anchor
+    /// restore and the at-bottom check. Returns the row height for the
+    /// item at `indexPath`; the controller wires it to the height cache.
+    var heightForItemAt: ((IndexPath) -> CGFloat)?
+
+    /// Inline loading-spinner row heights (flow-layout section header =
+    /// top / loadOlder, footer = bottom / loadNewer). The controller
+    /// returns `spinnerRowHeight` while that edge is loading, else 0 —
+    /// exactly the scroll-perf harness's `referenceSizeForHeader/Footer`.
+    /// Toggling the flag + invalidating delegate metrics grows/collapses
+    /// the inline spinner row inside the scroll content.
+    var headerHeight: (() -> CGFloat)?
+    var footerHeight: (() -> CGFloat)?
+
+    /// When set, `publishIsAtBottom` is short-circuited. The controller
+    /// raises this around synchronous viewport edits (`applyEdges`,
+    /// `fullReload`, `reconfigureVisible`) that run INSIDE SwiftUI's
+    /// view-update phase: any `setContentOffset` there fires
+    /// `scrollViewDidScroll` → `publishIsAtBottom`, mutating an
+    /// `@Published` property mid-update ("Publishing changes from within
+    /// view updates is not allowed"). The controller does the real
+    /// at-bottom recompute on a deferred runloop hop instead.
+    var suppressBottomPublish = false
+
+    /// Fired so the controller can flush any apply it deferred while the
+    /// list was decelerating (see `applyWhenStable`). Wired to the
+    /// scroll-end / drag-begin transitions so a stashed window edit lands
+    /// the instant natural motion settles.
+    var onFlushPendingApply: (() -> Void)?
 
     // MARK: - Collection view reference
 
     /// Weak ref to the collection view this coordinator is driving.
-    /// Set by `ChatListViewController` after it has installed the
+    /// Set by the list controller after it has installed the
     /// coordinator as its delegate. Used by the public scroll-action
     /// API (e.g. `scrollToBottom`) so SwiftUI overlays don't need a
     /// path back through the representable to trigger UIKit work.
@@ -120,9 +183,9 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
 
     // MARK: - Public scroll API (called from SwiftUI overlays)
 
-    /// Scroll to the very last item. No-op if the list is empty or
-    /// the collection view has been torn down. Used by the
-    /// jump-to-latest button in the UIKit branch.
+    /// Scroll to the very last item (newest), pinning it to the visual
+    /// bottom. No-op if the list is empty or the collection view has
+    /// been torn down. Used by the jump-to-latest button.
     func scrollToBottom(animated: Bool) {
         guard let cv = collectionView else { return }
         let lastSection = cv.numberOfSections - 1
@@ -177,12 +240,49 @@ final class ChatScrollCoordinator: NSObject, ObservableObject {
 
 // MARK: - UICollectionViewDelegate
 
-extension ChatScrollCoordinator: UICollectionViewDelegate {
+extension ChatScrollCoordinator: UICollectionViewDelegateFlowLayout {
+    /// Authoritative per-item height. With `estimatedItemSize = .zero`
+    /// the flow layout never self-sizes — it lays every cell out at the
+    /// height returned here, computed from the sizing cache. This makes
+    /// `contentSize` and every `frame.minY` exact the instant a snapshot
+    /// applies, which is the precondition for jump-free prepend
+    /// anchoring (mirrors the scroll-perf harness).
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        sizeForItemAt indexPath: IndexPath) -> CGSize {
+        let width = collectionView.bounds.width
+        guard width > 0 else { return CGSize(width: max(width, 1), height: 1) }
+        let h = heightForItemAt?(indexPath) ?? 0
+        // Guard against a degenerate 0 height (uncached + measure failed)
+        // — a 1pt placeholder keeps layout valid; the cell re-measures.
+        return CGSize(width: width, height: max(h, 1))
+    }
+
+    /// Inline top spinner row (loadOlder). Zero unless that edge is
+    /// loading — mirrors the harness's `referenceSizeForHeaderInSection`.
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        referenceSizeForHeaderInSection section: Int) -> CGSize {
+        let h = headerHeight?() ?? 0
+        guard h > 0 else { return .zero }
+        return CGSize(width: collectionView.bounds.width, height: h)
+    }
+
+    /// Inline bottom spinner row (loadNewer).
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        referenceSizeForFooterInSection section: Int) -> CGSize {
+        let h = footerHeight?() ?? 0
+        guard h > 0 else { return .zero }
+        return CGSize(width: collectionView.bounds.width, height: h)
+    }
+
     /// `UIScrollViewDelegate` callback. UIKit invariant: called on
     /// the main thread, so direct `@Published` mutation is safe.
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard let cv = scrollView as? UICollectionView else { return }
         publishIsAtBottom(for: cv)
+        onScroll?()
     }
 
     /// User has started a drag — release the idle anchor so the
@@ -191,23 +291,22 @@ extension ChatScrollCoordinator: UICollectionViewDelegate {
     /// back to the captured Y, fighting the user's gesture.
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         clearIdleAnchor()
+        onWillBeginScroll?()
+        onFlushPendingApply?()
     }
 
-    /// Forward supplementary-view display events to the controller
-    /// via closure hooks. Supplementary visibility ≡ "please load
-    /// more in this direction" — provider-level dedup keeps repeat
-    /// fires harmless.
-    func collectionView(
-        _ collectionView: UICollectionView,
-        willDisplaySupplementaryView view: UICollectionReusableView,
-        forElementKind elementKind: String,
-        at indexPath: IndexPath
-    ) {
-        if elementKind == UICollectionView.elementKindSectionHeader {
-            onHeaderSpinnerWillDisplay?()
-        } else if elementKind == UICollectionView.elementKindSectionFooter {
-            onFooterSpinnerWillDisplay?()
+    /// Drag ended without momentum — motion is over, resume warming.
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate {
+            onDidEndScroll?()
+            onFlushPendingApply?()
         }
+    }
+
+    /// Momentum scroll finished — motion is over, resume warming.
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        onDidEndScroll?()
+        onFlushPendingApply?()
     }
 }
 
@@ -215,6 +314,7 @@ extension ChatScrollCoordinator: UICollectionViewDelegate {
 
 private extension ChatScrollCoordinator {
     func publishIsAtBottom(for scrollView: UIScrollView) {
+        guard !suppressBottomPublish else { return }
         let offset = scrollView.contentOffset.y
         let inset = scrollView.adjustedContentInset
         let visibleHeight = scrollView.bounds.height - inset.top - inset.bottom
@@ -224,6 +324,9 @@ private extension ChatScrollCoordinator {
             if !isAtBottom { isAtBottom = true }
             return
         }
+        // The newest message lives at the bottom of the content, so
+        // "at bottom" (following live) means the scroll position is near
+        // the content's end. distanceFromBottom = 0 there.
         let distanceFromBottom = contentHeight - (offset + visibleHeight)
         let near = distanceFromBottom <= bottomThreshold
         if isAtBottom != near {

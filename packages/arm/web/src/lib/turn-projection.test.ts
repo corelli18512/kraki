@@ -63,6 +63,20 @@ describe('projectSpineMessages', () => {
     expect(projected.map((message) => message.type)).toEqual(['user_message', 'agent_message', 'idle']);
   });
 
+  it('keeps steer visible while projecting closing artifacts onto the same final outcome', () => {
+    const image = { type: 'content_ref' as const, id: 'steered-img', mimeType: 'image/png', size: 1 };
+    const projected = projectSpineMessages([
+      { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'run tests' } } as ChatMessage,
+      { type: 'user_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'only iOS', delivery: 'steer' } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: { content: 'done' } } as ChatMessage,
+      { type: 'idle', deviceId: 'd1', seq: 4, timestamp: '', sessionId: 's1', payload: { turnArtifacts: [image] } } as ChatMessage,
+    ]);
+
+    expect(projected.map((message) => message.type)).toEqual(['user_message', 'user_message', 'agent_message', 'idle']);
+    expect(projected[1].payload.delivery).toBe('steer');
+    expect((projected[2].payload as { attachments?: unknown[] }).attachments).toEqual([image]);
+  });
+
   it('projects closing idle artifacts onto the final agent outcome and deduplicates direct refs', () => {
     const image = { type: 'content_ref' as const, id: 'img', mimeType: 'image/png', size: 1 };
     const html = { type: 'content_ref' as const, id: 'html', mimeType: 'text/html', size: 2 };

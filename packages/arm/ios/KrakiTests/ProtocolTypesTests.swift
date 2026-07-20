@@ -22,6 +22,41 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertEqual(decoded.intValue, 42)
     }
 
+    /// JSON `1` must decode as Int, NOT Bool. JSONDecoder accepts `1`/`0` as a
+    /// Bool, so decoding Bool first silently turns `payload.steps: 1` into
+    /// `true` — which then fails `intValue` and hides the Steps affordance.
+    func testJsonOneAndZeroDecodeAsIntNotBool() throws {
+        let one = try JSONDecoder().decode(AnyCodable.self, from: Data("1".utf8))
+        let zero = try JSONDecoder().decode(AnyCodable.self, from: Data("0".utf8))
+        XCTAssertEqual(one.intValue, 1)
+        XCTAssertNil(one.boolValue)
+        XCTAssertEqual(zero.intValue, 0)
+        XCTAssertNil(zero.boolValue)
+    }
+
+    /// JSONSerialization (the WS path) parses JSON `1` into an NSNumber that
+    /// Swift bridges as Bool. `intValue` must still return 1 via NSNumber.
+    func testJsonSerializationNumberOneIntValue() {
+        // Simulate the WS path: JSONSerialization → [String: Any] → AnyCodable.
+        let json = "{\"steps\":1}".data(using: .utf8)!
+        let parsed = try! JSONSerialization.jsonObject(with: json) as! [String: Any]
+        let ac = AnyCodable(parsed["steps"]!)
+        XCTAssertEqual(ac.intValue, 1)
+        // Must round-trip back to JSON `1`, not `true` — otherwise GRDB stores
+        // `steps: true` and the Steps affordance hides on reload.
+        let reencoded = try! JSONEncoder().encode(["steps": ac])
+        let reStr = String(data: reencoded, encoding: .utf8)!
+        XCTAssertEqual(reStr, "{\"steps\":1}")
+    }
+
+    func testJsonTrueFalseDecodeAsBool() throws {
+        let t = try JSONDecoder().decode(AnyCodable.self, from: Data("true".utf8))
+        let f = try JSONDecoder().decode(AnyCodable.self, from: Data("false".utf8))
+        XCTAssertEqual(t.boolValue, true)
+        XCTAssertEqual(f.boolValue, false)
+        XCTAssertNil(t.intValue)
+    }
+
     func testDoubleEncodeDecode() throws {
         let original = AnyCodable(3.14)
         let decoded = try roundTrip(original)
@@ -325,5 +360,35 @@ final class ProtocolStructTests: XCTestCase {
         let data = try encoder.encode(detail)
         let decoded = try decoder.decode(ModelDetail.self, from: data)
         XCTAssertEqual(decoded, detail)
+    }
+}
+
+private final class PulseManagerTestHost: PulseHost {
+    var frames: [(String, String?)] = []
+    func sendPulseFrame(_ b64: String, target: String?) { frames.append((b64, target)) }
+    func onDelivered(json: String) {}
+    func onAcked(seqUpTo: UInt64) {}
+    func onResetInbound(fromSeq: UInt64, epoch: String) {}
+    func requestConnect() {}
+    func requestDisconnect() {}
+}
+
+final class PulseManagerConnectionScopeTests: XCTestCase {
+    func testDisconnectPurgesOnlyConnectionScopedCommands() {
+        let host = PulseManagerTestHost()
+        let manager = PulseManager(host: host)
+        manager.onConnected()
+        manager.sendEncrypted(blob: "normal", keys: ["d": "k"], target: "t")
+        manager.sendEncrypted(
+            blob: "abort", keys: ["d": "k"], target: "t", connectionScoped: true
+        )
+
+        XCTAssertEqual(manager.liveOutboxSizeForTesting, 2)
+        XCTAssertEqual(manager.connectionScopedCountForTesting, 1)
+
+        manager.onDisconnected()
+
+        XCTAssertEqual(manager.liveOutboxSizeForTesting, 1)
+        XCTAssertEqual(manager.connectionScopedCountForTesting, 0)
     }
 }

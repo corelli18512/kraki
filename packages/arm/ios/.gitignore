@@ -1,1 +1,4 @@
-Vendor/
+# Keep local heavyweight vendors ignored by default, but commit the small
+# Pulse Swift package required by every clean iOS/macOS checkout.
+Vendor/*
+!Vendor/Pulse/

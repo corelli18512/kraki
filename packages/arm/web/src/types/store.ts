@@ -45,6 +45,11 @@ export interface SessionCard {
   action: CardActionState | null;
 }
 
+export interface SessionRuntimeStatus {
+  status: 'compacting';
+  reason?: 'manual' | 'threshold' | 'overflow';
+}
+
 export interface SessionPreview {
   text: string;
   type: string;
@@ -68,6 +73,8 @@ export interface AppState {
   devices: Map<string, DeviceSummary>;
   messages: Map<string, ChatMessage[]>;
   cards: Map<string, SessionCard>;
+  /** Ephemeral session runtime state; never persisted to localStorage/IDB. */
+  runtimeStatuses: Map<string, SessionRuntimeStatus>;
 
   // Pinned sessions (stick to top of list)
   pinnedSessions: Set<string>;
@@ -149,6 +156,7 @@ export interface AppActions {
   ) => boolean;
   applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;
   setCardAction: (sessionId: string, action: CardActionState | null) => void;
+  setRuntimeStatus: (sessionId: string, status: SessionRuntimeStatus | null) => void;
   clearCard: (sessionId: string) => void;
   togglePin: (sessionId: string) => void;
   setPinnedSessions: (pinned: Set<string>) => void;

@@ -18,7 +18,8 @@ struct DeviceDetailView: View {
     }
 
     private var models: [String]? {
-        appState.deviceStore.deviceModels[device.id]
+        let list = appState.deviceStore.models(for: device.id)
+        return list.isEmpty ? nil : list
     }
 
     private var version: String? {

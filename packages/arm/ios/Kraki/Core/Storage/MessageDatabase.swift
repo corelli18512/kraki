@@ -28,6 +28,10 @@ final class MessageDatabase {
     /// idempotent — re-running it from a higher version on an empty
     /// DB is fine; downgrading is not supported.
     private static let schemaVersion = "v1"
+    /// Pure-spine migration: PR #154 moved tools/narration/permission/question
+    /// off the spine, so old rows + their (now-mismatched) seqs are garbage.
+    /// No back-compat — drop and recreate the table for a clean slate.
+    private static let schemaVersionPureSpine = "v2_pure_spine"
 
     // MARK: - State
 
@@ -90,6 +94,25 @@ final class MessageDatabase {
             // The PRIMARY KEY's prefix already gives most of this, but
             // the explicit index ensures range/order queries pick it
             // even when SQLite's planner is being conservative.
+            try db.execute(sql: """
+                CREATE INDEX idx_messages_session_seq
+                ON messages (session_id, seq)
+                """)
+        }
+        migrator.registerMigration(schemaVersionPureSpine) { db in
+            // Clean wipe: seqs from the old "every-event" model don't line up
+            // with the new dense spine-only seqs. Server replay repopulates.
+            try db.execute(sql: "DROP TABLE IF EXISTS messages")
+            try db.execute(sql: """
+                CREATE TABLE messages (
+                    session_id TEXT    NOT NULL,
+                    seq        INTEGER NOT NULL,
+                    type       TEXT    NOT NULL,
+                    timestamp  INTEGER,
+                    payload    BLOB    NOT NULL,
+                    PRIMARY KEY (session_id, seq, type)
+                ) WITHOUT ROWID
+                """)
             try db.execute(sql: """
                 CREATE INDEX idx_messages_session_seq
                 ON messages (session_id, seq)

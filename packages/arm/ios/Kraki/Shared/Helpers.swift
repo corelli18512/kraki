@@ -31,9 +31,42 @@ enum ISO8601 {
     /// Parse an ISO-8601 string, trying both formatter variants.
     /// Tolerant of "Z" vs "+00:00" suffix differences across relay
     /// versions and manual inputs.
+    ///
+    /// PERF: `ISO8601DateFormatter.date(from:)` is ~20µs even with a
+    /// cached formatter. Hot paths (session sort runs this once per
+    /// session, several times per websocket push) re-parse the SAME
+    /// timestamp strings repeatedly. A small thread-safe memo cache
+    /// makes repeat parses of an unchanged timestamp O(1), so a steady
+    /// stream of pushes stops re-paying the parse cost.
     static func parse(_ string: String) -> Date? {
-        withFractional.date(from: string) ?? withoutFractional.date(from: string)
+        if let hit = cache.lookup(string) { return hit }
+        let parsed = withFractional.date(from: string) ?? withoutFractional.date(from: string)
+        cache.store(string, parsed)
+        return parsed
     }
+
+    /// Bounded, lock-guarded memo for `parse`. Distinct timestamp
+    /// strings are bounded in practice (≈ session + message count),
+    /// but we cap the cache and drop it wholesale on overflow so it
+    /// can never grow without limit over a long-lived session.
+    private final class ParseCache: @unchecked Sendable {
+        private var map: [String: Date?] = [:]
+        private let lock = NSLock()
+        private let cap = 4096
+
+        func lookup(_ key: String) -> Date?? {
+            lock.lock(); defer { lock.unlock() }
+            return map[key]
+        }
+
+        func store(_ key: String, _ value: Date?) {
+            lock.lock(); defer { lock.unlock() }
+            if map.count >= cap { map.removeAll(keepingCapacity: true) }
+            map[key] = value
+        }
+    }
+
+    private static let cache = ParseCache()
 
     /// Stamp the current instant in the canonical relay format.
     static func now() -> String {

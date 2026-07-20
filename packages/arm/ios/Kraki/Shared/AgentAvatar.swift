@@ -101,14 +101,14 @@ struct AgentAvatar: View {
 
     var body: some View {
         ZStack {
-            // Circle background with session-hue color
-            Circle()
+            // Rounded rect background with session-hue color — matches web's
+            // `rounded-md`/`rounded-lg` container (NOT a circle).
+            RoundedRectangle(cornerRadius: size.cornerRadius, style: .circular)
                 .fill(bgColor)
                 .frame(width: size.dimension, height: size.dimension)
 
-            // Copilot SVG icon (same for all agents)
-            CopilotIcon()
-                .fill(iconColor)
+            // Per-agent SVG icon (Copilot / Claude / fallback Copilot)
+            agentIcon
                 .frame(width: size.iconSize, height: size.iconSize)
         }
         .overlay(alignment: .bottomTrailing) {
@@ -150,6 +150,23 @@ struct AgentAvatar: View {
             }
         }
     }
+    /// Resolve the per-agent SVG glyph filled with `iconColor`.
+    /// Mirrors web `AgentIcon` — falls back to the Copilot mark when
+    /// the tentacle reports an agent we don't have artwork for yet,
+    /// so a future agent doesn't render as a blank avatar.
+    @ViewBuilder
+    private var agentIcon: some View {
+        switch agent.lowercased() {
+        case "claude":
+            // Pixel art has two rectangular eye cutouts — even-odd
+            // fill makes the inner rects render as holes.
+            ClaudeIcon().fill(iconColor, style: FillStyle(eoFill: true))
+        case "pi":
+            PiIcon().fill(iconColor, style: FillStyle(eoFill: true))
+        default:
+            CopilotIcon().fill(iconColor)
+        }
+    }
 }
 
 // MARK: - Copilot Icon (SVG Shape)
@@ -167,6 +184,66 @@ private struct CopilotIcon: Shape {
         // Eyes
         path.addPath(parseSVGPath("M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z").applying(.init(scaleX: scale, y: scale)))
 
+        return path
+    }
+}
+
+// MARK: - Claude Icon (SVG Shape)
+
+/// The Claude Code pixel-art mark — a stylised "block character" face.
+/// Mirrors `ClaudeIcon` from `web/AgentAvatar.tsx`. The viewBox in the
+/// web SVG is `-1 1.5 26 20.5` with `preserveAspectRatio="none"`, so we
+/// stretch the path to fill the avatar square (matching web exactly).
+///
+/// Uses even-odd fill via the caller's `FillStyle(eoFill: true)` to
+/// punch the two eye rectangles out of the body donut.
+private struct ClaudeIcon: Shape {
+    private static let viewBox = (x: CGFloat(-1), y: CGFloat(1.5), w: CGFloat(26), h: CGFloat(20.5))
+
+    func path(in rect: CGRect) -> Path {
+        let vb = Self.viewBox
+        let sx = rect.width / vb.w
+        let sy = rect.height / vb.h
+        // Map viewBox-origin → rect origin. Apply order: scale first,
+        // then translate (CGAffineTransform composes T*S so T is the
+        // "outer" op when applied to a point).
+        let transform = CGAffineTransform.identity
+            .translatedBy(x: -vb.x * sx, y: -vb.y * sy)
+            .scaledBy(x: sx, y: sy)
+
+        return parseSVGPath("M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z")
+            .applying(transform)
+    }
+}
+
+// MARK: - Pi Icon (SVG Shape)
+
+/// The pi (pi.dev) mark — a geometric "P" with a square hole plus a separate
+/// "i" dot. Mirrors `PiIcon` from `web/AgentAvatar.tsx`. The viewBox is padded
+/// around the content bounds so the mark renders at ~84% of the icon box,
+/// matching Claude/Copilot's visual weight.
+///
+/// The first subpath (the "P") is drawn with even-odd fill (via the caller's
+/// `FillStyle(eoFill: true)`) so the inner square reads as a hole. The second
+/// subpath (the "i" dot, bottom-right) is a separate solid square.
+private struct PiIcon: Shape {
+    private static let viewBox = (x: CGFloat(120.29), y: CGFloat(120.29), w: CGFloat(559.43), h: CGFloat(559.43))
+
+    func path(in rect: CGRect) -> Path {
+        let vb = Self.viewBox
+        let sx = rect.width / vb.w
+        let sy = rect.height / vb.h
+        let transform = CGAffineTransform.identity
+            .translatedBy(x: -vb.x * sx, y: -vb.y * sy)
+            .scaledBy(x: sx, y: sy)
+
+        var path = Path()
+        // "P": outer L + inner square hole (evenodd punch-out).
+        path.addPath(parseSVGPath("M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z")
+            .applying(transform))
+        // "i": separate solid square dot.
+        path.addPath(parseSVGPath("M517.36 400H634.72V634.72H517.36Z")
+            .applying(transform))
         return path
     }
 }

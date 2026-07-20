@@ -8,6 +8,8 @@ import { StepsList } from './StepsList';
 const isTrace = (t: string) =>
   t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
   t === 'permission' || t === 'question' || t === 'error';
+const isTurnStart = (message: ChatMessage) =>
+  message.type === 'user_message' && message.payload.delivery !== 'steer';
 
 /**
  * Collect the TRACE steps (narration + tool chips) belonging to one turn,
@@ -26,7 +28,7 @@ export function collectTurnSteps(messages: ChatMessage[] | undefined, targetSeq:
   );
   if (targetIdx < 0) return [];
 
-  const inProgress = messages[targetIdx].type === 'user_message';
+  const inProgress = isTurnStart(messages[targetIdx]);
   let start: number;
   let end: number;
   if (inProgress) {
@@ -35,7 +37,7 @@ export function collectTurnSteps(messages: ChatMessage[] | undefined, targetSeq:
   } else {
     let turnStartIdx = -1;
     for (let i = targetIdx - 1; i >= 0; i--) {
-      if (messages[i].type === 'user_message') { turnStartIdx = i; break; }
+      if (isTurnStart(messages[i])) { turnStartIdx = i; break; }
     }
     start = turnStartIdx;         // steps live after the prior user_message
     end = targetIdx;              // …up to (before) the concluding bubble
@@ -66,7 +68,7 @@ export function useTurnSteps(
     if (!live) return bubbleSeq ?? -1;
     if (!messages) return -1;
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].type === 'user_message') {
+      if (isTurnStart(messages[i])) {
         return 'seq' in messages[i] ? (messages[i] as { seq?: number }).seq ?? -1 : -1;
       }
     }

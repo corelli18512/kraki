@@ -9,8 +9,14 @@ import Observation
 @Observable
 final class DeviceStore {
     var devices: [String: DeviceSummary] = [:]
-    var deviceModels: [String: [String]] = [:]
-    var deviceModelDetails: [String: [ModelDetail]] = [:]
+    /// Per-device list of agent capability slices. Each entry carries
+    /// its own `models` / `modelDetails`. Tentacles can advertise
+    /// multiple agents (e.g. Copilot + Claude). UI that wants a flat
+    /// model list reads through the `models(for:)` /
+    /// `modelDetails(for:)` helpers below — they collapse the slices
+    /// to a single agent (single-agent device) or a per-agent slice
+    /// (multi-agent device).
+    var deviceAgents: [String: [AgentCapabilities]] = [:]
     var deviceVersions: [String: String] = [:]
     /// Per-device local-session catalog populated by `local_sessions_list`
     /// responses. Cleared and re-fetched by the import picker on open.
@@ -37,13 +43,20 @@ final class DeviceStore {
     /// forced `online = false` — authoritative online state arrives
     /// via `auth_ok` / `device_joined`. Stored at
     /// `<ApplicationSupport>/Kraki/devices.json`.
+    ///
+    /// Schema versioning: bumped to v2 with PR #134 (multi-agent).
+    /// V1 snapshots are silently dropped on launch — model lists are
+    /// not critical and the next `device_greeting` re-fills them.
 
     private struct Snapshot: Codable {
+        /// Schema version. Absent / mismatched → snapshot ignored.
+        var schemaVersion: Int?
         var devices: [String: DeviceSummary]
-        var deviceModels: [String: [String]]
-        var deviceModelDetails: [String: [ModelDetail]]
+        var deviceAgents: [String: [AgentCapabilities]]
         var deviceVersions: [String: String]
     }
+
+    private static let snapshotSchemaVersion = 2
 
     private static let saveDebounce: TimeInterval = 10.0
     private var saveTask: DispatchWorkItem?
@@ -62,7 +75,13 @@ final class DeviceStore {
     init() {
         guard FileManager.default.fileExists(atPath: Self.snapshotURL.path),
               let data = try? Data(contentsOf: Self.snapshotURL),
-              var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+              var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+              snapshot.schemaVersion == Self.snapshotSchemaVersion else {
+            // Either no snapshot, or v1 (pre-multi-agent) — drop. Next
+            // greeting will re-fill agent capabilities.
+            try? FileManager.default.removeItem(at: Self.snapshotURL)
+            return
+        }
         // Force every restored device offline — authoritative online
         // state arrives later from auth_ok.
         for (id, var device) in snapshot.devices {
@@ -70,8 +89,7 @@ final class DeviceStore {
             snapshot.devices[id] = device
         }
         self.devices = snapshot.devices
-        self.deviceModels = snapshot.deviceModels
-        self.deviceModelDetails = snapshot.deviceModelDetails
+        self.deviceAgents = snapshot.deviceAgents
         self.deviceVersions = snapshot.deviceVersions
     }
 
@@ -79,9 +97,9 @@ final class DeviceStore {
     /// Called after any mutation that changes a persisted field.
     fileprivate func scheduleSave() {
         pendingSnapshot = Snapshot(
+            schemaVersion: Self.snapshotSchemaVersion,
             devices: devices,
-            deviceModels: deviceModels,
-            deviceModelDetails: deviceModelDetails,
+            deviceAgents: deviceAgents,
             deviceVersions: deviceVersions
         )
         saveTask?.cancel()
@@ -115,9 +133,58 @@ final class DeviceStore {
         devices.values.filter { $0.role == .tentacle }
     }
 
-    /// Union of all model IDs across all devices.
+    /// Union of all model IDs across all devices and agents.
     var allModels: [String] {
-        Array(Set(deviceModels.values.flatMap { $0 })).sorted()
+        var seen = Set<String>()
+        for agents in deviceAgents.values {
+            for agent in agents {
+                for m in agent.models ?? [] { seen.insert(m) }
+            }
+        }
+        return seen.sorted()
+    }
+
+    /// Agents advertised by the given device, in the order the
+    /// tentacle reported them. Empty if the greeting hasn't landed
+    /// yet (or the device went offline and we cleared its slice).
+    func agents(for deviceId: String) -> [AgentCapabilities] {
+        deviceAgents[deviceId] ?? []
+    }
+
+    /// Look up an agent slice by id within a device. Returns nil if
+    /// the device doesn't currently advertise that agent — callers
+    /// should fall back to the first slice or handle the empty case.
+    func agent(_ agentId: AgentId, on deviceId: String) -> AgentCapabilities? {
+        agents(for: deviceId).first { $0.id == agentId }
+    }
+
+    /// Models for the given device + agent. When `agentId` is nil
+    /// (callsite hasn't been multi-agent-ified yet) returns the union
+    /// across all agents on that device — a permissive default.
+    func models(for deviceId: String, agentId: AgentId? = nil) -> [String] {
+        let agents = agents(for: deviceId)
+        if let agentId, let match = agents.first(where: { $0.id == agentId }) {
+            return match.models ?? []
+        }
+        var seen = Set<String>(); var ordered: [String] = []
+        for a in agents { for m in a.models ?? [] where !seen.contains(m) {
+            seen.insert(m); ordered.append(m)
+        } }
+        return ordered
+    }
+
+    /// Model details for the given device + agent. Same fallback rule
+    /// as `models(for:agentId:)`.
+    func modelDetails(for deviceId: String, agentId: AgentId? = nil) -> [ModelDetail] {
+        let agents = agents(for: deviceId)
+        if let agentId, let match = agents.first(where: { $0.id == agentId }) {
+            return match.modelDetails ?? []
+        }
+        var seen = Set<String>(); var ordered: [ModelDetail] = []
+        for a in agents { for d in a.modelDetails ?? [] where !seen.contains(d.id) {
+            seen.insert(d.id); ordered.append(d)
+        } }
+        return ordered
     }
 
     /// Encryption key for a device (falls back to publicKey if encryptionKey absent).
@@ -154,8 +221,7 @@ final class DeviceStore {
 
     func removeDevice(_ id: String) {
         devices.removeValue(forKey: id)
-        deviceModels.removeValue(forKey: id)
-        deviceModelDetails.removeValue(forKey: id)
+        deviceAgents.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
         pendingGreetingIds.remove(id)
         scheduleSave()
@@ -174,26 +240,22 @@ final class DeviceStore {
         scheduleSave()
     }
 
-    /// Process a device_greeting: update name, models, version.
+    /// Process a device_greeting: update name, agents, version.
+    /// Both the new (`agents`) and legacy (`models`/`modelDetails`)
+    /// shapes are accepted — see `MessageRouter.handleDeviceGreeting`
+    /// for the synthesis rule when only legacy fields are present.
     func setGreeting(
         _ deviceId: String,
         name: String,
-        models: [String]?,
-        modelDetails: [ModelDetail]?,
+        agents: [AgentCapabilities]?,
         version: String?
     ) {
         devices[deviceId]?.name = name
 
-        if let models, !models.isEmpty {
-            deviceModels[deviceId] = models
+        if let agents, !agents.isEmpty {
+            deviceAgents[deviceId] = agents
         } else {
-            deviceModels.removeValue(forKey: deviceId)
-        }
-
-        if let modelDetails, !modelDetails.isEmpty {
-            deviceModelDetails[deviceId] = modelDetails
-        } else {
-            deviceModelDetails.removeValue(forKey: deviceId)
+            deviceAgents.removeValue(forKey: deviceId)
         }
 
         if let version {
@@ -208,8 +270,7 @@ final class DeviceStore {
 
     func reset() {
         devices.removeAll()
-        deviceModels.removeAll()
-        deviceModelDetails.removeAll()
+        deviceAgents.removeAll()
         deviceVersions.removeAll()
         pendingGreetingIds.removeAll()
         clearPersistentSnapshot()
@@ -242,30 +303,21 @@ final class DeviceStore {
         pendingGreetingIds.remove(id)
     }
 
-    /// Set device models list.
-    func setDeviceModels(_ id: String, models: [String]) {
-        deviceModels[id] = models
+    /// Replace the agent slice list for a device (called from
+    /// `MessageRouter.handleDeviceGreeting`). Pass an empty array to
+    /// drop the device's agents (e.g. on `device_left`).
+    func setDeviceAgents(_ id: String, agents: [AgentCapabilities]) {
+        if agents.isEmpty {
+            deviceAgents.removeValue(forKey: id)
+        } else {
+            deviceAgents[id] = agents
+        }
         scheduleSave()
     }
 
-    /// Set device model details from raw JSON dictionaries.
-    func setDeviceModelDetails(_ id: String, details: [[String: Any]]) {
-        let parsed = details.compactMap { dict -> ModelDetail? in
-            guard let mid = dict["id"] as? String,
-                  let name = dict["name"] as? String else { return nil }
-            let supportsRE = dict["supportsReasoningEffort"] as? Bool ?? false
-            let supportedREs = (dict["supportedReasoningEfforts"] as? [String])?.compactMap { ReasoningEffort(rawValue: $0) }
-            let defaultRE = (dict["defaultReasoningEffort"] as? String).flatMap { ReasoningEffort(rawValue: $0) }
-            let contextWindow = dict["contextWindow"] as? Int
-            return ModelDetail(
-                id: mid, name: name,
-                supportsReasoningEffort: supportsRE,
-                supportedReasoningEfforts: supportedREs,
-                defaultReasoningEffort: defaultRE,
-                contextWindow: contextWindow
-            )
-        }
-        deviceModelDetails[id] = parsed
+    /// Drop a device's agent slices entirely (offline / removed).
+    func clearDeviceAgents(_ id: String) {
+        deviceAgents.removeValue(forKey: id)
         scheduleSave()
     }
 

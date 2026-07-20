@@ -1038,6 +1038,7 @@ export class RelayClient {
               content: msg.payload.text,
               ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
               ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
+              ...(msg.payload.delivery === 'steer' && { delivery: 'steer' as const }),
             },
           });
 
@@ -2654,7 +2655,7 @@ export class RelayClient {
     // recordTrace() (tool_start / agent_narration flow there, NOT through send());
     // stamp the running total onto agent_message / system_message bubbles here.
     if (sessionId) {
-      if (type === 'user_message') {
+      if (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer') {
         this.turnStepCounts.set(sessionId, 0);
       } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {
         const p = enriched.payload as Record<string, unknown> | undefined;

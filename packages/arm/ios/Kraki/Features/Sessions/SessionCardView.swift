@@ -112,7 +112,7 @@ private struct SessionCardBody: View {
         AgentAvatar(
             agent: session.agent,
             sessionId: session.id,
-            size: .lg,
+            size: .md,
             status: session.state,
             pendingPermission: hasPendingPermission,
             pendingQuestion: hasPendingQuestion

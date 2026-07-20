@@ -204,6 +204,10 @@ export interface UserMessage extends BaseEnvelope {
      *  on legacy clients or historical replays — clients must fall back
      *  to a positional heuristic in that case. */
     clientId?: string;
+    /** Echoed delivery intent. A steer remains visible in the spine but is
+     *  part of the current logical agent turn, so trace and artifact consumers
+     *  must not treat it as a new turn boundary. */
+    delivery?: 'prompt' | 'steer';
   };
 }
 

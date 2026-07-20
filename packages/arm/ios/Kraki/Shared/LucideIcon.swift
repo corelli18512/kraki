@@ -434,15 +434,24 @@ func parseSVGPath(_ d: String) -> Path {
 
         switch cmdChar {
         case "M":
+            var first = true
             repeat {
                 let x = num(); let y = num()
-                if lastCommand != "M" && lastCommand != " " {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                } else {
+                if first {
+                    // Every explicit moveto begins a NEW subpath. The previous
+                    // implementation keyed this off `lastCommand`, so an `M`
+                    // after `Z` became a line from the closed outer contour to
+                    // the inner contour. That corrupts even-odd glyphs such as
+                    // the official Pi mark (its square hole cuts a corner from
+                    // the P). Only subsequent coordinate pairs belonging to the
+                    // SAME M command are implicit absolute line-tos.
                     path.move(to: CGPoint(x: x, y: y))
+                    startX = x; startY = y
+                    first = false
+                } else {
+                    path.addLine(to: CGPoint(x: x, y: y))
                 }
                 currentX = x; currentY = y
-                startX = currentX; startY = currentY
                 lastCommand = "M"
             } while hasMoreNumbers()
 

@@ -378,6 +378,10 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
+        guard webSocketTask === task else {
+            KLog.d("ℹ️ Ignoring stale WebSocket open callback")
+            return
+        }
         KLog.d("✅ WebSocket opened")
         reconnectDelay = Self.reconnectBase
         reconnectAttempts = 0
@@ -393,6 +397,10 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
+        guard webSocketTask === task else {
+            KLog.d("ℹ️ Ignoring stale WebSocket close callback")
+            return
+        }
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
         KLog.d("🔒 WebSocket closed code=\(closeCode.rawValue) reason=\(reasonStr) intentional=\(intentionalClose) url=\(relayURL)")
         cleanup()
@@ -407,6 +415,10 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        guard task === self.task else {
+            KLog.d("ℹ️ Ignoring stale WebSocket completion callback")
+            return
+        }
         guard let error else { return }
         KLog.d("⚠️ WebSocket didCompleteWithError \(error.localizedDescription) intentional=\(intentionalClose) url=\(relayURL)")
         cleanup()

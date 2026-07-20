@@ -538,6 +538,16 @@ export class KrakiWSClient {
 
       // Store tentacle info for later message loading
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
+
+      // Session metadata is authoritative for coarse liveness; the dedicated
+      // runtime snapshot resolves the finer transient state. Re-request on
+      // every active session_list so an offline compaction end can clear stale
+      // local state. Idle/ended proves compaction is no longer running.
+      if (ts.state === 'active') {
+        messageProvider.requestCard(ts.id, true);
+      } else {
+        store.setRuntimeStatus(ts.id, null);
+      }
     }
 
     // Apply pin state from tentacle (replaces local pins for this tentacle's sessions)

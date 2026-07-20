@@ -446,6 +446,20 @@ describe('useStore', () => {
       expect(useStore.getState().cards.has('sess-nonexistent')).toBe(false);
     });
 
+    it('runtime status is independent from the card and cleared with session removal', () => {
+      useStore.getState().setSessions([mockSession]);
+      useStore.getState().setCardAction('sess-1', mockQuestionAction);
+      useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason: 'overflow' });
+      expect(useStore.getState().runtimeStatuses.get('sess-1')).toEqual({
+        status: 'compacting', reason: 'overflow',
+      });
+      expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockQuestionAction);
+
+      useStore.getState().removeSession('sess-1');
+      expect(useStore.getState().runtimeStatuses.has('sess-1')).toBe(false);
+      expect(useStore.getState().cards.has('sess-1')).toBe(false);
+    });
+
     it('stores question choices in card action', () => {
       useStore.getState().setCardAction('sess-1', mockQuestionAction);
       expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockQuestionAction);
@@ -474,6 +488,7 @@ describe('useStore', () => {
       expect(state.devices.size).toBe(0);
       expect(state.messages.size).toBe(0);
       expect(state.cards.size).toBe(0);
+      expect(state.runtimeStatuses.size).toBe(0);
       expect(state.sessionModes.size).toBe(0);
     });
   });

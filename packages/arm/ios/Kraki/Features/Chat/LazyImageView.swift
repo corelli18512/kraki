@@ -15,12 +15,9 @@
 import SwiftUI
 
 struct LazyImageView: View {
-    @Environment(AppState.self) private var appState
-
+    let attachmentStore: AttachmentStore
     let ref: ContentRef
     let sessionId: String
-
-    private var attachmentStore: AttachmentStore { appState.attachmentStore }
 
     /// Estimated aspect ratio from the tentacle's `width`/`height` hints.
     /// Fallback to square if neither is present.
@@ -31,9 +28,10 @@ struct LazyImageView: View {
         return 1.0
     }
 
-    /// Render at most ~192pt tall, scaled by the known aspect ratio.
-    private var renderedHeight: CGFloat { 192 }
-    private var renderedWidth: CGFloat { renderedHeight * aspectRatio }
+    /// Lazy images are constrained by both the bubble width supplied by the
+    /// parent and this vertical cap. Landscape refs therefore shrink to fit
+    /// instead of deriving an unbounded width from a fixed 192pt height.
+    private let maxRenderedHeight: CGFloat = 192
 
     var body: some View {
         Group {
@@ -43,7 +41,7 @@ struct LazyImageView: View {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFit()
-                        .frame(maxHeight: renderedHeight)
+                        .frame(maxWidth: .infinity, maxHeight: maxRenderedHeight, alignment: .leading)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 } else {
                     errorPlaceholder(label: "Invalid image")
@@ -66,7 +64,9 @@ struct LazyImageView: View {
                 .fill(.quaternary)
             ProgressView().controlSize(.small)
         }
-        .frame(width: renderedWidth, height: renderedHeight)
+        .aspectRatio(aspectRatio, contentMode: .fit)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxHeight: maxRenderedHeight)
     }
 
     /// Distinct error styling so a permanently failed image doesn't
@@ -99,7 +99,9 @@ struct LazyImageView: View {
                 }
                 .padding(.horizontal, 4)
             }
-            .frame(width: renderedWidth, height: renderedHeight)
+            .aspectRatio(aspectRatio, contentMode: .fit)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxHeight: maxRenderedHeight)
         }
         .buttonStyle(.plain)
     }

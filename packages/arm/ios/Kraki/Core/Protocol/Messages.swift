@@ -30,8 +30,34 @@ struct DeviceInfo: Codable, Sendable {
     var capabilities: DeviceCapabilities?
 }
 
+/// General agent category — extensible for future non-coding agents.
+/// Mirrors `AgentType` in the TS protocol.
+typealias AgentType = String  // currently only "code"
+
+/// Specific agent implementation within a type.
+/// Mirrors `AgentId` in the TS protocol. Kept as a String alias instead
+/// of a closed enum so a tentacle advertising a future agent doesn't
+/// fail to decode on this client.
+typealias AgentId = String  // "copilot" | "claude" | future
+
+/// Per-agent capability descriptor reported by a tentacle in
+/// `device_greeting`. A single tentacle can advertise multiple agents
+/// (e.g. Copilot + Claude Code) — the previous flat `models[]` is
+/// replaced by an array of these.
+struct AgentCapabilities: Codable, Equatable, Sendable {
+    var type: AgentType
+    var id: AgentId
+    var models: [String]?
+    var modelDetails: [ModelDetail]?
+}
+
 /// Capabilities advertised by a device.
 struct DeviceCapabilities: Codable, Equatable, Sendable {
+    /// New shape: per-agent slices of model lists.
+    var agents: [AgentCapabilities]?
+    /// Legacy flat fields kept here only so an old on-disk snapshot or
+    /// a not-yet-upgraded tentacle still decodes. Newly-encoded
+    /// payloads (and current relay traffic) only use `agents`.
     var models: [String]?
     var modelDetails: [ModelDetail]?
 }
@@ -143,7 +169,13 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
 
     var content: String? { payload["content"]?.stringValue }
     var interruptedDraft: String? { payload["draft"]?.stringValue }
+    /// `turn_status` payload's terminal action: `{type: user_abort|failed, payload:{...}}`.
+    /// For `interrupted_turn` (legacy) the card action is rebuilt by the caller.
     var terminalAction: [String: AnyCodable]? { payload["action"]?.dictValue }
+    /// `turn_status.finishedAt` — the real ISO timestamp a frozen terminal card
+    /// anchors its footer to (mirrors web `frozen.timestamp`). Falls back to
+    /// `interrupted_turn.interruptedAt` for the legacy message.
+    var finishedAt: String? { payload["finishedAt"]?.stringValue ?? payload["interruptedAt"]?.stringValue }
     var toolName: String? { payload["toolName"]?.stringValue }
     var toolCallId: String? { payload["toolCallId"]?.stringValue }
     var result: String? { payload["result"]?.stringValue }
@@ -157,6 +189,16 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var reason: String? { payload["reason"]?.stringValue }
     var resolution: String? { payload["resolution"]?.stringValue }
     var answer: String? { payload["answer"]?.stringValue }
+    var cancelled: Bool { payload["cancelled"]?.boolValue ?? false }
+    var allowFreeform: Bool { payload["allowFreeform"]?.boolValue ?? true }
+    /// TRACE step count stamped on a concluding bubble (agent_message /
+    /// system_message) by the tentacle. `> 0` ⇒ the turn has pullable steps.
+    var steps: Int? { payload["steps"]?.intValue }
+    /// Draft-bubble keep-last flag on `agent_message_delta`: replace the current
+    /// draft with `content` instead of appending when true.
+    var reset: Bool? { payload["reset"]?.boolValue }
+    /// `system_message` kind (e.g. "no_reply").
+    var systemKind: String? { payload["kind"]?.stringValue }
     var pinned: Bool? { payload["pinned"]?.boolValue }
     var mode: String? { payload["mode"]?.stringValue }
     var model: String? { payload["model"]?.stringValue }
@@ -212,6 +254,17 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         }
     }
 
+    /// Durable user-visible image/HTML refs attached to a turn's closing idle.
+    /// The visual projection moves these onto the final agent/terminal outcome;
+    /// bytes remain lazy in AttachmentStore.
+    var turnArtifacts: [ContentRef] {
+        guard type == "idle", let arr = payload["turnArtifacts"]?.arrayValue else { return [] }
+        return arr.compactMap { item -> ContentRef? in
+            guard let dict = item.dictValue else { return nil }
+            return ContentRef.from(dict)
+        }
+    }
+
     var args: [String: AnyCodable]? {
         payload["args"]?.dictValue
     }
@@ -236,7 +289,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// True for message types that should be rendered in the chat.
     var isRenderable: Bool {
         switch type {
-        case "user_message", "agent_message", "interrupted_turn", "turn_status", "pending_input", "send_input",
+        case "user_message", "agent_message", "interrupted_turn", "pending_input", "send_input",
              "permission", "question", "tool_start", "tool_complete",
              "idle", "active", "error", "session_created", "session_ended",
              "session_deleted", "kill_session", "answer",
@@ -298,6 +351,7 @@ struct SessionEndedPayload: Codable, Sendable {
 
 struct UserMessagePayload: Codable, Sendable {
     let content: String
+    var delivery: String?
 }
 
 struct AgentMessagePayload: Codable, Sendable {
@@ -338,6 +392,8 @@ struct ToolCompletePayload: Codable, Sendable {
 
 struct IdlePayload: Codable, Sendable {
     var usage: SessionUsage?
+    var reason: String?
+    var turnArtifacts: [ContentRef]?
 }
 
 struct CompactingPayload: Codable, Sendable {
@@ -375,6 +431,12 @@ struct SessionReadPayload: Codable, Sendable {
 struct DeviceGreetingPayload: Codable, Sendable {
     let name: String
     var kind: DeviceKind?
+    /// New shape (PR #134): per-agent capability slices.
+    var agents: [AgentCapabilities]?
+    /// Legacy flat fields. A current tentacle never sends these; we
+    /// keep them on the decode path so a session that started against
+    /// an old relay/tentacle still gets a model list. The router
+    /// promotes them into a synthetic single-agent (Copilot) bucket.
     var models: [String]?
     var modelDetails: [ModelDetail]?
     var version: String?
@@ -1167,8 +1229,15 @@ enum RelayEnvelope: Codable, Sendable {
 /// Used by CommandSender for the untyped send path.
 enum ConsumerMessageBuilder {
 
-    static func sendInput(sessionId: String, deviceId: String, text: String, attachments: [ImageAttachment]? = nil) -> [String: Any] {
+    static func sendInput(
+        sessionId: String,
+        deviceId: String,
+        text: String,
+        attachments: [ImageAttachment]? = nil,
+        delivery: String? = nil
+    ) -> [String: Any] {
         var payload: [String: Any] = ["text": text]
+        if let delivery { payload["delivery"] = delivery }
         if let attachments, !attachments.isEmpty {
             payload["attachments"] = attachments.map { ["type": $0.type, "mimeType": $0.mimeType, "data": $0.data] }
         }

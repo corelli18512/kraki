@@ -49,7 +49,7 @@ struct DeviceListView: View {
                             DeviceRow(
                                 device: device,
                                 isSelf: device.id == appState.deviceId,
-                                hasGreeting: appState.deviceStore.deviceModels[device.id] != nil
+                                hasGreeting: !appState.deviceStore.agents(for: device.id).isEmpty
                             )
                         }
                     }

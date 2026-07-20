@@ -51,6 +51,23 @@ struct MainTabView: View {
             selectedTab = 0
             sessionPath = NavigationPath()
         }
+        #if DEBUG
+        .task {
+            guard let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
+                  !target.isEmpty else { return }
+            // Pairing/auth and session_list are asynchronous. Wait until the
+            // requested session exists, then drive the normal navigation path.
+            for _ in 0..<100 {
+                if appState.sessionStore.sessions[target] != nil {
+                    selectedTab = 0
+                    sessionPath = NavigationPath()
+                    sessionPath.append(SessionNavID(id: target))
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        #endif
     }
 
     // MARK: - Sub-views (shared)

@@ -15,6 +15,9 @@ export default defineConfig({
       '@kraki/tentacle': resolve(__dirname, '../tentacle/src/index.ts'),
       '@kraki/protocol': resolve(__dirname, '../protocol/src/index.ts'),
       '@kraki/crypto': resolve(__dirname, '../crypto/src/index.ts'),
+      '@kraki/voice-broker/mock': resolve(__dirname, '../voice-broker/src/mock-doubao.ts'),
+      '@kraki/voice-broker/logger': resolve(__dirname, '../voice-broker/src/logger.ts'),
+      '@kraki/voice-broker': resolve(__dirname, '../voice-broker/src/index.ts'),
     },
   },
 });

@@ -769,10 +769,18 @@ export class SessionManager {
       meta.idleSeqs.push(seq);
     }
 
-    // A user_message begins a new turn — remember its seq so trace entries
-    // recorded until the next user_message can be tagged to this turn.
+    // A normal user_message begins a new turn — remember its seq so trace
+    // entries recorded until the next normal prompt can be tagged to this turn.
+    // A steer is a visible user interjection inside the current agent lifecycle
+    // and must not split its TRACE history.
     if (type === 'user_message') {
-      meta.currentTurnStartSeq = seq;
+      try {
+        const parsed = JSON.parse(payload) as { payload?: { delivery?: string } };
+        if (parsed.payload?.delivery !== 'steer') meta.currentTurnStartSeq = seq;
+      } catch {
+        // Legacy/corrupt payloads retain the historical boundary behavior.
+        meta.currentTurnStartSeq = seq;
+      }
     }
 
     meta.lastSeq = seq;
@@ -810,7 +818,14 @@ export class SessionManager {
         meta.idleSeqs.push(seq - messages.length + i + 1);
       }
       if (messages[i].type === 'user_message') {
-        meta.currentTurnStartSeq = seq - messages.length + i + 1;
+        try {
+          const parsed = JSON.parse(messages[i].payload) as { payload?: { delivery?: string } };
+          if (parsed.payload?.delivery !== 'steer') {
+            meta.currentTurnStartSeq = seq - messages.length + i + 1;
+          }
+        } catch {
+          meta.currentTurnStartSeq = seq - messages.length + i + 1;
+        }
       }
     }
 
@@ -884,12 +899,17 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
 
-    // Resolve the turn start: greatest user_message seq <= bubbleSeq.
+    // Resolve the turn start: greatest non-steer user_message seq <= bubbleSeq.
     let turnStartSeq = 0;
     for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
-      if (m.type === 'user_message' && m.seq <= bubbleSeq && m.seq > turnStartSeq) {
-        turnStartSeq = m.seq;
+      if (m.type !== 'user_message' || m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
+      try {
+        const parsed = JSON.parse(m.payload) as { payload?: { delivery?: string } };
+        if (parsed.payload?.delivery === 'steer') continue;
+      } catch {
+        // Legacy/corrupt payloads retain the historical boundary behavior.
       }
+      turnStartSeq = m.seq;
     }
 
     const complete = (meta.idleSeqs ?? []).some(s => s >= bubbleSeq);

@@ -47,6 +47,11 @@ struct SessionDetailView: View {
         .onAppear {
             KLog.chat("👆 [2/history TAP] session=\(sessionId.prefix(12)) — entering ChatView")
             sessionStore.activeSessionId = sessionId
+            // A cached live card is never authoritative across page entry. The
+            // matching subscription ACK will replace it before live frames are
+            // accepted; persistent spine remains independently visible/loading.
+            appState.messageStore.clearCard(sessionId)
+            appState.sessionSubscriptionController.setDesired(sessionId)
             // Bootstrap the in-memory window from the DB so ChatView
             // has something to render before the (possibly delayed)
             // tentacle replay lands. Cold-launch idempotent.
@@ -69,6 +74,17 @@ struct SessionDetailView: View {
         .onDisappear {
             if sessionStore.activeSessionId == sessionId {
                 sessionStore.activeSessionId = nil
+            }
+            // SwiftUI may deliver A.onDisappear before B.onAppear during a
+            // detail-to-detail navigation transition. Defer null one runloop so
+            // B can atomically replace A on the same Tentacle instead of
+            // emitting A→null→B. A real return to the list remains nil.
+            Task { @MainActor in
+                await Task.yield()
+                if sessionStore.activeSessionId == nil,
+                   appState.sessionSubscriptionController.desiredSessionId == sessionId {
+                    appState.sessionSubscriptionController.setDesired(nil)
+                }
             }
             // Drop pending bookkeeping when the user backs out of an
             // optimistic placeholder; the request stays in flight, but
@@ -111,6 +127,7 @@ struct SessionDetailView: View {
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                    .accessibilityLabel("More")
                 }
             }
             .sheet(isPresented: $showInfoSheet) {

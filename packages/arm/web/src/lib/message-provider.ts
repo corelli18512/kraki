@@ -389,7 +389,8 @@ class MessageProvider {
     this.cardRequested.clear();
   }
 
-  requestCard(sessionId: string): void {
+  requestCard(sessionId: string, force = false): void {
+    if (force) this.cardRequested.delete(sessionId);
     if (this.cardRequested.has(sessionId)) return;
     const store = getStore();
     if (store.status !== 'connected') return;

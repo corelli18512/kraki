@@ -41,10 +41,10 @@ struct SessionListView: View {
         .navigationBarHidden(true)
         .background(Color.surfacePrimary)
         .onAppear {
-            KLog.chat("📂 [snapshot] SessionListView.onAppear render: store=\(sessionStore.sessions.count) sorted=\(sorted.count) filtered=\(filteredSessions.count)")
+            KLog.chat("📂 [session-list] onAppear store=\(sessionStore.sessions.count) sorted=\(sorted.count) filtered=\(filteredSessions.count)")
         }
         .onChange(of: filteredSessions.count) { old, new in
-            KLog.chat("📂 [snapshot] SessionListView count change: \(old) → \(new)")
+            KLog.d("📂 [snapshot] SessionListView count change: \(old) → \(new)")
         }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 0) {
@@ -189,7 +189,6 @@ struct SessionListView: View {
         SessionTable(appState: appState, deviceFilter: selectedDeviceFilter) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
-        .equatable()
         .background(Color.surfacePrimary)
         .ignoresSafeArea(.container, edges: .bottom)
     }

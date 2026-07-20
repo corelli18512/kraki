@@ -79,7 +79,6 @@ final class SessionStoreTests: XCTestCase {
         store.upsertSession(makeDigest(pinned: true), deviceId: "dev-1", deviceName: "MB")
         store.setPreview("sess-1", text: "hi")
         store.setDraft("sess-1", "draft")
-        store.appendDelta("sess-1", "delta")
         store.incrementUnread("sess-1")
 
         store.removeSession("sess-1")
@@ -90,7 +89,6 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.sessionModes["sess-1"])
         XCTAssertNil(store.sessionPreviews["sess-1"])
         XCTAssertNil(store.drafts["sess-1"])
-        XCTAssertNil(store.streamingContent["sess-1"])
     }
 
     // MARK: - Properties
@@ -193,38 +191,6 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.drafts["sess-1"])
     }
 
-    // MARK: - Streaming Deltas
-
-    func testAppendDelta() {
-        // `appendDelta` debounces writes into `streamingContent`
-        // (so views update at ~4 Hz instead of per-token).
-        // `flushDelta` promotes the buffer synchronously, which is
-        // what test code wants for a deterministic read.
-        store.appendDelta("sess-1", "Hello")
-        store.appendDelta("sess-1", " World")
-        _ = store.flushDelta("sess-1")
-        // After flush, the delta promotes once into streamingContent
-        // before being cleared; re-append + flush to inspect the
-        // promoted state right before the second clear.
-        store.appendDelta("sess-1", "Hello World")
-        store.promotePendingDeltaForTesting("sess-1")
-        XCTAssertEqual(store.streamingContent["sess-1"], "Hello World")
-    }
-
-    func testFlushDelta() {
-        store.appendDelta("sess-1", "content")
-        let flushed = store.flushDelta("sess-1")
-        XCTAssertEqual(flushed, "content")
-        XCTAssertNil(store.streamingContent["sess-1"])
-    }
-
-    func testFlushDeltaWhenEmpty() {
-        let flushed = store.flushDelta("sess-1")
-        XCTAssertNil(flushed)
-    }
-
-    // MARK: - Sorted Sessions
-
     func testSortedSessions() {
         store.upsertSession(makeDigest(id: "s1"), deviceId: "d", deviceName: "n")
         store.upsertSession(makeDigest(id: "s2", pinned: true), deviceId: "d", deviceName: "n")
@@ -263,7 +229,6 @@ final class SessionStoreTests: XCTestCase {
         store.incrementUnread("sess-1")
         store.setPreview("sess-1", text: "hi")
         store.setDraft("sess-1", "draft")
-        store.appendDelta("sess-1", "delta")
         store.activeSessionId = "sess-1"
 
         store.reset()
@@ -275,7 +240,6 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertTrue(store.sessionModes.isEmpty)
         XCTAssertTrue(store.sessionPreviews.isEmpty)
         XCTAssertTrue(store.drafts.isEmpty)
-        XCTAssertTrue(store.streamingContent.isEmpty)
         XCTAssertNil(store.navigateToSession)
     }
 

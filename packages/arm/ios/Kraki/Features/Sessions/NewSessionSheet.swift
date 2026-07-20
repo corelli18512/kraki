@@ -15,6 +15,7 @@ struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedDeviceId: String = ""
+    @State private var selectedAgentId: String = ""
     @State private var selectedModel: String = ""
     @State private var reasoningEffort: ReasoningEffort?
     @State private var sessionTitle: String = ""
@@ -24,7 +25,12 @@ struct NewSessionSheet: View {
     private enum Screen: Equatable {
         case form
         case devicePicker
-        case modelPicker
+        /// Combined agent + model picker. When the device has multiple
+        /// agents we show a row of agent chips at the top and the
+        /// model list below. With a single agent the chip row hides
+        /// and the picker degenerates to the same model-only list the
+        /// pre-multi-agent build had.
+        case agentModelPicker
     }
 
     private var deviceStore: DeviceStore { appState.deviceStore }
@@ -37,12 +43,24 @@ struct NewSessionSheet: View {
         tentacles.filter(\.online)
     }
 
+    private var agentsList: [AgentCapabilities] {
+        deviceStore.agents(for: selectedDeviceId)
+    }
+
+    private var hasMultipleAgents: Bool {
+        agentsList.count > 1
+    }
+
+    private var activeAgent: AgentCapabilities? {
+        agentsList.first { $0.id == selectedAgentId } ?? agentsList.first
+    }
+
     private var models: [String] {
-        deviceStore.deviceModels[selectedDeviceId] ?? []
+        activeAgent?.models ?? []
     }
 
     private var modelDetails: [ModelDetail] {
-        deviceStore.deviceModelDetails[selectedDeviceId] ?? []
+        activeAgent?.modelDetails ?? []
     }
 
     private var selectedModelDetail: ModelDetail? {
@@ -56,7 +74,7 @@ struct NewSessionSheet: View {
     }
 
     private var canSubmit: Bool {
-        !selectedDeviceId.isEmpty && !selectedModel.isEmpty
+        !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
     }
 
     // MARK: - Body
@@ -79,8 +97,8 @@ struct NewSessionSheet: View {
                     case .devicePicker:
                         devicePickerCard
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
-                    case .modelPicker:
-                        modelPickerCard
+                    case .agentModelPicker:
+                        agentModelPickerCard
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     }
                 }
@@ -98,6 +116,7 @@ struct NewSessionSheet: View {
         .presentationBackground(.clear)
         .onAppear { selectDefaults() }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
+        .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
         .sheet(isPresented: $showImportSheet) {
             ImportSessionSheet()
@@ -147,10 +166,18 @@ struct NewSessionSheet: View {
                 }
                 .buttonStyle(.plain)
 
-                Text(screen == .devicePicker ? "Device" : "Model")
+                Text(headerTitle)
                     .font(.title2.weight(.semibold))
                 Spacer()
             }
+        }
+    }
+
+    private var headerTitle: String {
+        switch screen {
+        case .form: return "New Session"
+        case .devicePicker: return "Device"
+        case .agentModelPicker: return "Agent"
         }
     }
 
@@ -162,6 +189,17 @@ struct NewSessionSheet: View {
 
     // MARK: - Form Card
 
+    /// "Agent" row label combines agent + model so the user sees what
+    /// they'd be creating without drilling in. Falls back to "Select"
+    /// when nothing is picked yet (e.g. greeting hasn't landed).
+    private var agentRowValue: String {
+        guard !selectedAgentId.isEmpty || !selectedModel.isEmpty else { return "Select" }
+        let agentLabel = selectedAgentId.isEmpty ? "" : AgentInfo.from(selectedAgentId).label
+        if selectedModel.isEmpty { return agentLabel.isEmpty ? "Select" : agentLabel }
+        if agentLabel.isEmpty { return selectedModel }
+        return "\(agentLabel) · \(selectedModel)"
+    }
+
     private var formCard: some View {
         VStack(spacing: 0) {
             rowButton(label: "Device",
@@ -171,18 +209,17 @@ struct NewSessionSheet: View {
 
             Divider().padding(.leading, 16)
 
-            if models.isEmpty {
+            if agentsList.isEmpty {
                 HStack {
-                    Text("Model").foregroundStyle(Color.primary)
+                    Text("Agent").foregroundStyle(Color.primary)
                     Spacer()
                     Text("Waiting…").foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             } else {
-                rowButton(label: "Model",
-                          value: selectedModel.isEmpty ? "Select" : selectedModel) {
-                    withAnimation(.easeInOut(duration: 0.22)) { screen = .modelPicker }
+                rowButton(label: "Agent", value: agentRowValue) {
+                    withAnimation(.easeInOut(duration: 0.22)) { screen = .agentModelPicker }
                 }
             }
 
@@ -258,22 +295,67 @@ struct NewSessionSheet: View {
         .modifier(GlassCardModifier())
     }
 
-    private var modelPickerCard: some View {
+    // MARK: - Agent + Model Picker
+
+    /// Combined picker. Multi-agent devices show a row of agent chips
+    /// at the top and the agent's model list below — the same shape
+    /// the web `NewSessionDialog` uses. Single-agent devices skip the
+    /// chip strip entirely so the screen reads as a plain model list.
+    private var agentModelPickerCard: some View {
         AlwaysScrollableArea {
-            ModelPickerCard(
-                models: models,
-                modelDetails: modelDetails,
-                selectedModel: selectedModel,
-                reasoningEffort: $reasoningEffort,
-                onSelect: { model in
-                    selectedModel = model
-                    SessionPrefs.saveLastModel(deviceId: selectedDeviceId, model: model)
-                    // Don't auto-back so user can tweak Thinking.
-                },
-                onEffortChange: { effort in
-                    SessionPrefs.saveLastEffort(model: selectedModel, effort: effort)
+            VStack(spacing: 12) {
+                if hasMultipleAgents {
+                    agentChipStrip
+                        .padding(.horizontal, 4)
                 }
-            )
+                ModelPickerCard(
+                    models: models,
+                    modelDetails: modelDetails,
+                    selectedModel: selectedModel,
+                    reasoningEffort: $reasoningEffort,
+                    onSelect: { model in
+                        selectedModel = model
+                        SessionPrefs.saveLastModel(
+                            deviceId: selectedDeviceId,
+                            agentId: selectedAgentId,
+                            model: model
+                        )
+                        // Don't auto-back so user can tweak Thinking.
+                    },
+                    onEffortChange: { effort in
+                        SessionPrefs.saveLastEffort(model: selectedModel, effort: effort)
+                    }
+                )
+            }
+        }
+    }
+
+    /// Horizontal pill list mirroring the web "Agent" buttons.
+    private var agentChipStrip: some View {
+        HStack(spacing: 8) {
+            ForEach(agentsList, id: \.id) { agent in
+                Button {
+                    handleSelectAgent(agent.id)
+                } label: {
+                    Text(AgentInfo.from(agent.id).label)
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            agent.id == selectedAgentId
+                                ? Color.krakiPrimary
+                                : Color.secondary.opacity(0.18),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(
+                            agent.id == selectedAgentId
+                                ? Color.white
+                                : Color.primary
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -334,19 +416,46 @@ struct NewSessionSheet: View {
                 selectedDeviceId = first.id
             }
         }
+        applyAgentPref()
         applyModelPref()
     }
 
     private func onDeviceChanged() {
+        applyAgentPref()
         applyModelPref()
     }
 
-    /// Restore the last model selected for the current device, or auto-pick
-    /// the first available if the saved model is gone.
+    /// Restore the last-used agent for the current device. Falls back
+    /// to the first advertised slice. No-op when the device hasn't yet
+    /// reported its agents (waiting on `device_greeting`).
+    private func applyAgentPref() {
+        guard !agentsList.isEmpty else { selectedAgentId = ""; return }
+        let candidate = SessionPrefs.lastAgentId(deviceId: selectedDeviceId)
+        if let candidate, agentsList.contains(where: { $0.id == candidate }) {
+            selectedAgentId = candidate
+        } else if !agentsList.contains(where: { $0.id == selectedAgentId }) {
+            selectedAgentId = agentsList.first?.id ?? ""
+        }
+    }
+
+    private func handleSelectAgent(_ agentId: String) {
+        guard agentId != selectedAgentId else { return }
+        selectedAgentId = agentId
+        SessionPrefs.saveLastAgent(deviceId: selectedDeviceId, agentId: agentId)
+        // Switching agent invalidates the model — re-resolve from prefs.
+        applyModelPref()
+    }
+
+    private func onAgentChanged() {
+        applyModelPref()
+    }
+
+    /// Restore the last model selected for the current device + agent,
+    /// or auto-pick the first available if the saved model is gone.
     private func applyModelPref() {
-        let available = deviceStore.deviceModels[selectedDeviceId] ?? []
+        let available = models
         guard !available.isEmpty else { return }
-        if let lastModel = SessionPrefs.lastModel(deviceId: selectedDeviceId),
+        if let lastModel = SessionPrefs.lastModel(deviceId: selectedDeviceId, agentId: selectedAgentId),
            available.contains(lastModel) {
             selectedModel = lastModel
         } else if selectedModel.isEmpty || !available.contains(selectedModel) {
@@ -379,6 +488,7 @@ struct NewSessionSheet: View {
         let trimmed = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.commandSender?.createSession(
             targetDeviceId: selectedDeviceId,
+            agentId: selectedAgentId,
             model: selectedModel,
             reasoningEffort: reasoningEffort,
             prompt: nil,
@@ -493,12 +603,18 @@ struct GlassCardModifier: ViewModifier {
     }
 }
 
-/// Persists the user's last-used Device / Model / Reasoning-Effort choices,
-/// mirroring the web `NewSessionDialog` keys so the same prefs would
-/// conceptually carry across surfaces.
+/// Persists the user's last-used Device / Agent / Model / Reasoning-Effort
+/// choices, mirroring the web `NewSessionDialog` keys so the same prefs
+/// would conceptually carry across surfaces.
+///
+/// Schema note: `lastModel` is keyed by `"deviceId:agentId"` to keep the
+/// "remember per agent" behavior the web ships. A pre-multi-agent
+/// snapshot keyed only by `deviceId` is read once as a fallback so users
+/// upgrading from an older build keep their last model.
 enum SessionPrefs {
     private static let lastDeviceKey = "kraki:last-device"
-    private static let lastModelKey  = "kraki:last-model"   // { deviceId: model }
+    private static let lastAgentKey  = "kraki:last-agent"   // { deviceId: agentId }
+    private static let lastModelKey  = "kraki:last-model"   // { "deviceId:agentId": model } — pre-multi-agent: { deviceId: model }
     private static let lastEffortKey = "kraki:last-effort"  // { model: effort }
 
     static func lastDeviceId() -> String? {
@@ -509,13 +625,33 @@ enum SessionPrefs {
         UserDefaults.standard.set(id, forKey: lastDeviceKey)
     }
 
-    static func lastModel(deviceId: String) -> String? {
-        modelMap()[deviceId]
+    /// Last agent id used on the given device. Returns nil if the user
+    /// hasn't picked one yet — caller should default to the first
+    /// available slice (or `"copilot"` for legacy single-agent flows).
+    static func lastAgentId(deviceId: String) -> String? {
+        agentMap()[deviceId]
     }
 
-    static func saveLastModel(deviceId: String, model: String) {
+    static func saveLastAgent(deviceId: String, agentId: String) {
+        var map = agentMap()
+        map[deviceId] = agentId
+        UserDefaults.standard.set(map, forKey: lastAgentKey)
+    }
+
+    /// Resolve the last-used model for (device, agent). Falls back to
+    /// the legacy device-only key once for migration.
+    static func lastModel(deviceId: String, agentId: String?) -> String? {
+        let map = modelMap()
+        if let agentId, let m = map["\(deviceId):\(agentId)"] { return m }
+        // Legacy single-agent key — every entry was a Copilot session
+        // before PR #134.
+        return map[deviceId]
+    }
+
+    static func saveLastModel(deviceId: String, agentId: String?, model: String) {
         var map = modelMap()
-        map[deviceId] = model
+        let key = agentId.map { "\(deviceId):\($0)" } ?? deviceId
+        map[key] = model
         UserDefaults.standard.set(map, forKey: lastModelKey)
     }
 
@@ -528,6 +664,10 @@ enum SessionPrefs {
         var map = effortMap()
         map[model] = effort.rawValue
         UserDefaults.standard.set(map, forKey: lastEffortKey)
+    }
+
+    private static func agentMap() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: lastAgentKey) as? [String: String] ?? [:]
     }
 
     private static func modelMap() -> [String: String] {

@@ -22,6 +22,8 @@ final class AppState {
     private(set) var messageProvider: MessageProvider?
     private(set) var pushManager: PushManager?
     private(set) var preferencesManager: PreferencesManager?
+    private(set) var pulseManager: PulseManager?
+    private(set) var sessionSubscriptionController: SessionSubscriptionController!
 
     init() {
         // The message DB is the persistence backbone for chat
@@ -195,12 +197,41 @@ final class AppState {
         self.messageProvider = provider
         self.pushManager = push
         self.preferencesManager = prefs
+        // Pulse reliable transport — wraps every consumer message through
+        // the endpoint before E2E encryption, and unwraps inbound frames
+        // after decryption.
+        self.pulseManager = PulseManager(host: self)
+        self.sessionSubscriptionController = SessionSubscriptionController(host: self)
 
         // Mirror the persisted credential state from disk so cold launch
         // with stored creds skips LoginView and lands directly on the
         // session list, per RootView's gating contract. AuthManager has
         // already loaded `storedDeviceId` from UserDefaults in its init.
         self.hasStoredCredentials = (auth.storedDeviceId != nil)
+
+        // DEBUG: automate real-relay pairing in the simulator without
+        // requiring camera/UI automation. This exercises the same AuthManager,
+        // WebSocket, Pulse, session-list and storage paths as manual pairing;
+        // only acquisition of the QR URL is bypassed.
+        #if DEBUG
+        if let pairingURL = ProcessInfo.processInfo.environment["KRAKI_PAIRING_URL"],
+           let components = URLComponents(string: pairingURL),
+           let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+           !token.isEmpty {
+            auth.clearStoredCredentials()
+            auth.pairingToken = token
+            if let pairedRelay = components.queryItems?.first(where: { $0.name == "relay" })?.value,
+               !pairedRelay.isEmpty, pairedRelay != relayURL {
+                relayURL = pairedRelay
+                client.setRelayURL(pairedRelay) // schedules exactly one connect
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.connect() }
+            }
+            connectionStatus = .authenticating
+        } else if ProcessInfo.processInfo.environment["KRAKI_DEV_LOGIN"] == "1" {
+            DispatchQueue.main.async { [weak self] in self?.devConnect() }
+        }
+        #endif
     }
 
     func connect() {
@@ -213,8 +244,8 @@ final class AppState {
     ///
     /// The default `relayURL` is `wss://relay.kraki.chat` (prod) for
     /// all build configurations, so this dev path explicitly forces
-    /// the URL to the local `pnpm dev` relay (`ws://localhost:4000`,
-    /// matches `scripts/dev-local.ts:RELAY_PORT`). On the iOS
+    /// the URL to the local `pnpm dev` relay (`ws://localhost:4400`,
+    /// matching `scripts/dev-local.ts`'s default relay port). On the iOS
     /// Simulator `localhost` resolves to the host Mac, so this just
     /// works when the dev daemon is up.
     func devConnect() {
@@ -232,7 +263,7 @@ final class AppState {
         // would otherwise leave the UI parked on `.awaitingLogin`.
         authManager?.forceOpenAuthOnce = true
         // `KRAKI_LOCAL_RELAY_PORT` env override matches `scripts/dev-local.ts`.
-        let port = ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4000"
+        let port = ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4400"
         let devURL = "ws://localhost:\(port)"
         relayURL = devURL
         // Intentionally NOT persisting to App Group — the dev URL is
@@ -240,9 +271,15 @@ final class AppState {
         // Otherwise a debug install can leave `ws://localhost:4000`
         // baked into shared defaults on a physical phone where it
         // can never resolve.
-        wsClient?.setRelayURL(devURL)
         connectionStatus = .connecting
-        wsClient?.connect()
+        if wsClient?.relayURL != devURL {
+            // setRelayURL tears down the old socket and schedules the replacement
+            // on the next runloop. Do not also call connect() here: that creates
+            // two local sockets with different open-auth device IDs/Pulse epochs.
+            wsClient?.setRelayURL(devURL)
+        } else {
+            wsClient?.connect()
+        }
         #endif
     }
 
@@ -287,6 +324,8 @@ final class AppState {
         deviceStore.reset()
         messageStore.reset()
         commandSender?.reset()
+        sessionSubscriptionController?.setDesired(nil)
+        sessionSubscriptionController?.onDisconnected()
     }
 
     /// Called when the app returns to foreground. Reset backoff and
@@ -330,9 +369,11 @@ final class AppState {
             connectionStatus = .authenticating
             authManager?.bootstrapAuth()
         case .disconnected:
+            sessionSubscriptionController?.onDisconnected()
             if connectionStatus == .connected {
                 connectionStatus = .disconnected
             }
+            pulseManager?.onDisconnected()
         case .connecting:
             connectionStatus = .connecting
         }
@@ -367,6 +408,12 @@ final class AppState {
         // — setting it to true again is a no-op.
         self.hasCompletedInitialConnect = true
 
+        // The relay rejects Pulse frames before auth and only starts its peer
+        // endpoint after sending auth_ok. Start our endpoint at the same
+        // boundary; doing this on raw WebSocket connect loses the hello on a
+        // challenge reconnect and leaves session_list/history requests stuck.
+        pulseManager?.onConnected()
+
         deviceStore.setDevices(devices)
 
         // Drain any queued encrypted messages
@@ -381,20 +428,26 @@ final class AppState {
         self.connectionStatus = .awaitingLogin
     }
 
-    /// Send an encrypted message through the WebSocket.
-    /// Encrypts as a unicast to the target tentacle (looked up by sessionId),
-    /// or broadcasts to all tentacles if no sessionId.
-    func sendEncryptedMessage(_ message: [String: Any]) {
-        guard let deviceId else {
+    /// Send an encrypted message over the Pulse reliable-transport layer.
+    /// E2E-encrypts the inner message to `{blob, keys}`, then hands the pair to
+    /// the pulse endpoint, which frames it and sends the OUTER relay envelope
+    /// `{type:"unicast"|"broadcast", pulse:b64, blob:"", keys:{}}` — the
+    /// ciphertext rides inside the pulse frame, transparent to the relay.
+    @discardableResult
+    func sendEncryptedMessage(
+        _ message: [String: Any],
+        routingTarget: String? = nil,
+        connectionScoped: Bool = false
+    ) -> Bool {
+        guard deviceId != nil else {
             KLog.d("⚠️ sendEncrypted: no deviceId")
-            return
+            return false
         }
 
-        // Serialize the inner message to JSON string
         guard let innerData = try? JSONSerialization.data(withJSONObject: message),
               let innerString = String(data: innerData, encoding: .utf8) else {
             KLog.d("⚠️ sendEncrypted: failed to serialize message")
-            return
+            return false
         }
 
         // Determine target tentacle device. Prefer an explicit
@@ -405,7 +458,9 @@ final class AppState {
         let sessionId = message["sessionId"] as? String
         let explicitTarget = message["targetDeviceId"] as? String
         let targetDeviceId: String?
-        if let explicitTarget {
+        if let routingTarget {
+            targetDeviceId = routingTarget
+        } else if let explicitTarget {
             targetDeviceId = explicitTarget
         } else if let sessionId, let session = sessionStore.sessions[sessionId] {
             targetDeviceId = session.deviceId
@@ -417,13 +472,18 @@ final class AppState {
         var recipients: [RecipientKey] = []
         let crypto = CryptoManager()
 
-        if let targetDeviceId, let device = deviceStore.devices[targetDeviceId],
-           let encKeyB64 = device.encryptionKey ?? device.publicKey {
+        if let targetDeviceId {
+            guard let device = deviceStore.devices[targetDeviceId],
+                  let encKeyB64 = device.encryptionKey ?? device.publicKey else {
+                KLog.d("⚠️ sendEncrypted: target unavailable \(targetDeviceId.prefix(12))")
+                return false
+            }
             do {
                 let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
                 recipients.append(RecipientKey(deviceId: targetDeviceId, publicKey: pubKey))
             } catch {
                 KLog.d("❌ sendEncrypted: can't import key for \(targetDeviceId.prefix(12)): \(error)")
+                return false
             }
         } else {
             // Broadcast to all tentacle devices
@@ -440,40 +500,149 @@ final class AppState {
 
         guard !recipients.isEmpty else {
             KLog.d("⚠️ sendEncrypted: no recipients found")
-            return
+            return false
         }
 
         do {
             let blob = try crypto.encryptToBlob(innerString, recipients: recipients)
-
-            if let targetDeviceId {
-                // Unicast
-                let envelope: [String: Any] = [
-                    "type": "unicast",
-                    "to": targetDeviceId,
-                    "blob": blob.blob,
-                    "keys": blob.keys,
-                ]
-                guard let envData = try? JSONSerialization.data(withJSONObject: envelope),
-                      let envString = String(data: envData, encoding: .utf8) else { return }
-                KLog.d("📤🔒 unicast → \(targetDeviceId.prefix(12))...")
-                wsClient?.sendRaw(envString)
-            } else {
-                // Broadcast
-                let envelope: [String: Any] = [
-                    "type": "broadcast",
-                    "blob": blob.blob,
-                    "keys": blob.keys,
-                ]
-                guard let envData = try? JSONSerialization.data(withJSONObject: envelope),
-                      let envString = String(data: envData, encoding: .utf8) else { return }
-                KLog.d("📤🔒 broadcast to \(recipients.count) devices")
-                wsClient?.sendRaw(envString)
-            }
+            KLog.d("📤🔒 pulse → \(targetDeviceId?.prefix(12) ?? "broadcast")...")
+            guard let pulseManager else { return false }
+            pulseManager.sendEncrypted(
+                blob: blob.blob,
+                keys: blob.keys,
+                target: targetDeviceId,
+                connectionScoped: connectionScoped
+            )
+            return true
         } catch {
             KLog.d("❌ sendEncrypted: encryption failed: \(error)")
+            return false
         }
     }
+}
+
+// MARK: - Session subscription
+
+extension AppState: SessionSubscriptionHost {
+    var subscriptionConnected: Bool { connectionStatus == .connected }
+
+    func resolveTentacle(for sessionId: String) -> String? {
+        sessionStore.sessions[sessionId]?.deviceId
+    }
+
+    func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool {
+        var payload: [String: Any] = [:]
+        payload["sessionId"] = sessionId ?? NSNull()
+        return sendEncryptedMessage([
+            "type": "set_session_subscription",
+            "deviceId": deviceId ?? "",
+            "seq": 0,
+            "timestamp": ISO8601.now(),
+            "payload": payload,
+        ], routingTarget: tentacleId)
+    }
+
+    func applySessionSubscriptionSnapshot(_ ack: SessionSubscriptionAck) {
+        guard let sessionId = ack.sessionId,
+              let snapshot = ack.snapshot,
+              let digestJSON = snapshot["digest"] as? [String: Any],
+              let digest = SessionDigest(json: digestJSON) else { return }
+
+        let device = deviceStore.device(for: ack.tentacleId)
+        sessionStore.upsertSession(
+            digest,
+            deviceId: ack.tentacleId,
+            deviceName: device?.name ?? ack.tentacleId
+        )
+        sessionStore.setMode(sessionId, digest.mode)
+        if let usage = digest.usage { sessionStore.setUsage(sessionId, usage) }
+        if let preview = digest.preview {
+            sessionStore.setPreview(
+                sessionId,
+                text: preview.text,
+                type: preview.type,
+                timestamp: preview.timestamp
+            )
+        }
+
+        switch digest.state {
+        case .compacting:
+            messageStore.setCompacting(sessionId, reason: nil)
+        case .idle, .active:
+            messageStore.clearRuntimeStatus(sessionId)
+        }
+
+        let cardJSON = snapshot["card"] as? [String: Any] ?? [:]
+        let draft = cardJSON["draft"] as? String ?? ""
+        let actionPayload = cardJSON["action"].map { ["action": $0] }
+        let action = MessageRouter.decodeCardAction(actionPayload)
+        messageStore.replaceCardFromSubscription(
+            sessionId,
+            draft: draft,
+            action: action,
+            state: digest.state
+        )
+
+        let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
+        messageProvider?.setTentacleInfo(
+            sessionId: sessionId,
+            lastSeq: spineHeadSeq,
+            deviceId: ack.tentacleId
+        )
+        messageProvider?.ensureLoaded(
+            sessionId: sessionId,
+            reason: "subscriptionSnapshot"
+        )
+    }
+
+    func reportSessionSubscriptionError(_ message: String) {
+        lastError = message
+    }
+}
+
+// MARK: - PulseHost
+
+extension AppState: PulseHost {
+    func sendPulseFrame(_ b64: String, target: String?) {
+        // Outer relay envelope carrying the pulse frame; blob/keys are empty
+        // (the ciphertext lives inside the pulse frame's payload).
+        var envelope: [String: Any] = ["pulse": b64, "blob": "", "keys": [String: String]()]
+        if let target {
+            envelope["type"] = "unicast"
+            envelope["to"] = target
+        } else {
+            envelope["type"] = "broadcast"
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: envelope),
+              let str = String(data: data, encoding: .utf8) else { return }
+        wsClient?.sendRaw(str)
+    }
+
+    func onDelivered(json: String) {
+        // `json` is the in-order `{blob, keys}` payload — E2E-decrypt it.
+        guard let data = json.data(using: .utf8) else { return }
+        do {
+            let result = try messageRouter?.encryptionHandler.decryptInbound(data)
+                ?? (message: Data(), sessionId: nil)
+            guard !result.message.isEmpty else { return }
+            Task { @MainActor in
+                messageRouter?.handleDataMessage(result.message)
+            }
+        } catch {
+            KLog.d("❌ pulse deliver decrypt failed: \(error)")
+        }
+    }
+
+    func onAcked(seqUpTo: UInt64) {
+        commandSender?.resolvePulseAcked(seqUpTo: seqUpTo)
+    }
+
+    func onResetInbound(fromSeq: UInt64, epoch: String) {
+        KLog.d("⚠️ pulse reset-inbound from=\(fromSeq) epoch=\(epoch)")
+    }
+
+    func requestConnect() { wsClient?.connect() }
+    func requestDisconnect() { wsClient?.disconnect() }
 }
 
 // MARK: - Types

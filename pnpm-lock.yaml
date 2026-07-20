@@ -267,8 +267,8 @@ importers:
   packages/tests:
     dependencies:
       '@coinfra/pulse':
-        specifier: ^0.3.1
-        version: 0.3.2
+        specifier: ^0.4.1
+        version: 0.4.1
       '@kraki/crypto':
         specifier: workspace:*
         version: link:../crypto
@@ -729,9 +729,6 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
-
-  '@coinfra/pulse@0.3.2':
-    resolution: {integrity: sha512-ZH1o6zrUGsAyvOjV5MflCWiM9tfD92lIJqvlHAyKt1920OeMcjzDFgNwLujTLJtHwt1goyvULebndeAFpUmWVw==}
 
   '@coinfra/pulse@0.4.1':
     resolution: {integrity: sha512-qSG4f/rG4LRqafahaqkC43laXyrfzh0+oiKZqnwYvJ4SMzs3UPOWO/RYMmPX4EonnTcVPBs6QhuSdqPodytW/w==}
@@ -4855,8 +4852,6 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.4.9':
     optional: true
-
-  '@coinfra/pulse@0.3.2': {}
 
   '@coinfra/pulse@0.4.1': {}
 

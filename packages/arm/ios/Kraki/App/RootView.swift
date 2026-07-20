@@ -24,11 +24,29 @@ struct RootView: View {
             // MainTabView) and intentionally NOT part of this gate —
             // mixing them would leave the user stuck on MainTabView
             // after a credential rejection.
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["KRAKI_AVATAR_TEST"] == "1" {
+                AvatarTestView()
+            } else if ProcessInfo.processInfo.environment["KRAKI_BUBBLE_CATALOG"] == "1" {
+                BubbleCatalogTestView()
+            } else if ProcessInfo.processInfo.environment["KRAKI_FLATBUBBLE"] == "1" {
+                FlatBubbleTestView()
+            } else if ProcessInfo.processInfo.environment["KRAKI_LIVEBUBBLE"] == "1" {
+                // Debug shortcut: the pure-spine LIVE bubble (card) render demo,
+                // mock-driven so it validates on a simulator with WS locked.
+                NavigationStack { LiveBubbleTestView() }
+            } else if appState.hasStoredCredentials {
+                MainTabView()
+            } else {
+                LoginView()
+            }
+            #else
             if appState.hasStoredCredentials {
                 MainTabView()
             } else {
                 LoginView()
             }
+            #endif
         }
         .animation(.easeInOut(duration: 0.3), value: appState.hasStoredCredentials)
     }

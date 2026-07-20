@@ -2134,8 +2134,8 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
   });
 
-  it('dispatches active-turn steer immediately without waiting for idle', async () => {
-    const { adapter, ws } = buildClient();
+  it('dispatches and persists active-turn steer immediately without waiting for idle', async () => {
+    const { adapter, ws, sm } = buildClient();
     ws.emit('message', Buffer.from(JSON.stringify({
       type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 610,
       timestamp: new Date().toISOString(), payload: { text: 'first' },
@@ -2151,6 +2151,13 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenNthCalledWith(
       2, 'sess_1', 'change direction', undefined, { delivery: 'steer' },
     );
+    const persistedSteer = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[2] as string)
+      .map((payload) => JSON.parse(payload) as { type?: string; payload?: { content?: string; delivery?: string } })
+      .find((message) => message.type === 'user_message' && message.payload?.content === 'change direction');
+    expect(persistedSteer).toMatchObject({
+      payload: { content: 'change direction', delivery: 'steer' },
+    });
   });
 
   it('reasserts active after steer acceptance when the preceding work idles during its ACK', async () => {

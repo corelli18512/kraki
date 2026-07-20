@@ -9,6 +9,7 @@ struct KrakiApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        TKMarkdown.prewarmSyntaxHighlighter()
         UIScrollView.appearance().showsVerticalScrollIndicator = false
         UIScrollView.appearance().showsHorizontalScrollIndicator = false
     }

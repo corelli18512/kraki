@@ -74,7 +74,7 @@ extension SessionDigest {
 final class MessageRouter {
 
     private weak var appState: AppState?
-    private let encryptionHandler: EncryptionHandler
+    let encryptionHandler: EncryptionHandler
 
     private static let previewMaxLength = 80
 
@@ -99,12 +99,7 @@ final class MessageRouter {
         "interrupted_turn",
         "turn_status",
         "user_message",
-        "permission",
-        "permission_resolved",
-        "question",
-        "question_resolved",
-        "tool_start",
-        "tool_complete",
+        "system_message",
         "error",
         "session_ended",
         "idle",
@@ -118,7 +113,7 @@ final class MessageRouter {
     /// `updatePreview` flips the card to the agent's final reply (or
     /// to permission / question / error text).
     private static let notifyWorthyTypes: Set<String> = [
-        "idle", "error", "permission", "question", "turn_status"
+        "idle", "error", "turn_status"
     ]
 
     // MARK: Init
@@ -151,7 +146,7 @@ final class MessageRouter {
         // message ...). The outer "📥 broadcast" / "📥 unicast" doubles
         // the log volume during agent streaming without adding signal.
         switch type {
-        case "unicast", "broadcast":
+        case "unicast", "multicast", "broadcast":
             break
         default:
             KLog.d("📥 \(type)")
@@ -217,8 +212,16 @@ final class MessageRouter {
             }
 
         // ── Encrypted envelopes ──────────────────────────────────────────
-        case "unicast", "broadcast":
-            handleEncryptedEnvelope(data)
+        case "unicast", "multicast", "broadcast":
+            // Pulse path: the envelope carries a `pulse` frame (blob/keys
+            // empty); feed the frame to the endpoint, which delivers the
+            // original `{blob, keys}` in-order for E2E decryption. Legacy
+            // envelopes (no `pulse`) go through the direct decrypt path.
+            if let pulse = json["pulse"] as? String, let appState {
+                appState.pulseManager?.onFrame(pulse)
+            } else {
+                handleEncryptedEnvelope(data)
+            }
 
         default:
             break
@@ -261,6 +264,11 @@ final class MessageRouter {
 
         // ── Messages without a sessionId ─────────────────────────────────
 
+        if type == "session_subscription_set" {
+            handleSessionSubscriptionSet(dict)
+            return
+        }
+
         if type == "session_list" {
             handleSessionList(dict)
             return
@@ -281,6 +289,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "turn_trace_batch" {
+            handleTurnTraceBatch(dict)
+            return
+        }
+
         if type == "device_greeting" {
             handleDeviceGreeting(dict)
             return
@@ -294,6 +307,15 @@ final class MessageRouter {
         // ── All remaining messages require a sessionId ───────────────────
 
         guard let sessionId = dict["sessionId"] as? String else { return }
+
+        // High-frequency live card data is subscriber-only. Stop stale frames
+        // before they touch seq bookkeeping, previews, runtime status, or card
+        // state. Persistent/global messages remain independently authoritative.
+        if type == "agent_message_delta" || type == "card_action" {
+            guard appState.sessionSubscriptionController.acceptsLive(sessionId) else {
+                return
+            }
+        }
 
         // Drop messages for sessions we don't know about, except session_created
         if type != "session_created",
@@ -353,15 +375,24 @@ final class MessageRouter {
 
         case "session_ended":
             appState.sessionStore.updateState(sessionId, state: "ended")
-            appState.sessionStore.flushDelta(sessionId)
+            appState.messageStore.clearRuntimeStatus(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
 
         case "session_deleted":
             appState.sessionStore.removeSession(sessionId)
+            appState.messageStore.clearRuntimeStatus(sessionId)
+            appState.messageStore.clearCard(sessionId)
 
         // ── Chat messages ────────────────────────────────────────────────
 
         case "user_message":
+            let delivery = payload?["delivery"] as? String
+            // A normal persisted user message starts a fresh turn and clears
+            // stale transient card state. A steer remains inside the current
+            // agent lifecycle: keep its draft/action intact while ensuring the
+            // late-frame gate stays open.
+            appState.messageStore.beginCardTurn(sessionId, delivery: delivery)
             // Persist + materialise the real user_message, then clear
             // any optimistic pending placeholder our outbox is
             // holding for the matching clientId. The render layer
@@ -379,130 +410,98 @@ final class MessageRouter {
             }
 
         case "agent_message":
-            appState.sessionStore.flushDelta(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
+            }
+            registerContentRefs(in: payload, sessionId: sessionId)
+            if let arr = payload?["attachments"] as? [[String: Any]] {
+                for att in arr {
+                    if let type = att["type"] as? String,
+                       (type == "content_ref" || type == "image_ref"),
+                       let id = att["id"] as? String {
+                        appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
+                    }
+                }
             }
 
         case "turn_status":
-            appState.sessionStore.flushDelta(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            let draft = payload?["draft"] as? String ?? ""
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
             let action = payload?["action"] as? [String: Any]
-            let failed = action?["type"] as? String == "failed"
-            updatePreview(sessionId, text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
-                          type: failed ? "error" : "agent", timestamp: timestamp)
+            let failed = (action?["type"] as? String) == "failed"
+            let draft = payload?["draft"] as? String ?? ""
+            updatePreview(sessionId,
+                          text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
+                          type: failed ? "error" : "agent",
+                          timestamp: timestamp)
 
         case "interrupted_turn":
-            appState.sessionStore.flushDelta(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
             let draft = payload?["draft"] as? String ?? ""
-            let failed = payload?["reason"] as? String == "process_lost"
-            updatePreview(sessionId, text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
-                          type: failed ? "error" : "agent", timestamp: timestamp)
+            updatePreview(sessionId, text: draft.isEmpty ? "Turn aborted" : draft,
+                          type: "agent", timestamp: timestamp)
+
+        case "system_message":
+            // Kraki-authored spine notice (e.g. no_reply). Lands like a
+            // concluding bubble: persist + close the live-card turn.
+            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
+            let label = (payload?["content"] as? String)
+                ?? ((payload?["kind"] as? String) == "no_reply" ? "No reply" : "System notice")
+            updatePreview(sessionId, text: label, type: "agent", timestamp: timestamp)
 
         case "agent_message_delta":
+            // Draft bubble (card). Keep-last: replace on `reset`, else append.
             if let content = payload?["content"] as? String {
-                appState.sessionStore.appendDelta(sessionId, content)
-                appState.sessionStore.setAgentTextActivity(sessionId, text: content)
+                let reset = payload?["reset"] as? Bool ?? false
+                appState.messageStore.applyCardMessage(sessionId, content, reset: reset)
+                appState.sessionStore.setAgentTextActivity(
+                    sessionId, text: appState.messageStore.cards[sessionId]?.text ?? content)
             }
 
-        // ── Permissions ──────────────────────────────────────────────────
+        case "card_action":
+            // Compatibility transport for release Tentacles. New producers use
+            // session_runtime_status below, but old compaction actions are still
+            // split atomically out of the card domain.
+            appState.messageStore.applyCardAction(sessionId, Self.decodeCardAction(payload))
 
-        case "permission":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            if let permId = payload?["id"] as? String {
-                let toolName = payload?["toolName"] as? String ?? ""
-                let description = payload?["description"] as? String ?? ""
-                let rawArgs = payload?["args"] as? [String: Any]
-                let codedArgs = rawArgs.map { dict in
-                    dict.mapValues { AnyCodable($0) }
-                }
-                let perm = PendingPermission(
-                    id: permId,
-                    sessionId: sessionId,
-                    description: description,
-                    toolName: toolName.isEmpty ? nil : toolName,
-                    args: codedArgs,
-                    timestamp: Date()
-                )
-                _ = perm  // pending state is derived from messages now;
-                          // PendingPermission no longer needs to be added
-                          // to a dictionary — the underlying `permission`
-                          // message we already appended above is the
-                          // source of truth. ChatView derives the list
-                          // from messages, sidebar uses preview.type.
-                // Prefer the human-readable description; fall back to
-                // the tool name so the preview always says SOMETHING.
-                let previewBody = description.isEmpty ? toolName : description
-                updatePreview(sessionId, text: previewBody, type: "permission",
-                              timestamp: timestamp, notify: true)
+        case "session_runtime_status":
+            switch payload?["status"] as? String {
+            case "compacting":
+                let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
+                appState.messageStore.setCompacting(sessionId, reason: reason)
+            default:
+                // Runtime-idle clears only runtime status. It must never mutate
+                // a tool, permission/question, draft, or terminal outcome.
+                appState.messageStore.clearRuntimeStatus(sessionId)
             }
 
-        case "permission_resolved":
-            // Grouper folds the resolution into the originating
-            // permission row (backpatchPermission). Just persist.
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-
-        case "approve", "deny", "always_allow":
-            // Defensive: these are inbound commands from arm; tentacle
-            // doesn't broadcast them back today. If they ever do arrive
-            // (cross-device or protocol drift), the grouper will fold
-            // them the same way as permission_resolved. No special
-            // handling needed here.
-            break
-
-        // ── Questions ────────────────────────────────────────────────────
-
-        case "question":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            if let qId = payload?["id"] as? String,
-               let question = payload?["question"] as? String {
-                // Same as permission: we no longer hold a derived
-                // PendingQuestion in a dict — the message itself is
-                // canonical. Sidebar reads preview.type to know there's
-                // a pending question; ChatView scans its window.
-                _ = qId
-                updatePreview(sessionId, text: question, type: "question",
-                              timestamp: timestamp, notify: true)
-            }
-
-        case "question_resolved":
-            if let answer = payload?["answer"] as? String, !answer.isEmpty {
-                updatePreview(sessionId, text: answer, type: "answer",
-                              timestamp: timestamp)
-            }
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-
-        case "answer":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            if let answer = payload?["answer"] as? String, !answer.isEmpty {
-                updatePreview(sessionId, text: answer, type: "answer",
-                              timestamp: timestamp)
-            }
-
-        // ── Tool events ──────────────────────────────────────────────────
+        // ── Tool events (off-spine trace) ────────────────────────────────
+        // No longer persisted or seq'd — the live tool surfaces via the card
+        // action slot. We keep only the session-list activity chip + attachment
+        // pre-registration so an expanded tool's args/result show a spinner.
 
         case "tool_start":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             if let name = payload?["toolName"] as? String {
-                let headline = payload?["headline"] as? String
-                appState.sessionStore.setCurrentTool(sessionId, toolName: name, headline: headline)
+                appState.sessionStore.setCurrentTool(
+                    sessionId, toolName: name, headline: payload?["headline"] as? String)
             }
-            // Mark any ContentRef we can see as awaiting push so views
-            // expanding the chip see a spinner immediately if bytes
-            // haven't arrived yet.
             registerContentRefs(in: payload, sessionId: sessionId)
 
         case "tool_complete":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
+            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             let name = payload?["toolName"] as? String
-            let success = payload?["success"] as? Bool
-            appState.sessionStore.clearCurrentTool(sessionId, ifMatching: name, success: success)
+            appState.sessionStore.clearCurrentTool(
+                sessionId, ifMatching: name, success: payload?["success"] as? Bool)
             registerContentRefs(in: payload, sessionId: sessionId)
-            // Also mark content_ref entries inside the `attachments`
-            // array (e.g. images from `kraki-show_image`).
             if let arr = payload?["attachments"] as? [[String: Any]] {
                 for att in arr {
                     if let type = att["type"] as? String,
@@ -521,8 +520,10 @@ final class MessageRouter {
         // ── Session state ────────────────────────────────────────────────
 
         case "idle":
+            registerContentRefs(in: payload, sessionId: sessionId)
             appState.sessionStore.updateState(sessionId, state: "idle")
-            appState.sessionStore.flushDelta(sessionId)
+            appState.messageStore.clearRuntimeStatus(sessionId)
+            appState.messageStore.endCardTurn(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let usage = payload?["usage"] as? [String: Any] {
                 appState.sessionStore.setSessionUsage(sessionId, usage: usage)
@@ -532,14 +533,12 @@ final class MessageRouter {
                 updatePreview(sessionId, text: lastContent, type: "agent",
                               timestamp: timestamp, notify: true)
             }
+            // Turn ended — pull the authoritative trace for its concluding
+            // bubble so a later "Steps" open is instant.
+            appState.messageProvider?.pullLatestTurnTrace(sessionId)
 
         case "active":
-            // Active may be reasserted during steer acceptance while Pi is still
-            // compacting. Only compacting-end, idle, or session_list may leave
-            // the independent compacting state.
-            if appState.sessionStore.sessions[sessionId]?.state != .compacting {
-                appState.sessionStore.updateState(sessionId, state: "active")
-            }
+            appState.sessionStore.updateState(sessionId, state: "active")
             // NOTE: We deliberately do NOT call `messageStore.append`
             // here. `active` is a TRANSIENT envelope (see the comment at
             // L297) whose `seq` field comes from the relay's GLOBAL event
@@ -548,22 +547,23 @@ final class MessageRouter {
             // seqs, which then makes `MessageProvider.requestLatest`'s
             // `storeLastSeq >= tentacleLastSeq` short-circuit fire
             // spuriously — and we permanently stop fetching new messages
-            // after reconnect. Compounding fact: `MessageBubbleView`
+            // after reconnect. Compounding fact: the bubble renderer
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
 
-        case "compacting":
-            if payload?["phase"] as? String == "start" {
-                appState.sessionStore.setTransientState(sessionId, .compacting)
+        case "compact":
+            // Transient compaction runtime status (peer of active/idle).
+            // Never touches the card action slot, TRACE, or spine.
+            let phase = payload?["phase"] as? String
+            if phase == "start" {
+                let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
+                appState.messageStore.setCompacting(sessionId, reason: reason)
             } else {
-                let nextState = SessionState(rawValue: payload?["nextState"] as? String ?? "active") ?? .active
-                appState.sessionStore.setState(sessionId, nextState)
+                appState.messageStore.clearRuntimeStatus(sessionId)
             }
-            // Deliberately no MessageStore/MessageProvider ingestion: this is a
-            // transient session state, not spine, TRACE, or a chat cell.
 
         case "error":
-            appState.sessionStore.flushDelta(sessionId)
+            appState.messageStore.clearCard(sessionId)
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
             // If this error correlates to a pending create/fork/import
@@ -627,6 +627,7 @@ final class MessageRouter {
 
     // MARK: - Specific Handlers
 
+    @MainActor
     private func handleSessionList(_ dict: [String: Any]) {
         guard let appState else { return }
 
@@ -661,7 +662,7 @@ final class MessageRouter {
                 usage = "usage=nil"
             }
             let title = d.title.map { "title=\"\($0.prefix(30))\"" } ?? "title=nil"
-            KLog.chat("    [\(i)] \(pin) id=\(d.id) lastSeq=\(d.lastSeq) readSeq=\(d.readSeq) mode=\(d.mode.rawValue) agent=\(d.agent) model=\(d.model ?? "nil") state=\(d.state.rawValue) msgCount=\(d.messageCount) \(title) \(prev) \(usage)")
+            KLog.d("    [\(i)] \(pin) id=\(d.id) lastSeq=\(d.lastSeq) readSeq=\(d.readSeq) mode=\(d.mode.rawValue) agent=\(d.agent) model=\(d.model ?? "nil") state=\(d.state.rawValue) msgCount=\(d.messageCount) \(title) \(prev) \(usage)")
         }
 
         // Remove sessions from this tentacle that are no longer in the list
@@ -669,11 +670,24 @@ final class MessageRouter {
         for (sid, session) in appState.sessionStore.sessions {
             if session.deviceId == tentacleDeviceId && !tentacleIds.contains(sid) {
                 appState.sessionStore.removeSession(sid)
+                appState.messageStore.clearRuntimeStatus(sid)
+                appState.messageStore.clearCard(sid)
             }
         }
 
         for digest in parsed {
             appState.sessionStore.upsertSession(digest, deviceId: tentacleDeviceId, deviceName: deviceName)
+
+            // Runtime status is ephemeral and the producer is authoritative.
+            // Active live-card state is restored only by the current session's
+            // subscription ACK; do not pull every active session via the legacy
+            // request_card reconnect path.
+            switch digest.state {
+            case .compacting:
+                appState.messageStore.setCompacting(digest.id, reason: nil)
+            case .idle, .active:
+                appState.messageStore.clearRuntimeStatus(digest.id)
+            }
 
             // Sync mode
             appState.sessionStore.setMode(digest.id, digest.mode)
@@ -747,6 +761,29 @@ final class MessageRouter {
         if let active = appState.sessionStore.activeSessionId {
             appState.messageProvider?.ensureLoaded(sessionId: active, reason: "sessionListSelfHeal")
         }
+
+        // This post-auth list is the inbound stream-0 reconnect barrier. Notify
+        // only after routing metadata and provider head state are authoritative.
+        appState.sessionSubscriptionController.onSessionList(tentacleId: tentacleDeviceId)
+    }
+
+    @MainActor
+    private func handleSessionSubscriptionSet(_ dict: [String: Any]) {
+        guard let appState,
+              let tentacleId = dict["deviceId"] as? String,
+              let payload = dict["payload"] as? [String: Any],
+              let accepted = payload["accepted"] as? Bool else { return }
+        let sessionId = payload["sessionId"] as? String
+        let error = (payload["error"] as? [String: Any])?["message"] as? String
+        appState.sessionSubscriptionController.onAck(
+            SessionSubscriptionAck(
+                tentacleId: tentacleId,
+                sessionId: sessionId,
+                accepted: accepted,
+                snapshot: payload["snapshot"] as? [String: Any],
+                errorMessage: error
+            )
+        )
     }
 
     private func handleSessionCreated(
@@ -804,7 +841,7 @@ final class MessageRouter {
         )
 
         if lastSeq > 0 {
-            appState.messageProvider?.requestLatest(sessionId: sessionId, reason: "newSession")
+            appState.messageProvider?.ensureLoaded(sessionId: sessionId, reason: "newSession")
         }
 
         // Correlate requestId — auto-navigate if we created this session
@@ -822,12 +859,13 @@ final class MessageRouter {
 
         appState.deviceStore.setDeviceOnline(deviceId, online: true)
 
-        if let models = payload?["models"] as? [String] {
-            appState.deviceStore.setDeviceModels(deviceId, models: models)
-        }
-        if let modelDetails = payload?["modelDetails"] as? [[String: Any]] {
-            appState.deviceStore.setDeviceModelDetails(deviceId, details: modelDetails)
-        }
+        // PR #134 (multi-agent): tentacles now report `agents: [{type,id,models,modelDetails}]`.
+        // Pre-#134 tentacles still publish flat `models`/`modelDetails`;
+        // collapse those into a synthetic single-agent (Copilot) bucket
+        // so the rest of the iOS UI sees a uniform shape.
+        let agents = parseAgentCapabilities(payload: payload)
+        appState.deviceStore.setDeviceAgents(deviceId, agents: agents)
+
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
         }
@@ -836,6 +874,62 @@ final class MessageRouter {
         // re-inserts into pendingGreetingIds) so the net effect of a
         // greeting frame is "device is online + no longer pending".
         appState.deviceStore.markGreeted(deviceId)
+    }
+
+    /// Build an agent slice array from a `device_greeting` payload.
+    /// Prefers the new `agents[]` shape; falls back to legacy flat
+    /// `models`/`modelDetails` for older tentacles. Returns `[]` if
+    /// the payload conveys no capability info.
+    private func parseAgentCapabilities(payload: [String: Any]?) -> [AgentCapabilities] {
+        guard let payload else { return [] }
+        if let raw = payload["agents"] as? [[String: Any]] {
+            return raw.compactMap { Self.decodeAgent($0) }
+        }
+        // Legacy fallback.
+        let legacyModels = payload["models"] as? [String] ?? []
+        let legacyDetails = (payload["modelDetails"] as? [[String: Any]])
+            .map { Self.decodeModelDetails($0) } ?? []
+        guard !legacyModels.isEmpty || !legacyDetails.isEmpty else { return [] }
+        return [
+            AgentCapabilities(
+                type: "code",
+                id: "copilot",
+                models: legacyModels.isEmpty ? nil : legacyModels,
+                modelDetails: legacyDetails.isEmpty ? nil : legacyDetails
+            )
+        ]
+    }
+
+    private static func decodeAgent(_ dict: [String: Any]) -> AgentCapabilities? {
+        guard let id = dict["id"] as? String else { return nil }
+        let type = (dict["type"] as? String) ?? "code"
+        let models = dict["models"] as? [String]
+        let detailsRaw = dict["modelDetails"] as? [[String: Any]]
+        let details = detailsRaw.map { decodeModelDetails($0) }
+        return AgentCapabilities(
+            type: type,
+            id: id,
+            models: models,
+            modelDetails: (details?.isEmpty ?? true) ? nil : details
+        )
+    }
+
+    private static func decodeModelDetails(_ raw: [[String: Any]]) -> [ModelDetail] {
+        raw.compactMap { dict -> ModelDetail? in
+            guard let mid = dict["id"] as? String,
+                  let name = dict["name"] as? String else { return nil }
+            let supportsRE = dict["supportsReasoningEffort"] as? Bool ?? false
+            let supportedREs = (dict["supportedReasoningEfforts"] as? [String])?.compactMap { ReasoningEffort(rawValue: $0) }
+            let defaultRE = (dict["defaultReasoningEffort"] as? String).flatMap { ReasoningEffort(rawValue: $0) }
+            let contextWindow = dict["contextWindow"] as? Int
+            return ModelDetail(
+                id: mid, name: name,
+                supportsReasoningEffort: supportsRE,
+                supportedReasoningEfforts: supportedREs,
+                defaultReasoningEffort: defaultRE,
+                contextWindow: contextWindow
+            )
+        }
     }
 
     /// Land a `local_sessions_list` response into the device store so
@@ -919,6 +1013,38 @@ final class MessageRouter {
         )
     }
 
+    /// `turn_trace_batch` → inject a turn's pulled TRACE steps into the store.
+    private func handleTurnTraceBatch(_ dict: [String: Any]) {
+        guard let appState else { return }
+        let payload = dict["payload"] as? [String: Any] ?? dict
+        let sessionId = payload["sessionId"] as? String ?? dict["sessionId"] as? String ?? ""
+        let bubbleSeq = payload["bubbleSeq"] as? Int ?? 0
+        let complete = payload["complete"] as? Bool ?? true
+        let entriesArray = payload["entries"] as? [[String: Any]] ?? []
+        // Trace entries are off-spine (seq=0). Assign synthetic seqs (9001+)
+        // so each ChatMessage.id ("session:seq") is unique — otherwise
+        // SwiftUI ForEach collapses them all into one row.
+        let entries = ProducerMessageDecoder.decodeBatchMessages(entriesArray)
+            .enumerated()
+            .map { idx, msg in
+                ChatMessage(type: msg.type, seq: 9001 + idx,
+                            sessionId: msg.sessionId, deviceId: msg.deviceId,
+                            timestamp: msg.timestamp, payload: msg.payload)
+            }
+        appState.messageProvider?.handleTurnTraceBatch(
+            sessionId: sessionId, bubbleSeq: bubbleSeq, entries: entries, complete: complete)
+    }
+
+    /// Decode a `card_action` payload's `action` slot into a `ChatMessage`
+    /// (type + payload verbatim), or nil when the slot is empty.
+    static func decodeCardAction(_ payload: [String: Any]?) -> ChatMessage? {
+        guard let action = payload?["action"] as? [String: Any],
+              let type = action["type"] as? String else { return nil }
+        let actionPayload = (action["payload"] as? [String: Any]) ?? [:]
+        return ChatMessage(type: type, seq: 0, sessionId: nil, deviceId: nil,
+                           timestamp: nil, payload: actionPayload.mapValues { AnyCodable($0) })
+    }
+
     // MARK: - Preview Helpers
 
     private func truncPreview(_ text: String) -> String {
@@ -963,6 +1089,16 @@ final class MessageRouter {
                (type == "content_ref" || type == "image_ref"),
                let id = dict["id"] as? String {
                 appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
+            }
+        }
+        for key in ["attachments", "turnArtifacts"] {
+            guard let arr = payload[key] as? [[String: Any]] else { continue }
+            for att in arr {
+                if let type = att["type"] as? String,
+                   (type == "content_ref" || type == "image_ref"),
+                   let id = att["id"] as? String {
+                    appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
+                }
             }
         }
     }

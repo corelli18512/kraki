@@ -16,23 +16,10 @@ import Observation
 
 // MARK: - SwiftUI bridge
 
-struct SessionTable: UIViewControllerRepresentable, Equatable {
+struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
     let onCellTapped: (String) -> Void
-
-    /// SwiftUI re-creates this struct on every parent body re-eval
-    /// (e.g. SessionStore @Published mutations bubble up through
-    /// SessionListView even when the user has pushed into ChatView).
-    /// Closures never compare equal, so we deliberately exclude
-    /// `onCellTapped` from equality — its body is functionally
-    /// stable ("append tapped sessionId to the nav path") even when
-    /// the closure identity differs. Combined with `.equatable()`
-    /// modifier at the callsite, this skips ~90% of the spurious
-    /// `updateUIViewController` calls.
-    static func == (lhs: SessionTable, rhs: SessionTable) -> Bool {
-        lhs.appState === rhs.appState && lhs.deviceFilter == rhs.deviceFilter
-    }
 
     func makeUIViewController(context: Context) -> SessionTableController {
         let vc = SessionTableController()
@@ -46,7 +33,7 @@ struct SessionTable: UIViewControllerRepresentable, Equatable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
-        KLog.chat("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
+        KLog.d("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
     }
 }
@@ -222,7 +209,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         let shouldAnimate = animated && didApplyInitialSnapshot
         dataSource.apply(snapshot, animatingDifferences: shouldAnimate)
         lastAppliedIds = ids
-        KLog.chat("📂 [snapshot] SessionTable.applySnapshot APPLIED: rows=\(ids.count) reconfigured=\(changedIds.count) animated=\(shouldAnimate) initial=\(!didApplyInitialSnapshot) inWindow=\(view.window != nil)")
+        KLog.chat("📂 [session-list] applySnapshot rows=\(ids.count) reconfigured=\(changedIds.count) initial=\(!didApplyInitialSnapshot) inWindow=\(view.window != nil)")
         didApplyInitialSnapshot = true
     }
 
@@ -252,6 +239,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if let id = dataSource.itemIdentifier(for: indexPath) {
+            KLog.chat("👆 [session-list] tap session=\(id.prefix(12))")
             onCellTapped?(id)
         }
     }

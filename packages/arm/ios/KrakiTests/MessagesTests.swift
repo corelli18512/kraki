@@ -365,6 +365,14 @@ final class ConsumerMessageBuilderTests: XCTestCase {
         XCTAssertEqual(attachments?[0]["mimeType"] as? String, "image/png")
     }
 
+    func testBuildSteerInput() {
+        let msg = ConsumerMessageBuilder.sendInput(
+            sessionId: "sess-1", deviceId: "dev-1", text: "change direction", delivery: "steer"
+        )
+        let payload = msg["payload"] as? [String: Any]
+        XCTAssertEqual(payload?["delivery"] as? String, "steer")
+    }
+
     func testBuildApprove() {
         let msg = ConsumerMessageBuilder.approve(sessionId: "sess-1", deviceId: "dev-1", permissionId: "perm-1")
         assertEnvelope(msg, type: "approve")

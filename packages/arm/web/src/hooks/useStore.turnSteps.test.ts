@@ -118,6 +118,22 @@ describe('setTurnSteps', () => {
     expect(toolCount).toBe(4); // the second pull's 4 entries, not 6
   });
 
+  it('keeps a steer visible inside the original prompt-bounded TRACE region', () => {
+    const store = useStore.getState();
+    store.appendMessage('s1', m('user_message', 1, { content: 'run tests' }));
+    store.appendMessage('s1', m('user_message', 2, { content: 'only iOS', delivery: 'steer' }));
+    store.appendMessage('s1', m('agent_message', 3, { content: 'done' }));
+
+    store.setTurnSteps('s1', 3, [traceEntry('tool_start', 'tc1'), traceEntry('tool_complete', 'tc1')]);
+
+    const list = useStore.getState().messages.get('s1')!;
+    expect(list.filter(x => x.type === 'user_message').map(x => x.payload.delivery)).toEqual([undefined, 'steer']);
+    const promptIdx = list.findIndex(x => x.type === 'user_message' && x.payload.delivery !== 'steer');
+    const finalIdx = list.findIndex(x => x.type === 'agent_message');
+    const tools = list.slice(promptIdx + 1, finalIdx).filter(x => x.type === 'tool_start' || x.type === 'tool_complete');
+    expect(tools).toHaveLength(2);
+  });
+
   it('only affects the target turn in a multi-turn session', () => {
     const store = useStore.getState();
     store.appendMessage('s1', m('user_message', 1));

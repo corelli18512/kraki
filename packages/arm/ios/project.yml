@@ -9,7 +9,11 @@ options:
 
 packages:
   GRDB:
-    path: ./Vendor/GRDB.swift
+    url: https://github.com/groue/GRDB.swift.git
+    revision: 36e30a6f1ef10e4194f6af0cff90888526f0c115
+  Highlightr:
+    url: https://github.com/raspu/Highlightr.git
+    exactVersion: 2.3.0
   Pulse:
     path: ./Vendor/Pulse
 
@@ -67,6 +71,7 @@ targets:
       - target: KrakiNotification
         embed: true
       - package: GRDB
+      - package: Highlightr
       - package: Pulse
 
   KrakiNotification:
