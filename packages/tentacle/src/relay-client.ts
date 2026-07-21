@@ -449,10 +449,8 @@ export class RelayClient {
 
   /** Clear all open human attention for a session (turn ended / session gone). */
   private clearOpenQuestions(sessionId: string): void {
-    // Delete both maps independently. The previous `a || b` form short-
-    // circuited: when a session had BOTH a question and a permission open,
-    // `openQuestions.delete()` returning true skipped `openPermissions.delete()`,
-    // leaking the permission into every subsequent session_list digest.
+    // Delete both maps independently: `a || b` short-circuited and leaked a
+    // permission when a question was also open on the same session.
     const qChanged = this.openQuestions.delete(sessionId);
     const pChanged = this.openPermissions.delete(sessionId);
     this.sessionManager.clearPendingHumanAction(sessionId);

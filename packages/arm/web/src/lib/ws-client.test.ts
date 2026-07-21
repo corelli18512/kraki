@@ -1360,31 +1360,36 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().sessionPreviews.get('sess-p')).toBeUndefined();
     });
 
-    it('does NOT clear a non-attention preview when the digest has no attention', async () => {
-      // An agent/user/error preview belongs to the durable spine; it must
-      // survive a digest that carries no attention, and be left for
-      // rebuildPreview / the next subscription ACK to refresh.
+    it('overwrites a stale question preview with the digest agent preview', async () => {
+      // The digest is the single authority. When a question resolves on a
+      // session that has a spine agent_message, the enriched digest reverts to
+      // the agent preview - which must overwrite the stale `type:'question'`
+      // entry (clearing the phantom "waiting" badge) rather than be ignored.
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
+      // Seed a question preview.
       receiveInner({
         type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
         payload: { sessions: [{
-          id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'discuss',
+          id: 'sess-agent', agent: 'pi', state: 'active', mode: 'discuss',
           lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
-          preview: { type: 'agent', text: 'Done.', timestamp: new Date().toISOString() },
+          preview: { type: 'question', text: 'Which DB?', timestamp: new Date().toISOString() },
         }] },
       });
-      expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('agent');
+      expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('question');
 
+      // Question resolved; the digest reverts to the spine agent preview.
       receiveInner({
         type: 'session_list', deviceId: 'dev-t1', seq: 2, timestamp: new Date().toISOString(),
         payload: { sessions: [{
           id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'discuss',
-          lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+          lastSeq: 6, readSeq: 6, messageCount: 6, createdAt: new Date().toISOString(),
+          preview: { type: 'agent', text: 'Done.', timestamp: new Date().toISOString() },
         }] },
       });
       expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('agent');
+      expect(useStore.getState().sessionPreviews.get('sess-agent')?.text).toBe('Done.');
     });
 
     it('only warms up sessions within 24h or active/pinned', async () => {
