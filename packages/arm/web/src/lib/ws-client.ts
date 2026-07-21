@@ -514,6 +514,20 @@ export class KrakiWSClient {
       const preview = tsRecord.preview as { text: string; type: string; timestamp: string } | undefined;
       if (preview?.text) {
         store.setSessionPreview(ts.id, { text: preview.text, type: preview.type, timestamp: preview.timestamp });
+      } else {
+        // Tentacle's enriched digest carries no attention preview for this
+        // session, so the question/permission that produced the local one has
+        // been resolved (answered/approved/cancelled/turn-ended). The previous
+        // code skipped the write entirely, leaking a stale `type:'question'`
+        // preview that keeps the sidebar pinned on "waiting" long after the
+        // ask is gone - and it is persisted to localStorage, so it survives
+        // reloads. Only clear ATTENTION previews (question/permission);
+        // normal agent/user/error previews belong to the durable spine and
+        // must be left for rebuildPreview / the next subscription ACK.
+        const existing = getStore().sessionPreviews.get(ts.id);
+        if (existing && (existing.type === 'question' || existing.type === 'permission')) {
+          store.clearSessionPreview(ts.id);
+        }
       }
 
       if (tsRecord.usage && typeof tsRecord.usage === 'object') {

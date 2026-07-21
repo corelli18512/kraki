@@ -2041,6 +2041,7 @@ describe('RelayClient pending-question digest', () => {
     })));
     let seq = 100;
     const askQ = (id: string) => (adapter.onQuestionRequest as (sid: string, e: Record<string, unknown>) => void)('sess_1', { id, question: `Q ${id}`, choices: ['a', 'b'] });
+    const askP = (id: string, desc = `P ${id}`) => (adapter.onPermissionRequest as (sid: string, e: Record<string, unknown>) => void)('sess_1', { id, description: desc, toolArgs: { toolName: 'shell' } });
     const answerQ = (id: string) => ws.emit('message', Buffer.from(JSON.stringify({
       type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: ++seq,
       timestamp: new Date().toISOString(), payload: { questionId: id, answer: 'a' },
@@ -2062,7 +2063,7 @@ describe('RelayClient pending-question digest', () => {
       return undefined;
     };
     const preview = () => digest()?.preview as { type: string; text: string } | undefined;
-    return { adapter, sm, client, ws, askQ, answerQ, digest, preview };
+    return { adapter, sm, client, ws, askQ, askP, answerQ, digest, preview };
   }
 
   it('restores compacting from session_list state without replaying runtime events', () => {
@@ -2116,6 +2117,37 @@ describe('RelayClient pending-question digest', () => {
     askQ('q1');
     (adapter.onQuestionAutoResolved as (sid: string, qid: string) => void)('sess_1', 'q1');
     expect(preview()?.type).not.toBe('question');
+  });
+
+  it('clears BOTH question and permission attention on terminal turn end (no short-circuit leak)', () => {
+    // Regression: clearOpenQuestions used `openQuestions.delete(sid) ||
+    // openPermissions.delete(sid)`. The `||` short-circuited when the question
+    // map delete returned true, so a permission open on the same session
+    // leaked into every subsequent session_list digest and kept the sidebar
+    // pinned on a stale permission badge forever.
+    //
+    // Real trigger path: a terminal adapter error stages a failed outcome,
+    // then idle freezes it via finishTurnWithStatus -> clearOpenQuestions
+    // (bypassing the soleOpenQuestion guard, which would otherwise hold the
+    // question open while the agent waits for an answer).
+    const { adapter, askQ, askP, preview } = buildClient();
+    askQ('q1');
+    askP('p1');
+    // Both attention items are open.
+    expect(preview()?.type).toBe('question');
+    // Terminal error + idle ends the turn and clears both maps independently.
+    (adapter.onError as (sid: string, e: { message: string }) => void)('sess_1', { message: 'boom' });
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(preview()?.type).not.toBe('question');
+    expect(preview()?.type).not.toBe('permission');
+  });
+
+  it('clears a lone permission attention on terminal turn end', () => {
+    const { adapter, askP, preview } = buildClient();
+    askP('p1');
+    expect(preview()?.type).toBe('permission');
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(preview()?.type).not.toBe('permission');
   });
 
   it('serializes distinct composer prompts until the preceding turn idles', async () => {

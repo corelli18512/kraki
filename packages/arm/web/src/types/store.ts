@@ -163,6 +163,7 @@ export interface AppActions {
   incrementUnread: (sessionId: string) => void;
   clearUnread: (sessionId: string) => void;
   setSessionPreview: (sessionId: string, preview: SessionPreview, incrementUnread?: boolean) => void;
+  clearSessionPreview: (sessionId: string) => void;
   setDraft: (sessionId: string, text: string) => void;
   setLastError: (message: string | null) => void;
   setNavigateToSession: (sessionId: string | null) => void;

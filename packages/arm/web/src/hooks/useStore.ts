@@ -348,6 +348,14 @@ export const useStore = create<Store>()(persist((set) => ({
       return { sessionPreviews: previews };
     }),
 
+  clearSessionPreview: (sessionId) =>
+    set((state) => {
+      if (!state.sessionPreviews.has(sessionId)) return state;
+      const previews = new Map(state.sessionPreviews);
+      previews.delete(sessionId);
+      return { sessionPreviews: previews };
+    }),
+
   setDraft: (sessionId, text) =>
     set((state) => {
       const next = new Map(state.drafts);

@@ -110,6 +110,12 @@ class MockAdapter extends AgentAdapter {
     this.active(sid);
     this.onQuestionRequest?.(sid, { id, question: q, choices, allowFreeform: true });
   }
+  questionAutoResolved(sid: string, id: string) {
+    this.onQuestionAutoResolved?.(sid, id);
+  }
+  permissionAutoResolved(sid: string, id: string) {
+    this.onPermissionAutoResolved?.(sid, id);
+  }
   toolStart(sid: string, tool: string, args: Record<string, unknown> = {}, toolCallId?: string) {
     this.active(sid);
     const id = toolCallId ?? `tc-${sid}-${Date.now().toString(36)}`;
@@ -322,11 +328,42 @@ async function main(): Promise<void> {
         case '/delta': adapter.delta(q.get('sid')!, q.get('text') ?? '...'); return json(200, { ok: true });
         case '/perm': adapter.perm(q.get('sid')!, q.get('id') ?? 'perm-1', q.get('tool') ?? 'shell', q.get('desc') ?? 'run a command'); return json(200, { ok: true });
         case '/question': adapter.question(q.get('sid')!, q.get('id') ?? 'q-1', q.get('text') ?? 'which one?', q.get('choices') ? q.get('choices')!.split('|') : undefined); return json(200, { ok: true });
+        case '/questionAutoResolved': adapter.questionAutoResolved(q.get('sid')!, q.get('id') ?? 'q-1'); return json(200, { ok: true });
+        case '/permissionAutoResolved': adapter.permissionAutoResolved(q.get('sid')!, q.get('id') ?? 'perm-1'); return json(200, { ok: true });
         case '/toolStart': adapter.toolStart(q.get('sid')!, q.get('tool') ?? 'bash', q.get('cmd') ? { command: q.get('cmd')! } : {}); return json(200, { ok: true });
         case '/toolComplete': adapter.toolComplete(q.get('sid')!, q.get('tool') ?? 'bash', q.get('result') ?? 'done'); return json(200, { ok: true });
         case '/active': adapter.active(q.get('sid')!); return json(200, { ok: true });
         case '/idle': adapter.idle(q.get('sid')!); return json(200, { ok: true });
         case '/error': adapter.error(q.get('sid')!, q.get('message') ?? 'error'); return json(200, { ok: true });
+        // Inject an inbound Arm->Tentacle control message through the real
+        // relay-client message path (abort/kill/delete). Lets tests drive the
+        // Tentacle-side turn-termination / session-removal paths without
+        // depending on the Arm UI, exercising clearOpenQuestions /
+        // purgeSessionToolState exactly as production.
+        case '/armAbort': {
+          const sid = q.get('sid')!;
+          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+            type: 'abort_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
+            timestamp: new Date().toISOString(), payload: {},
+          });
+          return json(200, { ok: true });
+        }
+        case '/armKill': {
+          const sid = q.get('sid')!;
+          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+            type: 'kill_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
+            timestamp: new Date().toISOString(), payload: {},
+          });
+          return json(200, { ok: true });
+        }
+        case '/armDelete': {
+          const sid = q.get('sid')!;
+          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+            type: 'delete_session', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
+            timestamp: new Date().toISOString(), payload: {},
+          });
+          return json(200, { ok: true });
+        }
         // Legacy-history compatibility: inject the old durable Abort message
         // through RelayClient's real persistence + pulse broadcast path. The UI
         // must normalize it to the modern frozen LiveAgentBubble renderer.
@@ -357,9 +394,16 @@ async function main(): Promise<void> {
             consumerKeys?: Map<string, string>;
             onlineConsumers?: Set<string>;
             currentSessionByArm?: Map<string, string | null>;
+            openQuestions?: Map<string, Map<string, unknown>>;
+            openPermissions?: Map<string, Map<string, unknown>>;
+            enrichSessionList?: (sessions: ReturnType<SessionManager['getSessionList']>) => ReturnType<SessionManager['getSessionList']>;
           };
+          const rawSessions = sm.getSessionList();
           return json(200, {
-            sessions: sm.getSessionList(),
+            sessions: rawSessions,
+            enrichedSessions: r.enrichSessionList ? r.enrichSessionList(rawSessions) : rawSessions,
+            openQuestions: r.openQuestions ? Object.fromEntries([...r.openQuestions].map(([sid, items]) => [sid, [...items.keys()]])) : 'n/a',
+            openPermissions: r.openPermissions ? Object.fromEntries([...r.openPermissions].map(([sid, items]) => [sid, [...items.keys()]])) : 'n/a',
             consumerKeys: r.consumerKeys ? Array.from(r.consumerKeys.keys()) : 'n/a',
             onlineConsumers: r.onlineConsumers ? Array.from(r.onlineConsumers) : 'n/a',
             subscriptions: r.currentSessionByArm ? Object.fromEntries(r.currentSessionByArm) : 'n/a',

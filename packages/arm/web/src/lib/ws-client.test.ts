@@ -1305,6 +1305,88 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().sessionPreviews.get('sess-pending')?.type).toBe('question');
     });
 
+    it('clears a stale question preview when session_list digest no longer carries attention', async () => {
+      // Regression: handleSessionList only WROTE previews when the digest had
+      // one. When the question was resolved (answered/cancelled/turn-ended),
+      // the enriched digest stopped carrying a preview, but the stale
+      // `type:'question'` entry persisted in the store (and localStorage),
+      // pinning the sidebar on a phantom "waiting" badge - even after reload.
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      // Seed a question preview.
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-q', agent: 'pi', state: 'active', mode: 'execute',
+          lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+          preview: { type: 'question', text: 'Which DB?', timestamp: new Date().toISOString() },
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-q')?.type).toBe('question');
+
+      // Tentacle resolves the question; the next digest has no preview.
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 2, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-q', agent: 'pi', state: 'active', mode: 'execute',
+          lastSeq: 6, readSeq: 6, messageCount: 6, createdAt: new Date().toISOString(),
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-q')).toBeUndefined();
+    });
+
+    it('clears a stale permission preview when session_list digest no longer carries attention', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-p', agent: 'pi', state: 'active', mode: 'execute',
+          lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+          preview: { type: 'permission', text: 'Run npm test', timestamp: new Date().toISOString() },
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-p')?.type).toBe('permission');
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 2, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-p', agent: 'pi', state: 'active', mode: 'execute',
+          lastSeq: 6, readSeq: 6, messageCount: 6, createdAt: new Date().toISOString(),
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-p')).toBeUndefined();
+    });
+
+    it('does NOT clear a non-attention preview when the digest has no attention', async () => {
+      // An agent/user/error preview belongs to the durable spine; it must
+      // survive a digest that carries no attention, and be left for
+      // rebuildPreview / the next subscription ACK to refresh.
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'discuss',
+          lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+          preview: { type: 'agent', text: 'Done.', timestamp: new Date().toISOString() },
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('agent');
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 2, timestamp: new Date().toISOString(),
+        payload: { sessions: [{
+          id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'discuss',
+          lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+        }] },
+      });
+      expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('agent');
+    });
+
     it('only warms up sessions within 24h or active/pinned', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
