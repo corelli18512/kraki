@@ -123,6 +123,15 @@ install_app_bundle() {
 
   chmod +x "$APP_PATH/Contents/MacOS/kraki"
 
+  # Register the bundle with Launch Services so macOS TCC tracks the
+  # app by bundle id (stable across updates) instead of cdhash (which
+  # changes every release and invalidates all TCC grants). This is the
+  # root-cause fix for the recurring "kraki lost its permissions" bug.
+  # Best-effort; the daemon also re-registers on startup and after self-update.
+  if [ -x "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" ]; then
+    /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "$APP_PATH" 2>/dev/null || true
+  fi
+
   mkdir -p "$INSTALL_DIR"
 
   # Remove existing binary/symlink and create symlink to the .app binary

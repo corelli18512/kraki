@@ -16,7 +16,7 @@
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
-import { ensureWindowsSystemPath, probeFda } from './checks.js';
+import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
@@ -75,6 +75,23 @@ export async function startWorker(): Promise<WorkerResult> {
       { addedPathDirs: _ensuredWindowsPathDirs },
       'Self-healed PATH on Windows (System32 and friends were missing)',
     );
+  }
+
+  // macOS: ensure the .app bundle is registered with Launch Services so
+  // TCC tracks grants by bundle id (stable across updates) instead of
+  // cdhash (invalidated every release). This self-heals machines that
+  // installed before the lsregister step existed. Idempotent + cheap.
+  if (platform() === 'darwin') {
+    ensureTccBundleRegistered();
+    // Also purge zombie Launch Services entries from past updates / builds —
+    // a one-time sweep that fixes every already-installed machine.
+    const sweep = cleanupStaleBundleEntries();
+    if (sweep.removed.length > 0) {
+      logger.info(
+        { removedCount: sweep.removed.length },
+        'Cleaned stale Launch Services entries for chat.kraki.cli (TCC hygiene)',
+      );
+    }
   }
 
   // macOS: check Full Disk Access status. FDA is required to prevent
