@@ -92,6 +92,8 @@ vi.mock("../checks.js", () => ({
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
   probeFda: vi.fn().mockResolvedValue('granted'),
   pollFda: vi.fn().mockResolvedValue('granted'),
+  ensureTccBundleRegistered: vi.fn(),
+  openAllTccPanes: vi.fn(),
 }));
 
 // Mock pair module to avoid real WebSocket connection

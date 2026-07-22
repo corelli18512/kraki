@@ -130,6 +130,8 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('../checks.js', () => ({
   ensureWindowsSystemPath: vi.fn().mockReturnValue([]),
+  ensureTccBundleRegistered: vi.fn(),
+  cleanupStaleBundleEntries: vi.fn().mockReturnValue({ removed: [], kept: [] }),
   probeFda: vi.fn().mockResolvedValue('granted'),
 }));
 

@@ -21,7 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, saveAnthropicKey, withRetry, probeFda, pollFda } from './checks.js';
+import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, saveAnthropicKey, withRetry, probeFda, pollFda, ensureTccBundleRegistered, openAllTccPanes } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 import type { AgentId } from '@kraki/protocol';
@@ -89,23 +89,37 @@ function step(n: number, total: number) { return chalk.dim(`[${n}/${total}]`); }
 function divider() { console.log(chalk.dim('  ─────────────────────────────────')); }
 
 /**
- * Check and guide the user through granting Full Disk Access.
- * FDA is a superset of all per-folder and AppData TCC categories —
- * granting it eliminates every recurring macOS permission dialog.
+ * Check and guide the user through granting macOS TCC permissions.
+ *
+ * This is where the recurring "kraki lost its permissions after update"
+ * bug is fixed end-to-end: register the .app bundle with Launch Services
+ * (so TCC tracks grants by bundle id, stable across updates, instead of
+ * cdhash, invalidated every release), then open every TCC pane the user
+ * must toggle, and poll FDA as the "done" signal.
  */
 async function runFdaStep(stepNum: number, total: number): Promise<void> {
   console.log(`  ${icon} ${step(stepNum, total)} ${chalk.bold('macOS Privacy')}`);
 
+  // Register the bundle with Launch Services so the grants we ask for
+  // actually stick across future updates. Idempotent + safe.
+  ensureTccBundleRegistered();
+
   const fdaStatus = await probeFda();
   if (fdaStatus === 'granted') {
-    console.log(chalk.green('    ✓ Full Disk Access granted'));
+    console.log(chalk.green('    ✓ Full Disk Access already granted'));
+    console.log(chalk.dim('    Other TCC services are only needed by specific features:'));
+    console.log(chalk.dim('    Accessibility, Input Monitoring, Screen Recording, Automation.'));
+    console.log(chalk.dim('    Run `kraki permissions --open` to grant them.'));
     return;
   }
 
   console.log(chalk.dim('    Grant Full Disk Access to prevent recurring permission dialogs'));
-  console.log(chalk.dim('    during agent sessions.\n'));
-  console.log(chalk.dim('    Open: System Settings → Privacy & Security → Full Disk Access → add kraki'));
+  console.log(chalk.dim('    during agent sessions, plus any other TCC service a feature needs.'));
+  console.log(chalk.dim('    Kraki.app is signed + registered with Launch Services, so these'));
+  console.log(chalk.dim('    grants survive every future update - grant once only.'));
   console.log('');
+  console.log(chalk.dim('    Opening System Settings panes…'));
+  openAllTccPanes();
 
   const ac = new AbortController();
   const spinner = ora({

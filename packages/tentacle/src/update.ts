@@ -20,7 +20,7 @@ import { isSea } from 'node:sea';
 import chalk from 'chalk';
 import ora from 'ora';
 import { getKrakiHome } from './config.js';
-import { probeFda } from './checks.js';
+import { probeFda, registerKrakiAppBundle, unregisterAppBundlePath, cleanupStaleBundleEntries } from './checks.js';
 
 const GITHUB_REPO = 'corelli18512/kraki';
 const NPM_PACKAGE = '@kraki/tentacle';
@@ -635,6 +635,13 @@ async function updateViaAppBundle(
   // Strip quarantine/provenance xattrs
   stripProvenance(extractedApp);
 
+  // Unregister the TEMP extract from Launch Services. `tar` extraction + any
+  // system scan can register this throwaway path under our bundle id; if it
+  // lingers, TCC's responsible-bundle resolver sees a duplicate
+  // `chat.kraki.cli` at a path that will vanish after the update, which is
+  // a proven cause of "permissions lost after every update".
+  unregisterAppBundlePath(extractedApp);
+
   // Determine target location
   const existingAppDir = detectAppBundle();
   const appHome = join(
@@ -669,6 +676,20 @@ async function updateViaAppBundle(
 
     // Clean up backup
     rmSync(backupDir, { recursive: true, force: true });
+
+    // Re-register the new bundle with Launch Services. This is THE fix
+    // for the recurring "kraki lost its permissions after update" bug:
+    // it refreshes TCC's bundle-id -> path binding so every previously
+    // granted TCC service (FDA / Accessibility / Screen Recording / ...)
+    // continues to resolve to the new binary via the stable Developer ID
+    // Designated Requirement, instead of being invalidated by the cdhash
+    // change. Best-effort; never fatal if lsregister is unavailable.
+    registerKrakiAppBundle();
+    // Purge zombie Launch Services entries left by prior updates / test
+    // builds (paths that no longer exist under /private/tmp, DerivedData,
+    // etc.). Without this, TCC can mis-resolve the daemon's bundle and
+    // re-prompt for every service even though the canonical bundle is fine.
+    cleanupStaleBundleEntries(targetAppDir);
   } catch (err) {
     // Restore backup on failure
     if (existsSync(backupDir)) {

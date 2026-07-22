@@ -81,6 +81,11 @@ function printHelp(): void {
   kraki doctor         Print environment status as JSON
   kraki fda --json     Print macOS Full Disk Access status as JSON
   kraki fda --watch    Stream FDA status as NDJSON until granted
+  kraki permissions    macOS TCC status (bundle registration + FDA) as JSON
+  kraki permissions --open
+                       Open every TCC pane in System Settings
+  kraki permissions --clean
+                       Also purge stale Launch Services entries
   kraki status         Show status and connection info
   kraki status --json  Print status as JSON (for desktop apps)
   kraki logs [-f]      Tail log files (-f to follow)
@@ -702,11 +707,83 @@ async function cmdFda(args: string[]): Promise<void> {
   process.stdout.write(JSON.stringify({ ok: true, status }) + '\n');
 }
 
+// ── kraki permissions - macOS TCC status + deep-links ─────
+//
+// This is the user-facing entry point for the root-cause fix. It:
+//   1. registers the installed .app bundle with Launch Services so TCC
+//      tracks grants by bundle id (stable across updates) instead of
+//      cdhash (invalidated every release), and
+//   2. opens the exact System Settings panes the user must toggle, since
+//      TCC.db is SIP-protected and cannot be flipped programmatically.
+
+async function cmdPermissions(args: string[]): Promise<void> {
+  const {
+    probeTccStatus, openAllTccPanes, TCC_SERVICES, ensureTccBundleRegistered, cleanupStaleBundleEntries,
+  } = await import('./checks.js');
+
+  const open = args.includes('--open');
+  const json = args.includes('--json');
+  const clean = args.includes('--clean');
+
+  if (process.platform !== 'darwin') {
+    process.stdout.write(JSON.stringify({ ok: true, status: 'not_applicable', platform: process.platform }) + '\n');
+    return;
+  }
+
+  // Always (re)register the bundle. Idempotent and cheap; this is the
+  // fix the recurring-FDA commits #123/#133/#138/#142 were all missing.
+  // (probeTccStatus below also registers, so this is technically redundant,
+  // but kept explicit so `--open` alone still registers without a full probe.)
+  ensureTccBundleRegistered();
+  // Purge zombie Launch Services entries (paths that no longer exist, or
+  // throwaway /tmp extracts from prior updates). `--clean` reports them;
+  // the sweep itself always runs as hygiene.
+  const sweep = cleanupStaleBundleEntries();
+
+  const status = await probeTccStatus();
+
+  if (open) {
+    openAllTccPanes();
+    if (!json) {
+      console.log(chalk.bold('  Opening macOS Privacy & Security panes…'));
+      console.log(chalk.dim('  TCC grants cannot be applied automatically (SIP-protected).'));
+      console.log(chalk.dim('  Toggle the switch for Kraki in each pane that opens.'));
+      console.log('');
+      for (const s of TCC_SERVICES) {
+        console.log(`    ${chalk.bold(s.label)}`);
+        console.log(chalk.dim(`      ${s.url}`));
+        console.log(chalk.dim(`      needed to: ${s.reason}`));
+      }
+      console.log('');
+      console.log(chalk.green('  Because Kraki.app is signed with a stable Developer ID and now'));
+      console.log(chalk.green('  registered with Launch Services, these grants survive updates.'));
+    }
+  }
+
+  if (clean && sweep.removed.length > 0 && !json) {
+    console.log(chalk.dim(`  Cleaned ${sweep.removed.length} stale Launch Services entr${sweep.removed.length === 1 ? 'y' : 'ies'}:`));
+    for (const p of sweep.removed.slice(0, 10)) console.log(chalk.dim(`    - ${p}`));
+    if (sweep.removed.length > 10) console.log(chalk.dim(`    … and ${sweep.removed.length - 10} more`));
+  }
+
+  if (json || !open) {
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      bundled: status.bundled,
+      registered: status.registered,
+      notApplicable: status.notApplicable,
+      services: status.services,
+      launchServices: { staleRemoved: sweep.removed.length, kept: sweep.kept.length },
+      servicesNeeded: TCC_SERVICES.map((s) => ({ id: s.id, label: s.label, reason: s.reason })),
+    }, null, 2) + '\n');
+  }
+}
+
 // ── kraki doctor — environment status as JSON ───────────
 
 async function cmdDoctor(): Promise<void> {
   const {
-    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda,
+    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
   } = await import('./checks.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
   // multi-adapter logger (created at module load) defaults to info-level
@@ -721,6 +798,11 @@ async function cmdDoctor(): Promise<void> {
   const copilot = checkCopilotCli();
   const claude = checkClaudeCli();
   const anthropic = checkAnthropicCreds();
+  // doctor is a READ-ONLY status query (called frequently by the toolbar).
+  // We do NOT mutate Launch Services here — only report current TCC identity
+  // health so the UI can surface "re-grant needed". The actual registration
+  // happens in `kraki permissions`, setup, the daemon start, and after updates.
+  const tccBundled = getKrakiAppBundlePath() !== null;
   const fda = await probeFda();
 
   // SDK + CLI level "can actually start" detection (matches runtime).
@@ -738,6 +820,16 @@ async function cmdDoctor(): Promise<void> {
     configExists: config !== null,
     daemonRunning: isDaemonRunning(),
     fda,
+    // macOS TCC identity health. `tccRegistered=true` means permissions
+    // granted in System Settings will survive future updates; false means
+    // the user will be re-prompted after every release.
+    tcc: {
+      platform: process.platform,
+      bundled: tccBundled,
+      bundlePath: getKrakiAppBundlePath(),
+      // Read-only hint: run `kraki permissions` to (re)register + clean.
+      // We intentionally do NOT mutate LS from a status query.
+    },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
     // Legacy fields — kept so existing consumers keep working.
@@ -979,6 +1071,11 @@ async function main(): Promise<void> {
 
   if (cmd === 'fda') {
     await cmdFda(args);
+    return;
+  }
+
+  if (cmd === 'permissions') {
+    await cmdPermissions(args);
     return;
   }
 

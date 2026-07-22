@@ -6,9 +6,9 @@
  */
 
 import { execSync } from 'node:child_process';
-import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
+import { homedir, platform, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
 
@@ -356,6 +356,379 @@ export async function pollFda(
     if (status === 'granted') return 'granted';
   }
 
-  // Final check after abort — the user may have granted just before skip
+  // Final check after abort - the user may have granted just before skip
   return probeFda();
+}
+
+// ── macOS TCC: Launch Services registration ───────────────
+//
+// THE root cause of every recurring "kraki lost its permissions" bug.
+//
+// macOS TCC can track a signed .app bundle two ways:
+//   1. By cdhash + path (default for raw Mach-O executed directly)
+//   2. By bundle id + signing identity Designated Requirement (DR)
+//      — only when the bundle is REGISTERED with Launch Services
+//
+// The release pipeline already signs the .app with a stable Developer ID
+// and gives it a stable CFBundleIdentifier (chat.kraki.cli), which is what
+// makes (2) possible. But the install/update paths never told Launch
+// Services about the bundle, so TCC silently fell back to (1). Every
+// release ships a new binary -> new cdhash -> every previously granted
+// TCC service (FDA, Accessibility, Screen Recording, Input Monitoring,
+// Automation) is invalidated and the user has to re-grant.
+//
+// Calling `lsregister -f <bundle>` once (per install location) flips TCC
+// into bundle-id tracking. As long as the Developer ID Team ID stays
+// stable across releases, every TCC grant then survives updates forever.
+// This is the fix commits #123/#133/#138/#142 were all reaching for but
+// never actually completed.
+
+/** Path to the system `lsregister` binary (stable across macOS versions). */
+export const LSREGISTER_PATH =
+  '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/' +
+  'LaunchServices.framework/Versions/A/Support/lsregister';
+
+/** Bundle id of the signed Kraki CLI/daemon .app (must never change). */
+const KRAKI_BUNDLE_ID = 'chat.kraki.cli';
+
+/**
+ * Resolve the .app bundle that contains the current executable, if any.
+ * Returns the absolute path to `*.app`, or null when running as a raw
+ * standalone binary / from node_modules / on non-macOS hosts.
+ *
+ * Expected layout: <prefix>/Kraki.app/Contents/MacOS/kraki
+ */
+export function getKrakiAppBundlePath(): string | null {
+  if (platform() !== 'darwin') return null;
+  let realPath: string;
+  try {
+    realPath = realpathSync(process.execPath);
+  } catch {
+    realPath = process.execPath;
+  }
+  const macosDir = dirname(realPath);
+  const contentsDir = dirname(macosDir);
+  const appDir = dirname(contentsDir);
+  if (
+    macosDir.endsWith('/MacOS') &&
+    contentsDir.endsWith('/Contents') &&
+    appDir.endsWith('.app') &&
+    existsSync(join(contentsDir, 'Info.plist'))
+  ) {
+    return appDir;
+  }
+  return null;
+}
+
+/**
+ * Register (or re-register) the installed Kraki.app bundle with Launch
+ * Services so TCC tracks permissions by bundle id instead of cdhash.
+ *
+ * Safe to call repeatedly and on every platform:
+ *   - non-darwin -> no-op, returns true
+ *   - not running from a .app bundle -> returns false (dev/node_modules)
+ *   - lsregister missing/fails -> swallows the error, returns false
+ *
+ * Returns true when the bundle looks registered.
+ */
+export function registerKrakiAppBundle(): boolean {
+  if (platform() !== 'darwin') return true;
+  const appPath = getKrakiAppBundlePath();
+  if (!appPath) return false;
+
+  try {
+    execSync(`"${LSREGISTER_PATH}" -f "${appPath}"`, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    return true;
+  } catch {
+    // lsregister can fail spuriously under CSM/SSV. Registration is also
+    // performed implicitly the first time the bundle is opened via Launch
+    // Services, so a failure here is not fatal — TCC will still resolve the
+    // bundle id once the user adds it in System Settings.
+    return false;
+  }
+}
+
+/** Ensure the bundle is registered. Convenience wrapper for setup/update. */
+export function ensureTccBundleRegistered(): void {
+  registerKrakiAppBundle();
+}
+
+/**
+ * Remove a bundle path from Launch Services. Use after extracting an update
+ * into a throwaway temp dir so TCC's responsible-bundle resolver never sees
+ * a stale duplicate `chat.kraki.cli` entry pointing at a path that no longer
+ * exists. Stale duplicates are the second root cause of "permissions lost
+ * after update": with many conflicting entries, TCC can fail to attribute
+ * the running daemon to the canonical bundle and re-prompt for every TCC
+ * service. Best-effort; never throws.
+ *
+ * Implementation note: `lsregister -u <path>` only works when <path> still
+ * exists on disk — on a vanished path it returns -10814 ("failed to scan")
+ * and silently leaves the zombie entry behind. So when the path is gone we
+ * recreate a 3-file stub bundle at the same path (same CFBundleIdentifier),
+ * run `-u`, then delete the stub. That is the only reliable way to evict an
+ * orphan Launch Services record without a full `-kill` db reset.
+ */
+export function unregisterAppBundlePath(appPath: string): void {
+  if (platform() !== 'darwin') return;
+  const safeTry = (fn: () => void) => { try { fn(); } catch { /* best-effort */ } };
+
+  // `lsregister -u <path>` only works when <path> still exists on disk — on a
+  // vanished path it returns -10814 ("failed to scan") and silently leaves the
+  // zombie entry behind. When the path is gone we recreate a 3-file stub
+  // bundle at the same path (same CFBundleIdentifier), run `-u`, then delete
+  // the stub. That is the only reliable way to evict an orphan Launch Services
+  // record without a destructive `-kill` db reset.
+  let createdStub = false;
+  if (!existsSync(join(appPath, 'Contents', 'Info.plist'))) {
+    safeTry(() => {
+      mkdirSync(join(appPath, 'Contents', 'MacOS'), { recursive: true });
+      writeFileSync(join(appPath, 'Contents', 'MacOS', 'kraki'), '#!/bin/sh\n', { mode: 0o755 });
+      writeFileSync(
+        join(appPath, 'Contents', 'Info.plist'),
+        '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>' +
+        '<key>CFBundleIdentifier</key><string>' + KRAKI_BUNDLE_ID + '</string>' +
+        '<key>CFBundleExecutable</key><string>kraki</string>' +
+        '<key>CFBundleName</key><string>Kraki</string>' +
+        '<key>CFBundleVersion</key><string>0</string>' +
+        '</dict></plist>\n',
+      );
+      createdStub = true;
+    });
+  }
+
+  safeTry(() => {
+    execSync('"' + LSREGISTER_PATH + '" -u "' + appPath + '"', {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+  });
+
+  // Tear down any stub we created (best-effort; never the real bundle, which
+  // always had an Info.plist and so never triggered stub creation).
+  if (createdStub) {
+    safeTry(() => rmSync(appPath, { recursive: true, force: true }));
+  }
+}
+
+/**
+ * Sweeper: when kraki has been installed/updated/test-built many times,
+ * Launch Services accumulates zombie entries for `chat.kraki.cli` at paths
+ * that no longer exist (old update temp dirs, Xcode build products, test
+ * extractions). Each one is a chance for TCC to mis-resolve the running
+ * daemon's bundle and silently invalidate its grants. This parses
+ * `lsregister -dump`, finds every registered path whose bundle id is the
+ * daemon's, and unregisters any that either no longer exist on disk or are
+ * not the canonical install path. Safe to run on every install/update.
+ */
+export function cleanupStaleBundleEntries(canonicalAppPath?: string): {
+  removed: string[]; kept: string[];
+} {
+  if (platform() !== 'darwin') return { removed: [], kept: [] };
+
+  const canonical = canonicalAppPath ?? getKrakiAppBundlePath();
+  const canonicalReal = canonical ? realpathSafe(canonical) : null;
+  const removed: string[] = [];
+  const kept: string[] = [];
+
+  let dump = '';
+  try {
+    dump = execSync(`"${LSREGISTER_PATH}" -dump`, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return { removed, kept };
+  }
+
+  // Each LS record block is delimited by a line of dashes. A block claims
+  // bundle id `chat.kraki.cli` (or whatever the running binary's id is) if
+  // it contains `CFBundleIdentifier = "<id>"`. The path it is registered at
+  // is the `path:` line. We unregister any path that is gone from disk or
+  // is a /private/tmp or $TMPDIR throwaway.
+  const bundleId = KRAKI_BUNDLE_ID;
+  const tmpRoot = realpathSafe(tmpdir());
+  const blocks = dump.split(/^----+\s*$/m);
+  const seenPaths = new Set<string>();
+  for (const block of blocks) {
+    if (!block.includes(`CFBundleIdentifier = "${bundleId}"`)) continue;
+    const pathMatch = block.match(/^path:\s*(\S.*?)\s*\(0x/m);
+    if (!pathMatch) continue;
+    const rawPath = pathMatch[1].trim();
+    if (seenPaths.has(rawPath)) continue;
+    seenPaths.add(rawPath);
+
+    const isCanonical = canonicalReal !== null && realpathSafe(rawPath) === canonicalReal;
+    const isUnderTmp = rawPath.startsWith('/private/tmp/') || rawPath.startsWith(tmpRoot) || rawPath.startsWith('/tmp/');
+    const existsOnDisk = existsSync(rawPath);
+
+    // NEVER touch the canonical install path, even if it's momentarily gone
+    // (e.g. mid-replacement during an update) — it will be re-registered by
+    // the caller. Only evict throwaway /tmp paths and genuinely-orphaned
+    // non-canonical paths.
+    if (isCanonical) {
+      kept.push(rawPath);
+      continue;
+    }
+    // Unregister anything stale (gone from disk) OR a throwaway temp path,
+    // even if it still exists this instant (it won't after the update).
+    if (!existsOnDisk || isUnderTmp) {
+      unregisterAppBundlePath(rawPath);
+      removed.push(rawPath);
+    } else {
+      kept.push(rawPath);
+    }
+  }
+  return { removed, kept };
+}
+
+/** Resolve a path without throwing (falls back to the input). */
+function realpathSafe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+// ── macOS TCC: System Settings deep-links ───────────────
+//
+// The URLs below are the supported Privacy & Security anchors (macOS 13+).
+// `open`-ing them lands the user on the exact pane; they still have to flip
+// the toggle (TCC.db is SIP-protected and cannot be flipped programmatically).
+
+export type TccService =
+  | 'fda'
+  | 'accessibility'
+  | 'inputMonitoring'
+  | 'screenRecording'
+  | 'automation';
+
+interface TccServiceInfo {
+  /** Stable id used in JSON output. */
+  id: TccService;
+  /** Human label for the setup/CLI UX. */
+  label: string;
+  /** System Settings deep-link URL. */
+  url: string;
+  /** Why kraki wants this. */
+  reason: string;
+}
+
+export const TCC_SERVICES: readonly TccServiceInfo[] = [
+  {
+    id: 'fda',
+    label: 'Full Disk Access',
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+    reason: 'read project files, TCC db, Mail/Safari data without per-file prompts',
+  },
+  {
+    id: 'accessibility',
+    label: 'Accessibility',
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+    reason: 'synthesize input / drive UI via the Accessibility API',
+  },
+  {
+    id: 'inputMonitoring',
+    label: 'Input Monitoring',
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
+    reason: 'observe global key events for hotkeys / steering',
+  },
+  {
+    id: 'screenRecording',
+    label: 'Screen Recording',
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    reason: 'capture screen contents for vision/preview features',
+  },
+  {
+    id: 'automation',
+    label: 'Automation',
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
+    reason: 'send AppleEvents to other apps (Terminal, Finder, Safari, ...)',
+  },
+] as const;
+
+/** Open a specific TCC pane in System Settings. No-op off macOS. */
+export function openTccPane(service: TccService): boolean {
+  if (platform() !== 'darwin') return false;
+  const info = TCC_SERVICES.find((s) => s.id === service);
+  if (!info) return false;
+  try {
+    execSync(`open "${info.url}"`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Open every TCC pane kraki wants (used by `kraki permissions --open`). */
+export function openAllTccPanes(): void {
+  if (platform() !== 'darwin') return;
+  for (const s of TCC_SERVICES) openTccPane(s.id);
+}
+
+// ── macOS TCC: full status snapshot ──────────────────────
+
+export type TccProbeStatus = 'granted' | 'denied' | 'unknown';
+
+export interface TccStatus {
+  /** Whether the running binary lives inside a Launch-Services bundle. */
+  bundled: boolean;
+  /** Whether that bundle is registered with Launch Services. Best-effort. */
+  registered: boolean;
+  /** True on non-darwin hosts where none of this applies. */
+  notApplicable: boolean;
+  /**
+   * Per-service probe. Only `fda` can be probed reliably without triggering a
+   * system dialog; the rest stay `'unknown'` until the user grants them and
+   * kraki actually exercises the protected capability at runtime.
+   */
+  services: Record<TccService, TccProbeStatus>;
+}
+
+/**
+ * Probe macOS TCC state for kraki. FDA is the only service with a reliable
+ * non-intrusive probe (multi-path file-access check). Accessibility / Input
+ * Monitoring / Screen Recording / Automation have no public, prompt-free
+ * probe from a Node process, so they report `'unknown'` and the caller is
+ * expected to open the corresponding pane via `openTccPane()`.
+ */
+export async function probeTccStatus(): Promise<TccStatus> {
+  if (platform() !== 'darwin') {
+    return {
+      bundled: false,
+      registered: false,
+      notApplicable: true,
+      services: {
+        fda: 'granted',
+        accessibility: 'granted',
+        inputMonitoring: 'granted',
+        screenRecording: 'granted',
+        automation: 'granted',
+      },
+    };
+  }
+
+  const bundled = getKrakiAppBundlePath() !== null;
+  // Registration is idempotent; calling it here also self-heals machines that
+  // installed before the lsregister step existed.
+  const registered = registerKrakiAppBundle();
+  const fda = await probeFda();
+
+  return {
+    bundled,
+    registered,
+    notApplicable: false,
+    services: {
+      fda: fda === 'granted' ? 'granted' : fda === 'denied' ? 'denied' : 'unknown',
+      accessibility: 'unknown',
+      inputMonitoring: 'unknown',
+      screenRecording: 'unknown',
+      automation: 'unknown',
+    },
+  };
 }

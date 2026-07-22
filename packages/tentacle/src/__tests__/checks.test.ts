@@ -30,6 +30,7 @@ vi.mock('node:fs', async (importActual) => {
   return {
     ...actual,
     existsSync: vi.fn(() => true),
+    realpathSync: vi.fn((p: string) => p),
     promises: {
       ...actual.promises,
       access: vi.fn(), // FDA probe — default: resolves (granted)
@@ -39,13 +40,14 @@ vi.mock('node:fs', async (importActual) => {
 
 import { execSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
-import { existsSync, promises as fsp } from 'node:fs';
+import { existsSync, realpathSync, promises as fsp } from 'node:fs';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
+const mockRealpathSync = realpathSync as unknown as ReturnType<typeof vi.fn>;
 const mockAccess = fsp.access as unknown as ReturnType<typeof vi.fn>;
 const mockPlatform = platform as unknown as ReturnType<typeof vi.fn>;
 const mockHomedir = homedir as unknown as ReturnType<typeof vi.fn>;
@@ -414,5 +416,201 @@ describe('pollFda()', () => {
     setTimeout(() => ac.abort(), 150);
     const result = await pollFda(50, ac.signal);
     expect(result).toBe('granted');
+  });
+});
+// ── Launch Services registration + TCC panes ────────────────
+
+describe('getKrakiAppBundlePath()', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+    mockHomedir.mockReturnValue('/home/test');
+    mockExistsSync.mockReturnValue(true);
+    mockRealpathSync.mockImplementation((p: string) => p);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('returns null off macOS', () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(getKrakiAppBundlePath()).toBeNull();
+  });
+
+  it('detects a bundle by walking up to Contents/*.app', () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExistsSync.mockReturnValue(true);
+    expect(getKrakiAppBundlePath()).toBe('/Users/x/.local/share/kraki/Kraki.app');
+  });
+
+  it('returns null for a standalone binary outside a bundle', () => {
+    mockRealpathSync.mockReturnValue('/usr/local/bin/kraki');
+    expect(getKrakiAppBundlePath()).toBeNull();
+  });
+
+  it('returns null when Info.plist is missing', () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExistsSync.mockReturnValue(false);
+    expect(getKrakiAppBundlePath()).toBeNull();
+  });
+});
+
+describe('registerKrakiAppBundle()', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+    mockHomedir.mockReturnValue('/home/test');
+    mockExistsSync.mockReturnValue(true);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('is a no-op (returns true) off macOS', () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(registerKrakiAppBundle()).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('runs lsregister against the bundle and returns true', () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExecSync.mockReturnValue('');
+    expect(registerKrakiAppBundle()).toBe(true);
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    const cmd = mockExecSync.mock.calls[0][0] as string;
+    expect(cmd).toContain('lsregister');
+    expect(cmd).toContain('Kraki.app');
+  });
+
+  it('returns false when not running from a bundle', () => {
+    mockRealpathSync.mockReturnValue('/usr/local/bin/kraki');
+    expect(registerKrakiAppBundle()).toBe(false);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('swallows lsregister failure and returns false', () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExecSync.mockImplementation(() => { throw new Error('boom'); });
+    expect(registerKrakiAppBundle()).toBe(false);
+  });
+});
+
+describe('ensureTccBundleRegistered()', () => {
+  it('does not throw', () => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('linux');
+    expect(() => ensureTccBundleRegistered()).not.toThrow();
+  });
+});
+
+describe('TCC_SERVICES + openTccPane()', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+  });
+
+  it('covers the five services kraki wants, with deep-link URLs', () => {
+    const ids = TCC_SERVICES.map((s) => s.id);
+    expect(ids).toEqual(['fda', 'accessibility', 'inputMonitoring', 'screenRecording', 'automation']);
+    for (const s of TCC_SERVICES) {
+      expect(s.url.startsWith('x-apple.systempreferences:')).toBe(true);
+      expect(s.label.length).toBeGreaterThan(0);
+      expect(s.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('opens the right deep-link for a given service', () => {
+    mockExecSync.mockReturnValue('');
+    expect(openTccPane('fda')).toBe(true);
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect((mockExecSync.mock.calls[0][0] as string)).toContain('Privacy_AllFiles');
+  });
+
+  it('is a no-op off macOS', () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(openTccPane('fda')).toBe(false);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('probeTccStatus()', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+    mockHomedir.mockReturnValue('/home/test');
+    mockExistsSync.mockReturnValue(true);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('reports notApplicable off macOS with all services granted', async () => {
+    mockPlatform.mockReturnValue('linux');
+    const s = await probeTccStatus();
+    expect(s.notApplicable).toBe(true);
+    expect(s.services.fda).toBe('granted');
+  });
+
+  it('probes FDA and leaves the rest unknown, registering the bundle', async () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExecSync.mockReturnValue('');
+    mockAccess.mockResolvedValue(undefined); // FDA granted
+    const s = await probeTccStatus();
+    expect(s.bundled).toBe(true);
+    expect(s.registered).toBe(true);
+    expect(s.services.fda).toBe('granted');
+    expect(s.services.accessibility).toBe('unknown');
+    expect(s.services.screenRecording).toBe('unknown');
+    expect(s.services.automation).toBe('unknown');
+  });
+
+  it('reports denied FDA when all probe paths are EPERM', async () => {
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+    mockExecSync.mockReturnValue('');
+    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    const s = await probeTccStatus();
+    expect(s.services.fda).toBe('denied');
+  });
+});
+
+// ── unregisterAppBundlePath(): vanished-path stub eviction ────
+
+describe('unregisterAppBundlePath()', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+    mockHomedir.mockReturnValue('/home/test');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('is a no-op off macOS', () => {
+    mockPlatform.mockReturnValue('linux');
+    expect(() => unregisterAppBundlePath('/tmp/whatever.app')).not.toThrow();
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('evicts a vanished path by recreating a stub, running lsregister -u, then removing the stub', () => {
+    // Path does not exist -> stub creation path
+    mockExistsSync.mockReturnValue(false);
+    // lsregister -u succeeds
+    mockExecSync.mockReturnValue('');
+
+    unregisterAppBundlePath('/tmp/kraki-app-update/Kraki.app');
+
+    // mkdir + writeFileSync called to build the stub
+    expect(mockExecSync).toHaveBeenCalled();
+    const cmd = mockExecSync.mock.calls[mockExecSync.mock.calls.length - 1][0] as string;
+    expect(cmd).toContain('lsregister');
+    expect(cmd).toContain('-u');
+  });
+
+  it('does NOT create a stub when the path already exists', () => {
+    // Info.plist exists -> no stub, just -u
+    mockExistsSync.mockReturnValue(true);
+    mockExecSync.mockReturnValue('');
+    unregisterAppBundlePath('/real/Kraki.app');
+    const cmd = mockExecSync.mock.calls[0]?.[0] as string | undefined;
+    expect(cmd).toContain('lsregister');
+    expect(cmd).toContain('-u');
+  });
+
+  it('swallows lsregister failure', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecSync.mockImplementation(() => { throw new Error('-10814'); });
+    expect(() => unregisterAppBundlePath('/x.app')).not.toThrow();
   });
 });
