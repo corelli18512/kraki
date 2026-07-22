@@ -4,11 +4,9 @@ packages:
   - packages/head
   - packages/tentacle
   - packages/arm/*
-  - packages/toolbar
   - packages/tests
   - packages/voice-broker
 
 ignoredBuiltDependencies:
   - better-sqlite3
   - esbuild
-  - "@tauri-apps/cli"
