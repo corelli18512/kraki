@@ -1022,8 +1022,15 @@ export class HeadServer {
       ).then(result => {
         this.handleBackendAuthResult(ws, state, result);
       }).catch(err => {
+        // A thrown error means the auth backend itself was unreachable / timed
+        // out (network, 5xx, abort) — NOT that the signature was invalid. A
+        // deterministic auth failure comes back as a resolved AuthError outcome
+        // above. Reporting this as auth_rejected made the arm treat a transient
+        // backend outage as a permanent credential failure and wipe the paired
+        // device, forcing a full re-pair. Surface it as auth_unavailable so the
+        // client retries instead of destroying a valid session.
         logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
-        this.sendAuthError(ws, 'auth_rejected', 'Internal auth error');
+        this.sendAuthError(ws, 'auth_unavailable', 'Authentication service unavailable');
       });
       return;
     }
