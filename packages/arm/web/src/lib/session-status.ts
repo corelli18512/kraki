@@ -55,10 +55,13 @@ export function getSessionStatus(
   previewType?: string,
 ): SessionStatus {
   if ((session.state as string) === 'ended') return 'ended';
-  if (session.state === 'idle') return 'idle';
-  // A blocking human affordance remains the highest-priority visible status;
-  // compacting is independent and must not displace it.
+  // A blocking human affordance is the highest-priority visible status: it
+  // must read "pending" even when the transport state is "idle" (e.g. after a
+  // relay restart flattened in-memory liveness but a question is still open).
+  // Checking this before the idle short-circuit is the whole point.
   if (livePendingCount > 0 || previewType === 'question') return 'pending';
+  if (session.state === 'idle') return 'idle';
+  // compacting is independent and must not displace pending (checked above).
   if (session.state === 'compacting') return 'compacting';
   return 'working';
 }

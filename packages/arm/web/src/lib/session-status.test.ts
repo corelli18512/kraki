@@ -73,9 +73,15 @@ describe('getSessionStatus', () => {
     expect(getSessionStatus(session({ state: 'idle' }), 0, 'agent')).toBe('idle');
   });
 
-  it('an idle session is never pending even with a stale question preview', () => {
-    // A pending turn is by definition running; once idle the turn concluded, so
-    // a not-yet-refreshed 'question' preview must not resurrect the pending badge.
-    expect(getSessionStatus(session({ state: 'idle' }), 0, 'question')).toBe('idle');
+  it('an open question reads pending even when the transport state is idle', () => {
+    // The digest preview is authoritative: `type:'question'` is only carried
+    // while a question is genuinely open (enrichSessionList overrides it from
+    // the in-memory openQuestions map, and a resolved question reverts the
+    // preview to the spine). So a 'question' preview is never stale. After a
+    // relay restart the transport state collapses to 'idle' even though the
+    // turn is still blocked on a human answer — pending must still surface so
+    // the sidebar shows "waiting" and the user notices the unanswered ask.
+    expect(getSessionStatus(session({ state: 'idle' }), 0, 'question')).toBe('pending');
+    expect(getSessionStatus(session({ state: 'idle' }), 1)).toBe('pending');
   });
 });

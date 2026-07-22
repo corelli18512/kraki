@@ -412,6 +412,28 @@ async function main(): Promise<void> {
         // ── tentacle link control ──
         case '/tentacle/disconnect': relay!.disconnect(); return json(200, { ok: true });
         case '/tentacle/connect': relay!.connect(); return json(200, { ok: true });
+        case '/tentacle/restart': {
+          // Faithful process-restart simulation: destroy the RelayClient and
+          // rebuild it against the SAME SessionManager (disk state persists),
+          // so reconnect runs the real auth -> restorePendingHumanActions ->
+          // resumeDisconnectedSessions -> broadcastSessionList path with
+          // in-memory openQuestions/card starting EMPTY. This is what a real
+          // upgrade restart does.
+          const adapter2 = adapter;
+          const sm2 = sm;
+          relay!.disconnect();
+          await new Promise((r) => setTimeout(r, 300));
+          relay = new RelayClient(adapter2 as unknown as AgentAdapter, sm2, {
+            relayUrl: RELAY_URL,
+            device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+          }, keyManager, attachmentStore);
+          await new Promise<void>((resolve, reject) => {
+            relay!.onAuthenticated = () => resolve();
+            relay!.onFatalError = (m: string) => reject(new Error(`tentacle restart auth failed: ${m}`));
+            relay!.connect();
+          });
+          return json(200, { ok: true });
+        }
         // ── seed a session as READ on the tentacle (readSeq = lastSeq), so a
         //    subsequent UI "Mark unread" produces an observable readSeq rollback. ──
         case '/read': {
