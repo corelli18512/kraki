@@ -308,6 +308,19 @@ describe('SessionManager', () => {
       expect(meta.totalRuns).toBe(2);
     });
 
+    it('can load a new runtime run without starting a turn', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.markDisconnected(sessionId);
+
+      const result = sm.resumeSession(sessionId, false);
+
+      expect(result?.runId).toBe('run_002');
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.state).toBe('idle');
+      expect(meta.currentRunId).toBe('run_002');
+      expect(meta.totalRuns).toBe(2);
+    });
+
     it('should mark previous run as crashed', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.markDisconnected(sessionId);

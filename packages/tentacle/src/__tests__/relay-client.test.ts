@@ -827,6 +827,27 @@ describe('RelayClient set_session_model', () => {
     await vi.runAllTimersAsync();
     expect(adapter.resumeSession).toHaveBeenCalledWith('sess_d', expect.anything());
     expect(adapter.setSessionModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4', undefined, undefined);
+    // A model change may load the runtime, but it must not start a turn.
+    expect(sm.resumeSession).toHaveBeenCalledWith('sess_d', false);
+    expect(sm.markIdle).not.toHaveBeenCalled();
+  });
+
+  it('keeps an already-active session active when changing model', async () => {
+    const { sm } = buildConnectedClient();
+    sm.getMeta.mockReturnValue({ id: 'sess_1', agent: 'copilot', state: 'active', model: 'old-model' });
+    const ws = sockets[0];
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_model',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { model: 'claude-opus-4' },
+    })));
+
+    await vi.runAllTimersAsync();
+    expect(sm.markIdle).not.toHaveBeenCalled();
   });
 
   it('de-duplicates concurrent lazy resumes for the same session (resume once, not twice)', async () => {

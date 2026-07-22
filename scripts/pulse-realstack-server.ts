@@ -340,6 +340,14 @@ async function main(): Promise<void> {
         // Tentacle-side turn-termination / session-removal paths without
         // depending on the Arm UI, exercising clearOpenQuestions /
         // purgeSessionToolState exactly as production.
+        case '/armSetModel': {
+          const sid = q.get('sid')!;
+          (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
+            type: 'set_session_model', sessionId: sid, deviceId: q.get('from') ?? 'dev-test-arm', seq: Number(q.get('seq') ?? Date.now()),
+            timestamp: new Date().toISOString(), payload: { model: q.get('model') ?? 'mock-v2' },
+          });
+          return json(200, { ok: true });
+        }
         case '/armAbort': {
           const sid = q.get('sid')!;
           (relay as unknown as { handleMessage: (m: Record<string, unknown>) => void }).handleMessage({
