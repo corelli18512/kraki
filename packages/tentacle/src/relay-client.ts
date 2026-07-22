@@ -253,6 +253,12 @@ export class RelayClient {
     const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
     if (usage) this.sessionManager.setUsage(sessionId, usage);
     this.sendTurnIdle(sessionId, { usage, ...(terminalError && { reason: 'failed' as const }) });
+    // The closing idle changes the turn boundary — the agent reply / terminal
+    // outcome now replaces the user_message as the preview anchor. Broadcast so
+    // every arm's digest-derived preview advances authoritatively. Without this
+    // a question/permission-less turn would never refresh the sidebar preview
+    // (broadcastSessionList otherwise only fires on question/permission events).
+    this.broadcastSessionList();
     this.maybeGenerateTitle(sessionId);
   }
 
@@ -1198,6 +1204,8 @@ export class RelayClient {
               this.sessionManager.markIdle(sessionId);
               this.clearCompacting(sessionId);
               this.sendTurnIdle(sessionId, { reason: 'aborted' });
+              // Turn boundary changed (aborted outcome). See settleAdapterIdle.
+              this.broadcastSessionList();
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'abortSession failed');

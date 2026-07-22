@@ -679,6 +679,88 @@ describe('SessionManager', () => {
       expect(entry!.preview!.type).toBe('agent');
       expect(entry!.preview!.text).toContain('I will run a command');
     });
+
+    it('preview is the turn boundary, not transient error noise', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Fix the migration' },
+      }));
+      // A flurry of transient 503 errors mid-turn must NOT become the preview.
+      sm.appendMessage(sessionId, 'error', JSON.stringify({
+        type: 'error', sessionId, payload: { message: '503 auth_unavailable' },
+      }));
+      sm.appendMessage(sessionId, 'error', JSON.stringify({
+        type: 'error', sessionId, payload: { message: '503 auth_unavailable' },
+      }));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('user');
+      expect(entry!.preview!.text).toBe('Fix the migration');
+    });
+
+    it('preview stays at the user_message during a multi-tool turn', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Run the test suite' },
+      }));
+      // Tool activity (legacy on-spine records) and narration must not
+      // displace the turn boundary even when they fill the tail window.
+      for (let i = 0; i < 25; i++) {
+        sm.appendMessage(sessionId, 'tool_start', JSON.stringify({
+          type: 'tool_start', sessionId, payload: { toolName: 'bash', toolCallId: `c${i}` },
+        }));
+        sm.appendMessage(sessionId, 'tool_complete', JSON.stringify({
+          type: 'tool_complete', sessionId, payload: { toolName: 'bash', toolCallId: `c${i}` },
+        }));
+      }
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('user');
+      expect(entry!.preview!.text).toBe('Run the test suite');
+    });
+
+    it('preview advances to the terminal turn_status on failure', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Deploy it' },
+      }));
+      sm.appendMessage(sessionId, 'turn_status', JSON.stringify({
+        type: 'turn_status', sessionId,
+        payload: { draft: '', action: { type: 'failed', payload: { failedAt: 'now' } } },
+      }));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('error');
+      expect(entry!.preview!.text).toBe('Turn failed');
+    });
+
+    it('preview uses the draft at an interrupted_turn boundary', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Summarize' },
+      }));
+      sm.appendMessage(sessionId, 'interrupted_turn', JSON.stringify({
+        type: 'interrupted_turn', sessionId, payload: { draft: 'Halfway through…' },
+      }));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('agent');
+      expect(entry!.preview!.text).toBe('Halfway through…');
+    });
+
+    it('preview shows a system_message (no-reply) outcome', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Hello?' },
+      }));
+      sm.appendMessage(sessionId, 'system_message', JSON.stringify({
+        type: 'system_message', sessionId, payload: { kind: 'no_reply', content: '' },
+      }));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('agent');
+      expect(entry!.preview!.text).toBe('No reply');
+    });
   });
 
   // ── Legacy inline-image strip migration ───────────────

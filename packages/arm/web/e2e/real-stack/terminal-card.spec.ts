@@ -121,7 +121,11 @@ test.describe.serial('real-stack terminal status cards', () => {
     await expect(legacyCard).toBeVisible({ timeout: 10_000 });
     await expect(legacyCard.getByText('User aborted')).toBeVisible();
     await expect(legacyCard.getByText('npm test')).toHaveCount(0);
-    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+    // "Turn aborted" must not leak into the CHAT rendering of the legacy card
+    // (it normalizes to the frozen "User aborted" bubble). Aborted sessions may
+    // legitimately show "Turn aborted" as their sidebar preview, so scope this
+    // to the chat scroll area, not the whole page.
+    await expect(page.locator('[data-chat-scroll]').getByText('Turn aborted', { exact: true })).toHaveCount(0);
 
     await page.screenshot({ path: '/tmp/kraki-terminal-legacy-normalized.png', fullPage: false });
 
@@ -132,7 +136,7 @@ test.describe.serial('real-stack terminal status cards', () => {
       .filter({ hasText: legacyDraft });
     await expect(replayedLegacyCard).toBeVisible({ timeout: 10_000 });
     await expect(replayedLegacyCard.getByText('User aborted')).toBeVisible();
-    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-chat-scroll]').getByText('Turn aborted', { exact: true })).toHaveCount(0);
 
     const lostDraft = 'Legacy process loss uses the shared failed bubble';
     await control('/legacyInterrupted', {
@@ -145,7 +149,7 @@ test.describe.serial('real-stack terminal status cards', () => {
     await expect(lostCard).toBeVisible({ timeout: 10_000 });
     await expect(lostCard.getByText('Turn failed')).toBeVisible();
     await expect(lostCard.getByText('Agent process was lost')).toBeVisible();
-    await expect(page.getByText('Turn aborted', { exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-chat-scroll]').getByText('Turn aborted', { exact: true })).toHaveCount(0);
 
     await page.screenshot({ path: '/tmp/kraki-terminal-legacy-process-lost.png', fullPage: false });
   });

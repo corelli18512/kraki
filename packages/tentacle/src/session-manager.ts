@@ -1110,8 +1110,26 @@ export class SessionManager {
   }
 
   /**
-   * Read the last few lines of a session's JSONL and extract a sidebar preview.
-   * Scans backward to find the last agent_message, user_message, error, permission, or question.
+   * Extract a sidebar preview = the most recent STABLE turn boundary.
+   *
+   * A turn boundary is the durable conversation anchor: the `user_message`
+   * that began the current (or last) turn, or the agent outcome of the
+   * previous turn (final `agent_message`, terminal `turn_status`, aborted
+   * `interrupted_turn`, or `system_message` like no-reply). It stays put for
+   * the whole turn — tool activity and narration are NOT boundaries.
+   *
+   * Transient `error` records (503/429 retries) are skipped: they are
+   * infrastructure noise, not conversation content, and a turn that fails is
+   * represented by its terminal `turn_status` (or falls back to the
+   * user_message, which is still the correct anchor). Open questions and
+   * permissions are likewise skipped here — they are turn-internal mechanics
+   * and are layered on top separately by `enrichSessionList` (the attention
+   * override), so they must never come from this file scan.
+   *
+   * Scans the whole 32KB tail (not just the last 20 lines): the spine is now
+   * sparse (`tool_start`/`tool_complete` live in `trace.jsonl`), but older
+   * sessions still carry them and a 20-line window could be entirely
+   * non-anchor entries.
    */
   private getSessionPreview(sessionId: string): import('@kraki/protocol').SessionPreviewDigest | undefined {
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
@@ -1135,25 +1153,17 @@ export class SessionManager {
       return undefined;
     }
 
-    // Parse lines from end to find the last previewable message
+    // Turn-boundary scan (most recent first). Returns the first anchor found.
     const lines = tail.split('\n');
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+    for (let i = lines.length - 1; i >= 0; i--) {
       if (!lines[i]) continue;
       try {
         const entry = JSON.parse(lines[i]) as LoggedMessage;
-        const inner = JSON.parse(entry.payload);
-        const payload = inner.payload as Record<string, unknown> | undefined;
+        const inner = JSON.parse(entry.payload) as { type?: string; payload?: Record<string, unknown> };
+        const payload = inner.payload;
         if (!payload) continue;
 
         switch (inner.type) {
-          case 'interrupted_turn': {
-            const draft = payload.draft;
-            return {
-              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : 'Turn aborted',
-              type: 'agent',
-              timestamp: entry.ts,
-            };
-          }
           case 'agent_message': {
             const content = payload.content;
             if (typeof content === 'string' && content) {
@@ -1168,34 +1178,35 @@ export class SessionManager {
             }
             break;
           }
-          case 'error': {
-            const message = payload.message;
-            if (typeof message === 'string') {
-              return { text: stripMarkdownForPreview(message), type: 'error', timestamp: entry.ts };
-            }
-            break;
+          case 'interrupted_turn': {
+            const draft = payload.draft;
+            const failed = payload.reason === 'process_lost';
+            return {
+              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Turn aborted'),
+              type: 'agent',
+              timestamp: entry.ts,
+            };
           }
-          case 'permission': {
-            if (!payload.resolution) {
-              const tool = typeof payload.toolName === 'string' ? payload.toolName : 'permission';
-              return { text: truncateText(tool, PREVIEW_MAX), type: 'permission', timestamp: entry.ts };
-            }
-            break;
+          case 'turn_status': {
+            const draft = payload.draft;
+            const actionType = (payload.action as { type?: string } | undefined)?.type;
+            const failed = actionType === 'failed';
+            return {
+              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Turn aborted'),
+              type: failed ? 'error' : 'agent',
+              timestamp: entry.ts,
+            };
           }
-          case 'question': {
-            if (!payload.answer) {
-              const q = typeof payload.question === 'string' ? payload.question : '';
-              return { text: stripMarkdownForPreview(q), type: 'question', timestamp: entry.ts };
-            }
-            break;
+          case 'system_message': {
+            const content = payload.content;
+            const label = typeof content === 'string' && content
+              ? content
+              : (payload.kind === 'no_reply' ? 'No reply' : 'System notice');
+            return { text: stripMarkdownForPreview(label), type: 'agent', timestamp: entry.ts };
           }
-          case 'answer': {
-            const answer = payload.answer;
-            if (typeof answer === 'string' && answer) {
-              return { text: stripMarkdownForPreview(answer), type: 'answer', timestamp: entry.ts };
-            }
-            break;
-          }
+          // error / idle / active / session_created / session_ended / tool_* /
+          // agent_narration / question / answer / permission / *_resolved /
+          // compacting are intentionally NOT turn boundaries — skip them.
         }
       } catch {
         // Skip malformed lines
