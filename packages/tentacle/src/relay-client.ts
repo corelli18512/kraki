@@ -1278,8 +1278,8 @@ export class RelayClient {
           // Other agents retain the established resume-then-set ordering.
           const applyModel = this.sessionManager.getMeta(sessionId)?.agent === 'pi'
             ? this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier)
-                .then(() => this.ensureSessionResumed(sessionId, false))
-            : this.ensureSessionResumed(sessionId)
+                .then(() => this.ensureSessionResumed(sessionId, false, false))
+            : this.ensureSessionResumed(sessionId, true, false)
                 .then(() => this.adapter.setSessionModel(sessionId, model, reasoningEffort, contextTier));
           applyModel
             .then(() => {
@@ -2012,7 +2012,7 @@ export class RelayClient {
    * Returns true if the session was freshly resumed, false if it was already
    * active/idle (or the resume failed).
    */
-  private async ensureSessionResumed(sessionId: string, restoreModel = true): Promise<boolean> {
+  private async ensureSessionResumed(sessionId: string, restoreModel = true, active = true): Promise<boolean> {
     const existing = this.resumeInFlight.get(sessionId);
     if (existing) return existing;
 
@@ -2021,7 +2021,7 @@ export class RelayClient {
 
     const promise = (async () => {
       try {
-        const result = this.sessionManager.resumeSession(sessionId);
+        const result = this.sessionManager.resumeSession(sessionId, active);
         if (!result) return false;
         // Tell the adapter which agent owns this session (for multi-agent routing)
         this.adapter.registerSessionAgent(sessionId, meta.agent);

@@ -400,7 +400,7 @@ export class SessionManager {
    * Resume a session after crash/restart. Creates a new run.
    * Returns context for the agent to recover.
    */
-  resumeSession(sessionId: string): { runId: string; context: SessionContext } | null {
+  resumeSession(sessionId: string, active = true): { runId: string; context: SessionContext } | null {
     const meta = this.readMeta(sessionId);
     if (!meta) return null;
 
@@ -429,8 +429,10 @@ export class SessionManager {
     };
     this.writeRun(sessionId, newRun);
 
-    // Update meta
-    meta.state = 'active';
+    // Update meta. Loading runtime state for a configuration-only operation
+    // (e.g. set_session_model) is not a turn start, so the caller may preserve
+    // idle while still creating a fresh process run.
+    meta.state = active ? 'active' : 'idle';
     meta.currentRunId = runId;
     meta.totalRuns = runNum;
     meta.updatedAt = new Date().toISOString();
