@@ -9,6 +9,7 @@ import { QuestionInput } from '../actions/QuestionInput';
 import { ToolActivity } from './ToolActivity';
 import { StepsButton, useTurnSteps } from './StepsModal';
 import { markdownComponents, ImageAttachments, HtmlArtifactCards } from './MessageBubble';
+import { StreamingMarkdown } from './StreamingMarkdown';
 import { messageProvider } from '../../lib/message-provider';
 import { formatTime } from '../../lib/format';
 import { cardActionKey } from '../../lib/session-status';
@@ -123,9 +124,13 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
           <div className="overflow-x-auto px-4 py-2.5">
             {hasContent && (
               <div className="markdown-content text-sm leading-relaxed text-text-primary">
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                  {draft}
-                </Markdown>
+                {live
+                  ? <StreamingMarkdown content={draft} />
+                  : (
+                    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                      {draft}
+                    </Markdown>
+                  )}
               </div>
             )}
             <ImageAttachments attachments={frozen?.attachments} sessionId={sessionId} />

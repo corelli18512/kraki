@@ -326,6 +326,32 @@ async function main(): Promise<void> {
         // ── agent-side simulation (inbound to browser, over pulse) ──
         case '/msg': adapter.msg(q.get('sid')!, q.get('text') ?? 'hello'); return json(200, { ok: true });
         case '/delta': adapter.delta(q.get('sid')!, q.get('text') ?? '...'); return json(200, { ok: true });
+        case '/deltaStream': {
+          // Stream many small token chunks to stress the status-card draft
+          // renderer. chunks=<n> intervalMs=<i> size=<chars per chunk>.
+          const sid = q.get('sid')!;
+          const chunks = Number(q.get('chunks') ?? 200);
+          const intervalMs = Number(q.get('intervalMs') ?? 30);
+          const size = Number(q.get('size') ?? 8);
+          const heavy = q.get('heavy') === '1';
+          // heavy=true: stream markdown with code fences / lists so each render
+          // re-runs remark + rehype-highlight on growing structured content —
+          // the real worst case for the status-card draft.
+          const heavyWords = ('Here is the plan: \n\n```ts\nfunction f(x: number) { return x * 2; }\nconst y = f(42);\n```\n\n- step one\n- step two\n- **bold** item with `code` and more text to grow '.split(' '));
+          const words = heavy ? heavyWords : ('the quick brown fox jumps over the lazy dog while the agent streams tokens into the status card draft bubble rendering markdown reactively '.split(' '));
+          let i = 0;
+          adapter.active(sid);
+          await new Promise<void>((resolve) => {
+            const iv = setInterval(() => {
+              const w = words[i % words.length];
+              const piece = heavy ? (w + ' ') : (w + ' ').repeat(Math.max(1, Math.ceil(size / (w.length + 1)))).slice(0, size);
+              adapter.delta(sid, piece);
+              i++;
+              if (i >= chunks) { clearInterval(iv); resolve(); }
+            }, intervalMs);
+          });
+          return json(200, { ok: true, sent: i });
+        }
         case '/perm': adapter.perm(q.get('sid')!, q.get('id') ?? 'perm-1', q.get('tool') ?? 'shell', q.get('desc') ?? 'run a command'); return json(200, { ok: true });
         case '/question': adapter.question(q.get('sid')!, q.get('id') ?? 'q-1', q.get('text') ?? 'which one?', q.get('choices') ? q.get('choices')!.split('|') : undefined); return json(200, { ok: true });
         case '/questionAutoResolved': adapter.questionAutoResolved(q.get('sid')!, q.get('id') ?? 'q-1'); return json(200, { ok: true });
