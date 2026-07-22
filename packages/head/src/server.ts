@@ -1030,7 +1030,7 @@ export class HeadServer {
         // device, forcing a full re-pair. Surface it as auth_unavailable so the
         // client retries instead of destroying a valid session.
         logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
-        this.sendAuthError(ws, 'auth_unavailable', 'Authentication service unavailable');
+        this.sendAuthError(ws, 'service_unavailable', 'Authentication service unavailable');
       });
       return;
     }

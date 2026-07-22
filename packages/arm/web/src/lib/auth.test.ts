@@ -54,6 +54,18 @@ describe('processAuthError: credential wipe policy', () => {
     expect(d.connect).toHaveBeenCalled();
   });
 
+  it('KEEPS credentials on service_unavailable (real RemoteAuthBackend timeout code)', () => {
+    // RemoteAuthBackend.post() catches fetch failures and returns
+    // { ok:false, code:'service_unavailable' }; Head forwards that code. The
+    // arm must treat it as transient and keep the paired identity.
+    localStorageMock._seed('kraki_device', JSON.stringify({ relay: 'wss://r', deviceId: 'dev_x' }));
+    const d = deps();
+    processAuthError({ code: 'service_unavailable', message: 'Account service unavailable' }, 'dev_x', d);
+    expect(d.clearStoredDeviceId).not.toHaveBeenCalled();
+    expect(localStorageMock.removeItem).not.toHaveBeenCalledWith('kraki_device');
+    expect(d.connect).toHaveBeenCalled();
+  });
+
   it('KEEPS credentials on a generic auth_rejected (may be transient)', () => {
     localStorageMock._seed('kraki_device', JSON.stringify({ relay: 'wss://r', deviceId: 'dev_x' }));
     const d = deps();

@@ -89,20 +89,20 @@ describe('Challenge auth: transient backend outage → auth_unavailable (not aut
   beforeEach(async () => { env = await createEnv(); });
   afterEach(async () => { await env.cleanup(); });
 
-  it('reports auth_unavailable when verifyChallenge rejects (timeout/network)', async () => {
+  it('reports service_unavailable when verifyChallenge rejects (timeout/network)', async () => {
     env.backend.verifyError = new Error('The operation was aborted due to timeout');
     const messages = await challengeAuth(env.port);
     const err = messages.find(m => m.type === 'auth_error') as { code?: string; message?: string } | undefined;
     expect(err).toBeDefined();
-    expect(err!.code).toBe('auth_unavailable');
+    expect(err!.code).toBe('service_unavailable');
     expect(err!.message).toContain('unavailable');
   });
 
-  it('reports auth_unavailable on a 5xx backend error too', async () => {
+  it('reports service_unavailable on a 5xx backend error too', async () => {
     env.backend.verifyError = new Error('500 internal');
     const messages = await challengeAuth(env.port);
     const err = messages.find(m => m.type === 'auth_error') as { code?: string } | undefined;
     expect(err).toBeDefined();
-    expect(err!.code).toBe('auth_unavailable');
+    expect(err!.code).toBe('service_unavailable');
   });
 });
