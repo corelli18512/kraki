@@ -1259,6 +1259,7 @@ export interface AuthOkMessage {
 
 export type AuthErrorCode =
   | 'auth_rejected'
+  | 'auth_unavailable'
   | 'unknown_auth_method'
   | 'pairing_disabled'
   | 'invalid_pairing_token'

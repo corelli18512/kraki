@@ -151,16 +151,33 @@ export function processAuthError(
   }
 
   if (storedDeviceId) {
-    logger.warn('Auth failed for stored device, clearing credentials');
-    localStorage.removeItem(STORAGE_KEY);
-    deps.clearStoredDeviceId();
-    store.setLastError(
-      oauthAvailable
-        ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
-        : 'Authentication failed. Please scan a new pairing QR code.',
+    // Only destroy the persisted pairing on a DETERMINISTIC failure — a code
+    // that proves this device's credentials are actually invalid. A transient
+    // outage (auth backend unreachable/timed out → auth_unavailable, or a
+    // generic auth_rejected that may itself stem from a backend hiccup) must
+    // NOT clear the paired device: doing so turned a 15s account-service
+    // timeout into a permanent logout that required a fresh QR/GitHub pairing.
+    const fatal = authError.code === 'invalid_signature'
+      || authError.code === 'device_not_found'
+      || authError.code === 'unknown_device'
+      || authError.code === 'user_not_found';
+    if (fatal) {
+      logger.warn('Auth failed for stored device (fatal), clearing credentials', { code: authError.code });
+      localStorage.removeItem(STORAGE_KEY);
+      deps.clearStoredDeviceId();
+      store.setLastError(
+        oauthAvailable
+          ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
+          : 'Authentication failed. Please scan a new pairing QR code.',
       );
-      deps.disconnect();
-      deps.connect();
+    } else {
+      // Transient: keep the paired identity and just reconnect — the next
+      // challenge attempt succeeds once the backend recovers.
+      logger.warn('Auth failed for stored device (transient), keeping credentials', { code: authError.code });
+      store.setLastError('Authentication temporarily unavailable. Reconnecting…');
+    }
+    deps.disconnect();
+    deps.connect();
   } else {
     store.setReconnectState(0, null);
     store.setLastError(
