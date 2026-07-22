@@ -173,3 +173,26 @@ kraki fda [--json|--watch]   # unchanged, retained for compatibility
 | `ad7b9c2d` (#138) | probe FDA before binary replace | worked around the post-replace probe, not the grant loss |
 | `9da93153` (#142) | wrap CLI in `.app` to "preserve FDA" | correct theory — but never registered the bundle with Launch Services, so TCC still used cdhash |
 | **this change** | **`lsregister` on install + after every update** | **closes the gap #142 left open** |
+
+## The trigger we actually hit on the live install
+
+Diagnosis of the real machine narrowed the recurrence to a specific,
+reproducible misconfiguration — not a vague macOS quirk:
+
+- The CLI's `Kraki.app` was shipped with **no icon and no `CFBundleIconFile`**,
+  so every macOS surface (System Settings, Finder, Dock) showed it as a generic
+  binary — visually identical to the raw Mach-O at `~/.local/bin/kraki`.
+- A **second** app, the native SwiftUI Mac app (`chat.kraki.mac`, with a proper
+  icon), also appeared in System Settings as "Kraki".
+- In the Full Disk Access list the user therefore saw *two* "Kraki" entries and
+  granted the toggle to the wrong one (the `chat.kraki.mac` entry, bundle id
+  mismatched → useless to the CLI daemon). The CLI itself, when launched from
+  the `~/.local/bin/kraki` symlink, got authorized as a raw **path**
+  (`client_type=1`) because TCC couldn't resolve it to the bundle — and a
+  path-tracked grant dies on every binary update.
+
+So the fix set is: (1) ship a real icon so the CLI bundle is visually distinct
+(this change), (2) keep Launch Services clean and the bundle registered (the
+`lsregister` work), (3) on the user side, authorize the `chat.kraki.cli`
+bundle specifically — identifiable now by its icon — and stop launching the
+daemon via the raw symlink.
