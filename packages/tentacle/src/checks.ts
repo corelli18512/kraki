@@ -566,7 +566,11 @@ export function cleanupStaleBundleEntries(canonicalAppPath?: string): {
     const isUnderTmp = rawPath.startsWith('/private/tmp/') || rawPath.startsWith(tmpRoot) || rawPath.startsWith('/tmp/');
     const existsOnDisk = existsSync(rawPath);
 
-    if (isCanonical && existsOnDisk) {
+    // NEVER touch the canonical install path, even if it's momentarily gone
+    // (e.g. mid-replacement during an update) — it will be re-registered by
+    // the caller. Only evict throwaway /tmp paths and genuinely-orphaned
+    // non-canonical paths.
+    if (isCanonical) {
       kept.push(rawPath);
       continue;
     }

@@ -732,10 +732,12 @@ async function cmdPermissions(args: string[]): Promise<void> {
 
   // Always (re)register the bundle. Idempotent and cheap; this is the
   // fix the recurring-FDA commits #123/#133/#138/#142 were all missing.
+  // (probeTccStatus below also registers, so this is technically redundant,
+  // but kept explicit so `--open` alone still registers without a full probe.)
   ensureTccBundleRegistered();
   // Purge zombie Launch Services entries (paths that no longer exist, or
-  // throwaway /tmp extracts from prior updates). `--clean` forces it even
-  // when nothing looks dirty; otherwise it still runs as hygiene.
+  // throwaway /tmp extracts from prior updates). `--clean` reports them;
+  // the sweep itself always runs as hygiene.
   const sweep = cleanupStaleBundleEntries();
 
   const status = await probeTccStatus();
@@ -781,7 +783,7 @@ async function cmdPermissions(args: string[]): Promise<void> {
 
 async function cmdDoctor(): Promise<void> {
   const {
-    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath, registerKrakiAppBundle,
+    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
   } = await import('./checks.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
   // multi-adapter logger (created at module load) defaults to info-level
@@ -796,10 +798,11 @@ async function cmdDoctor(): Promise<void> {
   const copilot = checkCopilotCli();
   const claude = checkClaudeCli();
   const anthropic = checkAnthropicCreds();
-  // Self-heal Launch Services registration so TCC tracks kraki by bundle id
-  // (stable across updates) rather than cdhash (invalidated every release).
+  // doctor is a READ-ONLY status query (called frequently by the toolbar).
+  // We do NOT mutate Launch Services here — only report current TCC identity
+  // health so the UI can surface "re-grant needed". The actual registration
+  // happens in `kraki permissions`, setup, the daemon start, and after updates.
   const tccBundled = getKrakiAppBundlePath() !== null;
-  const tccRegistered = registerKrakiAppBundle();
   const fda = await probeFda();
 
   // SDK + CLI level "can actually start" detection (matches runtime).
@@ -823,8 +826,9 @@ async function cmdDoctor(): Promise<void> {
     tcc: {
       platform: process.platform,
       bundled: tccBundled,
-      registered: tccRegistered,
       bundlePath: getKrakiAppBundlePath(),
+      // Read-only hint: run `kraki permissions` to (re)register + clean.
+      // We intentionally do NOT mutate LS from a status query.
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
