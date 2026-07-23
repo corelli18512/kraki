@@ -8,11 +8,10 @@
 
 import { getStore } from './store-adapter';
 import { createLogger } from './logger';
-import type { ChatMessage, SessionPreview } from '../types/store';
+import type { ChatMessage } from '../types/store';
 
 const logger = createLogger('msg-provider');
 
-const PREVIEW_MAX = 80;
 const BATCH_TIMEOUT_MS = 10_000;
 
 // Rows written by older web clients before runtime/TRACE state was separated
@@ -36,98 +35,6 @@ const NON_SPINE_CACHE_TYPES = new Set([
 
 function isSpineCacheMessage(message: ChatMessage): boolean {
   return !NON_SPINE_CACHE_TYPES.has(message.type);
-}
-
-/** Strip common markdown syntax for clean preview display. */
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, '') // fenced code blocks
-    .replace(/`([^`]+)`/g, '$1')    // inline code
-    .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')  // italic
-    .replace(/_([^_]+)_/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')    // headings
-    .replace(/^\s*[-*+]\s+/gm, '')  // list items
-    .replace(/^\s*\d+\.\s+/gm, '')  // ordered list items
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images
-    .replace(/\n+/g, ' ')           // newlines to spaces
-    .replace(/\s+/g, ' ')           // collapse whitespace
-    .trim();
-}
-
-/**
- * Rebuild session preview from the current messages in the store.
- */
-function rebuildPreview(sessionId: string): void {
-  const store = getStore();
-  const msgs = store.messages.get(sessionId);
-  if (!msgs || msgs.length === 0) return;
-
-  let preview: SessionPreview | null = null;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    const ts = 'timestamp' in m ? (m as { timestamp: string }).timestamp : '';
-    const payload = 'payload' in m ? (m.payload as Record<string, unknown>) : null;
-
-    if (m.type === 'question' && payload) {
-      // Skip already-answered questions — they shouldn't show the question badge
-      if (payload.answer) continue;
-      const q = typeof payload.question === 'string' ? payload.question : '';
-      preview = { text: stripMarkdown(q).slice(0, PREVIEW_MAX), type: 'question', timestamp: ts };
-      break;
-    }
-    if (m.type === 'permission' && payload) {
-      // Skip already-resolved permissions
-      if (payload.resolution) continue;
-      const tool = typeof payload.toolName === 'string' ? payload.toolName : '';
-      preview = { text: tool.slice(0, PREVIEW_MAX), type: 'permission', timestamp: ts };
-      break;
-    }
-    if (m.type === 'error' && payload) {
-      const msg = typeof payload.message === 'string' ? payload.message : 'Error';
-      preview = { text: stripMarkdown(msg).slice(0, PREVIEW_MAX), type: 'error', timestamp: ts };
-      break;
-    }
-    if (m.type === 'turn_status' && payload) {
-      const draft = typeof payload.draft === 'string' ? payload.draft : '';
-      const action = payload.action && typeof payload.action === 'object' ? payload.action as Record<string, unknown> : null;
-      const kind = action && action.type === 'failed' ? 'Turn failed' : 'User aborted';
-      preview = { text: stripMarkdown(draft || kind).slice(0, PREVIEW_MAX), type: action?.type === 'failed' ? 'error' : 'agent', timestamp: ts };
-      break;
-    }
-    if (m.type === 'interrupted_turn' && payload) {
-      const draft = typeof payload.draft === 'string' ? payload.draft : '';
-      const failed = payload.reason === 'process_lost';
-      preview = {
-        text: stripMarkdown(draft || (failed ? 'Turn failed' : 'User aborted')).slice(0, PREVIEW_MAX),
-        type: failed ? 'error' : 'agent',
-        timestamp: ts,
-      };
-      break;
-    }
-    if (m.type === 'agent_message' && payload) {
-      const content = typeof payload.content === 'string' ? payload.content : '';
-      if (content) {
-        preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'agent', timestamp: ts };
-        break;
-      }
-    }
-    if (m.type === 'user_message' && payload) {
-      const content = typeof payload.content === 'string' ? payload.content : '';
-      preview = { text: stripMarkdown(content).slice(0, PREVIEW_MAX), type: 'user', timestamp: ts };
-      break;
-    }
-    if (m.type === 'answer' && payload) {
-      const answer = typeof payload.answer === 'string' ? payload.answer : '';
-      if (answer) { preview = { text: stripMarkdown(answer).slice(0, PREVIEW_MAX), type: 'answer', timestamp: ts }; break; }
-    }
-  }
-
-  if (preview) {
-    store.setSessionPreview(sessionId, preview);
-  }
 }
 
 interface PendingRequest {
@@ -361,7 +268,6 @@ class MessageProvider {
     // No pending request — direct batch (e.g. from a concurrent path)
     if (messages.length > 0) {
       getStore().prependMessages(sessionId, messages);
-      rebuildPreview(sessionId);
     }
     this.loadingSessions.delete(sessionId);
     getStore().setSessionLoading(sessionId, false);
@@ -586,19 +492,6 @@ class MessageProvider {
   private deliverMessages(sessionId: string, messages: ChatMessage[], initial?: boolean): void {
     if (messages.length > 0) {
       getStore().prependMessages(sessionId, messages);
-      if (initial) {
-        const existingPreview = getStore().sessionPreviews.get(sessionId);
-        rebuildPreview(sessionId);
-        // Preserve the existing preview timestamp if it's newer than the rebuilt one.
-        // This keeps forked sessions showing their fork time instead of the source
-        // session's last message time.
-        if (existingPreview) {
-          const rebuilt = getStore().sessionPreviews.get(sessionId);
-          if (rebuilt && existingPreview.timestamp > rebuilt.timestamp) {
-            getStore().setSessionPreview(sessionId, { ...rebuilt, timestamp: existingPreview.timestamp });
-          }
-        }
-      }
     }
     logger.info('delivered', { sessionId, count: messages.length, initial });
   }

@@ -157,11 +157,10 @@ export function answer(
     sessionId,
     payload: { questionId, answer: answerText, wasFreeform },
   });
-  // Update preview optimistically so the question badge clears immediately
-  if (answerText) {
-    const timestamp = new Date().toISOString();
-    getStore().setSessionPreview(sessionId, { text: answerText.slice(0, 80), type: 'answer', timestamp });
-  }
+  // The sidebar preview is owned by the session_list digest; an answer is a
+  // turn-internal mechanic (like a tool call), not a turn boundary, so it must
+  // not be written to the preview store. The digest's attention override
+  // clears the question preview authoritatively on resolve.
 }
 
 export function killSession(

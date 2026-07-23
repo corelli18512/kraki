@@ -578,7 +578,8 @@ export const useStore = create<Store>()(persist((set) => ({
     loadingSessions: new Set(),
     pendingSessions: new Set(),
     // unreadCount kept — persisted snapshot shown until session_list reconciles.
-    // sessionPreviews kept — persisted snapshot shown until rebuildPreview refreshes.
+    // sessionPreviews kept — persisted snapshot shown until the session_list
+    // digest (the tentacle) reconciles it.
     // messages are NOT touched — they're managed by IndexedDB hydration.
     // pending_input cleanup happens during hydration.
     // cards are in-memory only — restored via request_card when a session opens.

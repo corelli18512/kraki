@@ -42,6 +42,15 @@ function updatePreview(sid: string, preview: SessionPreview, notify: boolean): v
   store.setSessionPreview(sid, preview, shouldIncrement);
 }
 
+/** Drive only the unread badge for a notify-worthy event. The preview text line
+ *  is owned by the session_list digest (the tentacle is the single authority);
+ *  some events still need to light up the unread dot without touching preview. */
+function notifyUnread(sid: string, notify: boolean): void {
+  if (!notify) return;
+  if (isViewingSession(sid) && document.hasFocus()) return;
+  getStore().incrementUnread(sid);
+}
+
 export interface RouterContext {
   cmdState: CommandState;
   /** Send an encrypted message back through the relay (for auto-approve in auto mode). */
@@ -213,8 +222,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       traceEvent({ comp: 'arm', evt: 'APP-AGENT-MESSAGE', sessionId: sid, contentLen: msg.payload.content?.length });
       store.appendMessage(sid, msg);
-      // Preview is set by idle handler (final answer only) and rebuildPreview (IDB/replay).
-      // Setting it here would show intermediate thinking-step messages.
+      // The sidebar preview is owned by the session_list digest (the tentacle is
+      // the single authority). The agent reply becomes the preview only once the
+      // turn closes and the tentacle broadcasts; setting it here would show
+      // intermediate thinking-step messages.
       break;
     }
 
@@ -224,11 +235,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         store.removePendingSession(sid);
       }
       store.appendMessage(sid, msg);
-      updatePreview(sid, {
-        text: truncPreview((msg.payload as Record<string, unknown>).message as string ?? 'Error'),
-        type: 'error',
-        timestamp: msg.timestamp,
-      }, !replaying);
+      // Preview text is owned by the session_list digest; a transient error is
+      // not a turn boundary and must not displace the stable preview. Only the
+      // unread badge is driven here.
+      notifyUnread(sid, !replaying);
       break;
 
     case 'turn_status': {
@@ -281,23 +291,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const idleUsage = idlePayload?.usage;
       if (idleUsage) store.setSessionUsage(sid, idleUsage);
       const idleReason = idlePayload?.reason;
-      // Don't update preview for aborted turns — the agent text is incomplete
-      if (idleReason !== 'aborted') {
-        const sessionMsgs = store.messages.get(sid);
-        if (sessionMsgs) {
-          for (let i = sessionMsgs.length - 1; i >= 0; i--) {
-            const m = sessionMsgs[i];
-            if (m.type === 'agent_message' && 'payload' in m) {
-              const content = (m.payload as Record<string, unknown>).content;
-              if (typeof content === 'string') {
-                updatePreview(sid, { text: truncPreview(content), type: 'agent', timestamp: msg.timestamp }, !replaying);
-              }
-              break;
-            }
-            if ((m.type === 'user_message' && m.payload.delivery !== 'steer') || m.type === 'idle') break;
-          }
-        }
-      }
+      // Preview is owned by the session_list digest (tentacle broadcasts on
+      // turn-close so the post-turn agent outcome advances authoritatively).
+      // Only drive the unread badge for completed (non-aborted) turns.
+      if (idleReason !== 'aborted') notifyUnread(sid, !replaying);
       if (!replaying && isViewingSession(sid) && document.hasFocus()) {
         import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid)).catch(() => {});
       }

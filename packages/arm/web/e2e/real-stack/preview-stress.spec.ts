@@ -116,7 +116,12 @@ test.describe('preview high-intensity stress', () => {
     await settle();
 
     expect(await openQ(sid)).toEqual([]);
-    expect(await enrichedPreview(sid)).toBeUndefined();
+    // The abort is now a real turn boundary, so the digest preview reflects it
+    // ("Turn aborted") instead of being undefined. What matters for "no phantom
+    // waiting": no question-typed attention remains and the card doesn't read
+    // waiting.
+    const abortPreview = await enrichedPreview(sid);
+    expect(abortPreview?.type).not.toBe('question');
     expect((await cardText(arm.page, q)) ?? '').not.toContain('waiting');
   });
 
