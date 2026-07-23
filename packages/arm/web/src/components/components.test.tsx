@@ -10,7 +10,6 @@ import { DeviceList } from '../components/sessions/DeviceList';
 import { NewSessionDialog } from '../components/sessions/NewSessionDialog';
 import type { ChatMessage } from '../types/store';
 import { EmptyState } from '../components/common/EmptyState';
-import { StreamingText } from '../components/chat/StreamingText';
 import { ToolActivity } from '../components/chat/ToolActivity';
 import { ProfileBar } from '../components/layout/ProfileBar';
 
@@ -267,23 +266,6 @@ describe('EmptyState', () => {
     expect(screen.getByText('◈')).toBeInTheDocument();
     expect(screen.getByText('No data')).toBeInTheDocument();
     expect(screen.getByText('Nothing to show')).toBeInTheDocument();
-  });
-});
-
-// ============================================================
-// StreamingText
-// ============================================================
-
-describe('StreamingText', () => {
-  it('renders content', () => {
-    renderWithRouter(<StreamingText content="Hello streaming" />);
-    expect(screen.getByText('Hello streaming')).toBeInTheDocument();
-  });
-
-  it('has streaming cursor class', () => {
-    const { container } = renderWithRouter(<StreamingText content="typing..." />);
-    const cursorEl = container.querySelector('.streaming-cursor');
-    expect(cursorEl).toBeInTheDocument();
   });
 });
 
