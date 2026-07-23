@@ -105,7 +105,28 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     // Drive 400 chunks at ~20ms with HEAVY markdown (code fences + lists) so
     // every render re-runs remark + rehype-highlight on growing structured
     // content — the real worst case for the status-card draft.
-    await control('/deltaStream', { sid, chunks: '400', intervalMs: '20', size: '12', heavy: '1' });
+    const streamPromise = control('/deltaStream', { sid, chunks: '400', intervalMs: '20', size: '12', heavy: '1' });
+
+    // MID-STREAM snapshot: while tokens are still arriving (~halfway), assert
+    // markdown STRUCTURE is rendered — not raw `**` / ` ``` ` markers. This is
+    // the regression target: the draft must show parsed markdown during
+    // streaming. (Previously it degraded to raw text until the stream settled.)
+    await arm.page.waitForTimeout(3000);
+    const midStream = await arm.page.evaluate(() => {
+      const root = document.querySelector('[data-live-bubble] .markdown-content') as HTMLElement | null;
+      if (!root) return { hasDom: false };
+      return {
+        hasDom: true,
+        hasCode: !!root.querySelector('code'),
+        hasListItem: !!root.querySelector('li'),
+        hasStrongOrEm: !!root.querySelector('strong, em'),
+        rawMarkerVisible: /\*\*|```/.test(root.innerText),
+        textLen: root.innerText.length,
+      };
+    });
+    console.log(`MID_STREAM ${JSON.stringify(midStream)}`);
+
+    await streamPromise;
 
     // Give the renderer + 40ms coalesce a moment to settle the tail.
     await arm.page.waitForTimeout(2000);
@@ -152,6 +173,11 @@ test('profile: status-card draft delta smoothness', async ({ browser }) => {
     // Sanity: deltas arrived and the draft rendered content.
     expect(report.deltaCount).toBeGreaterThan(50);
     expect(report.finalDraftLen).toBeGreaterThan(100);
+    // CORE: markdown structure must render DURING streaming (sampled mid-stream
+    // while tokens were still arriving), not raw markers.
+    expect(midStream.hasDom).toBe(true);
+    expect(midStream.hasCode || midStream.hasListItem || midStream.hasStrongOrEm).toBe(true);
+    expect(midStream.rawMarkerVisible).toBe(false);
   } finally {
     await arm.context.close();
   }

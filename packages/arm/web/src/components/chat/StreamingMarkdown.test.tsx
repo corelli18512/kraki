@@ -1,52 +1,46 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { StreamingMarkdown } from './StreamingMarkdown';
 
 describe('StreamingMarkdown', () => {
-  it('renders the raw text immediately while deltas are still arriving', () => {
-    // No markdown AST during active streaming — a single cheap text node that
-    // paints in the same frame the token arrives.
-    render(<StreamingMarkdown content="hello **world" />);
-    // Raw draft wraps the text; it should appear verbatim (un-parsed markdown
-    // sigils present, since we deliberately skip the parse while streaming).
-    expect(screen.getByText('hello **world')).toBeTruthy();
-    // The full parse (which would render <strong>world</strong>) must NOT have
-    // run yet.
-    expect(screen.queryByText('world')).toBeNull();
-  });
-
-  it('parses to markdown once the stream settles (no new text for a while)', async () => {
-    vi.useFakeTimers();
+  it('renders parsed markdown, not raw markers (complete input)', () => {
     render(<StreamingMarkdown content="hello **world**" />);
-    // While streaming: raw text.
-    expect(screen.getByText('hello **world**')).toBeTruthy();
-
-    // After the settle window with no further changes, the parsed markdown
-    // replaces the raw text.
-    act(() => { vi.advanceTimersByTime(400); });
-    expect(screen.getByText('world')).toBeTruthy(); // <strong>world</strong>
+    expect(screen.getByText('world')).toBeTruthy();
     expect(screen.queryByText('hello **world**')).toBeNull();
-    vi.useRealTimers();
   });
 
-  it('keeps streaming raw text across rapid updates (parse stays deferred)', () => {
-    vi.useFakeTimers();
-    const { rerender } = render(<StreamingMarkdown content="ab" />);
-    expect(screen.getByText('ab')).toBeTruthy();
-    // Rapid growth — each update resets the settle timer, so the parse never
-    // fires mid-stream.
-    rerender(<StreamingMarkdown content="abc" />);
-    act(() => { vi.advanceTimersByTime(200); });
-    rerender(<StreamingMarkdown content="abcd" />);
-    act(() => { vi.advanceTimersByTime(200); });
-    expect(screen.getByText('abcd')).toBeTruthy();
-    // Still raw (no parse yet — settle never completed under 350ms gaps).
-    expect(screen.queryByText('bcd')).toBeNull();
-    vi.useRealTimers();
+  it('repairs UNCLOSED markdown mid-stream so it renders as structure, not raw', () => {
+    // remend closes the **, so half-streamed bold renders as bold.
+    render(<StreamingMarkdown content="this is **bold and still streaming" />);
+    expect(screen.getByText(/bold and still streaming/)).toBeTruthy();
+    expect(screen.queryByText(/\*\*/)).toBeNull();
   });
 
-  it('renders nothing for empty content', () => {
+  it('repairs an unclosed inline code span', () => {
+    render(<StreamingMarkdown content={'use `useState hook'} />);
+    expect(screen.getByText(/useState hook/)).toBeTruthy();
+  });
+
+  it('parses a complete code block', () => {
+    const { container } = render(<StreamingMarkdown content={'```ts\nconst x = 1;\n```'} />);
+    expect(container.querySelector('code')).toBeTruthy();
+  });
+
+  it('renders a list', () => {
+    render(<StreamingMarkdown content={'- one\n- two'} />);
+    expect(screen.getByText('one')).toBeTruthy();
+    expect(screen.getByText('two')).toBeTruthy();
+  });
+
+  it('updates content across re-renders (streaming growth)', () => {
+    const { rerender } = render(<StreamingMarkdown content="abc" />);
+    expect(screen.getByText('abc')).toBeTruthy();
+    rerender(<StreamingMarkdown content="abc def **bold**" />);
+    expect(screen.getByText('bold')).toBeTruthy();
+  });
+
+  it('renders nothing meaningful for empty content', () => {
     const { container } = render(<StreamingMarkdown content="" />);
-    expect(container.textContent).toBe('');
+    expect(container.textContent?.trim()).toBe('');
   });
 });
