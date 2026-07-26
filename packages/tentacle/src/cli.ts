@@ -784,7 +784,9 @@ async function cmdPermissions(args: string[]): Promise<void> {
 async function cmdDoctor(): Promise<void> {
   const {
     checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
+    getDaemonTccIdentity,
   } = await import('./checks.js');
+  const { loadDaemonPid } = await import('./config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
   // multi-adapter logger (created at module load) defaults to info-level
   // stdout (dev) which would interleave pino lines into the output, so
@@ -829,6 +831,13 @@ async function cmdDoctor(): Promise<void> {
       bundlePath: getKrakiAppBundlePath(),
       // Read-only hint: run `kraki permissions` to (re)register + clean.
       // We intentionally do NOT mutate LS from a status query.
+      //
+      // identity.healthy answers the question that actually predicts whether a
+      // grant survives the next update: does the RUNNING daemon have a Launch
+      // Services bundle identity? A bundled, registered, correctly signed app
+      // still reports healthy:false when its daemon was started by absolute
+      // path — that combination is what made this bug recur six times.
+      identity: getDaemonTccIdentity(loadDaemonPid()),
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,

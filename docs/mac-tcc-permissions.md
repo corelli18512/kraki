@@ -1,8 +1,14 @@
 # macOS TCC permissions — root-cause fix for "kraki keeps losing its permissions"
 
-> Status: fixed end-to-end. The recurring re-grant-on-every-update bug is
-> resolved by registering `Kraki.app` with Launch Services. This document
-> exists so nobody re-introduces the regression.
+> Status: fixed by changing how the daemon is **launched**.
+>
+> An earlier revision of this document declared the bug "fixed end-to-end by
+> registering `Kraki.app` with Launch Services". That was wrong, and it was the
+> seventh failed fix. `lsregister -f` makes Launch Services aware that the bundle
+> exists **on disk**; it has no effect on the **runtime identity** of a process
+> that launchd `execve()`d directly, and runtime identity is what TCC keys on.
+> Registration was necessary but never sufficient. See "What was actually
+> measured" below — the evidence, rather than the reasoning, is the point.
 
 ## Symptom
 
@@ -56,17 +62,105 @@ permanent — until now.
 
 ### Why the prior fixes kept relapsing
 
-`#123/#133/#138/#142` all attacked detection or packaging, never these
-two mechanisms. The `.app` wrap (#142) was the right instinct but (a) it
-doesn't change how launchd launches the binary, and (b) it never cleaned
-the Launch Services pollution, so the zombie problem kept growing.
+`#123/#133/#138/#142` all attacked detection or packaging, never these two
+mechanisms. The `.app` wrap (#142) was the right instinct but (a) it doesn't
+change how launchd launches the binary, and (b) it never cleaned the Launch
+Services pollution, so the zombie problem kept growing.
+
+`#182` then fixed Bug 2 properly — the zombie sweeper works and should stay. But
+it only *argued around* Bug 1, claiming the path-tracking risk was "addressed by
+keeping the canonical path stable and keeping Launch Services unambiguous". It
+is not. Keeping the path stable is precisely the case that breaks: TCC stores
+path **plus cdhash**, and every update rewrites the cdhash at that stable path.
+
+The deeper reason this recurred seven times is that **nothing ever measured the
+daemon's runtime identity**. Bundle registration and LS cleanliness are both easy
+to observe and both looked correct, so each fix appeared to work until a user
+updated again.
+
+## What was actually measured
+
+Run directly against the live install and a set of throwaway signed bundles on
+macOS 26.5. `lsappinfo info -only bundleid <pid>` and
+`NSRunningApplication(processIdentifier:)` agree in every case.
+
+| Bundle `Info.plist` | Launched by | Launch Services identity |
+|---|---|---|
+| `LSBackgroundOnly` + `LSUIElement` (kraki's exact config) | `execve` of `Contents/MacOS/…` | **none** |
+| `LSUIElement` only | `execve` of `Contents/MacOS/…` | **none** |
+| `LSBackgroundOnly` + `LSUIElement` | `open` | bundle id resolves |
+| `LSUIElement` only | `open` | bundle id resolves |
+| — | launchd job running `open -W -n -a` | bundle id resolves |
+
+The live kraki daemon reported `"CFBundleIdentifier"=[ NULL ]`, i.e. no bundle
+identity at all — so TCC had nothing to key on but the absolute path.
+
+Three conclusions follow, and they are what the fix rests on:
+
+1. **The launch method decides everything.** `Info.plist` flags are irrelevant;
+   `LSBackgroundOnly` is not the culprit and removing it changes nothing.
+2. **A plain non-AppKit CLI binary does get a full bundle identity** when started
+   through LaunchServices. Being a Node SEA binary is not an obstacle.
+3. **`lsregister -f` cannot fix this**, because it only describes the bundle on
+   disk and never touches the identity of a running process.
+
+Independently confirmed that grants do survive an update once the identity is
+right: a Developer-ID-signed bundle launched via LaunchServices kept Screen
+Recording, Accessibility, Input Monitoring and Microphone across a version bump
+that changed its cdhash.
 
 ## Fix
 
-Three things, all in `packages/tentacle/src/checks.ts` and wired into the
-install/update/daemon paths:
+### The load-bearing change — launch through LaunchServices
 
-1. **`registerKrakiAppBundle()`** — `lsregister -f <Kraki.app>`. Called on
+`buildLaunchdPlist()` in `packages/tentacle/src/daemon.ts` now emits, for any
+bundled install:
+
+```
+/usr/bin/open -W -n -a <Kraki.app>
+  --stdout <bootstrap.log> --stderr <bootstrap.log>
+  --env K=V …
+  --args __daemon-worker
+```
+
+instead of `execve`ing `Kraki.app/Contents/MacOS/kraki` directly. The daemon now
+has a real bundle identity, so TCC stores the grant against `chat.kraki.cli` and
+its cdhash-free Designated Requirement, which survives every update.
+
+Details that are load-bearing, each verified rather than assumed:
+
+- **`-W`** blocks for the app's lifetime, so launchd still supervises the daemon.
+  Without it `open` returns immediately and launchd loses the process entirely.
+- **`KeepAlive: true`**, not `SuccessfulExit: false`. `open -W` exits **0 even
+  when the app it waits on is SIGKILLed**, so the old exit-code condition would
+  never fire and a crashed daemon would stay dead. `ThrottleInterval: 10` keeps
+  an unlaunchable bundle from spinning.
+- **`--env`** is required: an app started through LaunchServices inherits the
+  launchd *session* environment, not the environment of whoever called `open`.
+  Without it the daemon silently loses `PATH`, proxy settings and tokens.
+- **`--stdout` / `--stderr`** for the same reason — the launchd job's
+  `StandardOutPath` now captures `open` itself, not the daemon.
+- **`--args` must come last**; `open` treats everything after it as app `argv`.
+  Verified the daemon receives a clean `argv[1] == "__daemon-worker"` with no
+  `-psn_…` argument injected.
+- **`stopDaemon()` now unloads the launchd job *before* signalling the daemon.**
+  With `KeepAlive: true`, killing first lets launchd resurrect the daemon in the
+  window before the job is unloaded, and `kraki stop` appears to do nothing.
+- Non-bundled installs keep the old direct-`execve` behaviour and its original
+  `SuccessfulExit: false` semantics, where exit status is still meaningful.
+
+`buildLaunchdPlist()` is exported and pure specifically so the launch mechanism
+is asserted in CI (`src/__tests__/daemon-launch-tcc.test.ts`, 13 tests). That is
+the actual regression guard: this bug relapsed six times because nothing ever
+tested *how* the daemon was launched.
+
+### Supporting changes (necessary, not sufficient)
+
+Three things in `packages/tentacle/src/checks.ts`, wired into the
+install/update/daemon paths. These keep System Settings showing one unambiguous
+"Kraki" entry; they do **not** by themselves preserve grants:
+
+1. **`registerKrakiAppBundle(path?)`** — `lsregister -f <Kraki.app>`. Called on
    install, after every self-update, and on every daemon start, so the
    canonical bundle-id binding Launch Services needs is always current.
 
@@ -99,25 +193,57 @@ Wiring:
 | `daemon-worker.ts` `startWorker()` | register + sweep on every daemon start (self-heal) |
 | `cli.ts` `cmdPermissions(--clean)` + `cmdDoctor()` | user-driven / observable |
 
-Because the Developer ID Team ID (`3A83X5JZ3S`) never changes between
-releases, once the Launch Services state is clean and the bundle is
-registered, the bundle-id path through TCC is stable and a granted
-permission survives updates. The path-tracked risk (Bug 1) is addressed
-by keeping the canonical path stable (it is) and keeping Launch Services
-unambiguous (Bug 2 fix) so the resolver consistently lands on the
-bundle-id-tracked record.
+The Developer ID Team ID (`3A83X5JZ3S`) never changes between releases, so the
+Designated Requirement is stable and cdhash-free. Combined with a daemon that
+actually has a bundle identity, a granted permission now survives updates.
+
+Two further corrections shipped with this change:
+
+- `registerKrakiAppBundle()` now takes an explicit path, and `update.ts` passes
+  the **new** `targetAppDir`. The no-argument form derived the bundle from the
+  running process's `execPath`, which at that point is the old bundle just
+  renamed to `.bak` — and in the standalone-to-bundle migration it returned
+  `null`, so the freshly installed bundle was never registered at all.
+- `unregisterAppBundlePath()` now only fabricates its eviction stub at a path
+  that is **completely absent**. It previously wrote a stub into any directory
+  lacking `Contents/Info.plist` and then `rmSync`'d the whole tree — which would
+  delete a half-extracted update, or an unrelated directory that merely shared
+  the name. An uncollected Launch Services record is recoverable; a deleted
+  directory is not.
+
+### Diagnosing it next time
+
+`kraki doctor` now reports `tcc.identity`:
+
+```json
+{ "bundled": true, "bundlePath": "…/Kraki.app",
+  "daemonPid": 6856, "daemonBundleId": null, "healthy": false }
+```
+
+`daemonBundleId: null` with `bundled: true` is the exact broken state — a
+correctly signed, correctly registered bundle whose daemon was nonetheless
+started by absolute path. That single field is what was missing for seven
+attempts. When healthy it reads `"daemonBundleId": "chat.kraki.cli"`.
 
 ### Verified
 
-- `vitest run` — 748/748 pass (incl. 19 new tests covering bundle
-  detection, lsregister calls, the vanished-path stub eviction, and
-  `cleanupStaleBundleEntries`).
+- `vitest run` — 792/792 pass, including 13 new tests in
+  `src/__tests__/daemon-launch-tcc.test.ts` asserting the launch mechanism
+  itself: `open` as `argv[0]`, `-W`, `-n`, `-a <bundle>`, `--args` last,
+  `--env`/`--stdout`/`--stderr` forwarding, `KeepAlive: true`, and the
+  direct-`execve` fallback for non-bundled installs.
 - `tsc --noEmit` — 0 errors across the whole tentacle package.
-- Sandbox (`/tmp/kraki-tcc-sandbox-test.sh`) — registers, survives a
-  simulated update, never touches the real `chat.kraki.cli`.
-- Direct eviction probe (`/tmp/evict-probe.mjs`, against the real compiled
-  `dist/checks.js`) — a deleted-path zombie (3 entries) is reduced to 0 by
-  `unregisterAppBundlePath()`.
+- Launch identity measured live on macOS 26.5 across four bundle/launch
+  combinations plus a real launchd job (see "What was actually measured").
+- End-to-end under real launchd: a job running `open -W -n -a <bundle>` produced
+  a process with a resolved bundle id, stayed supervised, and was **restarted
+  ~1s after `kill -9` with its identity intact**.
+- Grant survival across a cdhash-changing update confirmed on a Developer-ID
+  signed bundle launched through LaunchServices.
+
+Not verified here, and the one thing left to confirm on a real install: that a
+freshly granted Full Disk Access on the updated kraki survives the *next* real
+release. The mechanism is proven; the production round-trip needs one user grant.
 
 ## Granting the permissions (user)
 
@@ -156,6 +282,18 @@ kraki fda [--json|--watch]   # unchanged, retained for compatibility
   Team ID resets every grant.
 - **Never** strip the `.app` wrapping. A raw Mach-O executed directly has
   no bundle identity to track.
+- **Never** point the launchd job back at `Contents/MacOS/kraki`. That single
+  change silently reintroduces the entire bug — the daemon keeps running, the
+  bundle stays signed and registered, and grants quietly stop surviving updates.
+  `daemon-launch-tcc.test.ts` fails if you do; do not "fix" that test.
+- **Never** launch the daemon through the `~/.local/bin/kraki` symlink either.
+  It has the same effect: no bundle identity, path-tracked grant. (`install.sh`
+  and the web installer still do this for their initial post-install start — it
+  is the remaining known gap, tracked below.)
+- Keep the notarization ticket **stapled** and staple *before* building the
+  distribution tarball. An unstapled app needs a successful online Gatekeeper
+  check on every launch; if Gatekeeper refuses to launch it, its TCC grants are
+  irrelevant.
 - If you ship a second bundle (e.g. the Tauri toolbar,
   `cloud.corelli.kraki.toolbar`), register **that** bundle with
   `lsregister` too — its TCC grants are tracked under its own bundle id.
@@ -172,6 +310,18 @@ kraki fda [--json|--watch]   # unchanged, retained for compatibility
 | `3efb194d` (#133) | robust multi-path FDA probe | fixed *detection*, not *persistence* |
 | `ad7b9c2d` (#138) | probe FDA before binary replace | worked around the post-replace probe, not the grant loss |
 | `9da93153` (#142) | wrap CLI in `.app` to "preserve FDA" | correct theory — but never registered the bundle with Launch Services, so TCC still used cdhash |
+| `12ddf3c2` (#182) | `lsregister -f` + zombie eviction + real app icon | fixed Bug 2 for good, but only argued around Bug 1; the daemon was still `execve`'d by path, so it still had no bundle identity |
+| *this change* | launch the daemon via `open -W -n -a <bundle>` | gives the daemon a real Launch Services identity — the thing every previous fix left untouched |
+
+### Known remaining gap
+
+`install.sh:208` and `packages/arm/web/public/install.sh:188` still start the
+daemon with `nohup "${INSTALL_DIR}/kraki" __daemon-worker`, i.e. through the
+symlink. That first post-install daemon therefore has no bundle identity until
+something restarts it via the launchd job. It self-heals on the next
+`kraki start`/restart or reboot, but the installers should be switched to the
+same `open`-based launch. The two installers also disagree on `INSTALL_DIR`
+(`~/.local/bin` vs `/usr/local/bin`), which is worth unifying at the same time.
 | **this change** | **`lsregister` on install + after every update** | **closes the gap #142 left open** |
 
 ## The trigger we actually hit on the live install
