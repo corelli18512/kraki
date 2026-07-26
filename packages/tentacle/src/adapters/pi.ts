@@ -1664,6 +1664,7 @@ export class PiAdapter extends AgentAdapter {
       });
       const rl = createInterface({ input: child.stdout });
       let settled = false;
+      let lastStderr = '';
       const finish = (fn: () => void) => {
         if (settled) return;
         settled = true;
@@ -1672,10 +1673,9 @@ export class PiAdapter extends AgentAdapter {
         child.kill();
         fn();
       };
-      const timer = setTimeout(
-        () => finish(() => reject(new Error('pi catalog query timed out'))),
-        timeoutMs,
-      );
+      const fail = (reason: string) =>
+        finish(() => reject(new Error(lastStderr ? `${reason}: ${lastStderr}` : reason)));
+      const timer = setTimeout(() => fail('pi catalog query timed out'), timeoutMs);
 
       rl.on('line', line => {
         let msg: { type?: string; command?: string; data?: { models?: PiCatalogModel[] } };
@@ -1684,9 +1684,19 @@ export class PiAdapter extends AgentAdapter {
           finish(() => resolve(msg.data?.models ?? []));
         }
       });
+      // Drain stderr rather than leaving it piped and unread: a full pipe buffer
+      // would block pi mid-write and stall the query until the timeout. Keeping
+      // the last chunk also gives the rejection something to say.
+      child.stderr.on('data', d => { lastStderr = String(d).trim().slice(-200) || lastStderr; });
       child.on('error', err => finish(() => reject(err)));
-      child.on('exit', () => finish(() => reject(new Error('pi exited before answering'))));
-      child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
+      child.on('exit', () => fail('pi exited before answering'));
+      // An unhandled 'error' on stdin is a process-level crash, and this stream
+      // breaks whenever pi dies early — a degraded ladder is the acceptable
+      // outcome here, taking the daemon down with it is not.
+      child.stdin.on('error', () => fail('pi stdin closed before the query was sent'));
+      if (child.stdin.writable) {
+        child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
+      }
     });
   }
 
