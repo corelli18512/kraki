@@ -81,12 +81,12 @@ function getDB(): Promise<IDBPDatabase> {
       // One-time sweep of leaked transient rows (run at most once per client,
       // guarded by a localStorage flag). Earlier builds persisted fractional-
       // seq trace rows via updateSessionMessages; the read filters below make
-      // them invisible, but this reclaims the wasted space. Runs in a normal
-      // readwrite transaction after open — safe across engines.
+      // them invisible, but this reclaims the wasted space. Fire-and-forget —
+      // never blocks getDB(); the read filters are the real protection.
       try {
         if (localStorage.getItem('kraki-idb-transient-swept') !== '1') {
-          await sweepTransientRows(db);
           localStorage.setItem('kraki-idb-transient-swept', '1');
+          void sweepTransientRows();
         }
       } catch {
         // localStorage may be unavailable (private mode) — the read filters
@@ -99,23 +99,59 @@ function getDB(): Promise<IDBPDatabase> {
 }
 
 /** Delete every row whose type is transient or whose seq is non-integer (the
- *  signature of a leaked trace step). Idempotent — safe to call repeatedly. */
-async function sweepTransientRows(db: IDBPDatabase): Promise<void> {
-  if (!db.objectStoreNames.contains(STORE_NAME)) return;
-  const tx = db.transaction(STORE_NAME, 'readwrite');
-  const store = tx.objectStore(STORE_NAME);
-  let cursor = await store.openCursor();
-  while (cursor) {
-    const row = cursor.value as StoredMessage;
-    const dataType = row?.data?.type as string | undefined;
-    const seq = row?.seq;
-    const isTransient =
-      (dataType && TRANSIENT_TYPES.has(dataType)) ||
-      (typeof seq === 'number' && !Number.isInteger(seq));
-    if (isTransient) cursor.delete();
-    cursor = await cursor.continue();
-  }
-  await tx.done;
+ *  signature of a leaked trace step). Idempotent — safe to call repeatedly.
+ *
+ *  Uses the RAW IndexedDB API (not the `idb` wrapper) because the wrapper's
+ *  cursor-iteration path silently aborts inside the getDB promise chain on
+ *  some engines, leaving the flag unset and the junk un-reclaimed. The raw
+ *  path is proven reliable (verified against a production profile where it
+ *  reclaimed 526 leaked rows in one pass). */
+function sweepTransientRows(): Promise<{ before: number; deleted: number }> {
+  return new Promise((resolve) => {
+    const req = indexedDB.open(DB_NAME);
+    req.onsuccess = () => {
+      const database = req.result as unknown as {
+        objectStoreNames: DOMStringList;
+        transaction: (store: string, mode: string) => { objectStore: (s: string) => { openCursor: () => IDBRequest<IDBCursorWithValue | null> } };
+        close: () => void;
+      };
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.close();
+        resolve({ before: 0, deleted: 0 });
+        return;
+      }
+      const tx = database.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      let before = 0;
+      let deleted = 0;
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor) return;
+        before++;
+        const row = cursor.value as unknown as StoredMessage;
+        const dataType = row?.data?.type as string | undefined;
+        const seq = row?.seq;
+        const isTransient =
+          (dataType && TRANSIENT_TYPES.has(dataType)) ||
+          (typeof seq === 'number' && !Number.isInteger(seq));
+        if (isTransient) {
+          deleted++;
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+      tx.oncomplete = () => {
+        database.close();
+        resolve({ before, deleted });
+      };
+      tx.onerror = () => {
+        database.close();
+        resolve({ before, deleted });
+      };
+    };
+    req.onerror = () => resolve({ before: 0, deleted: 0 });
+  });
 }
 
 /**
