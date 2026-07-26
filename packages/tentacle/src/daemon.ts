@@ -27,6 +27,7 @@ import {
   loadDaemonPid,
   clearDaemonPid,
 } from './config.js';
+import { getKrakiAppBundlePath } from './checks.js';
 
 // How long to wait for a regular spawned child to finish bootstrapping
 // before declaring success. No signature verification involved.
@@ -243,9 +244,118 @@ export class MacOSCodeSignatureError extends Error {
 // ── Start / Stop ────────────────────────────────────────
 
 /**
+ * Build the launchd job that starts the daemon.
+ *
+ * Exported and pure so the launch mechanism is assertable in CI. That matters
+ * more than it looks: "TCC permissions reset on every update" was diagnosed and
+ * "fixed" six times, and every one of those fixes left the launch mechanism
+ * untested, so each regression was invisible until a user hit it again.
+ *
+ * @param appBundle absolute path to the enclosing .app, or null for a raw binary
+ * @param execPath  the daemon executable, used only in the non-bundled fallback
+ */
+export function buildLaunchdPlist(opts: {
+  label: string;
+  appBundle: string | null;
+  execPath: string;
+  bootstrapLogPath: string;
+  workingDirectory: string;
+  envEntries: [string, string][];
+}): string {
+  const { label, appBundle, execPath, bootstrapLogPath, workingDirectory, envEntries } = opts;
+
+  // How the daemon is launched decides how TCC identifies it, and that decision
+  // is what made Full Disk Access evaporate on every update.
+  //
+  // launchd `execve()`ing Kraki.app/Contents/MacOS/kraki gives the process NO
+  // Launch Services application identity — verified directly: for a bundle
+  // launched that way, NSRunningApplication(processIdentifier:) returns nil and
+  // `lsappinfo info -only bundleid <pid>` reports NULL, while the same bundle
+  // started via `open` resolves to its bundle id. With no bundle identity to key
+  // on, TCC falls back to client_type=1 (absolute path) and, since the macOS 11.4
+  // fix for CVE-2021-30713, revalidates the binary at that path against the
+  // cdhash captured at grant time. Every update writes a new cdhash, so a
+  // path-tracked grant cannot survive one.
+  //
+  // `lsregister -f` does not fix this. It only teaches Launch Services that the
+  // bundle exists ON DISK; it has no effect on the runtime identity of a process
+  // that was exec'd directly. That is why registering the bundle and clearing
+  // zombie LS entries reduced the symptom without ever ending it.
+  //
+  // Launching through LaunchServices is the fix: `open` gives the process a real
+  // bundle identity, so TCC stores the grant against chat.kraki.cli, whose
+  // Designated Requirement is cdhash-free and stable across updates.
+  //   -W  block for the app's lifetime so launchd still supervises the daemon
+  //   -n  always start a fresh instance rather than reactivating a stale one
+  // Info.plist flags are irrelevant here: LSBackgroundOnly and LSUIElement both
+  // resolve fine under `open`, and neither rescues a path-exec'd process.
+  const programArgs: string[] = appBundle
+    ? [
+        '/usr/bin/open',
+        '-W',
+        '-n',
+        '-a', appBundle,
+        '--stdout', bootstrapLogPath,
+        '--stderr', bootstrapLogPath,
+        ...envEntries.flatMap(([k, v]) => ['--env', `${k}=${v}`]),
+        '--args', INTERNAL_DAEMON_WORKER_COMMAND,
+      ]
+    : [execPath, INTERNAL_DAEMON_WORKER_COMMAND];
+
+  // `open -W` returns 0 even when the app it is waiting on is SIGKILLed, so
+  // KeepAlive/SuccessfulExit=false would never fire and a crashed daemon would
+  // stay dead. Supervise unconditionally instead, throttled so a bundle that
+  // refuses to launch cannot spin. The direct-exec fallback keeps the original
+  // exit-code semantics, where they still work.
+  const keepAliveXml = appBundle
+    ? '    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>10</integer>'
+    : '    <key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>\n    </dict>';
+
+  const programArgsXml = programArgs
+    .map(a => `        <string>${escapeXml(a)}</string>`)
+    .join('\n');
+
+  const envXml = envEntries
+    .map(([k, v]) => `        <key>${k}</key>\n        <string>${escapeXml(v)}</string>`)
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${escapeXml(label)}</string>
+    <key>ProgramArguments</key>
+    <array>
+${programArgsXml}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+${keepAliveXml}
+    <key>EnvironmentVariables</key>
+    <dict>
+${envXml}
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${escapeXml(bootstrapLogPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${escapeXml(bootstrapLogPath)}</string>
+    <key>WorkingDirectory</key>
+    <string>${escapeXml(workingDirectory)}</string>
+</dict>
+</plist>`;
+}
+
+/**
  * Start the daemon via launchctl on macOS SEA.
- * launchd spawns the process in a clean context, bypassing CSM restrictions.
- * The daemon-worker saves its own PID; we poll for it here.
+ *
+ * launchd spawns the job in a clean context, bypassing CSM restrictions. For a
+ * bundled install the job is `open`, which hands the actual launch to
+ * LaunchServices so the daemon gets a real bundle identity — see
+ * buildLaunchdPlist() for why that is load-bearing.
+ *
+ * Either way the daemon-worker saves its own PID, so the poll below reads the
+ * daemon's PID and not the PID of whatever launched it.
  */
 async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
@@ -278,40 +388,14 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
     if (process.env[key]) envEntries.push([key, process.env[key]!]);
   }
 
-  const envXml = envEntries
-    .map(([k, v]) => `        <key>${k}</key>\n        <string>${escapeXml(v)}</string>`)
-    .join('\n');
-
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${getLaunchdLabel()}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${escapeXml(process.execPath)}</string>
-        <string>${INTERNAL_DAEMON_WORKER_COMMAND}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>EnvironmentVariables</key>
-    <dict>
-${envXml}
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${escapeXml(bootstrapLogPath)}</string>
-    <key>StandardErrorPath</key>
-    <string>${escapeXml(bootstrapLogPath)}</string>
-    <key>WorkingDirectory</key>
-    <string>${escapeXml(homedir())}</string>
-</dict>
-</plist>`;
+  const plist = buildLaunchdPlist({
+    label: getLaunchdLabel(),
+    appBundle: getKrakiAppBundlePath(),
+    execPath: process.execPath,
+    bootstrapLogPath,
+    workingDirectory: homedir(),
+    envEntries,
+  });
 
   const plistPath = getLaunchdPlistPath();
   writeFileSync(plistPath, plist);
@@ -388,18 +472,52 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 }
 
 export function stopDaemon(): boolean {
-  const pid = loadDaemonPid();
-  if (pid !== null) {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // Process already gone
-    }
-    clearDaemonPid();
-  }
-
-  // On macOS, also clean up launchd agent
+  // Unload the launchd job BEFORE signalling the daemon. The bundled macOS job
+  // runs with KeepAlive=true (see startDaemonLaunchctl), so killing first would
+  // let launchd restart the daemon in the window before the job is unloaded and
+  // `kraki stop` would appear to do nothing.
+  //
+  // Unloading is no longer sufficient on its own, either. The job is now `open`,
+  // and the daemon it launches belongs to LaunchServices rather than to launchd
+  // — verified: after `launchctl unload` the daemon is still running. Before, the
+  // daemon WAS the job process and the unload killed it. So the PID-based signal
+  // below is now the only thing that actually stops the daemon, and it has to
+  // succeed.
   if (process.platform === 'darwin') cleanupLaunchdPlist();
 
-  return pid !== null;
+  const pid = loadDaemonPid();
+  if (pid === null) return false;
+
+  const alive = () => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // Process already gone.
+    clearDaemonPid();
+    return true;
+  }
+
+  // Escalate if it ignores SIGTERM. Only ever targets the PID recorded under
+  // THIS Kraki home, so a dev instance can never take down the global daemon
+  // (the reason the launchd label is KRAKI_HOME-scoped in the first place) —
+  // which is also why there is deliberately no pkill-by-name fallback here: with
+  // no PID file there is no way to tell whose daemon a process is.
+  // 5s: the daemon's SIGTERM handler disconnects the relay and stops the
+  // adapter before exiting, so cutting it off too early truncates a real
+  // shutdown. It exits well inside this window when healthy, so `kraki stop`
+  // still returns promptly.
+  const deadline = Date.now() + 5000;
+  const idle = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline && alive()) {
+    Atomics.wait(idle, 0, 0, 100);   // synchronous sleep; spawns nothing
+  }
+  if (alive()) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* raced us to exit */ }
+  }
+
+  clearDaemonPid();
+  return true;
 }

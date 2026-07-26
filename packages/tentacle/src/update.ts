@@ -677,14 +677,19 @@ async function updateViaAppBundle(
     // Clean up backup
     rmSync(backupDir, { recursive: true, force: true });
 
-    // Re-register the new bundle with Launch Services. This is THE fix
-    // for the recurring "kraki lost its permissions after update" bug:
-    // it refreshes TCC's bundle-id -> path binding so every previously
-    // granted TCC service (FDA / Accessibility / Screen Recording / ...)
-    // continues to resolve to the new binary via the stable Developer ID
-    // Designated Requirement, instead of being invalidated by the cdhash
-    // change. Best-effort; never fatal if lsregister is unavailable.
-    registerKrakiAppBundle();
+    // Re-register the new bundle with Launch Services so System Settings keeps
+    // showing it by name and icon and the bundle-id lookup stays unambiguous.
+    //
+    // Pass targetAppDir explicitly. The no-argument form derives the bundle from
+    // the RUNNING process's execPath, which at this point is the old bundle that
+    // was just renamed to <target>.bak — and in the standalone-to-bundle
+    // migration it resolves to null, so the newly installed bundle was never
+    // registered at all.
+    //
+    // Registration alone does NOT preserve TCC grants across an update; only the
+    // launch mechanism does that (see buildLaunchdPlist in daemon.ts). Best-effort;
+    // never fatal if lsregister is unavailable.
+    registerKrakiAppBundle(targetAppDir);
     // Purge zombie Launch Services entries left by prior updates / test
     // builds (paths that no longer exist under /private/tmp, DerivedData,
     // etc.). Without this, TCC can mis-resolve the daemon's bundle and

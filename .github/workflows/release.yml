@@ -285,28 +285,35 @@ jobs:
           </plist>
           PLIST
 
-          # Sign the bundle — this re-signs the executable inside too
-          codesign --force --deep --options runtime \
+          # Sign inside-out: the nested executable first, then the bundle.
+          # --deep is deprecated for signing and applies the OUTER entitlements to
+          # every nested binary, which silently mis-signs anything added to the
+          # bundle later.
+          codesign --force --options runtime \
+            --entitlements packages/tentacle/entitlements.plist \
+            --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            "$APP_DIR/Contents/MacOS/kraki"
+          codesign --force --options runtime \
             --entitlements packages/tentacle/entitlements.plist \
             --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
             "$APP_DIR"
 
-          # Create tar.gz for distribution
-          ARCH="${{ matrix.asset_name }}"
-          ARCH="${ARCH#kraki-cli-macos-}"
-          tar -czf "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz" \
-            -C packages/tentacle/dist/sea Kraki.app
+          codesign --verify --strict --verbose=2 "$APP_DIR"
 
-          echo "Created kraki-macos-${ARCH}.app.tar.gz"
-          ls -lh "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz"
+          # The distribution tarball is NOT built here. It has to be created after
+          # notarization + stapling, or it ships without the ticket and every user
+          # needs a successful online Gatekeeper check to launch. See the
+          # "Notarize" step below.
 
-      - name: Notarize binary (macOS)
+      - name: Notarize and staple (macOS)
         if: runner.os == 'macOS' && needs.prepare.outputs.publish_mode == 'publish'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+
           # Notarize the standalone binary
           zip $RUNNER_TEMP/binary.zip packages/tentacle/dist/sea/${{ matrix.asset_name }}
           xcrun notarytool submit $RUNNER_TEMP/binary.zip \
@@ -320,6 +327,29 @@ jobs:
           xcrun notarytool submit $RUNNER_TEMP/app-bundle.zip \
             --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait
+
+          # Staple the ticket INTO the bundle. Unlike a bare Mach-O, an .app can
+          # and must be stapled: without it every launch depends on a successful
+          # online Gatekeeper check, so an offline or rate-limited machine sees
+          # "damaged app" — and an app Gatekeeper refuses to launch has no TCC
+          # grants at all.
+          xcrun stapler staple packages/tentacle/dist/sea/Kraki.app
+          xcrun stapler validate packages/tentacle/dist/sea/Kraki.app
+          spctl -a -vvv --type exec packages/tentacle/dist/sea/Kraki.app
+
+      - name: Package .app bundle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          # Packaged only after notarization + stapling, so the tarball carries
+          # the ticket. Building it earlier is why the shipped bundle had no
+          # stapled ticket despite the release being notarized.
+          ARCH="${{ matrix.asset_name }}"
+          ARCH="${ARCH#kraki-cli-macos-}"
+          tar -czf "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz" \
+            -C packages/tentacle/dist/sea Kraki.app
+          echo "Created kraki-macos-${ARCH}.app.tar.gz"
+          ls -lh "packages/tentacle/dist/sea/kraki-macos-${ARCH}.app.tar.gz"
 
       - name: Smoke test tentacle binary
         run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}

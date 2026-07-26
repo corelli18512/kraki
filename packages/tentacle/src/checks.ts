@@ -421,8 +421,21 @@ export function getKrakiAppBundlePath(): string | null {
 }
 
 /**
- * Register (or re-register) the installed Kraki.app bundle with Launch
- * Services so TCC tracks permissions by bundle id instead of cdhash.
+ * Register (or re-register) the installed Kraki.app bundle with Launch Services.
+ *
+ * This makes Launch Services aware that the bundle exists ON DISK — which is
+ * what lets System Settings show it with its name and icon, and what keeps the
+ * bundle-id lookup unambiguous. It does NOT by itself make TCC track the daemon
+ * by bundle id.
+ *
+ * TCC's choice between bundle-id and path tracking follows the RUNTIME identity
+ * of the process, which is decided by how the process was launched, not by what
+ * is registered on disk. A binary `execve()`d out of Contents/MacOS has no
+ * Launch Services application identity at all (verified: NSRunningApplication
+ * returns nil for it, and resolves the bundle id for the same bundle started via
+ * `open`), so TCC path-tracks it and the grant dies with the next cdhash change.
+ * The daemon is therefore launched through LaunchServices — see the launch
+ * comment in startDaemonLaunchctl() (daemon.ts), which is the actual fix.
  *
  * Safe to call repeatedly and on every platform:
  *   - non-darwin -> no-op, returns true
@@ -431,9 +444,14 @@ export function getKrakiAppBundlePath(): string | null {
  *
  * Returns true when the bundle looks registered.
  */
-export function registerKrakiAppBundle(): boolean {
+export function registerKrakiAppBundle(appBundlePath?: string): boolean {
   if (platform() !== 'darwin') return true;
-  const appPath = getKrakiAppBundlePath();
+  // An explicit path is required after an update: the bundle directory has just
+  // been replaced, and deriving it from the still-running process's execPath
+  // either points at the old (now renamed) bundle or, when migrating a
+  // standalone binary to a bundle for the first time, resolves to null — in
+  // which case the freshly installed bundle was never registered at all.
+  const appPath = appBundlePath ?? getKrakiAppBundlePath();
   if (!appPath) return false;
 
   try {
@@ -449,6 +467,68 @@ export function registerKrakiAppBundle(): boolean {
     // bundle id once the user adds it in System Settings.
     return false;
   }
+}
+
+/**
+ * Whether a running process has a Launch Services application identity, i.e.
+ * whether TCC has a bundle id to key its grants on.
+ *
+ * This is the signal that was missing while "permissions reset on every update"
+ * was misdiagnosed six times. Registering the bundle on disk and cleaning zombie
+ * Launch Services entries are both visible and both looked correct, while the
+ * thing that actually decides bundle-id vs path tracking — the runtime identity
+ * of the daemon process — was never measured.
+ *
+ * `lsappinfo` answers it without a compiled helper. A process launched through
+ * LaunchServices reports its bundle id; one `execve()`d straight out of
+ * Contents/MacOS reports NULL, and NULL means TCC is path-tracking it and the
+ * grant will not survive the next update.
+ *
+ * Returns the bundle id, or null when the process has no LS identity (or on any
+ * lookup failure — this is a diagnostic and must never throw).
+ */
+export function getProcessBundleIdentity(pid: number): string | null {
+  if (platform() !== 'darwin') return null;
+  try {
+    const out = execSync(`/usr/bin/lsappinfo info -only bundleid ${pid}`, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    // Present:  "CFBundleIdentifier"="chat.kraki.cli"
+    // Absent:   "CFBundleIdentifier"=[ NULL ]
+    const m = out.match(/"CFBundleIdentifier"\s*=\s*"([^"]+)"/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Report whether the daemon is launched in a way TCC can track by bundle id.
+ *
+ * `healthy: false` with `bundled: true` is the exact state that caused the
+ * recurring permission loss: a correctly signed, correctly registered bundle
+ * whose daemon was nonetheless started by absolute path.
+ */
+export function getDaemonTccIdentity(daemonPid: number | null): {
+  bundled: boolean;
+  bundlePath: string | null;
+  daemonPid: number | null;
+  daemonBundleId: string | null;
+  healthy: boolean;
+} {
+  const bundlePath = getKrakiAppBundlePath();
+  const bundled = bundlePath !== null;
+  const daemonBundleId = daemonPid !== null ? getProcessBundleIdentity(daemonPid) : null;
+  return {
+    bundled,
+    bundlePath,
+    daemonPid,
+    daemonBundleId,
+    // Only meaningful while the daemon is actually running.
+    healthy: daemonPid === null ? bundled : daemonBundleId === KRAKI_BUNDLE_ID,
+  };
 }
 
 /** Ensure the bundle is registered. Convenience wrapper for setup/update. */
@@ -482,8 +562,18 @@ export function unregisterAppBundlePath(appPath: string): void {
   // bundle at the same path (same CFBundleIdentifier), run `-u`, then delete
   // the stub. That is the only reliable way to evict an orphan Launch Services
   // record without a destructive `-kill` db reset.
+  // Only fabricate a stub at a path that is COMPLETELY absent. A directory that
+  // exists but has no Contents/Info.plist is not necessarily ours — it can be a
+  // half-extracted update, or an unrelated directory that merely shares the name.
+  // Writing a stub into it would make the rmSync below delete the whole tree, so
+  // in that case do the plain `-u` and leave the directory alone even if the
+  // zombie entry survives. An uncollected LS record is recoverable; deleting a
+  // user's directory is not.
+  const alreadyExists = existsSync(appPath);
+  const isIntactBundle = existsSync(join(appPath, 'Contents', 'Info.plist'));
   let createdStub = false;
-  if (!existsSync(join(appPath, 'Contents', 'Info.plist'))) {
+
+  if (!alreadyExists) {
     safeTry(() => {
       mkdirSync(join(appPath, 'Contents', 'MacOS'), { recursive: true });
       writeFileSync(join(appPath, 'Contents', 'MacOS', 'kraki'), '#!/bin/sh\n', { mode: 0o755 });
@@ -507,9 +597,9 @@ export function unregisterAppBundlePath(appPath: string): void {
     });
   });
 
-  // Tear down any stub we created (best-effort; never the real bundle, which
-  // always had an Info.plist and so never triggered stub creation).
-  if (createdStub) {
+  // Remove only a stub this call created at a path that did not previously
+  // exist. Never touch a pre-existing directory, intact bundle or not.
+  if (createdStub && !alreadyExists && !isIntactBundle) {
     safeTry(() => rmSync(appPath, { recursive: true, force: true }));
   }
 }
