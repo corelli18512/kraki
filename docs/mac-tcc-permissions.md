@@ -313,15 +313,30 @@ kraki fda [--json|--watch]   # unchanged, retained for compatibility
 | `12ddf3c2` (#182) | `lsregister -f` + zombie eviction + real app icon | fixed Bug 2 for good, but only argued around Bug 1; the daemon was still `execve`'d by path, so it still had no bundle identity |
 | *this change* | launch the daemon via `open -W -n -a <bundle>` | gives the daemon a real Launch Services identity — the thing every previous fix left untouched |
 
-### Known remaining gap
+### Installers
 
-`install.sh:208` and `packages/arm/web/public/install.sh:188` still start the
-daemon with `nohup "${INSTALL_DIR}/kraki" __daemon-worker`, i.e. through the
-symlink. That first post-install daemon therefore has no bundle identity until
-something restarts it via the launchd job. It self-heals on the next
-`kraki start`/restart or reboot, but the installers should be switched to the
-same `open`-based launch. The two installers also disagree on `INSTALL_DIR`
-(`~/.local/bin` vs `/usr/local/bin`), which is worth unifying at the same time.
+Both `install.sh` and `packages/arm/web/public/install.sh` previously started
+the first daemon with `nohup "${INSTALL_DIR}/kraki" __daemon-worker` — through
+the symlink, so that very first daemon had no bundle identity either. If the
+user granted Full Disk Access to *that* process, the grant was path-tracked from
+the outset and died on the next update.
+
+Both now launch the bundle through LaunchServices on macOS:
+
+```sh
+open -n -a "$HOME/.local/share/kraki/Kraki.app" \
+  --stdout "$BOOTSTRAP_LOG" --stderr "$BOOTSTRAP_LOG" \
+  --env "PATH=$PATH" --env "HOME=$HOME" \
+  --args __daemon-worker
+```
+
+with the original `nohup` retained for non-macOS and for the non-bundled
+fallback. Because `open` returns as soon as the app is launched, the liveness
+check matches on process name instead of a PID the shell never owned.
+
+Still open, and not a TCC issue: the two installers disagree on `INSTALL_DIR`
+(`~/.local/bin` vs `/usr/local/bin`), so the symlink location differs by install
+channel. Worth unifying separately.
 | **this change** | **`lsregister` on install + after every update** | **closes the gap #142 left open** |
 
 ## The trigger we actually hit on the live install

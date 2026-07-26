@@ -203,18 +203,41 @@ main() {
   # shell can launch it just fine.
   KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
 
-  # Start daemon in background from the shell
+  # Start daemon in background from the shell.
   mkdir -p "${HOME}/.kraki/logs"
-  nohup "${INSTALL_DIR}/${BINARY_NAME}" __daemon-worker \
-    </dev/null >"${HOME}/.kraki/logs/daemon-bootstrap.log" 2>&1 &
-  DAEMON_PID=$!
+  BOOTSTRAP_LOG="${HOME}/.kraki/logs/daemon-bootstrap.log"
 
-  # Brief check that daemon survived startup
-  sleep 1
-  if kill -0 "$DAEMON_PID" 2>/dev/null; then
-    echo "  🦑 Kraki daemon started (PID $DAEMON_PID)"
+  # On macOS the daemon MUST be started through LaunchServices, not through the
+  # ${INSTALL_DIR}/kraki symlink. A binary exec'd by path gets no Launch Services
+  # application identity, so TCC keys its grants to the absolute path + cdhash
+  # and every future update silently revokes Full Disk Access. Launching the
+  # bundle with `open` gives the process its real bundle id (chat.kraki.cli),
+  # whose Developer ID Designated Requirement is cdhash-free and stable.
+  # See docs/mac-tcc-permissions.md.
+  APP_PATH="${HOME}/.local/share/kraki/Kraki.app"
+  if [ "$(uname -s)" = "Darwin" ] && [ -d "$APP_PATH" ]; then
+    open -n -a "$APP_PATH" \
+      --stdout "$BOOTSTRAP_LOG" --stderr "$BOOTSTRAP_LOG" \
+      --env "PATH=${PATH}" --env "HOME=${HOME}" \
+      --args __daemon-worker
+    # `open` returns as soon as the app is launched, so confirm by process name
+    # rather than by a PID we never owned.
+    sleep 2
+    if pgrep -f "Kraki.app/Contents/MacOS/kraki __daemon-worker" >/dev/null 2>&1; then
+      echo "  🦑 Kraki daemon started (via LaunchServices)"
+    else
+      echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
+    fi
   else
-    echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
+    nohup "${INSTALL_DIR}/${BINARY_NAME}" __daemon-worker \
+      </dev/null >"$BOOTSTRAP_LOG" 2>&1 &
+    DAEMON_PID=$!
+    sleep 1
+    if kill -0 "$DAEMON_PID" 2>/dev/null; then
+      echo "  🦑 Kraki daemon started (PID $DAEMON_PID)"
+    else
+      echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
+    fi
   fi
   echo ""
 }
