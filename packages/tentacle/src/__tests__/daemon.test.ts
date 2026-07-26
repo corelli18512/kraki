@@ -242,6 +242,29 @@ describe('stopDaemon()', () => {
   });
 
   it('sends SIGTERM, clears PID, and returns true', () => {
+    // Model a daemon that honours SIGTERM: the signal lands, and the
+    // liveness probe (signal 0) then reports it gone.
+    let terminated = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, sig?: string | number) => {
+      if (sig === 'SIGTERM') { terminated = true; return true; }
+      if (sig === 0 && terminated) throw new Error('ESRCH');
+      return true;
+    }) as typeof process.kill);
+    mockLoadDaemonPid.mockReturnValue(12345);
+
+    const result = stopDaemon();
+
+    expect(result).toBe(true);
+    expect(killSpy).toHaveBeenCalledWith(12345, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(12345, 'SIGKILL');
+    expect(mockClearDaemonPid).toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('escalates to SIGKILL when the daemon ignores SIGTERM', () => {
+    // Unloading the launchd job no longer kills the daemon — the job is `open`
+    // and the daemon belongs to LaunchServices — so this escalation is the only
+    // backstop left for a hung daemon.
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
     mockLoadDaemonPid.mockReturnValue(12345);
 
@@ -249,9 +272,10 @@ describe('stopDaemon()', () => {
 
     expect(result).toBe(true);
     expect(killSpy).toHaveBeenCalledWith(12345, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(12345, 'SIGKILL');
     expect(mockClearDaemonPid).toHaveBeenCalled();
     killSpy.mockRestore();
-  });
+  }, 10_000);
 
   it('clears PID even if process is already gone', () => {
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {

@@ -244,11 +244,6 @@ export class MacOSCodeSignatureError extends Error {
 // ── Start / Stop ────────────────────────────────────────
 
 /**
- * Start the daemon via launchctl on macOS SEA.
- * launchd spawns the process in a clean context, bypassing CSM restrictions.
- * The daemon-worker saves its own PID; we poll for it here.
- */
-/**
  * Build the launchd job that starts the daemon.
  *
  * Exported and pure so the launch mechanism is assertable in CI. That matters
@@ -351,6 +346,17 @@ ${envXml}
 </plist>`;
 }
 
+/**
+ * Start the daemon via launchctl on macOS SEA.
+ *
+ * launchd spawns the job in a clean context, bypassing CSM restrictions. For a
+ * bundled install the job is `open`, which hands the actual launch to
+ * LaunchServices so the daemon gets a real bundle identity — see
+ * buildLaunchdPlist() for why that is load-bearing.
+ *
+ * Either way the daemon-worker saves its own PID, so the poll below reads the
+ * daemon's PID and not the PID of whatever launched it.
+ */
 async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
@@ -470,17 +476,48 @@ export function stopDaemon(): boolean {
   // runs with KeepAlive=true (see startDaemonLaunchctl), so killing first would
   // let launchd restart the daemon in the window before the job is unloaded and
   // `kraki stop` would appear to do nothing.
+  //
+  // Unloading is no longer sufficient on its own, either. The job is now `open`,
+  // and the daemon it launches belongs to LaunchServices rather than to launchd
+  // — verified: after `launchctl unload` the daemon is still running. Before, the
+  // daemon WAS the job process and the unload killed it. So the PID-based signal
+  // below is now the only thing that actually stops the daemon, and it has to
+  // succeed.
   if (process.platform === 'darwin') cleanupLaunchdPlist();
 
   const pid = loadDaemonPid();
-  if (pid !== null) {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // Process already gone
-    }
+  if (pid === null) return false;
+
+  const alive = () => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // Process already gone.
     clearDaemonPid();
+    return true;
   }
 
-  return pid !== null;
+  // Escalate if it ignores SIGTERM. Only ever targets the PID recorded under
+  // THIS Kraki home, so a dev instance can never take down the global daemon
+  // (the reason the launchd label is KRAKI_HOME-scoped in the first place) —
+  // which is also why there is deliberately no pkill-by-name fallback here: with
+  // no PID file there is no way to tell whose daemon a process is.
+  // 5s: the daemon's SIGTERM handler disconnects the relay and stops the
+  // adapter before exiting, so cutting it off too early truncates a real
+  // shutdown. It exits well inside this window when healthy, so `kraki stop`
+  // still returns promptly.
+  const deadline = Date.now() + 5000;
+  const idle = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline && alive()) {
+    Atomics.wait(idle, 0, 0, 100);   // synchronous sleep; spawns nothing
+  }
+  if (alive()) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* raced us to exit */ }
+  }
+
+  clearDaemonPid();
+  return true;
 }
