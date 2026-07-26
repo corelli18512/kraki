@@ -76,7 +76,8 @@ export interface PiRpcOptions {
   /** Resume an existing on-disk session file. */
   sessionFile?: string;
   appendSystemPrompt?: string;
-  /** Thinking level: off|minimal|low|medium|high|xhigh (xhigh = max). */
+  /** Thinking level: off|minimal|low|medium|high|xhigh|max — `max` is pi's own
+   *  top rung, above xhigh, not an alias for it. */
   thinking?: string;
   /** Path to a pi extension loaded via `--extension`. Kraki always loads its
    *  tools extension (finalize_reply / ask_user + permission gate). */
@@ -305,14 +306,17 @@ export function parsePiPermission(toolName: string, inputJson: string): { toolAr
   }
 }
 
-/** Kraki ReasoningEffort → pi ThinkingLevel. pi tops out at xhigh; "max" maps there. */
-function effortToThinking(effort?: string): string | undefined {
+/** Kraki ReasoningEffort → pi ThinkingLevel. The names line up 1:1 — pi's ladder
+ *  is off|minimal|low|medium|high|xhigh|max, so `max` is a rung of its own and
+ *  must not be folded into xhigh. On Anthropic's adaptive-thinking models each
+ *  rung becomes an effort value and only `max` reaches the top one. */
+export function effortToThinking(effort?: string): string | undefined {
   switch (effort) {
     case 'low': return 'low';
     case 'medium': return 'medium';
     case 'high': return 'high';
-    case 'xhigh':
-    case 'max': return 'xhigh';
+    case 'xhigh': return 'xhigh';
+    case 'max': return 'max';
     default: return undefined;
   }
 }
@@ -440,6 +444,50 @@ function resolveDefaultModel(models: PiModelRow[]): string {
   // Prefer a pro/large model as default, then the first model
   const preferred = models.find(m => m.model.includes('pro') || m.model.includes('opus')) ?? models[0];
   return `${preferred.provider}/${preferred.model}`;
+}
+
+// ── Per-model thinking levels via the `get_available_models` RPC ───
+
+/** The slice of a pi catalog entry we need. `--list-models` reports thinking as
+ *  a bare yes/no, so the thinkingLevelMap — the thing that says which rungs a
+ *  model actually has — is only reachable over RPC. */
+export interface PiCatalogModel {
+  id: string;
+  provider: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+}
+
+/** pi's ladder, weakest first. Kraki has no `off`/`minimal` rung. */
+const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const KRAKI_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Ladder to fall back on when the catalog is unreachable: what the adapter
+ *  offered for every reasoning model before it could ask per model. */
+export const FALLBACK_EFFORTS: ReasoningEffort[] = ['high', 'xhigh'];
+
+/** Mirrors pi-ai's `getSupportedThinkingLevels`. off/minimal/low/medium/high are
+ *  available unless the model's map nulls them out; xhigh and max are opt-in —
+ *  a model only has them if its map declares them. Anything else would advertise
+ *  rungs pi then silently clamps away. */
+export function piThinkingLevelsFor(model: PiCatalogModel): ReasoningEffort[] {
+  if (!model.reasoning) return [];
+  return PI_THINKING_LEVELS.filter(level => {
+    const mapped = model.thinkingLevelMap?.[level];
+    if (mapped === null) return false;
+    if (level === 'xhigh' || level === 'max') return mapped !== undefined;
+    return true;
+  }).filter((level): level is ReasoningEffort =>
+    (KRAKI_EFFORTS as readonly string[]).includes(level));
+}
+
+/** `high` when the model has it, else the strongest rung below it — the same
+ *  direction pi's own clamp walks. */
+export function defaultEffortFor(efforts: ReasoningEffort[]): ReasoningEffort | undefined {
+  for (let i = KRAKI_EFFORTS.indexOf('high'); i >= 0; i--) {
+    if (efforts.includes(KRAKI_EFFORTS[i])) return KRAKI_EFFORTS[i];
+  }
+  return efforts[0];
 }
 
 /** Minimal shape of pi's streamed `assistantMessageEvent` (message_update RPC).
@@ -1582,16 +1630,80 @@ export class PiAdapter extends AgentAdapter {
     return this.fetchModels().map(m => `${m.provider}/${m.model}`);
   }
 
+  private cachedEfforts: Map<string, ReasoningEffort[]> | null = null;
+
+  /** Ask pi for its catalog over a throwaway rpc process. This is the only
+   *  interface that exposes each model's thinkingLevelMap, and thus the only way
+   *  to tell a model that genuinely has `max` (Opus 5, Fable 5, GLM 5.2) from one
+   *  whose top rung is `low` (GPT-5.6 Luna). Best-effort: on any failure the
+   *  caller keeps the old fixed ladder rather than losing the model list. */
+  private async fetchEfforts(): Promise<Map<string, ReasoningEffort[]>> {
+    if (this.cachedEfforts) return this.cachedEfforts;
+    const efforts = new Map<string, ReasoningEffort[]>();
+    try {
+      const models = await this.queryCatalog();
+      for (const m of models) {
+        if (!m?.id || !m?.provider) continue;
+        efforts.set(`${m.provider}/${m.id}`, piThinkingLevelsFor(m));
+      }
+      logger.info({ count: efforts.size }, 'Fetched pi thinking levels');
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'Could not fetch pi thinking levels, using default ladder');
+    }
+    this.cachedEfforts = efforts;
+    return efforts;
+  }
+
+  private queryCatalog(timeoutMs = 15_000): Promise<PiCatalogModel[]> {
+    return new Promise((resolve, reject) => {
+      // --no-session: this process only answers one question, it must not leave a
+      // session file behind next to the user's real ones.
+      const child = spawn(this.cliPath, ['--mode', 'rpc', '--no-session'], {
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const rl = createInterface({ input: child.stdout });
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        rl.close();
+        child.kill();
+        fn();
+      };
+      const timer = setTimeout(
+        () => finish(() => reject(new Error('pi catalog query timed out'))),
+        timeoutMs,
+      );
+
+      rl.on('line', line => {
+        let msg: { type?: string; command?: string; data?: { models?: PiCatalogModel[] } };
+        try { msg = JSON.parse(line); } catch { return; }
+        if (msg.type === 'response' && msg.command === 'get_available_models') {
+          finish(() => resolve(msg.data?.models ?? []));
+        }
+      });
+      child.on('error', err => finish(() => reject(err)));
+      child.on('exit', () => finish(() => reject(new Error('pi exited before answering'))));
+      child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
+    });
+  }
+
   async listModelDetails(): Promise<ModelDetail[]> {
-    const efforts: ReasoningEffort[] = ['high', 'xhigh'];
-    return this.fetchModels().map(m => ({
-      id: `${m.provider}/${m.model}`,
-      name: `${m.provider.charAt(0).toUpperCase() + m.provider.slice(1)} ${m.model}`,
-      supportsReasoningEffort: m.reasoning,
-      supportedReasoningEfforts: m.reasoning ? efforts : undefined,
-      defaultReasoningEffort: m.reasoning ? 'high' as const : undefined,
-      contextWindow: m.contextWindow,
-    }));
+    const byModel = await this.fetchEfforts();
+    return this.fetchModels().map(m => {
+      const id = `${m.provider}/${m.model}`;
+      const efforts = byModel.get(id) ?? (m.reasoning ? FALLBACK_EFFORTS : []);
+      return {
+        id,
+        name: `${m.provider.charAt(0).toUpperCase() + m.provider.slice(1)} ${m.model}`,
+        supportsReasoningEffort: m.reasoning && efforts.length > 0,
+        supportedReasoningEfforts: efforts.length > 0 ? efforts : undefined,
+        defaultReasoningEffort: defaultEffortFor(efforts),
+        contextWindow: m.contextWindow,
+      };
+    });
   }
 
   getSessionUsage(sessionId: string): SessionUsage | null {
