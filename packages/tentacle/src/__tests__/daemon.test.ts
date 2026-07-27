@@ -61,6 +61,7 @@ import {
   getDaemonStatus,
   startDaemon,
   stopDaemon,
+  inspectDaemonProcess,
   resolveDaemonLaunch,
   getDaemonBootstrapLogPath,
 } from '../daemon.js';
@@ -90,6 +91,24 @@ function makeFakeChild(pid = 42) {
   };
   return { child, listeners };
 }
+
+// ── inspectDaemonProcess ─────────────────────────────────
+
+describe('inspectDaemonProcess()', () => {
+  it('accepts only a process carrying the daemon-worker marker', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    mockExecFileSync.mockReturnValue('/path/to/kraki __daemon-worker');
+    expect(inspectDaemonProcess(12345)).toBe('daemon');
+    killSpy.mockRestore();
+  });
+
+  it('rejects another kraki CLI process without the worker marker', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    mockExecFileSync.mockReturnValue('/path/to/kraki update');
+    expect(inspectDaemonProcess(12345)).toBe('other');
+    killSpy.mockRestore();
+  });
+});
 
 // ── isDaemonRunning ─────────────────────────────────────
 

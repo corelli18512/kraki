@@ -108,17 +108,7 @@ export function inspectDaemonProcess(pid: number): DaemonProcessIdentity {
         });
     const trimmed = command.trim();
     const marker = INTERNAL_DAEMON_WORKER_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(trimmed)) return 'daemon';
-
-    // macOS CSM fallback runs the SEA daemon worker in the original CLI process,
-    // so its argv has no __daemon-worker marker. For SEA only, accept the exact
-    // installed executable path as a second identity proof. Never do this for a
-    // regular Node runtime, where process.execPath would merely identify "node"
-    // and could match an unrelated application.
-    if (isSea() && (trimmed === process.execPath || trimmed.startsWith(`${process.execPath} `))) {
-      return 'daemon';
-    }
-    return 'other';
+    return new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(trimmed) ? 'daemon' : 'other';
   } catch {
     return 'unknown';
   }

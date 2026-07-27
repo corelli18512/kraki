@@ -360,7 +360,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
 
   // Import daemon management upfront — needed for pre-update stop and post-update restart
-  const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError } = await import('./daemon.js');
+  const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError, INTERNAL_DAEMON_WORKER_COMMAND } = await import('./daemon.js');
   const daemonWasRunning = isDaemonRunning();
 
   // Probe FDA BEFORE the binary is replaced. After replacement the kernel
@@ -442,6 +442,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
             // Fall back to running the daemon in the current process
             // (already Gatekeeper-approved since the user invoked it).
             console.log(chalk.dim('  Starting in foreground (macOS code signature restriction)…'));
+            process.title = `kraki ${INTERNAL_DAEMON_WORKER_COMMAND}`;
             process.on('SIGHUP', () => {});
             const { saveDaemonPid, getLogVerbosity: getLogV } = await import('./config.js');
             saveDaemonPid(process.pid);
