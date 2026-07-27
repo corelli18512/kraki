@@ -347,6 +347,76 @@ describe('HeadServer (thin relay)', () => {
       await new Promise((r) => setTimeout(r, 200));
       expect(bobGot).toBe(false);
     });
+
+    it('rejects a pulse unicast addressed to another user\'s device', async () => {
+      // Regression: the pulse unicast branch passed `to` straight to the hub
+      // with no ownership check, so any authenticated device could address ANY
+      // device id. The hub would mint an endpoint for it and queue payloads on
+      // a stranger's outbox (persisting them for durable sends) — cross-user
+      // frame injection plus an unbounded endpoint/disk growth amplifier.
+      const fetcher = mockGitHubFetcher({
+        tok_alice: { id: 'alice', login: 'alice' },
+        tok_bob: { id: 'bob', login: 'bob' },
+      });
+      head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher }) });
+
+      const { ws: aliceWs } = await authConnect(head.port, 'A-Laptop', 'tentacle', { token: 'tok_alice' });
+      const { authOk: bobAuth } = await authConnect(head.port, 'B-Phone', 'app', { token: 'tok_bob' });
+
+      const errors: string[] = [];
+      aliceWs.on('message', (d) => {
+        const m = JSON.parse(d.toString());
+        if (m.type === 'server_error') errors.push(m.message as string);
+      });
+
+      const hub = (head.server as unknown as { pulseHub: { endpointCount(): number } }).pulseHub;
+      const before = hub.endpointCount();
+
+      aliceWs.send(JSON.stringify({
+        type: 'unicast', to: bobAuth.deviceId, pulse: 'AAAA', blob: '', keys: {},
+      }));
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(errors.some((e) => /not reachable/i.test(e))).toBe(true);
+      // And no endpoint was minted for Bob's device on Alice's behalf.
+      expect(hub.endpointCount()).toBe(before);
+    });
+
+    it('rejects a pulse unicast whose `to` is an array (multicast-check bypass)', async () => {
+      // `to` as an array reached the hub's multicast branch, skipping every
+      // validation the real `multicast` handler performs (tentacle-only sender,
+      // same-user + role=app targets, target cap).
+      head = await createHead();
+      const { ws: app } = await authConnect(head.port, 'Phone', 'app');
+      const errors: string[] = [];
+      app.on('message', (d) => {
+        const m = JSON.parse(d.toString());
+        if (m.type === 'server_error') errors.push(m.message as string);
+      });
+
+      app.send(JSON.stringify({
+        type: 'unicast', to: ['a', 'b'], pulse: 'AAAA', blob: '', keys: {},
+      }));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(errors.some((e) => /single string target/i.test(e))).toBe(true);
+    });
+
+    it('accepts a pulse unicast with an EMPTY `to` (pure control frame)', async () => {
+      // Load-bearing: hello/ack/heartbeat/reset carry no forward destination,
+      // so both arm and tentacle emit them as `to: ''`. Rejecting those breaks
+      // the pulse handshake itself — every session goes dead.
+      head = await createHead();
+      const { ws: app } = await authConnect(head.port, 'Phone', 'app');
+      const errors: string[] = [];
+      app.on('message', (d) => {
+        const m = JSON.parse(d.toString());
+        if (m.type === 'server_error') errors.push(m.message as string);
+      });
+
+      app.send(JSON.stringify({ type: 'unicast', to: '', pulse: 'AAAA', blob: '', keys: {} }));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(errors).toEqual([]);
+    });
   });
 
   // ── Broadcast isolation ───────────────────────────────
@@ -562,6 +632,46 @@ describe('HeadServer (thin relay)', () => {
   // ── Edge cases ────────────────────────────────────────
 
   describe('edge cases', () => {
+    it('stale-kill notifies the pulse hub so the endpoint stays collectable', async () => {
+      // Regression: removeConnection() (the no-pong stale kill) deleted the
+      // map entries and closed the socket, but never told the hub. The close
+      // handler then hit its reconnect-guard (entry already gone) and skipped
+      // onDeviceDisconnected too — so the device's pulse endpoint stayed in
+      // link=connected with disconnectedAtMs=null FOREVER. Neither GC tier can
+      // touch such an endpoint, and every later forward() kept growing its
+      // outbox: an unbounded leak for every device the relay ever stale-kills.
+      head = await createHead();
+      const { authOk } = await authConnect(head.port, 'Phone', 'app');
+      const deviceId = authOk.deviceId as string;
+
+      const hub = (head.server as unknown as {
+        pulseHub: { devices: Map<string, { live: { link: string; disconnectedAtMs: number | null } }> };
+      }).pulseHub;
+      expect(hub.devices.get(deviceId)?.live.link).toBe('connected');
+
+      (head.server as unknown as { removeConnection(id: string): void }).removeConnection(deviceId);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const ep = hub.devices.get(deviceId);
+      expect(ep?.live.link).toBe('disconnected');
+      expect(ep?.live.disconnectedAtMs).not.toBeNull();
+    });
+
+    it('re-auth on a new socket tears down the previous socket', async () => {
+      // The old socket is dropped from `connections` by the new auth, so the
+      // ping timer never visits it and its close handler skips cleanup — it
+      // would linger in `clients` holding its ClientState until TCP gave up.
+      head = await createHead();
+      const { ws: first, authOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev_dup' });
+      const closed = new Promise<void>((resolve) => first.on('close', () => resolve()));
+
+      await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: authOk.deviceId as string });
+      await closed; // the first socket must be terminated by the server
+
+      const clients = (head.server as unknown as { clients: Map<unknown, unknown> }).clients;
+      expect(clients.size).toBe(1);
+    });
+
     it('should handle invalid JSON gracefully', async () => {
       head = await createHead();
       const ws = connect(head.port);

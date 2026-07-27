@@ -363,4 +363,68 @@ describe('PulseHub GC (spec §11.4)', () => {
     const persistedSeqs = (s.outbox as Array<{ seq: string; durable: boolean }>).map((e) => e.seq).sort();
     expect(persistedSeqs).toEqual(['2']); // only the durable entry
   });
+
+  it('GC reclaims an endpoint that was only ever created while its device was OFFLINE', () => {
+    // Regression: a freshly-constructed Endpoint is Disconnected but reports
+    // disconnectedAtMs === null ("never disconnected in this run"), and the GC
+    // skips exactly that case. Endpoints minted by forward()-to-an-offline-
+    // device (and by recoverOnBoot) therefore became permanently immortal:
+    // never L1-purged, never L2-evicted. This is the common case in prod, where
+    // most registered arms are offline most of the time.
+    const w = new GcWorld(db, { purgeNonDurableAfterMs: 1_000, evictEndpointAfterMs: 5_000, intervalMs: 0 });
+    w.connectArm();
+    // Tentacle is never connected in this run — the hub mints its endpoint
+    // lazily on the first forward.
+    w.armSend(1, false);
+    w.advance(1_000);
+    expect(w.hub.endpointCount()).toBe(2); // arm + lazily-created tentacle
+
+    w.advance(10_000);
+    w.hub.gcTick();
+    // The never-connected tentacle endpoint must be evicted; arm stays.
+    expect(w.hub.endpointCount()).toBe(1);
+  });
+
+  it('GC does not re-snapshot devices that purged nothing', () => {
+    // Regression: gcTick tested the CUMULATIVE purged/evicted counters inside
+    // the per-device loop, so once any earlier device purged, every subsequent
+    // device in the scan got a redundant saveSnapshot() — reintroducing the
+    // per-message SQLite write storm the hub exists to avoid.
+    const w = new GcWorld(db, { purgeNonDurableAfterMs: 1_000, evictEndpointAfterMs: 0, intervalMs: 0 });
+    w.connectArm();
+    w.armSend(1, false); // creates + queues on the offline tentacle endpoint
+    w.advance(5_000);
+    w.hub.gcTick(); // purges the tentacle's non-durable queue
+
+    // Second scan: nothing left to purge anywhere, so no snapshot writes.
+    let writes = 0;
+    const realPrepare = db.prepare.bind(db);
+    (db as unknown as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (sql.includes('INSERT OR REPLACE INTO pulse_meta')) writes++;
+      return realPrepare(sql);
+    }) as typeof db.prepare;
+    try {
+      w.hub.gcTick();
+    } finally {
+      (db as unknown as { prepare: typeof db.prepare }).prepare = realPrepare;
+    }
+    expect(writes).toBe(0);
+  });
+
+  it('forgetDevice drops in-memory endpoint and every persisted row', () => {
+    const w = new GcWorld(db, { intervalMs: 0 });
+    w.connectArm();
+    w.armSend(7, true); // durable → tentacle outbox + snapshot rows on disk
+    w.advance(1_000);
+    expect(w.hub.outboxCount(TENT)).toBeGreaterThan(0);
+
+    w.hub.forgetDevice(TENT);
+
+    expect(w.hub.outboxCount(TENT)).toBe(0);
+    const meta = db.prepare('SELECT COUNT(*) AS n FROM pulse_meta WHERE device = ?').get(TENT) as { n: number };
+    expect(meta.n).toBe(0);
+    // And a boot recovery must not resurrect an endpoint for it.
+    w.hub.recoverOnBoot();
+    expect(w.hub.endpointCount()).toBe(1); // arm only
+  });
 });
