@@ -557,6 +557,59 @@ interface PromptWatchdogOptions {
   idleStallMs: number;
 }
 
+export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiCatalogModel[]> {
+  return new Promise((resolve, reject) => {
+    // --no-session: this process only answers one question, it must not leave a
+    // session file behind next to the user's real ones.
+    const child = spawn(cliPath, ['--mode', 'rpc', '--no-session'], {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const rl = createInterface({ input: child.stdout });
+    let settled = false;
+    let lastStderr = '';
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rl.close();
+      child.kill();
+      fn();
+    };
+    const fail = (reason: string) =>
+      finish(() => reject(new Error(lastStderr ? `${reason}: ${lastStderr}` : reason)));
+    const timer = setTimeout(() => fail('pi catalog query timed out'), timeoutMs);
+
+    rl.on('line', line => {
+      let msg: { type?: string; command?: string; success?: boolean; error?: string; data?: { models?: PiCatalogModel[] } };
+      try { msg = JSON.parse(line); } catch { return; }
+      if (msg.type !== 'response' || msg.command !== 'get_available_models') return;
+      if (msg.success === false) {
+        fail(msg.error || 'pi catalog query failed');
+        return;
+      }
+      finish(() => resolve(msg.data?.models ?? []));
+    });
+    // Drain stderr rather than leaving it piped and unread: a full pipe buffer
+    // would block pi mid-write and stall the query until the timeout. Keeping
+    // the last chunk also gives the rejection something to say.
+    child.stderr.on('data', d => { lastStderr = String(d).trim().slice(-200) || lastStderr; });
+    child.on('error', err => finish(() => reject(err)));
+    child.on('exit', () => fail('pi exited before answering'));
+    // An unhandled 'error' on stdin is a process-level crash, and this stream
+    // breaks whenever pi dies early — a degraded ladder is the acceptable
+    // outcome here, taking the daemon down with it is not.
+    child.stdin.on('error', () => fail('pi stdin closed before the query was sent'));
+    if (child.stdin.writable) {
+      child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Section 5 — adapter public methods
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
@@ -1636,68 +1689,26 @@ export class PiAdapter extends AgentAdapter {
    *  interface that exposes each model's thinkingLevelMap, and thus the only way
    *  to tell a model that genuinely has `max` (Opus 5, Fable 5, GLM 5.2) from one
    *  whose top rung is `low` (GPT-5.6 Luna). Best-effort: on any failure the
-   *  caller keeps the old fixed ladder rather than losing the model list. */
+   *  caller keeps the old fixed ladder rather than losing the model list. Failed
+   *  lookups are deliberately NOT cached, so a transient pi startup/RPC failure
+   *  heals on the next capabilities refresh instead of lasting until daemon
+   *  restart. */
   private async fetchEfforts(): Promise<Map<string, ReasoningEffort[]>> {
     if (this.cachedEfforts) return this.cachedEfforts;
-    const efforts = new Map<string, ReasoningEffort[]>();
     try {
-      const models = await this.queryCatalog();
+      const efforts = new Map<string, ReasoningEffort[]>();
+      const models = await queryPiCatalog(this.cliPath);
       for (const m of models) {
         if (!m?.id || !m?.provider) continue;
         efforts.set(`${m.provider}/${m.id}`, piThinkingLevelsFor(m));
       }
       logger.info({ count: efforts.size }, 'Fetched pi thinking levels');
+      this.cachedEfforts = efforts;
+      return efforts;
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'Could not fetch pi thinking levels, using default ladder');
+      return new Map();
     }
-    this.cachedEfforts = efforts;
-    return efforts;
-  }
-
-  private queryCatalog(timeoutMs = 15_000): Promise<PiCatalogModel[]> {
-    return new Promise((resolve, reject) => {
-      // --no-session: this process only answers one question, it must not leave a
-      // session file behind next to the user's real ones.
-      const child = spawn(this.cliPath, ['--mode', 'rpc', '--no-session'], {
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const rl = createInterface({ input: child.stdout });
-      let settled = false;
-      let lastStderr = '';
-      const finish = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        rl.close();
-        child.kill();
-        fn();
-      };
-      const fail = (reason: string) =>
-        finish(() => reject(new Error(lastStderr ? `${reason}: ${lastStderr}` : reason)));
-      const timer = setTimeout(() => fail('pi catalog query timed out'), timeoutMs);
-
-      rl.on('line', line => {
-        let msg: { type?: string; command?: string; data?: { models?: PiCatalogModel[] } };
-        try { msg = JSON.parse(line); } catch { return; }
-        if (msg.type === 'response' && msg.command === 'get_available_models') {
-          finish(() => resolve(msg.data?.models ?? []));
-        }
-      });
-      // Drain stderr rather than leaving it piped and unread: a full pipe buffer
-      // would block pi mid-write and stall the query until the timeout. Keeping
-      // the last chunk also gives the rejection something to say.
-      child.stderr.on('data', d => { lastStderr = String(d).trim().slice(-200) || lastStderr; });
-      child.on('error', err => finish(() => reject(err)));
-      child.on('exit', () => fail('pi exited before answering'));
-      // An unhandled 'error' on stdin is a process-level crash, and this stream
-      // breaks whenever pi dies early — a degraded ladder is the acceptable
-      // outcome here, taking the daemon down with it is not.
-      child.stdin.on('error', () => fail('pi stdin closed before the query was sent'));
-      if (child.stdin.writable) {
-        child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
-      }
-    });
   }
 
   async listModelDetails(): Promise<ModelDetail[]> {

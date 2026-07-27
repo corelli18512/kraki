@@ -12,9 +12,11 @@ import { resolve } from 'node:path';
 
 const mockSpawn = vi.fn();
 const mockExecSync = vi.fn();
+const mockExecFileSync = vi.fn();
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
   execSync: (...args: unknown[]) => mockExecSync(...args),
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
 const mockSaveDaemonPid = vi.fn();
@@ -59,6 +61,7 @@ import {
   getDaemonStatus,
   startDaemon,
   stopDaemon,
+  inspectDaemonProcess,
   resolveDaemonLaunch,
   getDaemonBootstrapLogPath,
 } from '../daemon.js';
@@ -68,6 +71,7 @@ beforeEach(() => {
   vi.useRealTimers();
   mockLoadDaemonPid.mockReturnValue(null);
   mockOpenSync.mockReturnValue(99);
+  mockExecFileSync.mockReturnValue('/path/to/kraki __daemon-worker');
 });
 
 afterEach(() => {
@@ -87,6 +91,24 @@ function makeFakeChild(pid = 42) {
   };
   return { child, listeners };
 }
+
+// ── inspectDaemonProcess ─────────────────────────────────
+
+describe('inspectDaemonProcess()', () => {
+  it('accepts only a process carrying the daemon-worker marker', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    mockExecFileSync.mockReturnValue('/path/to/kraki __daemon-worker');
+    expect(inspectDaemonProcess(12345)).toBe('daemon');
+    killSpy.mockRestore();
+  });
+
+  it('rejects another kraki CLI process without the worker marker', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    mockExecFileSync.mockReturnValue('/path/to/kraki update');
+    expect(inspectDaemonProcess(12345)).toBe('other');
+    killSpy.mockRestore();
+  });
+});
 
 // ── isDaemonRunning ─────────────────────────────────────
 
@@ -239,6 +261,33 @@ describe('stopDaemon()', () => {
   it('returns false when no daemon is running (no PID file)', () => {
     mockLoadDaemonPid.mockReturnValue(null);
     expect(stopDaemon()).toBe(false);
+  });
+
+  it('does not signal a reused PID that belongs to another process', () => {
+    mockLoadDaemonPid.mockReturnValue(12345);
+    mockExecFileSync.mockReturnValue('/Applications/Safari.app/Contents/MacOS/Safari');
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    expect(stopDaemon()).toBe(true);
+
+    expect(killSpy).toHaveBeenCalledWith(12345, 0);
+    expect(killSpy).not.toHaveBeenCalledWith(12345, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(12345, 'SIGKILL');
+    expect(mockClearDaemonPid).toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('fails closed when a live PID cannot be inspected', () => {
+    mockLoadDaemonPid.mockReturnValue(12345);
+    mockExecFileSync.mockImplementation(() => { throw new Error('EPERM'); });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    expect(stopDaemon()).toBe(false);
+
+    expect(killSpy).toHaveBeenCalledWith(12345, 0);
+    expect(killSpy).not.toHaveBeenCalledWith(12345, 'SIGTERM');
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+    killSpy.mockRestore();
   });
 
   it('sends SIGTERM, clears PID, and returns true', () => {

@@ -255,6 +255,11 @@ async function silentStart(config: KrakiConfig): Promise<void> {
  * downloaded SEA binaries (com.apple.provenance + CSM 2).
  */
 async function startDaemonInProcess(config: KrakiConfig): Promise<void> {
+  // Give the in-process CSM fallback the same inspectable identity marker as a
+  // normal daemon worker. stopDaemon() requires this before signalling a PID;
+  // accepting any process that merely runs the kraki executable would allow a
+  // stale PID reused by `kraki logs/update` to be killed.
+  process.title = `kraki ${INTERNAL_DAEMON_WORKER_COMMAND}`;
   // Ignore SIGHUP so the daemon survives terminal close
   process.on('SIGHUP', () => {});
 
