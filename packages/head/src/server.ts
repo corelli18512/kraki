@@ -479,9 +479,32 @@ export class HeadServer {
       // store-and-forward. The envelope MUST carry a pulse frame — the head is
       // pulse-only; there is no raw-WS relay path.
       if (typeof msg.pulse === 'string' && state.deviceId) {
+        // `to` MUST be a single string. An array here would reach the hub's
+        // multicast branch and bypass every check the `multicast` handler makes.
+        if (msg.to !== undefined && typeof msg.to !== 'string') {
+          this.sendError(ws, 'unicast requires a single string target');
+          return;
+        }
+        // An EMPTY `to` is legitimate and load-bearing: pure pulse control
+        // frames (hello/ack/heartbeat/reset) carry no forward destination, so
+        // both arm and tentacle emit them with `to: ''`. They ride the source
+        // endpoint only and are never forwarded — nothing to authorize.
+        const to = typeof msg.to === 'string' ? msg.to : '';
+        // Authorize a real destination. Without this any authenticated device
+        // could address ANY device id: the hub would mint an endpoint for it
+        // and queue (and, for durable sends, persist to SQLite) payloads on a
+        // stranger's outbox — cross-user frame injection plus an unbounded
+        // endpoint/disk-growth amplifier from a single client.
+        if (to !== '' && to !== HEAD_PULSE_TARGET) {
+          const target = this.storage.getDevice(to);
+          if (!target || target.userId !== state.userId) {
+            this.sendError(ws, 'unicast target is not reachable');
+            return;
+          }
+        }
         this.pulseHub.onPulseEnvelope(state.deviceId, {
           pulse: msg.pulse as string,
-          to: msg.to as string,
+          to,
         });
         return;
       }
@@ -832,8 +855,19 @@ export class HeadServer {
     this.connections.delete(deviceId);
     this.userByDevice.delete(deviceId);
     if (ws) {
-      try { ws.close(); } catch { /* best effort */ }
+      // The reason we are here is that the peer stopped answering pings, so a
+      // graceful `close()` (which waits for a close handshake that will never
+      // come) can leave the socket — and its ClientState — pinned for the full
+      // TCP timeout. Terminate outright.
+      try { ws.terminate(); } catch { /* best effort */ }
+      this.clients.delete(ws);
     }
+    // Tell the hub the link is down. The ws.on('close') handler cannot do it
+    // for us: its reconnect-guard sees the map entry already deleted and skips
+    // the whole cleanup block. Without this the device's pulse endpoint stays
+    // in link=connected with disconnectedAtMs=null forever, so neither GC tier
+    // can ever reclaim it and every later forward() keeps growing its outbox.
+    if (ws || userId) this.pulseHub.onDeviceDisconnected(deviceId);
     // Programmatic removal — the ws.on('close') handler's reconnect-guard
     // check will fail (we already deleted from the map), so notify other
     // devices ourselves. Idempotent: if the close handler does run later it
@@ -1070,6 +1104,7 @@ export class HeadServer {
     state.authenticatedAt = Date.now();
     state.deviceId = deviceId;
     state.userId = user.userId;
+    this.evictPreviousConnection(deviceId, ws);
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.userId);
     trace('DEV-CONNECT', { device: deviceId, user: user.userId, auth: 'challenge' });
@@ -1108,6 +1143,7 @@ export class HeadServer {
     state.authenticatedAt = Date.now();
     state.deviceId = result.deviceId;
     state.userId = result.userId;
+    this.evictPreviousConnection(result.deviceId, ws);
     this.connections.set(result.deviceId, ws);
     this.userByDevice.set(result.deviceId, result.userId);
     trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
@@ -1242,6 +1278,24 @@ export class HeadServer {
     this.broadcastDeviceJoined(params.userId, params.deviceId);
   }
 
+  /**
+   * A device is about to register `ws` as its connection. If the SAME device id
+   * already had a socket, that older socket is now orphaned: once we overwrite
+   * the map entry its close handler hits the reconnect-guard and skips cleanup,
+   * and the ping timer (which only walks `connections`) never visits it again.
+   * It would sit in `clients` holding its ClientState until TCP finally gives
+   * up. Terminate it explicitly.
+   *
+   * Must be called BEFORE `connections.set(deviceId, ws)`.
+   */
+  private evictPreviousConnection(deviceId: string, ws: WebSocket): void {
+    const previous = this.connections.get(deviceId);
+    if (!previous || previous === ws) return;
+    getLogger().info('Replacing existing connection for device', { deviceId });
+    this.clients.delete(previous);
+    try { previous.terminate(); } catch { /* best effort */ }
+  }
+
   private completeAuth(
     ws: WebSocket,
     state: ClientState,
@@ -1271,6 +1325,7 @@ export class HeadServer {
     state.authenticatedAt = Date.now();
     state.deviceId = deviceId;
     state.userId = user.id;
+    this.evictPreviousConnection(deviceId, ws);
     this.connections.set(deviceId, ws);
     this.userByDevice.set(deviceId, user.id);
     trace('DEV-CONNECT', { device: deviceId, user: user.id, auth: 'inline' });
@@ -1423,6 +1478,11 @@ export class HeadServer {
 
     this.storage.deleteDevice(targetDeviceId);
     this.storage.deletePushTokensForDevice(targetDeviceId);
+    // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
+    // rows too. Otherwise they outlive the device record forever, and
+    // recoverOnBoot faithfully rebuilds an endpoint for a device that can
+    // never authenticate again.
+    this.pulseHub.forgetDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
 
     // Broadcast removal to all remaining user devices

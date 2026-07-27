@@ -195,21 +195,62 @@ export class PulseHub {
     // stream gets its own epoch so a RESET/burst on bulk cannot disturb the
     // live stream's cursor.
     const ts = this.host.now();
+    // `createdAtMs` is what keeps these endpoints collectable. An endpoint
+    // starts Disconnected, so its offline clock must start now: otherwise every
+    // endpoint created while its device is OFFLINE — boot restore
+    // (`recoverOnBoot`) and, far more commonly, `forward()` to an offline
+    // destination — reports "never disconnected", which both GC tiers skip, and
+    // is never purged or evicted. `onDeviceConnected` clears the mark.
+    //
+    // The option ships in @coinfra/pulse >= 0.5.0. Widen the type so this also
+    // compiles against 0.4.1, where the constructor ignores the unknown key —
+    // the runtime fallback below covers that version.
+    type EpOpts = ConstructorParameters<typeof Endpoint>[0] & { createdAtMs?: number };
     const live = new Endpoint({
       epoch: `head:${this.processEpoch}:${deviceId}:live:${ts}`,
       durable: { supported: true },
       streamId: STREAM_LIVE,
       restore: this.loadSnapshot(deviceId, STREAM_LIVE),
-    });
+      createdAtMs: ts,
+    } as EpOpts);
     const bulk = new Endpoint({
       epoch: `head:${this.processEpoch}:${deviceId}:bulk:${ts}`,
       durable: { supported: true },
       streamId: STREAM_BULK,
       restore: this.loadSnapshot(deviceId, STREAM_BULK),
-    });
+      createdAtMs: ts,
+    } as EpOpts);
     d = { streams: new StreamSet([live, bulk]), live, bulk };
+    // Fallback for pulse < 0.5.0, where `createdAtMs` is ignored and the clock
+    // stays null: stamp it via onDisconnected. Second choice, not first: it also
+    // bumps the reconnect attempt counter and arms `reconnectAt`, so the next
+    // tick emits an `open` effect — a request to dial that makes no sense for
+    // the passive side of the link. Our `run()` deliberately ignores `open`
+    // (connections are WS-driven), so it is inert here, just noise. On >= 0.5.0
+    // `disconnectedAtMs` is already non-null and this never engages.
+    if (!this.connectedDevices.has(deviceId) && live.disconnectedAtMs === null) {
+      live.onDisconnected(ts);
+      bulk.onDisconnected(ts);
+    }
     this.devices.set(deviceId, d);
     return d;
+  }
+
+  /** Drop every trace of a device: in-memory endpoints plus its persisted
+   *  outbox / snapshot / capability rows. Called when a device is deleted from
+   *  the account — otherwise its durable rows stay in SQLite forever and
+   *  `recoverOnBoot` keeps resurrecting an endpoint for a device that can never
+   *  reconnect. */
+  forgetDevice(deviceId: string): void {
+    this.devices.delete(deviceId);
+    this.connectedDevices.delete(deviceId);
+    this.bulkCapableEver.delete(deviceId);
+    this.bulkCapableNow.delete(deviceId);
+    this.pulseSeenNow.delete(deviceId);
+    if (this.closed || !this.db.open) return;
+    this.db.prepare('DELETE FROM pulse_outbox WHERE device = ?').run(deviceId);
+    this.db.prepare('DELETE FROM pulse_meta WHERE device = ?').run(deviceId);
+    this.db.prepare('DELETE FROM pulse_capabilities WHERE device = ?').run(deviceId);
   }
 
   /** A device connected — bring up its stream set (resume any persisted outbox). */
@@ -405,9 +446,13 @@ export class PulseHub {
   }
 
   private unstoreOutbox(device: string, stream: number, seqUpTo: bigint): void {
+    // `seq` is stored as TEXT, so it must be compared numerically. Bind the
+    // bound as TEXT and CAST it too: `Number(seqUpTo)` silently loses precision
+    // above 2^53 and would then delete rows it shouldn't (or miss rows it
+    // should) once a long-lived endpoint's seq space grows past that.
     this.db
-      .prepare('DELETE FROM pulse_outbox WHERE device = ? AND stream = ? AND CAST(seq AS INTEGER) <= ?')
-      .run(device, stream, Number(seqUpTo));
+      .prepare('DELETE FROM pulse_outbox WHERE device = ? AND stream = ? AND CAST(seq AS INTEGER) <= CAST(? AS INTEGER)')
+      .run(device, stream, seqUpTo.toString());
   }
 
   private saveSnapshot(device: string): void {
@@ -513,6 +558,7 @@ export class PulseHub {
         continue;
       }
       // L1: drop non-durable outbox entries on BOTH streams.
+      let devicePurged = 0;
       for (const ep of [d.live, d.bulk]) {
         if (
           this.gc.purgeNonDurableAfterMs > 0
@@ -521,12 +567,19 @@ export class PulseHub {
         ) {
           const { droppedSeqs } = ep.purgeNonDurable('gc-idle');
           if (droppedSeqs.length > 0) {
-            purged += droppedSeqs.length;
+            devicePurged += droppedSeqs.length;
             trace('GC-PURGE', { device: deviceId, stream: ep.stream, dropped: droppedSeqs.length, offlineMs });
           }
         }
       }
-      if (purged > 0 || evicted > 0) this.saveSnapshot(deviceId);
+      // Snapshot only when THIS device actually changed. The counters are
+      // cumulative across the whole scan, so testing them here re-wrote a
+      // snapshot for every remaining device once any earlier device purged —
+      // exactly the per-message SQLite write storm the hub is built to avoid.
+      if (devicePurged > 0) {
+        purged += devicePurged;
+        this.saveSnapshot(deviceId);
+      }
     }
     if (purged > 0 || evicted > 0) {
       getLogger().info('pulse-hub gc', {
