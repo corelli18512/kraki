@@ -12,7 +12,7 @@
  * to running the daemon worker in the current process.
  */
 
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -74,6 +74,55 @@ function cleanupLaunchdPlist(): void {
   if (existsSync(p)) unlinkSync(p);
 }
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
+
+export type DaemonProcessIdentity = 'daemon' | 'other' | 'gone' | 'unknown';
+
+/**
+ * Verify that a PID still belongs to a Kraki daemon before signalling it.
+ *
+ * PID files can outlive their process, and operating systems eventually reuse
+ * the numeric PID. A liveness probe alone therefore cannot distinguish the real
+ * daemon from an unrelated process that inherited the same number. Query the
+ * process command line and require Kraki's internal worker marker. Fail closed
+ * (`unknown`) when the command cannot be inspected: it is safer to leave a hung
+ * daemon for manual diagnosis than to SIGKILL an arbitrary process.
+ */
+export function inspectDaemonProcess(pid: number): DaemonProcessIdentity {
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM' ? 'unknown' : 'gone';
+  }
+
+  try {
+    const command = process.platform === 'win32'
+      ? execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
+        ], { encoding: 'utf8', timeout: 5000, windowsHide: true })
+      : execFileSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
+          encoding: 'utf8',
+          timeout: 5000,
+        });
+    const trimmed = command.trim();
+    const marker = INTERNAL_DAEMON_WORKER_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?:^|\\s)${marker}(?:\\s|$)`).test(trimmed)) return 'daemon';
+
+    // macOS CSM fallback runs the SEA daemon worker in the original CLI process,
+    // so its argv has no __daemon-worker marker. For SEA only, accept the exact
+    // installed executable path as a second identity proof. Never do this for a
+    // regular Node runtime, where process.execPath would merely identify "node"
+    // and could match an unrelated application.
+    if (isSea() && (trimmed === process.execPath || trimmed.startsWith(`${process.execPath} `))) {
+      return 'daemon';
+    }
+    return 'other';
+  } catch {
+    return 'unknown';
+  }
+}
 
 export interface DaemonLaunchSpec {
   runtime: string;
@@ -208,27 +257,26 @@ export interface DaemonStatus {
 export function isDaemonRunning(): boolean {
   const pid = loadDaemonPid();
   if (pid === null) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    // Process doesn't exist — stale PID file
+  const identity = inspectDaemonProcess(pid);
+  if (identity === 'gone' || identity === 'other') {
     clearDaemonPid();
     return false;
   }
+  // `unknown` means the PID is alive but the OS refused command inspection.
+  // Treat it as running to avoid launching a duplicate daemon; stopDaemon()
+  // still refuses to signal it until its identity can be established.
+  return true;
 }
 
 export function getDaemonStatus(): DaemonStatus {
   const pid = loadDaemonPid();
   if (pid === null) return { running: false, pid: null };
-
-  try {
-    process.kill(pid, 0);
-    return { running: true, pid };
-  } catch {
+  const identity = inspectDaemonProcess(pid);
+  if (identity === 'gone' || identity === 'other') {
     clearDaemonPid();
     return { running: false, pid: null };
   }
+  return { running: true, pid };
 }
 
 export class MacOSCodeSignatureError extends Error {
@@ -297,7 +345,12 @@ export function buildLaunchdPlist(opts: {
         '-a', appBundle,
         '--stdout', bootstrapLogPath,
         '--stderr', bootstrapLogPath,
-        ...envEntries.flatMap(([k, v]) => ['--env', `${k}=${v}`]),
+        // `open --env NAME` copies NAME from open's own environment without
+        // embedding its value in argv. launchd supplies that environment via
+        // EnvironmentVariables below. Passing NAME=VALUE here would expose
+        // GH_TOKEN, proxy credentials, etc. in the long-lived `open -W` process
+        // command line for the daemon's entire lifetime.
+        ...envEntries.flatMap(([k]) => ['--env', k]),
         '--args', INTERNAL_DAEMON_WORKER_COMMAND,
       ]
     : [execPath, INTERNAL_DAEMON_WORKER_COMMAND];
@@ -377,8 +430,10 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   ];
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
-  // Forward proxy and other relevant env vars so the daemon can reach
-  // external services (e.g. Copilot API behind a proxy).
+  // Forward proxy and GitHub auth variables so the daemon keeps the same
+  // credential behavior as before. buildLaunchdPlist passes only variable NAMES
+  // to `open --env` (values remain in launchd's EnvironmentVariables), avoiding
+  // the new long-lived argv exposure without breaking PAT-only installations.
   const forwardVars = [
     'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
     'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
@@ -429,6 +484,11 @@ function escapeXml(s: string): string {
 
 export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
   stopDaemon();
+  // An alive PID whose identity could not be verified is deliberately left in
+  // place by stopDaemon(). Do not start a second daemon beside it.
+  if (loadDaemonPid() !== null) {
+    throw new Error('Refusing to start: the recorded daemon PID is alive but could not be verified. Remove the stale daemon.pid only after checking the process.');
+  }
 
   // On macOS SEA, use launchctl so launchd spawns the daemon in a clean
   // context that isn't blocked by CSM provenance tracking.
@@ -472,7 +532,21 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 }
 
 export function stopDaemon(): boolean {
-  // Unload the launchd job BEFORE signalling the daemon. The bundled macOS job
+  const pid = loadDaemonPid();
+  if (pid === null) {
+    // A missing PID can coexist with a stale launchd job (e.g. crash before the
+    // worker saved its PID). Cleaning the home-scoped job is safe here.
+    if (process.platform === 'darwin') cleanupLaunchdPlist();
+    return false;
+  }
+
+  // Establish identity BEFORE unloading supervision. If process inspection is
+  // unavailable, fail closed and leave both the process and its launchd job
+  // untouched rather than stranding a real daemon unsupervised.
+  const identity = inspectDaemonProcess(pid);
+  if (identity === 'unknown') return false;
+
+  // Unload the launchd job BEFORE signalling a verified daemon. The bundled macOS job
   // runs with KeepAlive=true (see startDaemonLaunchctl), so killing first would
   // let launchd restart the daemon in the window before the job is unloaded and
   // `kraki stop` would appear to do nothing.
@@ -485,8 +559,12 @@ export function stopDaemon(): boolean {
   // succeed.
   if (process.platform === 'darwin') cleanupLaunchdPlist();
 
-  const pid = loadDaemonPid();
-  if (pid === null) return false;
+  if (identity === 'gone' || identity === 'other') {
+    // Stale/reused PID: clean the record but never signal the process currently
+    // holding that number.
+    clearDaemonPid();
+    return true;
+  }
 
   const alive = () => {
     try { process.kill(pid, 0); return true; } catch { return false; }
@@ -515,7 +593,14 @@ export function stopDaemon(): boolean {
     Atomics.wait(idle, 0, 0, 100);   // synchronous sleep; spawns nothing
   }
   if (alive()) {
-    try { process.kill(pid, 'SIGKILL'); } catch { /* raced us to exit */ }
+    // Re-check immediately before escalation. The daemon may have exited and
+    // its numeric PID may already have been reused during the grace window.
+    const finalIdentity = inspectDaemonProcess(pid);
+    if (finalIdentity === 'daemon') {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* raced us to exit */ }
+    } else if (finalIdentity === 'unknown') {
+      return false;
+    }
   }
 
   clearDaemonPid();

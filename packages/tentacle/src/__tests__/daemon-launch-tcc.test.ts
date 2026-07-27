@@ -80,13 +80,28 @@ describe('buildLaunchdPlist — bundled install (the TCC-critical path)', () => 
     expect(i + 2).toBe(args.length);
   });
 
-  it('forwards environment via --env, since LS-launched apps do not inherit it', () => {
-    // An app started through LaunchServices gets the launchd session
-    // environment, NOT the environment of the process that called `open`.
-    // Without --env the daemon would silently lose PATH, proxies and tokens.
+  it('forwards environment by name, never embedding values in argv', () => {
+    // `open --env NAME` copies NAME from open's environment. NAME=VALUE would
+    // expose proxy credentials/tokens in the long-lived `open -W` argv.
     expect(args).toContain('--env');
-    expect(args).toContain('NODE_ENV=production');
-    expect(args).toContain('LOG_LEVEL=info');
+    expect(args).toContain('NODE_ENV');
+    expect(args).toContain('LOG_LEVEL');
+    expect(args).not.toContain('NODE_ENV=production');
+    expect(args).not.toContain('LOG_LEVEL=info');
+  });
+
+  it('does not leak environment values into the long-lived open command line', () => {
+    const secret = 'github_pat_super_secret';
+    const secretPlist = buildLaunchdPlist({
+      ...BASE,
+      appBundle: BUNDLE,
+      envEntries: [['HTTPS_PROXY', 'http://user:pass@proxy'], ['GH_TOKEN', secret]],
+    });
+    const secretArgs = programArgs(secretPlist);
+    expect(secretArgs).toContain('HTTPS_PROXY');
+    expect(secretArgs).toContain('GH_TOKEN');
+    expect(secretArgs.join(' ')).not.toContain('user:pass');
+    expect(secretArgs.join(' ')).not.toContain(secret);
   });
 
   it('redirects the daemon stdio, which LaunchServices also does not inherit', () => {
@@ -134,7 +149,8 @@ describe('buildLaunchdPlist — general', () => {
     });
     expect(plist).toContain('/Apps/A &amp; B.app');
     expect(plist).toContain('x&lt;y&gt;z');
-    expect(plist).toContain('V=a&amp;b&lt;c&gt;d');
+    expect(plist).toContain('<key>V</key>');
+    expect(plist).toContain('<string>a&amp;b&lt;c&gt;d</string>');
     // No raw & survived (every & must be part of an entity).
     expect(plist).not.toMatch(/&(?!amp;|lt;|gt;)/);
   });
