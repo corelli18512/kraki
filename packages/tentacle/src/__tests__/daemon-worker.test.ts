@@ -101,6 +101,10 @@ vi.mock('../logger.js', () => ({
 let mockConfig: Record<string, unknown> | null = null;
 let mockChannelKey: string | null = null;
 
+const mockSaveDaemonPid = vi.fn();
+const mockSaveDaemonReady = vi.fn();
+const mockClearDaemonReady = vi.fn();
+
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => mockConfig),
   loadChannelKey: vi.fn(() => mockChannelKey),
@@ -110,7 +114,9 @@ vi.mock('../config.js', () => ({
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
   getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
   getVersion: vi.fn(() => '0.0.0-test'),
-  saveDaemonPid: vi.fn(),
+  saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
+  saveDaemonReady: (...args: unknown[]) => mockSaveDaemonReady(...args),
+  clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
 }));
 
 let mockExecSyncReturn = 'fake-token\n';
@@ -166,9 +172,11 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockLoggerFns.debug).toHaveBeenCalledWith(expect.stringContaining('Resolved GitHub token'));
     expect(mockAdapter.start).toHaveBeenCalled();
     expect(mockRelay.connect).toHaveBeenCalled();
+    expect(mockSaveDaemonReady).toHaveBeenCalledWith(process.pid);
     expect(process.env.GITHUB_TOKEN).toBe('fake-token');
 
     await shutdown();
+    expect(mockClearDaemonReady).toHaveBeenCalled();
     expect(mockRelay.disconnect).toHaveBeenCalled();
     expect(mockAdapter.stop).toHaveBeenCalled();
   });

@@ -15,7 +15,7 @@
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -67,7 +67,9 @@ export interface WorkerResult {
 }
 
 export async function startWorker(): Promise<WorkerResult> {
-  // Write PID immediately so the launcher (launchctl or CLI) can find us
+  // Clear any stale readiness before publishing this process's PID. This order
+  // prevents a reused numeric PID from momentarily matching an old ready file.
+  clearDaemonReady();
   saveDaemonPid(process.pid);
   logger.info('Daemon starting…');
   if (_ensuredWindowsPathDirs.length > 0) {
@@ -256,7 +258,8 @@ export async function startWorker(): Promise<WorkerResult> {
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
 
-  // Write initial status file so toolbar can detect the daemon
+  // Write initial status file so toolbar can detect the daemon. Readiness is
+  // published only after the lifecycle handlers below are installed.
   initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
 
   // 6. Graceful shutdown
@@ -265,6 +268,7 @@ export async function startWorker(): Promise<WorkerResult> {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('Shutting down…');
+    clearDaemonReady();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();
@@ -282,6 +286,11 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.fatal({ err }, 'Uncaught exception — attempting graceful shutdown');
     shutdown().catch(() => {}).finally(() => process.exit(1));
   });
+
+  // Publish readiness only after every startup-critical component and graceful
+  // lifecycle handler is installed. The launcher must not report success before
+  // this point.
+  saveDaemonReady(process.pid);
 
   return { adapter, relay, sessionManager, shutdown };
 }

@@ -8,12 +8,12 @@
  * cannot be removed. macOS 26+ CSM 2 blocks direct fork()+execve() of
  * such binaries from child processes. To bypass this, macOS SEA builds
  * use launchctl to have launchd spawn the daemon in a completely
- * independent context. If launchctl also fails, the caller falls back
- * to running the daemon worker in the current process.
+ * independent context. A launch failure is fatal: Kraki never runs the
+ * daemon inside the interactive CLI process.
  */
 
 import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isSea } from 'node:sea';
@@ -26,19 +26,18 @@ import {
   saveDaemonPid,
   loadDaemonPid,
   clearDaemonPid,
+  loadDaemonReady,
+  clearDaemonReady,
 } from './config.js';
-import { getKrakiAppBundlePath } from './checks.js';
+import { getKrakiAppBundlePath, getProcessBundleIdentity, KRAKI_BUNDLE_ID } from './checks.js';
 
-// How long to wait for a regular spawned child to finish bootstrapping
-// before declaring success. No signature verification involved.
-const SPAWN_GRACE_MS = 1500;
+// How long to wait for any background daemon to publish readiness. Agent
+// discovery and capability loading can be slow on a cold machine; the explicit
+// ready file prevents this larger timeout from accepting a half-started worker.
+const DAEMON_READY_TIMEOUT_MS = 30_000;
 
-// How long to wait for a launchctl-spawned daemon to write its PID file.
-// Cold-launching a freshly-installed SEA binary on macOS takes ~2s for
-// signature verification + Node SEA bundle parse. Empirically a fresh
-// binary's first launch is ~1.9s, so we keep comfortable headroom for
-// slower machines / busy disks. After this, a CSM block is plausible.
-const LAUNCHCTL_GRACE_MS = 8000;
+// macOS LaunchServices uses the same readiness contract.
+const LAUNCHCTL_GRACE_MS = DAEMON_READY_TIMEOUT_MS;
 const LAUNCHD_LABEL_BASE = 'cloud.corelli.kraki';
 
 /**
@@ -68,11 +67,41 @@ function unloadLaunchdAgent(): void {
   } catch { /* not loaded */ }
 }
 
+function isLaunchdAgentLoaded(platform = process.platform): boolean {
+  if (platform !== 'darwin') return false;
+  const uid = process.getuid?.();
+  if (uid === undefined) return false;
+  try {
+    execFileSync('/bin/launchctl', ['print', `gui/${uid}/${getLaunchdLabel()}`], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function cleanupLaunchdPlist(): void {
   unloadLaunchdAgent();
   const p = getLaunchdPlistPath();
   if (existsSync(p)) unlinkSync(p);
 }
+export function hasUntrackedLaunchdDaemon(
+  pid: number | null = loadDaemonPid(),
+  platform = process.platform,
+): boolean {
+  return pid === null && isLaunchdAgentLoaded(platform);
+}
+
+export function assertNoUntrackedLaunchdDaemon(platform = process.platform): void {
+  if (!hasUntrackedLaunchdDaemon(loadDaemonPid(), platform)) return;
+  throw new Error(
+    'Refusing to start: the launchd job is still loaded but no verified daemon PID is available. ' +
+    'Inspect the existing job before removing it; Kraki will not risk starting a duplicate daemon.',
+  );
+}
+
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
 
 export type DaemonProcessIdentity = 'daemon' | 'other' | 'gone' | 'unknown';
@@ -204,11 +233,13 @@ export function resolveDaemonLaunch(
 function waitForDaemonBootstrap(
   child: ChildProcess,
   bootstrapLogPath: string,
-  timeoutMs = SPAWN_GRACE_MS,
+  timeoutMs = DAEMON_READY_TIMEOUT_MS,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let poll: NodeJS.Timeout | undefined;
     const cleanup = () => {
       clearTimeout(timer);
+      if (poll) clearInterval(poll);
       child.off('error', onError);
       child.off('exit', onExit);
     };
@@ -229,12 +260,59 @@ function waitForDaemonBootstrap(
 
     const timer = setTimeout(() => {
       cleanup();
-      resolve();
+      reject(new Error(`Kraki did not become ready within ${timeoutMs}ms. Check ${bootstrapLogPath}`));
     }, timeoutMs);
+
+    poll = setInterval(() => {
+      if (child.pid && loadDaemonReady() === child.pid) {
+        cleanup();
+        resolve();
+      }
+    }, 100);
 
     child.once('error', onError);
     child.once('exit', onExit);
   });
+}
+
+async function waitForProcessIdentityToChange(
+  pid: number,
+  timeoutMs: number,
+): Promise<DaemonProcessIdentity> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const identity = inspectDaemonProcess(pid);
+    if (identity !== 'daemon') return identity;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return inspectDaemonProcess(pid);
+}
+
+async function terminateFailedDaemon(pid: number): Promise<boolean> {
+  const initialIdentity = inspectDaemonProcess(pid);
+  if (initialIdentity === 'gone' || initialIdentity === 'other') return true;
+  if (initialIdentity !== 'daemon') return false;
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return true;
+  }
+
+  const afterTerm = await waitForProcessIdentityToChange(pid, 5000);
+  if (afterTerm === 'gone' || afterTerm === 'other') return true;
+  if (afterTerm !== 'daemon') return false;
+
+  // Re-check immediately before escalation to cover PID reuse during the wait.
+  if (inspectDaemonProcess(pid) !== 'daemon') return true;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    return true;
+  }
+
+  const afterKill = await waitForProcessIdentityToChange(pid, 1000);
+  return afterKill === 'gone' || afterKill === 'other';
 }
 
 // ── Status ──────────────────────────────────────────────
@@ -244,12 +322,14 @@ export interface DaemonStatus {
   pid: number | null;
 }
 
-export function isDaemonRunning(): boolean {
+export function isDaemonRunning(platform = process.platform): boolean {
   const pid = loadDaemonPid();
-  if (pid === null) return false;
+  if (pid === null) return isLaunchdAgentLoaded(platform);
   const identity = inspectDaemonProcess(pid);
   if (identity === 'gone' || identity === 'other') {
+    if (isLaunchdAgentLoaded(platform)) return true;
     clearDaemonPid();
+    clearDaemonReady();
     return false;
   }
   // `unknown` means the PID is alive but the OS refused command inspection.
@@ -258,24 +338,30 @@ export function isDaemonRunning(): boolean {
   return true;
 }
 
-export function getDaemonStatus(): DaemonStatus {
+export function getDaemonStatus(platform = process.platform): DaemonStatus {
   const pid = loadDaemonPid();
-  if (pid === null) return { running: false, pid: null };
+  if (pid === null) {
+    return isLaunchdAgentLoaded(platform)
+      ? { running: true, pid: null }
+      : { running: false, pid: null };
+  }
   const identity = inspectDaemonProcess(pid);
   if (identity === 'gone' || identity === 'other') {
+    if (isLaunchdAgentLoaded(platform)) return { running: true, pid: null };
     clearDaemonPid();
+    clearDaemonReady();
     return { running: false, pid: null };
   }
   return { running: true, pid };
 }
 
-export class MacOSCodeSignatureError extends Error {
+export class DaemonStartupError extends Error {
   constructor(bootstrapLogPath: string) {
     super(
-      `Daemon did not start within ${LAUNCHCTL_GRACE_MS}ms (CSM block or slow first-launch verify). ` +
-      `Falling back to in-process daemon. Check ${bootstrapLogPath}`,
+      `Daemon did not become ready within ${LAUNCHCTL_GRACE_MS}ms. ` +
+      `Kraki was not started. Check ${bootstrapLogPath}`,
     );
-    this.name = 'MacOSCodeSignatureError';
+    this.name = 'DaemonStartupError';
   }
 }
 
@@ -335,12 +421,14 @@ export function buildLaunchdPlist(opts: {
         '-a', appBundle,
         '--stdout', bootstrapLogPath,
         '--stderr', bootstrapLogPath,
-        // `open --env NAME` copies NAME from open's own environment without
-        // embedding its value in argv. launchd supplies that environment via
-        // EnvironmentVariables below. Passing NAME=VALUE here would expose
-        // GH_TOKEN, proxy credentials, etc. in the long-lived `open -W` process
-        // command line for the daemon's entire lifetime.
-        ...envEntries.flatMap(([k]) => ['--env', k]),
+        // Do not pass `open --env` at all. The app launched by `open` already
+        // inherits open's environment, which launchd supplies through the
+        // EnvironmentVariables dictionary below. Contrary to the previous
+        // implementation's assumption, `open --env NAME` sets NAME to an empty
+        // string; it does not copy the existing value. NAME=VALUE would work but
+        // would expose tokens and proxy credentials in the long-lived `open -W`
+        // argv. Inheriting the launchd environment preserves values without
+        // putting secrets on the command line.
         '--args', INTERNAL_DAEMON_WORKER_COMMAND,
       ]
     : [execPath, INTERNAL_DAEMON_WORKER_COMMAND];
@@ -400,7 +488,7 @@ ${envXml}
  * Either way the daemon-worker saves its own PID, so the poll below reads the
  * daemon's PID and not the PID of whatever launched it.
  */
-async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
+export async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
@@ -421,9 +509,9 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
   // Forward proxy and GitHub auth variables so the daemon keeps the same
-  // credential behavior as before. buildLaunchdPlist passes only variable NAMES
-  // to `open --env` (values remain in launchd's EnvironmentVariables), avoiding
-  // the new long-lived argv exposure without breaking PAT-only installations.
+  // credential behavior as before. Values live only in launchd's
+  // EnvironmentVariables dictionary; `open` and the app it launches inherit
+  // them without exposing them in the long-lived command line.
   const forwardVars = [
     'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
     'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
@@ -433,9 +521,10 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
     if (process.env[key]) envEntries.push([key, process.env[key]!]);
   }
 
+  const appBundle = getKrakiAppBundlePath();
   const plist = buildLaunchdPlist({
     label: getLaunchdLabel(),
-    appBundle: getKrakiAppBundlePath(),
+    appBundle,
     execPath: process.execPath,
     bootstrapLogPath,
     workingDirectory: homedir(),
@@ -443,7 +532,9 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
   });
 
   const plistPath = getLaunchdPlistPath();
-  writeFileSync(plistPath, plist);
+  clearDaemonReady();
+  writeFileSync(plistPath, plist, { mode: 0o600 });
+  chmodSync(plistPath, 0o600);
   unloadLaunchdAgent();
   execSync(`launchctl load "${plistPath}"`, { stdio: 'ignore' });
 
@@ -455,17 +546,52 @@ async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
     if (pid !== null) {
       try {
         process.kill(pid, 0);
-        return pid;
       } catch {
-        // PID saved but process already dead → CSM or crash
+        // PID saved but process already dead → startup crash / CSM block.
         break;
       }
+
+      // A PID file is written at the beginning of worker startup, before all
+      // imports and adapters have finished initializing. Do not report success
+      // merely because that early PID is alive: the process can still crash a
+      // moment later (the v0.31.8 `open --env NAME` regression did exactly
+      // this). Require the real worker marker, and for a bundled install require
+      // the Launch Services identity that makes the TCC fix meaningful.
+      const readinessPublished = loadDaemonReady() === pid;
+      if (!readinessPublished) continue;
+
+      const workerReady = inspectDaemonProcess(pid) === 'daemon';
+      const launchServicesReady = appBundle === null || getProcessBundleIdentity(pid) === KRAKI_BUNDLE_ID;
+      if (workerReady && launchServicesReady) return pid;
     }
   }
 
-  // Daemon didn't start or died immediately
+  // Daemon did not become ready. Inspect before removing supervision. If the OS
+  // refuses process inspection, fail closed: keep the launchd job and PID files
+  // intact so a potentially real daemon remains supervised and a later command
+  // cannot start a duplicate beside it.
+  const failedPid = loadDaemonPid();
+  const failedIdentity = failedPid === null ? 'gone' : inspectDaemonProcess(failedPid);
+  if (failedPid === null || failedIdentity !== 'daemon') {
+    // Without a verified worker PID, unloading `open -W` could leave its
+    // LaunchServices-owned child alive and unsupervised. Preserve the loaded job
+    // and state so later commands refuse to start a duplicate. If launchctl says
+    // the job is already gone, stale files are safe to clean.
+    if (isLaunchdAgentLoaded('darwin')) {
+      throw new DaemonStartupError(bootstrapLogPath);
+    }
+    cleanupLaunchdPlist();
+    clearDaemonPid();
+    clearDaemonReady();
+    throw new DaemonStartupError(bootstrapLogPath);
+  }
+
   cleanupLaunchdPlist();
-  throw new MacOSCodeSignatureError(bootstrapLogPath);
+  const terminated = await terminateFailedDaemon(failedPid);
+  if (!terminated) throw new DaemonStartupError(bootstrapLogPath);
+  clearDaemonPid();
+  clearDaemonReady();
+  throw new DaemonStartupError(bootstrapLogPath);
 }
 
 function escapeXml(s: string): string {
@@ -474,11 +600,13 @@ function escapeXml(s: string): string {
 
 export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): Promise<number> {
   stopDaemon();
+  assertNoUntrackedLaunchdDaemon();
   // An alive PID whose identity could not be verified is deliberately left in
   // place by stopDaemon(). Do not start a second daemon beside it.
   if (loadDaemonPid() !== null) {
     throw new Error('Refusing to start: the recorded daemon PID is alive but could not be verified. Remove the stale daemon.pid only after checking the process.');
   }
+  clearDaemonReady();
 
   // On macOS SEA, use launchctl so launchd spawns the daemon in a clean
   // context that isn't blocked by CSM provenance tracking.
@@ -508,11 +636,16 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   try {
     await waitForDaemonBootstrap(child, bootstrapLogPath);
   } catch (err) {
-    try {
-      process.kill(child.pid, 'SIGTERM');
-    } catch {
-      // Child may already be gone
+    const terminated = await terminateFailedDaemon(child.pid);
+    if (!terminated) {
+      saveDaemonPid(child.pid);
+      throw new Error(
+        `Kraki failed to become ready and the background worker could not be safely terminated. ` +
+        `PID ${child.pid} remains recorded for manual diagnosis. Check ${bootstrapLogPath}`,
+      );
     }
+    clearDaemonPid();
+    clearDaemonReady();
     throw err;
   }
 
@@ -521,12 +654,17 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   return child.pid;
 }
 
-export function stopDaemon(): boolean {
+export function stopDaemon(platform = process.platform): boolean {
   const pid = loadDaemonPid();
   if (pid === null) {
-    // A missing PID can coexist with a stale launchd job (e.g. crash before the
-    // worker saved its PID). Cleaning the home-scoped job is safe here.
-    if (process.platform === 'darwin') cleanupLaunchdPlist();
+    // A loaded launchd job without a PID is ambiguous: LaunchServices may still
+    // own a child process that cannot be safely identified. Fail closed and
+    // preserve supervision rather than unloading the job and risking a duplicate
+    // daemon on the next start. Only remove a stale plist when launchctl confirms
+    // the job itself is not loaded.
+    if (hasUntrackedLaunchdDaemon(pid, platform)) return false;
+    if (platform === 'darwin') cleanupLaunchdPlist();
+    clearDaemonReady();
     return false;
   }
 
@@ -535,6 +673,9 @@ export function stopDaemon(): boolean {
   // untouched rather than stranding a real daemon unsupervised.
   const identity = inspectDaemonProcess(pid);
   if (identity === 'unknown') return false;
+  if ((identity === 'gone' || identity === 'other') && isLaunchdAgentLoaded(platform)) {
+    return false;
+  }
 
   // Unload the launchd job BEFORE signalling a verified daemon. The bundled macOS job
   // runs with KeepAlive=true (see startDaemonLaunchctl), so killing first would
@@ -547,12 +688,13 @@ export function stopDaemon(): boolean {
   // daemon WAS the job process and the unload killed it. So the PID-based signal
   // below is now the only thing that actually stops the daemon, and it has to
   // succeed.
-  if (process.platform === 'darwin') cleanupLaunchdPlist();
+  if (platform === 'darwin') cleanupLaunchdPlist();
 
   if (identity === 'gone' || identity === 'other') {
     // Stale/reused PID: clean the record but never signal the process currently
     // holding that number.
     clearDaemonPid();
+    clearDaemonReady();
     return true;
   }
 
@@ -565,6 +707,7 @@ export function stopDaemon(): boolean {
   } catch {
     // Process already gone.
     clearDaemonPid();
+    clearDaemonReady();
     return true;
   }
 
@@ -588,11 +731,21 @@ export function stopDaemon(): boolean {
     const finalIdentity = inspectDaemonProcess(pid);
     if (finalIdentity === 'daemon') {
       try { process.kill(pid, 'SIGKILL'); } catch { /* raced us to exit */ }
+
+      const killDeadline = Date.now() + 1000;
+      while (Date.now() < killDeadline) {
+        const afterKill = inspectDaemonProcess(pid);
+        if (afterKill === 'gone' || afterKill === 'other') break;
+        if (afterKill === 'unknown') return false;
+        Atomics.wait(idle, 0, 0, 50);
+      }
+      if (inspectDaemonProcess(pid) === 'daemon') return false;
     } else if (finalIdentity === 'unknown') {
       return false;
     }
   }
 
   clearDaemonPid();
+  clearDaemonReady();
   return true;
 }

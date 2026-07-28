@@ -21,7 +21,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
-import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon, MacOSCodeSignatureError } from './daemon.js';
+import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
@@ -210,30 +210,14 @@ async function cmdStart(): Promise<void> {
 // ── Shared start logic ──────────────────────────────────
 
 async function silentStart(config: KrakiConfig): Promise<void> {
-  // In install mode, the install script handles daemon startup from the
-  // shell (needed on macOS where kraki can't fork+exec itself due to CSM).
+  // In install mode, finish configuration but leave startup to the install
+  // script's subsequent `kraki start`. That command uses the normal background
+  // daemon manager and shows the pairing QR only after readiness succeeds.
   if (process.env.KRAKI_INSTALL === '1') {
-    const { showPairingQr } = await import('./setup.js');
-    await showPairingQr(config);
-    console.log(chalk.dim('  Commands:'));
-    console.log(chalk.dim('    kraki connect   Generate a new connect code'));
-    console.log(chalk.dim('    kraki status    Show connection status'));
-    console.log(chalk.dim('    kraki logs -f   Follow logs'));
-    console.log(chalk.dim('    kraki stop      Stop Kraki'));
-    console.log('');
     return;
   }
 
-  let pid: number;
-  try {
-    pid = await startDaemon(config);
-  } catch (err) {
-    if (err instanceof MacOSCodeSignatureError) {
-      return startDaemonInProcess(config);
-    }
-    console.log(chalk.red(`  Failed to start Kraki: ${(err as Error).message}`));
-    return;
-  }
+  const pid = await startDaemon(config);
   console.log(chalk.green(`  🦑 Kraki started (PID ${pid})`));
 
   // Show pairing QR code
@@ -247,42 +231,6 @@ async function silentStart(config: KrakiConfig): Promise<void> {
   console.log(chalk.dim('    kraki logs -f   Follow logs'));
   console.log(chalk.dim('    kraki stop      Stop Kraki'));
   console.log('');
-}
-
-/**
- * Run the daemon worker in the current process.
- * Used on macOS when the kernel blocks child process spawning of
- * downloaded SEA binaries (com.apple.provenance + CSM 2).
- */
-async function startDaemonInProcess(config: KrakiConfig): Promise<void> {
-  // Give the in-process CSM fallback the same inspectable identity marker as a
-  // normal daemon worker. stopDaemon() requires this before signalling a PID;
-  // accepting any process that merely runs the kraki executable would allow a
-  // stale PID reused by `kraki logs/update` to be killed.
-  process.title = `kraki ${INTERNAL_DAEMON_WORKER_COMMAND}`;
-  // Ignore SIGHUP so the daemon survives terminal close
-  process.on('SIGHUP', () => {});
-
-  const { saveDaemonPid, getLogVerbosity: getLogV } = await import('./config.js');
-  saveDaemonPid(process.pid);
-  process.env.LOG_LEVEL = getLogV(config) === 'verbose' ? 'debug' : 'info';
-
-  // Force production logging so pino writes to files, not stdout.
-  // (The spawned-daemon path doesn't need this because stdio is 'ignore'.)
-  process.env.NODE_ENV = 'production';
-
-  console.log(chalk.green(`  🦑 Kraki started (PID ${process.pid})`));
-
-  // Show pairing QR code
-  const { showPairingQr } = await import('./setup.js');
-  await showPairingQr(config);
-
-  console.log(chalk.dim('  Running in foreground — press Ctrl+C or run `kraki stop` to quit'));
-  console.log('');
-
-  const { startWorker } = await import('./daemon-worker.js');
-  await startWorker();
-  // This never returns — the process is now the daemon
 }
 
 function cmdStop(): void {
