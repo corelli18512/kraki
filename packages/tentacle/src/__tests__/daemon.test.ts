@@ -6,7 +6,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+
+const TEST_UID = 501;
+const expectedPlistPath = join('/tmp/fake-home', 'Library', 'LaunchAgents', 'cloud.corelli.kraki.plist');
 
 // ── Mocks ───────────────────────────────────────────────
 
@@ -142,7 +145,7 @@ describe('launchd job without a verified worker PID', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(stopDaemon('darwin')).toBe(false);
+    expect(stopDaemon('darwin', TEST_UID)).toBe(false);
     expect(mockExecSync).not.toHaveBeenCalled();
     expect(mockUnlinkSync).not.toHaveBeenCalled();
   });
@@ -154,7 +157,7 @@ describe('launchd job without a verified worker PID', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(() => assertNoUntrackedLaunchdDaemon('darwin')).toThrow('will not risk starting a duplicate daemon');
+    expect(() => assertNoUntrackedLaunchdDaemon('darwin', TEST_UID)).toThrow('will not risk starting a duplicate daemon');
   });
 
   it('allows stale plist cleanup when launchctl confirms no job is loaded', () => {
@@ -165,7 +168,7 @@ describe('launchd job without a verified worker PID', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(stopDaemon('darwin')).toBe(false);
+    expect(stopDaemon('darwin', TEST_UID)).toBe(false);
     expect(mockExecSync).toHaveBeenCalled();
     expect(mockUnlinkSync).toHaveBeenCalled();
   });
@@ -181,8 +184,8 @@ describe('isDaemonRunning()', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(isDaemonRunning('darwin')).toBe(true);
-    expect(getDaemonStatus('darwin')).toEqual({ running: true, pid: null });
+    expect(isDaemonRunning('darwin', TEST_UID)).toBe(true);
+    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null });
   });
 
   it('does not discard a stale PID while its launchd job remains loaded', () => {
@@ -192,7 +195,7 @@ describe('isDaemonRunning()', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(isDaemonRunning('darwin')).toBe(true);
+    expect(isDaemonRunning('darwin', TEST_UID)).toBe(true);
     expect(mockClearDaemonPid).not.toHaveBeenCalled();
   });
 
@@ -223,7 +226,7 @@ describe('getDaemonStatus()', () => {
       return '/path/to/kraki __daemon-worker';
     });
 
-    expect(getDaemonStatus('darwin')).toEqual({ running: true, pid: null });
+    expect(getDaemonStatus('darwin', TEST_UID)).toEqual({ running: true, pid: null });
   });
 
   it('returns running=false and pid=null when no PID file', () => {
@@ -310,14 +313,14 @@ describe('startDaemon()', () => {
       return true;
     }) as typeof process.kill);
 
-    const startPromise = startDaemonLaunchctl(fakeConfig);
+    const startPromise = startDaemonLaunchctl(fakeConfig, TEST_UID);
     expect(mockWriteFileSync).toHaveBeenCalledWith(
-      '/tmp/fake-home/Library/LaunchAgents/cloud.corelli.kraki.plist',
+      expectedPlistPath,
       expect.any(String),
       { mode: 0o600 },
     );
     expect(mockChmodSync).toHaveBeenCalledWith(
-      '/tmp/fake-home/Library/LaunchAgents/cloud.corelli.kraki.plist',
+      expectedPlistPath,
       0o600,
     );
     const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
@@ -344,7 +347,7 @@ describe('startDaemon()', () => {
     });
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const startPromise = startDaemonLaunchctl(fakeConfig);
+    const startPromise = startDaemonLaunchctl(fakeConfig, TEST_UID);
     const readyClearsBeforeTimeout = mockClearDaemonReady.mock.calls.length;
     const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
     await vi.advanceTimersByTimeAsync(30_200);
@@ -366,7 +369,7 @@ describe('startDaemon()', () => {
       throw new Error('unexpected process inspection');
     });
 
-    const startPromise = startDaemonLaunchctl(fakeConfig);
+    const startPromise = startDaemonLaunchctl(fakeConfig, TEST_UID);
     const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
     await vi.advanceTimersByTimeAsync(30_200);
 
