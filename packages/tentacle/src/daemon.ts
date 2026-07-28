@@ -67,10 +67,11 @@ function unloadLaunchdAgent(): void {
   } catch { /* not loaded */ }
 }
 
-function isLaunchdAgentLoaded(platform = process.platform): boolean {
-  if (platform !== 'darwin') return false;
-  const uid = process.getuid?.();
-  if (uid === undefined) return false;
+function isLaunchdAgentLoaded(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+): boolean {
+  if (platform !== 'darwin' || uid === undefined) return false;
   try {
     execFileSync('/bin/launchctl', ['print', `gui/${uid}/${getLaunchdLabel()}`], {
       stdio: ['ignore', 'ignore', 'ignore'],
@@ -90,12 +91,16 @@ function cleanupLaunchdPlist(): void {
 export function hasUntrackedLaunchdDaemon(
   pid: number | null = loadDaemonPid(),
   platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
 ): boolean {
-  return pid === null && isLaunchdAgentLoaded(platform);
+  return pid === null && isLaunchdAgentLoaded(platform, uid);
 }
 
-export function assertNoUntrackedLaunchdDaemon(platform = process.platform): void {
-  if (!hasUntrackedLaunchdDaemon(loadDaemonPid(), platform)) return;
+export function assertNoUntrackedLaunchdDaemon(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+): void {
+  if (!hasUntrackedLaunchdDaemon(loadDaemonPid(), platform, uid)) return;
   throw new Error(
     'Refusing to start: the launchd job is still loaded but no verified daemon PID is available. ' +
     'Inspect the existing job before removing it; Kraki will not risk starting a duplicate daemon.',
@@ -322,12 +327,15 @@ export interface DaemonStatus {
   pid: number | null;
 }
 
-export function isDaemonRunning(platform = process.platform): boolean {
+export function isDaemonRunning(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+): boolean {
   const pid = loadDaemonPid();
-  if (pid === null) return isLaunchdAgentLoaded(platform);
+  if (pid === null) return isLaunchdAgentLoaded(platform, uid);
   const identity = inspectDaemonProcess(pid);
   if (identity === 'gone' || identity === 'other') {
-    if (isLaunchdAgentLoaded(platform)) return true;
+    if (isLaunchdAgentLoaded(platform, uid)) return true;
     clearDaemonPid();
     clearDaemonReady();
     return false;
@@ -338,16 +346,19 @@ export function isDaemonRunning(platform = process.platform): boolean {
   return true;
 }
 
-export function getDaemonStatus(platform = process.platform): DaemonStatus {
+export function getDaemonStatus(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+): DaemonStatus {
   const pid = loadDaemonPid();
   if (pid === null) {
-    return isLaunchdAgentLoaded(platform)
+    return isLaunchdAgentLoaded(platform, uid)
       ? { running: true, pid: null }
       : { running: false, pid: null };
   }
   const identity = inspectDaemonProcess(pid);
   if (identity === 'gone' || identity === 'other') {
-    if (isLaunchdAgentLoaded(platform)) return { running: true, pid: null };
+    if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null };
     clearDaemonPid();
     clearDaemonReady();
     return { running: false, pid: null };
@@ -488,7 +499,10 @@ ${envXml}
  * Either way the daemon-worker saves its own PID, so the poll below reads the
  * daemon's PID and not the PID of whatever launched it.
  */
-export async function startDaemonLaunchctl(config: KrakiConfig): Promise<number> {
+export async function startDaemonLaunchctl(
+  config: KrakiConfig,
+  uid: number | undefined = process.getuid?.(),
+): Promise<number> {
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
@@ -577,7 +591,7 @@ export async function startDaemonLaunchctl(config: KrakiConfig): Promise<number>
     // LaunchServices-owned child alive and unsupervised. Preserve the loaded job
     // and state so later commands refuse to start a duplicate. If launchctl says
     // the job is already gone, stale files are safe to clean.
-    if (isLaunchdAgentLoaded('darwin')) {
+    if (isLaunchdAgentLoaded('darwin', uid)) {
       throw new DaemonStartupError(bootstrapLogPath);
     }
     cleanupLaunchdPlist();
@@ -654,7 +668,10 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   return child.pid;
 }
 
-export function stopDaemon(platform = process.platform): boolean {
+export function stopDaemon(
+  platform = process.platform,
+  uid: number | undefined = process.getuid?.(),
+): boolean {
   const pid = loadDaemonPid();
   if (pid === null) {
     // A loaded launchd job without a PID is ambiguous: LaunchServices may still
@@ -662,7 +679,7 @@ export function stopDaemon(platform = process.platform): boolean {
     // preserve supervision rather than unloading the job and risking a duplicate
     // daemon on the next start. Only remove a stale plist when launchctl confirms
     // the job itself is not loaded.
-    if (hasUntrackedLaunchdDaemon(pid, platform)) return false;
+    if (hasUntrackedLaunchdDaemon(pid, platform, uid)) return false;
     if (platform === 'darwin') cleanupLaunchdPlist();
     clearDaemonReady();
     return false;
@@ -673,7 +690,7 @@ export function stopDaemon(platform = process.platform): boolean {
   // untouched rather than stranding a real daemon unsupervised.
   const identity = inspectDaemonProcess(pid);
   if (identity === 'unknown') return false;
-  if ((identity === 'gone' || identity === 'other') && isLaunchdAgentLoaded(platform)) {
+  if ((identity === 'gone' || identity === 'other') && isLaunchdAgentLoaded(platform, uid)) {
     return false;
   }
 

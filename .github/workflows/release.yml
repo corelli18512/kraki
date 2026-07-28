@@ -430,12 +430,17 @@ jobs:
     name: Publish npm Packages
     needs:
       - prepare
+      - build-binary
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: |
       always() &&
       needs.prepare.result == 'success' &&
-      needs.prepare.outputs.publish_mode == 'publish'
+      needs.prepare.outputs.publish_mode == 'publish' &&
+      (
+        (startsWith(needs.prepare.outputs.release_tag, 'head-v') && needs.build-binary.result == 'skipped')
+        || (!startsWith(needs.prepare.outputs.release_tag, 'head-v') && needs.build-binary.result == 'success')
+      )
     permissions:
       contents: write
       id-token: write
