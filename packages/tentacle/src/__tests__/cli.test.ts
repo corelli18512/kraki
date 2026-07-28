@@ -123,6 +123,7 @@ let stdoutOutput: string[];
 let stderrOutput: string[];
 let originalArgv: string[];
 let originalMetaFile: string | undefined;
+let originalInstallMode: string | undefined;
 const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
 beforeEach(() => {
@@ -146,7 +147,9 @@ beforeEach(() => {
   }) as never);
   originalArgv = process.argv;
   originalMetaFile = process.env.KRAKI_META_FILE;
+  originalInstallMode = process.env.KRAKI_INSTALL;
   delete process.env.KRAKI_META_FILE;
+  delete process.env.KRAKI_INSTALL;
   // Reset mock defaults
   mockGetConfigDir.mockReturnValue('/tmp/fake-kraki');
   mockGetConfigPath.mockReturnValue('/tmp/fake-kraki/config.json');
@@ -159,6 +162,8 @@ afterEach(() => {
   process.argv = originalArgv;
   if (originalMetaFile === undefined) delete process.env.KRAKI_META_FILE;
   else process.env.KRAKI_META_FILE = originalMetaFile;
+  if (originalInstallMode === undefined) delete process.env.KRAKI_INSTALL;
+  else process.env.KRAKI_INSTALL = originalInstallMode;
 });
 
 /**
@@ -252,6 +257,23 @@ describe('CLI stop', () => {
   });
 });
 
+describe('CLI install mode', () => {
+  it('finishes setup without starting a worker or issuing a pairing token', async () => {
+    process.env.KRAKI_INSTALL = '1';
+    mockLoadConfig.mockReturnValue({
+      relay: 'wss://relay.test',
+      authMethod: 'github',
+      device: { name: 'laptop' },
+    });
+
+    await runCli(['start']);
+
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    expect(mockStartWorker).not.toHaveBeenCalled();
+    expect(mockShowPairingQr).not.toHaveBeenCalled();
+  });
+});
+
 describe('CLI restart', () => {
   it('starts from existing config when the daemon is stopped', async () => {
     const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
@@ -263,6 +285,21 @@ describe('CLI restart', () => {
 
     expect(mockStopDaemon).not.toHaveBeenCalled();
     expect(mockStartDaemon).toHaveBeenCalledWith(config);
+  });
+
+  it('reports a background start failure and never runs the worker in the CLI process', async () => {
+    const config = { relay: 'wss://relay.test', authMethod: 'github', device: { name: 'laptop' } };
+    mockLoadConfig.mockReturnValue(config);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    mockStartDaemon.mockRejectedValue(new Error('background launch failed'));
+
+    await runCli(['restart']);
+
+    expect(mockStartDaemon).toHaveBeenCalledWith(config);
+    expect(mockStartWorker).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('Fatal error:');
+    expect(consoleOutput.join('\n')).toContain('background launch failed');
+    expect(mockExit).toHaveBeenCalledWith(1);
   });
 
   it('stops a running daemon before starting it again', async () => {

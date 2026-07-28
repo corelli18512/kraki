@@ -219,3 +219,32 @@ export function clearDaemonPid(): void {
     // File may not exist — that's fine
   }
 }
+
+// ── Daemon readiness ───────────────────────────────────
+
+export function getDaemonReadyPath(): string {
+  return join(getKrakiHome(), 'daemon.ready');
+}
+
+export function saveDaemonReady(pid: number): void {
+  getConfigDir();
+  writeFileSync(getDaemonReadyPath(), String(pid), 'utf8');
+}
+
+export function loadDaemonReady(): number | null {
+  try {
+    const raw = readFileSync(getDaemonReadyPath(), 'utf8').trim();
+    const pid = parseInt(raw, 10);
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDaemonReady(): void {
+  try {
+    unlinkSync(getDaemonReadyPath());
+  } catch {
+    // File may not exist — that's fine
+  }
+}

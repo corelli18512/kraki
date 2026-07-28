@@ -389,7 +389,7 @@ export const LSREGISTER_PATH =
   'LaunchServices.framework/Versions/A/Support/lsregister';
 
 /** Bundle id of the signed Kraki CLI/daemon .app (must never change). */
-const KRAKI_BUNDLE_ID = 'chat.kraki.cli';
+export const KRAKI_BUNDLE_ID = 'chat.kraki.cli';
 
 /**
  * Resolve the .app bundle that contains the current executable, if any.

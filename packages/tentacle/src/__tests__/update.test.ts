@@ -20,7 +20,7 @@ vi.mock('node:https', async () => {
   };
 });
 
-import { fetchLatestVersion, formatBytes, getProxyForUrl, shouldBypassProxy } from '../update.js';
+import { fetchLatestVersion, formatBytes, getProxyForUrl, shouldBypassProxy, stopDaemonForUpdate } from '../update.js';
 
 function createMockResponse(statusCode: number, body: string, headers: Record<string, string> = {}) {
   const res = new PassThrough() as PassThrough & {
@@ -122,6 +122,36 @@ describe('update proxy support', () => {
     await expect(fetchLatestVersion()).resolves.toBe('0.12.0');
     expect(mockHttpRequest).toHaveBeenCalledOnce();
     expect(mockHttpsRequest).toHaveBeenCalledOnce();
+  });
+});
+
+describe('update daemon stop gate', () => {
+  it('does nothing when the daemon is already stopped', async () => {
+    const stopDaemon = vi.fn();
+    await stopDaemonForUpdate({ isDaemonRunning: () => false, stopDaemon }, 1, 1);
+    expect(stopDaemon).not.toHaveBeenCalled();
+  });
+
+  it('refuses the update when daemon identity cannot be safely stopped', async () => {
+    await expect(stopDaemonForUpdate({
+      isDaemonRunning: () => true,
+      stopDaemon: () => false,
+    }, 1, 1)).rejects.toThrow('could not be safely identified and stopped');
+  });
+
+  it('refuses the update when the daemon remains alive after the stop window', async () => {
+    await expect(stopDaemonForUpdate({
+      isDaemonRunning: () => true,
+      stopDaemon: () => true,
+    }, 1, 2)).rejects.toThrow('did not exit');
+  });
+
+  it('continues only after the daemon is confirmed gone', async () => {
+    let probes = 0;
+    await expect(stopDaemonForUpdate({
+      isDaemonRunning: () => probes++ < 2,
+      stopDaemon: () => true,
+    }, 1, 3)).resolves.toBeUndefined();
   });
 });
 

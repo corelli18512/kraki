@@ -218,6 +218,30 @@ describe('saveDaemonPid() / loadDaemonPid() / clearDaemonPid()', () => {
   });
 });
 
+// ── Daemon readiness ───────────────────────────────────
+
+describe('saveDaemonReady() / loadDaemonReady() / clearDaemonReady()', () => {
+  it('uses a separate readiness file and round-trips the worker PID', () => {
+    expect(config.getDaemonReadyPath()).toBe(join(tempHome, '.kraki', 'daemon.ready'));
+    expect(config.loadDaemonReady()).toBeNull();
+
+    config.saveDaemonReady(54321);
+    expect(config.loadDaemonReady()).toBe(54321);
+    expect(config.loadDaemonPid()).toBeNull();
+
+    config.clearDaemonReady();
+    expect(config.loadDaemonReady()).toBeNull();
+  });
+
+  it('returns null for stale or malformed readiness data', () => {
+    mkdirSync(join(tempHome, '.kraki'), { recursive: true });
+    writeFileSync(join(tempHome, '.kraki', 'daemon.ready'), 'not-a-pid', 'utf8');
+    expect(config.loadDaemonReady()).toBeNull();
+    expect(() => config.clearDaemonReady()).not.toThrow();
+    expect(() => config.clearDaemonReady()).not.toThrow();
+  });
+});
+
 describe('getOrCreateDeviceId()', () => {
   it('generates a new device ID on first call', () => {
     const id = config.getOrCreateDeviceId();

@@ -80,17 +80,18 @@ describe('buildLaunchdPlist — bundled install (the TCC-critical path)', () => 
     expect(i + 2).toBe(args.length);
   });
 
-  it('forwards environment by name, never embedding values in argv', () => {
-    // `open --env NAME` copies NAME from open's environment. NAME=VALUE would
-    // expose proxy credentials/tokens in the long-lived `open -W` argv.
-    expect(args).toContain('--env');
-    expect(args).toContain('NODE_ENV');
-    expect(args).toContain('LOG_LEVEL');
-    expect(args).not.toContain('NODE_ENV=production');
-    expect(args).not.toContain('LOG_LEVEL=info');
+  it('inherits launchd environment without using open --env', () => {
+    // `open --env NAME` sets NAME to an empty string; it does not copy the
+    // existing value. The launched app already inherits open's environment,
+    // which launchd provides through EnvironmentVariables.
+    expect(args).not.toContain('--env');
+    expect(args).not.toContain('NODE_ENV');
+    expect(args).not.toContain('LOG_LEVEL');
+    expect(plist).toMatch(/<key>NODE_ENV<\/key>\s*<string>production<\/string>/);
+    expect(plist).toMatch(/<key>LOG_LEVEL<\/key>\s*<string>info<\/string>/);
   });
 
-  it('does not leak environment values into the long-lived open command line', () => {
+  it('does not leak environment names or values into the long-lived open command line', () => {
     const secret = 'github_pat_super_secret';
     const secretPlist = buildLaunchdPlist({
       ...BASE,
@@ -98,10 +99,15 @@ describe('buildLaunchdPlist — bundled install (the TCC-critical path)', () => 
       envEntries: [['HTTPS_PROXY', 'http://user:pass@proxy'], ['GH_TOKEN', secret]],
     });
     const secretArgs = programArgs(secretPlist);
-    expect(secretArgs).toContain('HTTPS_PROXY');
-    expect(secretArgs).toContain('GH_TOKEN');
+    expect(secretArgs).not.toContain('--env');
+    expect(secretArgs).not.toContain('HTTPS_PROXY');
+    expect(secretArgs).not.toContain('GH_TOKEN');
     expect(secretArgs.join(' ')).not.toContain('user:pass');
     expect(secretArgs.join(' ')).not.toContain(secret);
+    expect(secretPlist).toContain('<key>HTTPS_PROXY</key>');
+    expect(secretPlist).toContain('<string>http://user:pass@proxy</string>');
+    expect(secretPlist).toContain('<key>GH_TOKEN</key>');
+    expect(secretPlist).toContain(`<string>${secret}</string>`);
   });
 
   it('redirects the daemon stdio, which LaunchServices also does not inherit', () => {

@@ -13,6 +13,9 @@ import { resolve } from 'node:path';
 const mockSpawn = vi.fn();
 const mockExecSync = vi.fn();
 const mockExecFileSync = vi.fn();
+const mockIsSea = vi.fn(() => false);
+const mockGetKrakiAppBundlePath = vi.fn((): string | null => null);
+const mockGetProcessBundleIdentity = vi.fn((): string | null => null);
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
   execSync: (...args: unknown[]) => mockExecSync(...args),
@@ -22,12 +25,15 @@ vi.mock('node:child_process', () => ({
 const mockSaveDaemonPid = vi.fn();
 const mockLoadDaemonPid = vi.fn();
 const mockClearDaemonPid = vi.fn();
+const mockLoadDaemonReady = vi.fn();
+const mockClearDaemonReady = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockOpenSync = vi.fn();
 const mockCloseSync = vi.fn();
 const mockExistsSync = vi.fn(() => false);
 const mockUnlinkSync = vi.fn();
 const mockWriteFileSync = vi.fn();
+const mockChmodSync = vi.fn();
 
 vi.mock('node:fs', () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
@@ -36,15 +42,21 @@ vi.mock('node:fs', () => ({
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
   unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  chmodSync: (...args: unknown[]) => mockChmodSync(...args),
 }));
 
 vi.mock('node:os', () => ({
   homedir: vi.fn(() => '/tmp/fake-home'),
 }));
 
-// Force isSea() → false so startDaemon tests use the spawn path (not launchctl)
 vi.mock('node:sea', () => ({
-  isSea: vi.fn(() => false),
+  isSea: (...args: unknown[]) => mockIsSea(...args),
+}));
+
+vi.mock('../checks.js', () => ({
+  getKrakiAppBundlePath: (...args: unknown[]) => mockGetKrakiAppBundlePath(...args),
+  getProcessBundleIdentity: (...args: unknown[]) => mockGetProcessBundleIdentity(...args),
+  KRAKI_BUNDLE_ID: 'chat.kraki.cli',
 }));
 
 vi.mock('../config.js', () => ({
@@ -54,15 +66,20 @@ vi.mock('../config.js', () => ({
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   loadDaemonPid: (...args: unknown[]) => mockLoadDaemonPid(...args),
   clearDaemonPid: (...args: unknown[]) => mockClearDaemonPid(...args),
+  loadDaemonReady: (...args: unknown[]) => mockLoadDaemonReady(...args),
+  clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
 }));
 
 import {
+  assertNoUntrackedLaunchdDaemon,
   isDaemonRunning,
   getDaemonStatus,
   startDaemon,
+  startDaemonLaunchctl,
   stopDaemon,
   inspectDaemonProcess,
   resolveDaemonLaunch,
+  DaemonStartupError,
   getDaemonBootstrapLogPath,
 } from '../daemon.js';
 
@@ -71,7 +88,14 @@ beforeEach(() => {
   vi.useRealTimers();
   mockLoadDaemonPid.mockReturnValue(null);
   mockOpenSync.mockReturnValue(99);
-  mockExecFileSync.mockReturnValue('/path/to/kraki __daemon-worker');
+  mockExecFileSync.mockImplementation((command: string) => {
+    if (command === '/bin/launchctl') throw new Error('not loaded');
+    return '/path/to/kraki __daemon-worker';
+  });
+  mockIsSea.mockReturnValue(false);
+  mockGetKrakiAppBundlePath.mockReturnValue(null);
+  mockGetProcessBundleIdentity.mockReturnValue(null);
+  mockLoadDaemonReady.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -110,9 +134,68 @@ describe('inspectDaemonProcess()', () => {
   });
 });
 
+describe('launchd job without a verified worker PID', () => {
+  it('fails closed instead of unloading a loaded job', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(stopDaemon('darwin')).toBe(false);
+    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+  });
+
+  it('refuses to start a duplicate beside a loaded untracked job', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(() => assertNoUntrackedLaunchdDaemon('darwin')).toThrow('will not risk starting a duplicate daemon');
+  });
+
+  it('allows stale plist cleanup when launchctl confirms no job is loaded', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExistsSync.mockReturnValue(true);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(stopDaemon('darwin')).toBe(false);
+    expect(mockExecSync).toHaveBeenCalled();
+    expect(mockUnlinkSync).toHaveBeenCalled();
+  });
+});
+
 // ── isDaemonRunning ─────────────────────────────────────
 
 describe('isDaemonRunning()', () => {
+  it('treats a loaded launchd job without a PID as running', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(isDaemonRunning('darwin')).toBe(true);
+    expect(getDaemonStatus('darwin')).toEqual({ running: true, pid: null });
+  });
+
+  it('does not discard a stale PID while its launchd job remains loaded', () => {
+    mockLoadDaemonPid.mockReturnValue(999999999);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(isDaemonRunning('darwin')).toBe(true);
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+  });
+
   it('returns false when no PID file exists', () => {
     mockLoadDaemonPid.mockReturnValue(null);
     expect(isDaemonRunning()).toBe(false);
@@ -133,6 +216,16 @@ describe('isDaemonRunning()', () => {
 // ── getDaemonStatus ─────────────────────────────────────
 
 describe('getDaemonStatus()', () => {
+  it('reports a loaded launchd job without a PID as running with unknown PID', () => {
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      return '/path/to/kraki __daemon-worker';
+    });
+
+    expect(getDaemonStatus('darwin')).toEqual({ running: true, pid: null });
+  });
+
   it('returns running=false and pid=null when no PID file', () => {
     mockLoadDaemonPid.mockReturnValue(null);
     expect(getDaemonStatus()).toEqual({ running: false, pid: null });
@@ -197,10 +290,97 @@ describe('startDaemon()', () => {
     expect(launch.workerPath).toBe(process.execPath);
   });
 
+  it('rejects a bundled macOS launch whose PID lacks the required Launch Services identity', async () => {
+    vi.useFakeTimers();
+    mockIsSea.mockReturnValue(true);
+    mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
+    mockGetProcessBundleIdentity.mockReturnValue(null);
+    mockLoadDaemonReady.mockReturnValue(4242);
+    mockExistsSync.mockReturnValue(true);
+    // stopDaemon() sees no previous PID; the duplicate-start guard also sees
+    // none; then the new worker writes PID 4242 during the launch poll.
+    mockLoadDaemonPid
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(4242);
+    let terminated = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGTERM') { terminated = true; return true; }
+      if (signal === 0 && terminated) throw new Error('ESRCH');
+      return true;
+    }) as typeof process.kill);
+
+    const startPromise = startDaemonLaunchctl(fakeConfig);
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      '/tmp/fake-home/Library/LaunchAgents/cloud.corelli.kraki.plist',
+      expect.any(String),
+      { mode: 0o600 },
+    );
+    expect(mockChmodSync).toHaveBeenCalledWith(
+      '/tmp/fake-home/Library/LaunchAgents/cloud.corelli.kraki.plist',
+      0o600,
+    );
+    const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
+    await vi.advanceTimersByTimeAsync(35_300);
+
+    await rejection;
+    expect(mockGetProcessBundleIdentity).toHaveBeenCalledWith(4242);
+    expect(mockUnlinkSync).toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('fails closed without removing supervision when startup identity cannot be inspected', async () => {
+    vi.useFakeTimers();
+    mockIsSea.mockReturnValue(true);
+    mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
+    mockLoadDaemonReady.mockReturnValue(4243);
+    mockLoadDaemonPid
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(4243);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      throw new Error('EPERM');
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const startPromise = startDaemonLaunchctl(fakeConfig);
+    const readyClearsBeforeTimeout = mockClearDaemonReady.mock.calls.length;
+    const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
+    await vi.advanceTimersByTimeAsync(30_200);
+
+    await rejection;
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+    expect(mockClearDaemonReady).toHaveBeenCalledTimes(readyClearsBeforeTimeout);
+    expect(killSpy).not.toHaveBeenCalledWith(4243, 'SIGTERM');
+    killSpy.mockRestore();
+  });
+
+  it('preserves a loaded launchd job when startup times out before any PID is available', async () => {
+    vi.useFakeTimers();
+    mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      throw new Error('unexpected process inspection');
+    });
+
+    const startPromise = startDaemonLaunchctl(fakeConfig);
+    const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
+    await vi.advanceTimersByTimeAsync(30_200);
+
+    await rejection;
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+    expect(mockClearDaemonReady).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for bootstrap before saving the PID', async () => {
     vi.useFakeTimers();
     const { child } = makeFakeChild(42);
     mockSpawn.mockReturnValue(child);
+    mockLoadDaemonReady.mockReturnValue(42);
 
     const startPromise = startDaemon(fakeConfig);
 
@@ -217,7 +397,7 @@ describe('startDaemon()', () => {
     expect(mockCloseSync).toHaveBeenCalledWith(99);
     expect(mockSaveDaemonPid).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(100);
 
     await expect(startPromise).resolves.toBe(42);
     expect(mockSaveDaemonPid).toHaveBeenCalledWith(42);
@@ -228,6 +408,7 @@ describe('startDaemon()', () => {
     vi.useFakeTimers();
     const { child } = makeFakeChild(55);
     mockSpawn.mockReturnValue(child);
+    mockLoadDaemonReady.mockReturnValue(55);
 
     const startPromise = startDaemon({
       ...fakeConfig,
@@ -237,8 +418,82 @@ describe('startDaemon()', () => {
     const [, , opts] = mockSpawn.mock.calls[0];
     expect(opts.env.LOG_LEVEL).toBe('debug');
 
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(100);
     await expect(startPromise).resolves.toBe(55);
+  });
+
+  it('fails instead of reporting success when a background worker never publishes readiness', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(77);
+    mockSpawn.mockReturnValue(child);
+    mockLoadDaemonReady.mockReturnValue(null);
+    let terminated = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGTERM') { terminated = true; return true; }
+      if (signal === 0 && terminated) throw new Error('ESRCH');
+      return true;
+    }) as typeof process.kill);
+
+    const startPromise = startDaemon(fakeConfig);
+    const rejection = expect(startPromise).rejects.toThrow('did not become ready');
+    await vi.advanceTimersByTimeAsync(35_200);
+
+    await rejection;
+    expect(child.unref).not.toHaveBeenCalled();
+    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
+    expect(killSpy).toHaveBeenCalledWith(77, 'SIGTERM');
+    killSpy.mockRestore();
+  });
+
+  it('does not SIGKILL a PID reused after the failed worker exits', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(78);
+    mockSpawn.mockReturnValue(child);
+    mockLoadDaemonReady.mockReturnValue(null);
+    let psInspections = 0;
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      psInspections += 1;
+      return psInspections === 1
+        ? '/path/to/kraki __daemon-worker'
+        : '/Applications/Safari.app/Contents/MacOS/Safari';
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const startPromise = startDaemon(fakeConfig);
+    const rejection = expect(startPromise).rejects.toThrow('did not become ready');
+    await vi.advanceTimersByTimeAsync(30_300);
+
+    await rejection;
+    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
+    expect(mockClearDaemonPid).toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalledWith(78, 'SIGKILL');
+    killSpy.mockRestore();
+  });
+
+  it('preserves the PID when failed-worker identity becomes unknown', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(79);
+    mockSpawn.mockReturnValue(child);
+    mockLoadDaemonReady.mockReturnValue(null);
+    let psInspections = 0;
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      psInspections += 1;
+      if (psInspections === 1) return '/path/to/kraki __daemon-worker';
+      throw new Error('EPERM');
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const startPromise = startDaemon(fakeConfig);
+    const rejection = expect(startPromise).rejects.toThrow('could not be safely terminated');
+    await vi.advanceTimersByTimeAsync(30_300);
+
+    await rejection;
+    expect(mockSaveDaemonPid).toHaveBeenCalledWith(79);
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalledWith(79, 'SIGKILL');
+    killSpy.mockRestore();
   });
 
   it('fails fast when the child exits during bootstrap', async () => {
@@ -265,7 +520,10 @@ describe('stopDaemon()', () => {
 
   it('does not signal a reused PID that belongs to another process', () => {
     mockLoadDaemonPid.mockReturnValue(12345);
-    mockExecFileSync.mockReturnValue('/Applications/Safari.app/Contents/MacOS/Safari');
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      return '/Applications/Safari.app/Contents/MacOS/Safari';
+    });
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
     expect(stopDaemon()).toBe(true);
@@ -314,7 +572,12 @@ describe('stopDaemon()', () => {
     // Unloading the launchd job no longer kills the daemon — the job is `open`
     // and the daemon belongs to LaunchServices — so this escalation is the only
     // backstop left for a hung daemon.
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    let killed = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGKILL') { killed = true; return true; }
+      if (signal === 0 && killed) throw new Error('ESRCH');
+      return true;
+    }) as typeof process.kill);
     mockLoadDaemonPid.mockReturnValue(12345);
 
     const result = stopDaemon();
@@ -325,6 +588,18 @@ describe('stopDaemon()', () => {
     expect(mockClearDaemonPid).toHaveBeenCalled();
     killSpy.mockRestore();
   }, 10_000);
+
+  it('keeps the PID and reports failure when SIGKILL does not terminate the daemon', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    mockLoadDaemonPid.mockReturnValue(12345);
+
+    const result = stopDaemon();
+
+    expect(result).toBe(false);
+    expect(killSpy).toHaveBeenCalledWith(12345, 'SIGKILL');
+    expect(mockClearDaemonPid).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  }, 12_000);
 
   it('clears PID even if process is already gone', () => {
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {

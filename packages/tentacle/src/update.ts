@@ -330,15 +330,21 @@ function isNewer(latest: string, current: string): boolean {
 
 // ── Update command ──────────────────────────────────────
 
-/**
- * Wait for the daemon process to fully exit so file locks are released.
- * Polls `isDaemonRunning()` at the given interval, up to maxAttempts.
- */
-async function waitForProcessExit(intervalMs: number, maxAttempts: number): Promise<void> {
-  const { isDaemonRunning } = await import('./daemon.js');
+export async function stopDaemonForUpdate(
+  deps: { isDaemonRunning: () => boolean; stopDaemon: () => boolean },
+  intervalMs = 500,
+  maxAttempts = 10,
+): Promise<void> {
+  if (!deps.isDaemonRunning()) return;
+  if (!deps.stopDaemon()) {
+    throw new Error('Refusing to update: the running daemon could not be safely identified and stopped');
+  }
   for (let i = 0; i < maxAttempts; i++) {
-    if (!isDaemonRunning()) return;
+    if (!deps.isDaemonRunning()) return;
     await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  if (deps.isDaemonRunning()) {
+    throw new Error(`Refusing to update: the daemon did not exit within ${(intervalMs * maxAttempts) / 1000} seconds`);
   }
 }
 
@@ -360,7 +366,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
 
   // Import daemon management upfront — needed for pre-update stop and post-update restart
-  const { isDaemonRunning, stopDaemon, startDaemon, MacOSCodeSignatureError, INTERNAL_DAEMON_WORKER_COMMAND } = await import('./daemon.js');
+  const { isDaemonRunning, stopDaemon, startDaemon } = await import('./daemon.js');
   const daemonWasRunning = isDaemonRunning();
 
   // Probe FDA BEFORE the binary is replaced. After replacement the kernel
@@ -384,10 +390,15 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   // Wait briefly for the process to release locks / finish flushing.
   if (daemonWasRunning) {
     spinner.text = `Stopping daemon before update…`;
-    stopDaemon();
-    await waitForProcessExit(500, 10);
+    try {
+      await stopDaemonForUpdate({ isDaemonRunning, stopDaemon });
+    } catch (err) {
+      spinner.fail((err as Error).message);
+      throw err;
+    }
   }
 
+  let installCompleted = false;
   try {
     switch (method) {
       case 'npm':
@@ -409,6 +420,7 @@ export async function performUpdate(currentVersion: string): Promise<void> {
     }
 
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
+    installCompleted = true;
     writeCache(latest);
 
     // Show FDA guidance if it was denied before the update. We don't re-probe
@@ -433,42 +445,26 @@ export async function performUpdate(currentVersion: string): Promise<void> {
       const { loadConfig } = await import('./config.js');
       const config = loadConfig();
       if (config) {
-        try {
-          await startDaemon(config);
-          console.log(chalk.green('  ✔ Daemon restarted'));
-        } catch (restartErr) {
-          if (restartErr instanceof MacOSCodeSignatureError) {
-            // startDaemon spawns a child process, which CSM blocks.
-            // Fall back to running the daemon in the current process
-            // (already Gatekeeper-approved since the user invoked it).
-            console.log(chalk.dim('  Starting in foreground (macOS code signature restriction)…'));
-            process.title = `kraki ${INTERNAL_DAEMON_WORKER_COMMAND}`;
-            process.on('SIGHUP', () => {});
-            const { saveDaemonPid, getLogVerbosity: getLogV } = await import('./config.js');
-            saveDaemonPid(process.pid);
-            process.env.LOG_LEVEL = getLogV(config) === 'verbose' ? 'debug' : 'info';
-            process.env.NODE_ENV = 'production';
-            console.log(chalk.green(`  🦑 Kraki started (PID ${process.pid})`));
-            console.log(chalk.dim('  Running in foreground — press Ctrl+C or run `kraki stop` to quit'));
-            const { startWorker } = await import('./daemon-worker.js');
-            await startWorker();
-            return;
-          }
-          console.log(chalk.red(`  Failed to restart daemon: ${(restartErr as Error).message}`));
-        }
+        await startDaemon(config);
+        console.log(chalk.green('  ✔ Daemon restarted'));
+      } else {
+        throw new Error('Update installed, but daemon restart failed because the Kraki config could not be loaded');
       }
     }
   } catch (err) {
-    // If we stopped the daemon for the update but it failed, restart so the
-    // user isn't left with a stopped daemon.
-    if (daemonWasRunning && !isDaemonRunning()) {
+    // If installation itself failed after stopping the old daemon, make one
+    // best-effort BACKGROUND recovery attempt. Once installation completed,
+    // however, a restart failure is final and must remain visible — never retry
+    // ambiguously and never run the worker in this interactive updater process.
+    if (!installCompleted && daemonWasRunning && !isDaemonRunning()) {
       try {
         const { loadConfig } = await import('./config.js');
         const config = loadConfig();
         if (config) await startDaemon(config);
-      } catch { /* best effort */ }
+      } catch { /* preserve the original update/restart failure below */ }
     }
     spinner.fail(`Update failed: ${(err as Error).message}`);
+    throw err;
   }
 }
 

@@ -196,49 +196,15 @@ main() {
   echo "  ✓ Kraki ${VERSION} installed"
   echo ""
 
-  # Auto-run interactive setup. KRAKI_INSTALL=1 tells kraki to show the
-  # setup wizard + pairing QR but exit without starting the daemon.
-  # The daemon is started below from the shell — on macOS 26+, kraki
-  # cannot fork+exec itself (CSM provenance tracking), but the user's
-  # shell can launch it just fine.
+  # Auto-run interactive setup. KRAKI_INSTALL=1 tells kraki to complete
+  # configuration but exit before daemon startup or pairing output. The
+  # subsequent `kraki start` uses the same background-only daemon manager,
+  # manager, readiness handshake, Launch Services validation, and error path as
+  # `kraki start` / `kraki restart`.
   KRAKI_INSTALL=1 "${INSTALL_DIR}/${BINARY_NAME}" </dev/tty
 
-  # Start daemon in background from the shell.
-  mkdir -p "${HOME}/.kraki/logs"
-  BOOTSTRAP_LOG="${HOME}/.kraki/logs/daemon-bootstrap.log"
-
-  # On macOS the daemon MUST be started through LaunchServices, not through the
-  # ${INSTALL_DIR}/kraki symlink. A binary exec'd by path gets no Launch Services
-  # application identity, so TCC keys its grants to the absolute path + cdhash
-  # and every future update silently revokes Full Disk Access. Launching the
-  # bundle with `open` gives the process its real bundle id (chat.kraki.cli),
-  # whose Developer ID Designated Requirement is cdhash-free and stable.
-  # See docs/mac-tcc-permissions.md.
-  APP_PATH="${HOME}/.local/share/kraki/Kraki.app"
-  if [ "$(uname -s)" = "Darwin" ] && [ -d "$APP_PATH" ]; then
-    open -n -a "$APP_PATH" \
-      --stdout "$BOOTSTRAP_LOG" --stderr "$BOOTSTRAP_LOG" \
-      --env "PATH=${PATH}" --env "HOME=${HOME}" \
-      --args __daemon-worker
-    # `open` returns as soon as the app is launched, so confirm by process name
-    # rather than by a PID we never owned.
-    sleep 2
-    if pgrep -f "Kraki.app/Contents/MacOS/kraki __daemon-worker" >/dev/null 2>&1; then
-      echo "  🦑 Kraki daemon started (via LaunchServices)"
-    else
-      echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
-    fi
-  else
-    nohup "${INSTALL_DIR}/${BINARY_NAME}" __daemon-worker \
-      </dev/null >"$BOOTSTRAP_LOG" 2>&1 &
-    DAEMON_PID=$!
-    sleep 1
-    if kill -0 "$DAEMON_PID" 2>/dev/null; then
-      echo "  🦑 Kraki daemon started (PID $DAEMON_PID)"
-    else
-      echo "  ⚠  Daemon didn't start automatically. Run: kraki start"
-    fi
-  fi
+  echo "  Starting Kraki daemon..."
+  "${INSTALL_DIR}/${BINARY_NAME}" start
   echo ""
 }
 

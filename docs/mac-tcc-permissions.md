@@ -119,7 +119,6 @@ bundled install:
 ```
 /usr/bin/open -W -n -a <Kraki.app>
   --stdout <bootstrap.log> --stderr <bootstrap.log>
-  --env K=V …
   --args __daemon-worker
 ```
 
@@ -135,9 +134,12 @@ Details that are load-bearing, each verified rather than assumed:
   when the app it waits on is SIGKILLed**, so the old exit-code condition would
   never fire and a crashed daemon would stay dead. `ThrottleInterval: 10` keeps
   an unlaunchable bundle from spinning.
-- **`--env`** is required: an app started through LaunchServices inherits the
-  launchd *session* environment, not the environment of whoever called `open`.
-  Without it the daemon silently loses `PATH`, proxy settings and tokens.
+- **No `open --env` arguments.** The launched app already inherits `open`'s
+  environment, and launchd supplies the required values through its
+  `EnvironmentVariables` dictionary. `open --env NAME` does **not** copy the
+  existing value — it overwrites it with an empty string. `NAME=VALUE` would
+  work but would expose proxy credentials and tokens in the long-lived
+  `open -W` command line.
 - **`--stdout` / `--stderr`** for the same reason — the launchd job's
   `StandardOutPath` now captures `open` itself, not the daemon.
 - **`--args` must come last**; `open` treats everything after it as app `argv`.
@@ -227,11 +229,13 @@ attempts. When healthy it reads `"daemonBundleId": "chat.kraki.cli"`.
 
 ### Verified
 
-- `vitest run` — 792/792 pass, including 13 new tests in
-  `src/__tests__/daemon-launch-tcc.test.ts` asserting the launch mechanism
-  itself: `open` as `argv[0]`, `-W`, `-n`, `-a <bundle>`, `--args` last,
-  `--env`/`--stdout`/`--stderr` forwarding, `KeepAlive: true`, and the
-  direct-`execve` fallback for non-bundled installs.
+- `vitest run` — 844/844 pass, including launch mechanism, background-only
+  failure behavior, explicit readiness handshake, launchd-without-PID authority,
+  failed-worker TERM/KILL/PID-reuse handling, updater stop gates, installer
+  delegation and PID hardening tests. The TCC suite asserts `open` as `argv[0]`,
+  `-W`, `-n`, `-a <bundle>`, `--args` last, no `--env` argv entries,
+  redirected stdio,
+  `KeepAlive: true`, and the direct-`execve` path for non-bundled installs.
 - `tsc --noEmit` — 0 errors across the whole tentacle package.
 - Launch identity measured live on macOS 26.5 across four bundle/launch
   combinations plus a real launchd job (see "What was actually measured").
@@ -286,10 +290,10 @@ kraki fda [--json|--watch]   # unchanged, retained for compatibility
   change silently reintroduces the entire bug — the daemon keeps running, the
   bundle stays signed and registered, and grants quietly stop surviving updates.
   `daemon-launch-tcc.test.ts` fails if you do; do not "fix" that test.
-- **Never** launch the daemon through the `~/.local/bin/kraki` symlink either.
-  It has the same effect: no bundle identity, path-tracked grant. (`install.sh`
-  and the web installer still do this for their initial post-install start — it
-  is the remaining known gap, tracked below.)
+- **Never** launch the daemon through the `~/.local/bin/kraki` symlink or a
+  hand-written installer `open`/`nohup` command. Installers must delegate to
+  `kraki start`, which owns launchd supervision, readiness validation and
+  Launch Services identity checks.
 - Keep the notarization ticket **stapled** and staple *before* building the
   distribution tarball. An unstapled app needs a successful online Gatekeeper
   check on every launch; if Gatekeeper refuses to launch it, its TCC grants are
@@ -321,18 +325,17 @@ the symlink, so that very first daemon had no bundle identity either. If the
 user granted Full Disk Access to *that* process, the grant was path-tracked from
 the outset and died on the next update.
 
-Both now launch the bundle through LaunchServices on macOS:
+Both installers now finish setup by invoking the public daemon manager:
 
 ```sh
-open -n -a "$HOME/.local/share/kraki/Kraki.app" \
-  --stdout "$BOOTSTRAP_LOG" --stderr "$BOOTSTRAP_LOG" \
-  --env "PATH=$PATH" --env "HOME=$HOME" \
-  --args __daemon-worker
+KRAKI_INSTALL=1 "${INSTALL_DIR}/kraki" </dev/tty
+"${INSTALL_DIR}/kraki" start
 ```
 
-with the original `nohup` retained for non-macOS and for the non-bundled
-fallback. Because `open` returns as soon as the app is launched, the liveness
-check matches on process name instead of a PID the shell never owned.
+They no longer invoke `open`, `nohup`, or `__daemon-worker` directly. This gives
+first install the same background-only policy, launchd supervision, explicit
+readiness handshake, Launch Services identity validation and non-zero failure
+path as `kraki start` and `kraki restart`.
 
 Still open, and not a TCC issue: the two installers disagree on `INSTALL_DIR`
 (`~/.local/bin` vs `/usr/local/bin`), so the symlink location differs by install
