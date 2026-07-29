@@ -718,18 +718,47 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
   let stopped = false;
   try {
     pid = await startDaemon(config);
-    const readyPid = loadDaemonReady();
-    const status = getDaemonStatus();
-    if (readyPid !== pid || !status.running || status.pid !== pid) {
-      throw new Error(
-        `Daemon release smoke observed inconsistent readiness: started=${pid}, ready=${readyPid}, status=${JSON.stringify(status)}`,
-      );
+    const appBundle = getKrakiAppBundlePath();
+    const stabilityDeadline = Date.now() + 15_000;
+
+    // v0.31.10 reached readiness and connected to Relay, then lost its runtime
+    // Launch Services identity after adapter child processes started. A smoke
+    // that stops immediately at readiness cannot catch that class of failure.
+    // Hold across the post-ready window and continuously verify the complete
+    // authority tuple before declaring the binary releasable.
+    while (Date.now() < stabilityDeadline) {
+      const readyPid = loadDaemonReady();
+      const status = getDaemonStatus();
+      const workerIdentity = inspectDaemonProcess(pid);
+      const bundleIdentity = appBundle === null ? null : getProcessBundleIdentity(pid);
+      const launchdLoaded = process.platform !== 'darwin' || isLaunchdAgentLoaded();
+
+      if (
+        readyPid !== pid ||
+        !status.running ||
+        status.pid !== pid ||
+        workerIdentity !== 'daemon' ||
+        (appBundle !== null && bundleIdentity !== KRAKI_BUNDLE_ID) ||
+        !launchdLoaded
+      ) {
+        throw new Error(
+          'Daemon release smoke lost post-ready authority: ' +
+          JSON.stringify({ pid, readyPid, status, workerIdentity, bundleIdentity, launchdLoaded }),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
     if (!stopDaemon()) {
       throw new Error(`Daemon release smoke could not stop PID ${pid}`);
     }
     stopped = true;
+    if (loadDaemonPid() !== null || loadDaemonReady() !== null) {
+      throw new Error('Daemon release smoke left stale PID/readiness state after stop');
+    }
+    if (process.platform === 'darwin' && isLaunchdAgentLoaded()) {
+      throw new Error('Daemon release smoke left its launchd job loaded after stop');
+    }
     return pid;
   } finally {
     // If an assertion after successful startup throws, best-effort stop only the
