@@ -26,6 +26,9 @@ import {
   saveDaemonPid,
   loadDaemonPid,
   clearDaemonPid,
+  saveDaemonIdentity,
+  loadDaemonIdentity,
+  clearDaemonIdentity,
   loadDaemonReady,
   clearDaemonReady,
 } from './config.js';
@@ -108,6 +111,51 @@ export function assertNoUntrackedLaunchdDaemon(
 }
 
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
+export const INTERNAL_DAEMON_SMOKE_COMMAND = '__daemon-release-smoke';
+
+/**
+ * Prepare the LaunchServices-owned CLI process before daemon-worker imports.
+ *
+ * macOS injects __CFBundleIdentifier when `open` launches Kraki.app. The value
+ * is private Launch Services bootstrap state and must not be forwarded as an
+ * application credential to every child process, so it is removed before the
+ * adapters start.
+ *
+ * More importantly, a bundle-external AppKit child can be attributed to the
+ * parent app through responsible-process ancestry even after that variable is
+ * removed. `lsappinfo(parentPid)` can then change from chat.kraki.cli to NULL
+ * while the original daemon remains healthy. Capture the daemon's correct
+ * PID-bound identity before any adapter child exists and persist it as the
+ * immutable startup proof; post-start live LS lookups are diagnostic only.
+ *
+ * Publish the PID at the same earliest safe point so launchd startup failures
+ * remain attributable even if a later module import throws. Readiness is still
+ * published only by startWorker() after full initialization.
+ */
+export async function prepareDaemonWorkerBootstrap(
+  env: NodeJS.ProcessEnv = process.env,
+  pid = process.pid,
+  appBundle = getKrakiAppBundlePath(),
+  lookupIdentity: (pid: number) => string | null = getProcessBundleIdentity,
+  timeoutMs = 5000,
+): Promise<void> {
+  clearDaemonIdentity();
+  if (appBundle !== null) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const bundleId = lookupIdentity(pid);
+      if (bundleId === KRAKI_BUNDLE_ID) {
+        saveDaemonIdentity({ pid, bundleId });
+        break;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (true);
+  }
+  delete env.__CFBundleIdentifier;
+  clearDaemonReady();
+  saveDaemonPid(pid);
+}
 
 export type DaemonProcessIdentity = 'daemon' | 'other' | 'gone' | 'unknown';
 
@@ -338,6 +386,7 @@ export function isDaemonRunning(
     if (isLaunchdAgentLoaded(platform, uid)) return true;
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return false;
   }
   // `unknown` means the PID is alive but the OS refused command inspection.
@@ -361,6 +410,7 @@ export function getDaemonStatus(
     if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null };
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return { running: false, pid: null };
   }
   return { running: true, pid };
@@ -506,6 +556,11 @@ export async function startDaemonLaunchctl(
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
+  writeFileSync(
+    bootstrapLogPath,
+    `[${new Date().toISOString()}] launching daemon home=${getKrakiHome()}\n`,
+    'utf8',
+  );
 
   const plistDir = join(homedir(), 'Library', 'LaunchAgents');
   mkdirSync(plistDir, { recursive: true });
@@ -519,6 +574,11 @@ export async function startDaemonLaunchctl(
     ['LOG_LEVEL', logLevel],
     ['PATH', [...pathParts].filter(Boolean).join(':')],
     ['HOME', homedir()],
+    // The launchd label is scoped to KRAKI_HOME, so the worker must receive
+    // the exact same home. Without this, an isolated/dev job silently falls
+    // back to ~/.kraki and multiple jobs overwrite the production PID/ready
+    // files while connecting as the same device.
+    ['KRAKI_HOME', getKrakiHome()],
   ];
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
@@ -532,7 +592,13 @@ export async function startDaemonLaunchctl(
     'GITHUB_TOKEN', 'GH_TOKEN',
   ];
   for (const key of forwardVars) {
-    if (process.env[key]) envEntries.push([key, process.env[key]!]);
+    const value = process.env[key];
+    if (!value) continue;
+    // Copilot CLI can inject a session-scoped gho_ token into its child
+    // environment. It is not valid for an independently launched daemon and
+    // must not be persisted in a launchd plist.
+    if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value.startsWith('gho_')) continue;
+    envEntries.push([key, value]);
   }
 
   const appBundle = getKrakiAppBundlePath();
@@ -547,6 +613,7 @@ export async function startDaemonLaunchctl(
 
   const plistPath = getLaunchdPlistPath();
   clearDaemonReady();
+  clearDaemonIdentity();
   writeFileSync(plistPath, plist, { mode: 0o600 });
   chmodSync(plistPath, 0o600);
   unloadLaunchdAgent();
@@ -575,7 +642,10 @@ export async function startDaemonLaunchctl(
       if (!readinessPublished) continue;
 
       const workerReady = inspectDaemonProcess(pid) === 'daemon';
-      const launchServicesReady = appBundle === null || getProcessBundleIdentity(pid) === KRAKI_BUNDLE_ID;
+      const identityProof = loadDaemonIdentity();
+      const launchServicesReady = appBundle === null || (
+        identityProof?.pid === pid && identityProof.bundleId === KRAKI_BUNDLE_ID
+      );
       if (workerReady && launchServicesReady) return pid;
     }
   }
@@ -597,6 +667,7 @@ export async function startDaemonLaunchctl(
     cleanupLaunchdPlist();
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     throw new DaemonStartupError(bootstrapLogPath);
   }
 
@@ -605,6 +676,7 @@ export async function startDaemonLaunchctl(
   if (!terminated) throw new DaemonStartupError(bootstrapLogPath);
   clearDaemonPid();
   clearDaemonReady();
+  clearDaemonIdentity();
   throw new DaemonStartupError(bootstrapLogPath);
 }
 
@@ -621,6 +693,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
     throw new Error('Refusing to start: the recorded daemon PID is alive but could not be verified. Remove the stale daemon.pid only after checking the process.');
   }
   clearDaemonReady();
+  clearDaemonIdentity();
 
   // On macOS SEA, use launchctl so launchd spawns the daemon in a clean
   // context that isn't blocked by CSM provenance tracking.
@@ -660,12 +733,75 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
     }
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     throw err;
   }
 
   child.unref();
   saveDaemonPid(child.pid);
   return child.pid;
+}
+
+export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number> {
+  if (process.env.KRAKI_RELEASE_SMOKE !== '1') {
+    throw new Error('The internal daemon release smoke command is disabled');
+  }
+
+  let pid: number | null = null;
+  let stopped = false;
+  try {
+    pid = await startDaemon(config);
+    const appBundle = getKrakiAppBundlePath();
+    const stabilityDeadline = Date.now() + 15_000;
+
+    // v0.31.10 reached readiness and connected to Relay, then lost its runtime
+    // Launch Services identity after adapter child processes started. A smoke
+    // that stops immediately at readiness cannot catch that class of failure.
+    // Hold across the post-ready window and continuously verify the complete
+    // authority tuple before declaring the binary releasable.
+    while (Date.now() < stabilityDeadline) {
+      const readyPid = loadDaemonReady();
+      const status = getDaemonStatus();
+      const workerIdentity = inspectDaemonProcess(pid);
+      const identityProof = loadDaemonIdentity();
+      const bundleIdentity = appBundle === null ? null : (
+        identityProof?.pid === pid ? identityProof.bundleId : null
+      );
+      const launchdLoaded = process.platform !== 'darwin' || isLaunchdAgentLoaded();
+
+      if (
+        readyPid !== pid ||
+        !status.running ||
+        status.pid !== pid ||
+        workerIdentity !== 'daemon' ||
+        (appBundle !== null && bundleIdentity !== KRAKI_BUNDLE_ID) ||
+        !launchdLoaded
+      ) {
+        throw new Error(
+          'Daemon release smoke lost post-ready authority: ' +
+          JSON.stringify({ pid, readyPid, status, workerIdentity, bundleIdentity, launchdLoaded }),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    if (!stopDaemon()) {
+      throw new Error(`Daemon release smoke could not stop PID ${pid}`);
+    }
+    stopped = true;
+    if (loadDaemonPid() !== null || loadDaemonReady() !== null || loadDaemonIdentity() !== null) {
+      throw new Error('Daemon release smoke left stale PID/readiness/identity state after stop');
+    }
+    if (process.platform === 'darwin' && isLaunchdAgentLoaded()) {
+      throw new Error('Daemon release smoke left its launchd job loaded after stop');
+    }
+    return pid;
+  } finally {
+    // If an assertion after successful startup throws, best-effort stop only the
+    // PID recorded under this smoke's isolated KRAKI_HOME. stopDaemon() remains
+    // identity-gated and will not signal an unrelated process.
+    if (pid !== null && !stopped) stopDaemon();
+  }
 }
 
 export function stopDaemon(
@@ -682,6 +818,7 @@ export function stopDaemon(
     if (hasUntrackedLaunchdDaemon(pid, platform, uid)) return false;
     if (platform === 'darwin') cleanupLaunchdPlist();
     clearDaemonReady();
+    clearDaemonIdentity();
     return false;
   }
 
@@ -712,6 +849,7 @@ export function stopDaemon(
     // holding that number.
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return true;
   }
 
@@ -725,6 +863,7 @@ export function stopDaemon(
     // Process already gone.
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return true;
   }
 
@@ -764,5 +903,6 @@ export function stopDaemon(
 
   clearDaemonPid();
   clearDaemonReady();
+  clearDaemonIdentity();
   return true;
 }

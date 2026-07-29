@@ -21,7 +21,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
-import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
+import { INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, isDaemonRunning, getDaemonStatus, startDaemon, runDaemonReleaseSmoke, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
@@ -739,7 +739,7 @@ async function cmdDoctor(): Promise<void> {
     checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
     getDaemonTccIdentity,
   } = await import('./checks.js');
-  const { loadDaemonPid } = await import('./config.js');
+  const { loadDaemonPid, loadDaemonIdentity } = await import('./config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
   // multi-adapter logger (created at module load) defaults to info-level
   // stdout (dev) which would interleave pino lines into the output, so
@@ -790,7 +790,7 @@ async function cmdDoctor(): Promise<void> {
       // Services bundle identity? A bundled, registered, correctly signed app
       // still reports healthy:false when its daemon was started by absolute
       // path — that combination is what made this bug recur six times.
-      identity: getDaemonTccIdentity(loadDaemonPid()),
+      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity()),
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
@@ -957,8 +957,20 @@ async function main(): Promise<void> {
   const cmd = args[0];
 
   if (cmd === INTERNAL_DAEMON_WORKER_COMMAND) {
+    // Must run before importing daemon-worker/adapters: capture the initial
+    // PID-bound Launch Services identity while it is still stable, then scrub
+    // private LS bootstrap state from the child-process environment.
+    await prepareDaemonWorkerBootstrap();
     const { startWorker } = await import('./daemon-worker.js');
     await startWorker();
+    return;
+  }
+
+  if (cmd === INTERNAL_DAEMON_SMOKE_COMMAND) {
+    const config = loadConfig();
+    if (!config) throw new Error(`No release smoke config found at ${getConfigPath()}`);
+    const pid = await runDaemonReleaseSmoke(config);
+    process.stdout.write(`daemon-release-smoke-ok pid=${pid}\n`);
     return;
   }
 

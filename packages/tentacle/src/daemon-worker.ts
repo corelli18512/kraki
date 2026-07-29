@@ -15,7 +15,7 @@
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -67,6 +67,13 @@ export interface WorkerResult {
 }
 
 export async function startWorker(): Promise<WorkerResult> {
+  // Launch Services injects this private bootstrap variable into Kraki.app.
+  // It is not a child-process credential, so remove it before adapters spawn.
+  // Correctness does not rely on this scrub: responsible-process attribution
+  // can still make live LS lookups unstable, which is why the CLI captured a
+  // PID-bound identity proof before importing this module.
+  delete process.env.__CFBundleIdentifier;
+
   // Clear any stale readiness before publishing this process's PID. This order
   // prevents a reused numeric PID from momentarily matching an old ready file.
   clearDaemonReady();
@@ -269,6 +276,7 @@ export async function startWorker(): Promise<WorkerResult> {
     shuttingDown = true;
     logger.info('Shutting down…');
     clearDaemonReady();
+    clearDaemonIdentity();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

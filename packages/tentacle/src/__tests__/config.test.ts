@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, existsSync, statSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSync } from 'node:fs';
 
@@ -53,6 +53,14 @@ describe('getConfigDir()', () => {
     expect(config.getKrakiHome()).toBe(customHome);
     expect(config.getConfigDir()).toBe(customHome);
     expect(existsSync(customHome)).toBe(true);
+  });
+
+  it('normalizes a relative KRAKI_HOME to one absolute path for CLI and launchd', async () => {
+    process.env.KRAKI_HOME = 'relative-kraki-home';
+    vi.resetModules();
+    config = await import('../config.js');
+
+    expect(config.getKrakiHome()).toBe(resolve('relative-kraki-home'));
   });
 
   it('creates the directory if it does not exist', () => {
@@ -215,6 +223,30 @@ describe('saveDaemonPid() / loadDaemonPid() / clearDaemonPid()', () => {
     mkdirSync(join(tempHome, '.kraki'), { recursive: true });
     writeFileSync(join(tempHome, '.kraki', 'daemon.pid'), 'not-a-number', 'utf8');
     expect(config.loadDaemonPid()).toBeNull();
+  });
+});
+
+// ── Daemon identity proof ───────────────────────────────
+
+describe('saveDaemonIdentity() / loadDaemonIdentity() / clearDaemonIdentity()', () => {
+  it('round-trips a PID-bound bundle identity proof with private permissions', () => {
+    const proof = { pid: 12345, bundleId: 'chat.kraki.cli' };
+    config.saveDaemonIdentity(proof);
+
+    expect(config.loadDaemonIdentity()).toEqual(proof);
+    expect(statSync(config.getDaemonIdentityPath()).mode & 0o777).toBe(0o600);
+
+    config.clearDaemonIdentity();
+    expect(config.loadDaemonIdentity()).toBeNull();
+  });
+
+  it('rejects malformed or incomplete identity proof data', () => {
+    mkdirSync(join(tempHome, '.kraki'), { recursive: true });
+    writeFileSync(config.getDaemonIdentityPath(), JSON.stringify({ pid: 0, bundleId: '' }), 'utf8');
+    expect(config.loadDaemonIdentity()).toBeNull();
+
+    writeFileSync(config.getDaemonIdentityPath(), 'not-json', 'utf8');
+    expect(config.loadDaemonIdentity()).toBeNull();
   });
 });
 

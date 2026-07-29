@@ -73,7 +73,7 @@ export function getVersion(): string {
 
 export function getKrakiHome(): string {
   const override = process.env.KRAKI_HOME?.trim();
-  return override ? join(override) : join(homedir(), '.kraki');
+  return override ? resolve(override) : join(homedir(), '.kraki');
 }
 
 export function getConfigDir(): string {
@@ -215,6 +215,41 @@ export function loadDaemonPid(): number | null {
 export function clearDaemonPid(): void {
   try {
     unlinkSync(getDaemonPidPath());
+  } catch {
+    // File may not exist — that's fine
+  }
+}
+
+export interface DaemonIdentityProof {
+  pid: number;
+  bundleId: string;
+}
+
+export function getDaemonIdentityPath(): string {
+  return join(getKrakiHome(), 'daemon.identity');
+}
+
+export function saveDaemonIdentity(proof: DaemonIdentityProof): void {
+  getConfigDir();
+  const path = getDaemonIdentityPath();
+  writeFileSync(path, JSON.stringify(proof), { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+export function loadDaemonIdentity(): DaemonIdentityProof | null {
+  try {
+    const value = JSON.parse(readFileSync(getDaemonIdentityPath(), 'utf8')) as Partial<DaemonIdentityProof>;
+    return Number.isInteger(value.pid) && (value.pid ?? 0) > 0 && typeof value.bundleId === 'string' && value.bundleId.length > 0
+      ? { pid: value.pid!, bundleId: value.bundleId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDaemonIdentity(): void {
+  try {
+    unlinkSync(getDaemonIdentityPath());
   } catch {
     // File may not exist — that's fine
   }
