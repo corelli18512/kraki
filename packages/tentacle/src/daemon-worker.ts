@@ -15,7 +15,7 @@
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady } from './config.js';
+import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -275,6 +275,7 @@ export async function startWorker(): Promise<WorkerResult> {
     shuttingDown = true;
     logger.info('Shutting down…');
     clearDaemonReady();
+    clearDaemonIdentity();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

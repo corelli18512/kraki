@@ -103,11 +103,7 @@ async function bundleCli() {
       'import.meta.url': '__kraki_import_meta_url',
     },
     banner: {
-      // Launch Services injects __CFBundleIdentifier into Kraki.app. Scrub it
-      // before ANY bundled module initializes so no static import can spawn a
-      // child Node/Pi/Copilot process that checks in as chat.kraki.cli and
-      // steals the daemon's runtime application identity.
-      js: 'if (process.argv[2] === "__daemon-worker") delete process.env.__CFBundleIdentifier;\nconst __kraki_import_meta_url = require("url").pathToFileURL(__filename).href;',
+      js: 'const __kraki_import_meta_url = require("url").pathToFileURL(__filename).href;',
     },
   });
 }

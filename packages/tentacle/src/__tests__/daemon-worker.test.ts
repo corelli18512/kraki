@@ -104,6 +104,7 @@ let mockChannelKey: string | null = null;
 const mockSaveDaemonPid = vi.fn();
 const mockSaveDaemonReady = vi.fn();
 const mockClearDaemonReady = vi.fn();
+const mockClearDaemonIdentity = vi.fn();
 
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => mockConfig),
@@ -117,6 +118,7 @@ vi.mock('../config.js', () => ({
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   saveDaemonReady: (...args: unknown[]) => mockSaveDaemonReady(...args),
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
+  clearDaemonIdentity: (...args: unknown[]) => mockClearDaemonIdentity(...args),
 }));
 
 let mockExecSyncReturn = 'fake-token\n';
@@ -187,6 +189,7 @@ describe('daemon-worker: startWorker()', () => {
 
     await shutdown();
     expect(mockClearDaemonReady).toHaveBeenCalled();
+    expect(mockClearDaemonIdentity).toHaveBeenCalled();
     expect(mockRelay.disconnect).toHaveBeenCalled();
     expect(mockAdapter.stop).toHaveBeenCalled();
   });

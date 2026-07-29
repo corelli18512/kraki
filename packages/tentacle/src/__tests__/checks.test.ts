@@ -42,7 +42,7 @@ import { execSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
 import { existsSync, realpathSync, promises as fsp } from 'node:fs';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, getProcessBundleIdentity, getDaemonTccIdentity, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
@@ -564,6 +564,38 @@ describe('probeTccStatus()', () => {
     mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
     const s = await probeTccStatus();
     expect(s.services.fda).toBe('denied');
+  });
+});
+
+describe('daemon TCC identity proof', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockPlatform.mockReturnValue('darwin');
+    mockExistsSync.mockReturnValue(true);
+    mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
+  });
+
+  it('parses a live lsappinfo identity', () => {
+    mockExecSync.mockReturnValue('"CFBundleIdentifier"="chat.kraki.cli"\n');
+    expect(getProcessBundleIdentity(123)).toBe('chat.kraki.cli');
+  });
+
+  it('prefers a matching PID-bound proof over a later unstable lsappinfo lookup', () => {
+    mockExecSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
+    const result = getDaemonTccIdentity(123, { pid: 123, bundleId: 'chat.kraki.cli' });
+
+    expect(result.daemonBundleId).toBe('chat.kraki.cli');
+    expect(result.healthy).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('does not trust an identity proof for a different PID', () => {
+    mockExecSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
+    const result = getDaemonTccIdentity(123, { pid: 999, bundleId: 'chat.kraki.cli' });
+
+    expect(result.daemonBundleId).toBeNull();
+    expect(result.healthy).toBe(false);
+    expect(mockExecSync).toHaveBeenCalled();
   });
 });
 

@@ -511,7 +511,10 @@ export function getProcessBundleIdentity(pid: number): string | null {
  * recurring permission loss: a correctly signed, correctly registered bundle
  * whose daemon was nonetheless started by absolute path.
  */
-export function getDaemonTccIdentity(daemonPid: number | null): {
+export function getDaemonTccIdentity(
+  daemonPid: number | null,
+  identityProof?: { pid: number; bundleId: string } | null,
+): {
   bundled: boolean;
   bundlePath: string | null;
   daemonPid: number | null;
@@ -520,7 +523,11 @@ export function getDaemonTccIdentity(daemonPid: number | null): {
 } {
   const bundlePath = getKrakiAppBundlePath();
   const bundled = bundlePath !== null;
-  const daemonBundleId = daemonPid !== null ? getProcessBundleIdentity(daemonPid) : null;
+  const daemonBundleId = daemonPid !== null
+    ? (identityProof?.pid === daemonPid
+        ? identityProof.bundleId
+        : getProcessBundleIdentity(daemonPid))
+    : null;
   return {
     bundled,
     bundlePath,

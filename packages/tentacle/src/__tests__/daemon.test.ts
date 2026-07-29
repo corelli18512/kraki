@@ -28,6 +28,9 @@ vi.mock('node:child_process', () => ({
 const mockSaveDaemonPid = vi.fn();
 const mockLoadDaemonPid = vi.fn();
 const mockClearDaemonPid = vi.fn();
+const mockSaveDaemonIdentity = vi.fn();
+const mockLoadDaemonIdentity = vi.fn();
+const mockClearDaemonIdentity = vi.fn();
 const mockLoadDaemonReady = vi.fn();
 const mockClearDaemonReady = vi.fn();
 const mockMkdirSync = vi.fn();
@@ -69,6 +72,9 @@ vi.mock('../config.js', () => ({
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   loadDaemonPid: (...args: unknown[]) => mockLoadDaemonPid(...args),
   clearDaemonPid: (...args: unknown[]) => mockClearDaemonPid(...args),
+  saveDaemonIdentity: (...args: unknown[]) => mockSaveDaemonIdentity(...args),
+  loadDaemonIdentity: (...args: unknown[]) => mockLoadDaemonIdentity(...args),
+  clearDaemonIdentity: (...args: unknown[]) => mockClearDaemonIdentity(...args),
   loadDaemonReady: (...args: unknown[]) => mockLoadDaemonReady(...args),
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
 }));
@@ -100,6 +106,7 @@ beforeEach(() => {
   mockGetKrakiAppBundlePath.mockReturnValue(null);
   mockGetProcessBundleIdentity.mockReturnValue(null);
   mockLoadDaemonReady.mockReturnValue(null);
+  mockLoadDaemonIdentity.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -123,18 +130,38 @@ function makeFakeChild(pid = 42) {
 // ── daemon worker bootstrap ─────────────────────────────
 
 describe('prepareDaemonWorkerBootstrap()', () => {
-  it('removes the private Launch Services bundle variable before child processes can inherit it', () => {
+  it('removes the private Launch Services bundle variable before child processes can inherit it', async () => {
     const env: NodeJS.ProcessEnv = {
       __CFBundleIdentifier: 'chat.kraki.cli',
       HOME: '/tmp/home',
     };
 
-    prepareDaemonWorkerBootstrap(env, 12345);
+    await prepareDaemonWorkerBootstrap(env, 12345, null, mockGetProcessBundleIdentity, 0);
 
     expect(env.__CFBundleIdentifier).toBeUndefined();
     expect(env.HOME).toBe('/tmp/home');
     expect(mockClearDaemonReady).toHaveBeenCalledOnce();
     expect(mockSaveDaemonPid).toHaveBeenCalledWith(12345);
+    expect(mockSaveDaemonIdentity).not.toHaveBeenCalled();
+  });
+
+  it('captures a matching initial Launch Services identity before scrubbing the environment', async () => {
+    const env: NodeJS.ProcessEnv = { __CFBundleIdentifier: 'chat.kraki.cli' };
+    mockGetProcessBundleIdentity.mockReturnValue('chat.kraki.cli');
+
+    await prepareDaemonWorkerBootstrap(env, 23456, '/Applications/Kraki.app', mockGetProcessBundleIdentity, 0);
+
+    expect(mockGetProcessBundleIdentity).toHaveBeenCalledWith(23456);
+    expect(mockSaveDaemonIdentity).toHaveBeenCalledWith({ pid: 23456, bundleId: 'chat.kraki.cli' });
+    expect(env.__CFBundleIdentifier).toBeUndefined();
+  });
+
+  it('does not publish an identity proof when the initial bundle identity is absent', async () => {
+    mockGetProcessBundleIdentity.mockReturnValue(null);
+
+    await prepareDaemonWorkerBootstrap({}, 34567, '/Applications/Kraki.app', mockGetProcessBundleIdentity, 0);
+
+    expect(mockSaveDaemonIdentity).not.toHaveBeenCalled();
   });
 });
 
@@ -312,6 +339,25 @@ describe('startDaemon()', () => {
     expect(launch.workerPath).toBe(process.execPath);
   });
 
+  it('accepts a matching worker-published identity proof even if live lsappinfo later becomes unstable', async () => {
+    vi.useFakeTimers();
+    mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
+    mockLoadDaemonReady.mockReturnValue(4142);
+    mockLoadDaemonIdentity.mockReturnValue({ pid: 4142, bundleId: 'chat.kraki.cli' });
+    mockGetProcessBundleIdentity.mockReturnValue(null);
+    mockLoadDaemonPid.mockReturnValue(4142);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const startPromise = startDaemonLaunchctl(fakeConfig, TEST_UID);
+    await vi.advanceTimersByTimeAsync(200);
+
+    await expect(startPromise).resolves.toBe(4142);
+    // The launcher consumes the proof captured before adapter children started;
+    // it must not re-query the mutable Launch Services process table here.
+    expect(mockGetProcessBundleIdentity).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
   it('rejects a bundled macOS launch whose PID lacks the required Launch Services identity', async () => {
     vi.useFakeTimers();
     mockIsSea.mockReturnValue(true);
@@ -349,7 +395,8 @@ describe('startDaemon()', () => {
     await vi.advanceTimersByTimeAsync(35_300);
 
     await rejection;
-    expect(mockGetProcessBundleIdentity).toHaveBeenCalledWith(4242);
+    expect(mockLoadDaemonIdentity).toHaveBeenCalled();
+    expect(mockGetProcessBundleIdentity).not.toHaveBeenCalled();
     expect(mockUnlinkSync).toHaveBeenCalled();
     killSpy.mockRestore();
   });

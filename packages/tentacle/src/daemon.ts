@@ -26,6 +26,9 @@ import {
   saveDaemonPid,
   loadDaemonPid,
   clearDaemonPid,
+  saveDaemonIdentity,
+  loadDaemonIdentity,
+  clearDaemonIdentity,
   loadDaemonReady,
   clearDaemonReady,
 } from './config.js';
@@ -125,10 +128,26 @@ export const INTERNAL_DAEMON_SMOKE_COMMAND = '__daemon-release-smoke';
  * failures remain attributable even if a later module import throws. Readiness
  * is still published only by startWorker() after full initialization.
  */
-export function prepareDaemonWorkerBootstrap(
+export async function prepareDaemonWorkerBootstrap(
   env: NodeJS.ProcessEnv = process.env,
   pid = process.pid,
-): void {
+  appBundle = getKrakiAppBundlePath(),
+  lookupIdentity: (pid: number) => string | null = getProcessBundleIdentity,
+  timeoutMs = 5000,
+): Promise<void> {
+  clearDaemonIdentity();
+  if (appBundle !== null) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const bundleId = lookupIdentity(pid);
+      if (bundleId === KRAKI_BUNDLE_ID) {
+        saveDaemonIdentity({ pid, bundleId });
+        break;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (true);
+  }
   delete env.__CFBundleIdentifier;
   clearDaemonReady();
   saveDaemonPid(pid);
@@ -363,6 +382,7 @@ export function isDaemonRunning(
     if (isLaunchdAgentLoaded(platform, uid)) return true;
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return false;
   }
   // `unknown` means the PID is alive but the OS refused command inspection.
@@ -386,6 +406,7 @@ export function getDaemonStatus(
     if (isLaunchdAgentLoaded(platform, uid)) return { running: true, pid: null };
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return { running: false, pid: null };
   }
   return { running: true, pid };
@@ -588,6 +609,7 @@ export async function startDaemonLaunchctl(
 
   const plistPath = getLaunchdPlistPath();
   clearDaemonReady();
+  clearDaemonIdentity();
   writeFileSync(plistPath, plist, { mode: 0o600 });
   chmodSync(plistPath, 0o600);
   unloadLaunchdAgent();
@@ -616,7 +638,10 @@ export async function startDaemonLaunchctl(
       if (!readinessPublished) continue;
 
       const workerReady = inspectDaemonProcess(pid) === 'daemon';
-      const launchServicesReady = appBundle === null || getProcessBundleIdentity(pid) === KRAKI_BUNDLE_ID;
+      const identityProof = loadDaemonIdentity();
+      const launchServicesReady = appBundle === null || (
+        identityProof?.pid === pid && identityProof.bundleId === KRAKI_BUNDLE_ID
+      );
       if (workerReady && launchServicesReady) return pid;
     }
   }
@@ -638,6 +663,7 @@ export async function startDaemonLaunchctl(
     cleanupLaunchdPlist();
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     throw new DaemonStartupError(bootstrapLogPath);
   }
 
@@ -646,6 +672,7 @@ export async function startDaemonLaunchctl(
   if (!terminated) throw new DaemonStartupError(bootstrapLogPath);
   clearDaemonPid();
   clearDaemonReady();
+  clearDaemonIdentity();
   throw new DaemonStartupError(bootstrapLogPath);
 }
 
@@ -662,6 +689,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
     throw new Error('Refusing to start: the recorded daemon PID is alive but could not be verified. Remove the stale daemon.pid only after checking the process.');
   }
   clearDaemonReady();
+  clearDaemonIdentity();
 
   // On macOS SEA, use launchctl so launchd spawns the daemon in a clean
   // context that isn't blocked by CSM provenance tracking.
@@ -701,6 +729,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
     }
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     throw err;
   }
 
@@ -730,7 +759,10 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
       const readyPid = loadDaemonReady();
       const status = getDaemonStatus();
       const workerIdentity = inspectDaemonProcess(pid);
-      const bundleIdentity = appBundle === null ? null : getProcessBundleIdentity(pid);
+      const identityProof = loadDaemonIdentity();
+      const bundleIdentity = appBundle === null ? null : (
+        identityProof?.pid === pid ? identityProof.bundleId : null
+      );
       const launchdLoaded = process.platform !== 'darwin' || isLaunchdAgentLoaded();
 
       if (
@@ -753,8 +785,8 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
       throw new Error(`Daemon release smoke could not stop PID ${pid}`);
     }
     stopped = true;
-    if (loadDaemonPid() !== null || loadDaemonReady() !== null) {
-      throw new Error('Daemon release smoke left stale PID/readiness state after stop');
+    if (loadDaemonPid() !== null || loadDaemonReady() !== null || loadDaemonIdentity() !== null) {
+      throw new Error('Daemon release smoke left stale PID/readiness/identity state after stop');
     }
     if (process.platform === 'darwin' && isLaunchdAgentLoaded()) {
       throw new Error('Daemon release smoke left its launchd job loaded after stop');
@@ -782,6 +814,7 @@ export function stopDaemon(
     if (hasUntrackedLaunchdDaemon(pid, platform, uid)) return false;
     if (platform === 'darwin') cleanupLaunchdPlist();
     clearDaemonReady();
+    clearDaemonIdentity();
     return false;
   }
 
@@ -812,6 +845,7 @@ export function stopDaemon(
     // holding that number.
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return true;
   }
 
@@ -825,6 +859,7 @@ export function stopDaemon(
     // Process already gone.
     clearDaemonPid();
     clearDaemonReady();
+    clearDaemonIdentity();
     return true;
   }
 
@@ -864,5 +899,6 @@ export function stopDaemon(
 
   clearDaemonPid();
   clearDaemonReady();
+  clearDaemonIdentity();
   return true;
 }

@@ -739,7 +739,7 @@ async function cmdDoctor(): Promise<void> {
     checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
     getDaemonTccIdentity,
   } = await import('./checks.js');
-  const { loadDaemonPid } = await import('./config.js');
+  const { loadDaemonPid, loadDaemonIdentity } = await import('./config.js');
   // `kraki doctor` must emit a single clean JSON line on stdout. The
   // multi-adapter logger (created at module load) defaults to info-level
   // stdout (dev) which would interleave pino lines into the output, so
@@ -790,7 +790,7 @@ async function cmdDoctor(): Promise<void> {
       // Services bundle identity? A bundled, registered, correctly signed app
       // still reports healthy:false when its daemon was started by absolute
       // path — that combination is what made this bug recur six times.
-      identity: getDaemonTccIdentity(loadDaemonPid()),
+      identity: getDaemonTccIdentity(loadDaemonPid(), loadDaemonIdentity()),
     },
     ghAuth: ghAuth.authenticated,
     ghUser: ghAuth.username ?? null,
@@ -960,7 +960,7 @@ async function main(): Promise<void> {
     // Must run before importing daemon-worker/adapters: Launch Services injects
     // __CFBundleIdentifier into Kraki.app, and child Node processes must not
     // inherit it and check in as the Kraki application.
-    prepareDaemonWorkerBootstrap();
+    await prepareDaemonWorkerBootstrap();
     const { startWorker } = await import('./daemon-worker.js');
     await startWorker();
     return;

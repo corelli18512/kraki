@@ -220,6 +220,39 @@ export function clearDaemonPid(): void {
   }
 }
 
+export interface DaemonIdentityProof {
+  pid: number;
+  bundleId: string;
+}
+
+export function getDaemonIdentityPath(): string {
+  return join(getKrakiHome(), 'daemon.identity');
+}
+
+export function saveDaemonIdentity(proof: DaemonIdentityProof): void {
+  getConfigDir();
+  writeFileSync(getDaemonIdentityPath(), JSON.stringify(proof), { mode: 0o600 });
+}
+
+export function loadDaemonIdentity(): DaemonIdentityProof | null {
+  try {
+    const value = JSON.parse(readFileSync(getDaemonIdentityPath(), 'utf8')) as Partial<DaemonIdentityProof>;
+    return Number.isInteger(value.pid) && (value.pid ?? 0) > 0 && typeof value.bundleId === 'string' && value.bundleId.length > 0
+      ? { pid: value.pid!, bundleId: value.bundleId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDaemonIdentity(): void {
+  try {
+    unlinkSync(getDaemonIdentityPath());
+  } catch {
+    // File may not exist — that's fine
+  }
+}
+
 // ── Daemon readiness ───────────────────────────────────
 
 export function getDaemonReadyPath(): string {

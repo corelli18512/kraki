@@ -226,6 +226,30 @@ describe('saveDaemonPid() / loadDaemonPid() / clearDaemonPid()', () => {
   });
 });
 
+// ── Daemon identity proof ───────────────────────────────
+
+describe('saveDaemonIdentity() / loadDaemonIdentity() / clearDaemonIdentity()', () => {
+  it('round-trips a PID-bound bundle identity proof with private permissions', () => {
+    const proof = { pid: 12345, bundleId: 'chat.kraki.cli' };
+    config.saveDaemonIdentity(proof);
+
+    expect(config.loadDaemonIdentity()).toEqual(proof);
+    expect(statSync(config.getDaemonIdentityPath()).mode & 0o777).toBe(0o600);
+
+    config.clearDaemonIdentity();
+    expect(config.loadDaemonIdentity()).toBeNull();
+  });
+
+  it('rejects malformed or incomplete identity proof data', () => {
+    mkdirSync(join(tempHome, '.kraki'), { recursive: true });
+    writeFileSync(config.getDaemonIdentityPath(), JSON.stringify({ pid: 0, bundleId: '' }), 'utf8');
+    expect(config.loadDaemonIdentity()).toBeNull();
+
+    writeFileSync(config.getDaemonIdentityPath(), 'not-json', 'utf8');
+    expect(config.loadDaemonIdentity()).toBeNull();
+  });
+});
+
 // ── Daemon readiness ───────────────────────────────────
 
 describe('saveDaemonReady() / loadDaemonReady() / clearDaemonReady()', () => {

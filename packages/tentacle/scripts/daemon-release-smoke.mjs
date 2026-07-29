@@ -67,7 +67,7 @@ try {
     throw new Error(`daemon release smoke did not report success:\n${result.stdout}\n${result.stderr}`);
   }
 
-  for (const stateFile of ['daemon.pid', 'daemon.ready']) {
+  for (const stateFile of ['daemon.pid', 'daemon.ready', 'daemon.identity']) {
     if (existsSync(join(tempHome, stateFile))) {
       throw new Error(`daemon release smoke left stale ${stateFile}`);
     }

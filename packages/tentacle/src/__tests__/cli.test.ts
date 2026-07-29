@@ -51,6 +51,8 @@ vi.mock('../config.js', () => ({
   getOrCreateDeviceId: vi.fn(() => 'dev_test'),
   saveGitHubToken: vi.fn(),
   loadGitHubToken: vi.fn(() => null),
+  loadDaemonPid: vi.fn(() => null),
+  loadDaemonIdentity: vi.fn(() => null),
   DEFAULT_LOG_VERBOSITY: 'normal',
 }));
 
