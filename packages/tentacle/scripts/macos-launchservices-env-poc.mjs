@@ -163,12 +163,17 @@ try {
         if (childEnv !== '<missing>') {
           throw new Error(`scrub: expected child env to be missing, got ${childEnv}`);
         }
-        // The live parent lookup itself can become NULL after any external
-        // AppKit child check-in, even when the child cannot claim the bundle.
-        // That instability is why production captures a PID-bound proof before
-        // spawning adapters instead of using post-start lsappinfo as authority.
-        if (childIdentity === bundleId) {
-          throw new Error('scrub: external child still acquired the parent bundle identity');
+        // Even without the inherited private variable, Launch Services can
+        // attribute an external AppKit child through responsible-process
+        // ancestry. The child can still acquire the parent bundle identity and
+        // the live parent lookup can become NULL. This is the decisive proof
+        // that environment scrubbing alone is insufficient and post-start
+        // lsappinfo cannot be readiness authority.
+        if (childIdentity !== bundleId || afterChildIdentity === bundleId) {
+          throw new Error(
+            `scrub: expected responsible-process collision despite scrub ` +
+            `(parent=${afterChildIdentity}, child=${childIdentity})`,
+          );
         }
       }
 
@@ -183,7 +188,7 @@ try {
     }
   }
 
-  console.log('✅ macOS Launch Services identity-collision PoC passed');
+  console.log('✅ macOS Launch Services live-identity instability PoC passed');
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
