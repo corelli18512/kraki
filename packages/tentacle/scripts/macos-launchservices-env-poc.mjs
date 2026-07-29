@@ -51,6 +51,8 @@ let mode = args[1]
 let resultDir = args[2]
 
 if mode == "child" {
+  let inherited = ProcessInfo.processInfo.environment["__CFBundleIdentifier"] ?? "<missing>"
+  try! inherited.write(toFile: resultDir + "/child.bundle-env", atomically: true, encoding: .utf8)
   while true { sleep(1) }
 }
 
@@ -72,8 +74,8 @@ while true { sleep(1) }
 `);
 
 const cases = [
-  { mode: 'inherit', expectChildIdentity: true },
-  { mode: 'scrub', expectChildIdentity: false },
+  { mode: 'inherit', expectedChildEnv: null },
+  { mode: 'scrub', expectedChildEnv: '<missing>' },
 ];
 
 try {
@@ -118,30 +120,28 @@ try {
       if (!parentPid || !childPid) throw new Error(`${testCase.mode}: app did not publish PIDs`);
 
       // Launch Services check-in is asynchronous. Wait for the parent identity
-      // and, in the inherited case, the child identity to settle.
+      // and for the child to report the inherited private environment value.
       let parentIdentity = null;
-      let childIdentity = null;
+      let childEnv = null;
       const identityDeadline = Date.now() + 10_000;
       while (Date.now() < identityDeadline) {
         parentIdentity = bundleIdentity(parentPid);
-        childIdentity = bundleIdentity(childPid);
-        if (parentIdentity === bundleId && (testCase.expectChildIdentity ? childIdentity === bundleId : childIdentity === null)) {
-          break;
-        }
+        const childEnvPath = join(caseDir, 'child.bundle-env');
+        childEnv = existsSync(childEnvPath) ? readFileSync(childEnvPath, 'utf8') : null;
+        const expectedChildEnv = testCase.expectedChildEnv ?? bundleId;
+        if (parentIdentity === bundleId && childEnv === expectedChildEnv) break;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
+      const expectedChildEnv = testCase.expectedChildEnv ?? bundleId;
       if (parentIdentity !== bundleId) {
         throw new Error(`${testCase.mode}: parent identity mismatch: expected ${bundleId}, got ${parentIdentity}`);
       }
-      if (testCase.expectChildIdentity && childIdentity !== bundleId) {
-        throw new Error(`${testCase.mode}: expected inherited child identity ${bundleId}, got ${childIdentity}`);
-      }
-      if (!testCase.expectChildIdentity && childIdentity !== null) {
-        throw new Error(`${testCase.mode}: expected scrubbed child identity to be null, got ${childIdentity}`);
+      if (childEnv !== expectedChildEnv) {
+        throw new Error(`${testCase.mode}: expected child bundle env ${expectedChildEnv}, got ${childEnv}`);
       }
 
-      console.log(`✅ ${testCase.mode}: parent=${parentIdentity} child=${childIdentity ?? 'null'}`);
+      console.log(`✅ ${testCase.mode}: parent=${parentIdentity} child-env=${childEnv}`);
     } finally {
       terminate(childPid);
       terminate(parentPid);
