@@ -354,6 +354,14 @@ jobs:
       - name: Smoke test tentacle binary
         run: node packages/tentacle/scripts/smoke-test-binary.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
 
+      - name: Smoke test background daemon
+        if: runner.os != 'macOS'
+        run: node packages/tentacle/scripts/daemon-release-smoke.mjs packages/tentacle/dist/sea/${{ matrix.asset_name }}
+
+      - name: Smoke test macOS LaunchServices daemon
+        if: runner.os == 'macOS'
+        run: node packages/tentacle/scripts/daemon-release-smoke.mjs packages/tentacle/dist/sea/Kraki.app/Contents/MacOS/kraki
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:

@@ -40,3 +40,60 @@ jobs:
 
       - name: Run validation
         run: pnpm validate
+
+  macos-daemon-launch:
+    name: macOS Daemon Launch
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install tentacle build dependencies
+        run: pnpm install --frozen-lockfile --filter @kraki/tentacle...
+
+      - name: Prove Launch Services child identity inheritance and scrub
+        run: node packages/tentacle/scripts/macos-launchservices-env-poc.mjs
+
+      - name: Build tentacle SEA
+        run: pnpm --filter @kraki/tentacle run build:binary:local
+
+      - name: Create ad-hoc signed test app
+        run: |
+          set -euo pipefail
+          BINARY="packages/tentacle/dist/sea/kraki-cli-macos-${RUNNER_ARCH}"
+          if [ ! -f "$BINARY" ]; then
+            BINARY="packages/tentacle/dist/sea/kraki-cli-macos-arm64"
+          fi
+          APP="packages/tentacle/dist/sea/Kraki.app"
+          mkdir -p "$APP/Contents/MacOS"
+          cp "$BINARY" "$APP/Contents/MacOS/kraki"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>kraki</string>
+          <key>CFBundleIdentifier</key><string>chat.kraki.cli</string>
+          <key>CFBundleName</key><string>Kraki</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleVersion</key><string>ci</string>
+          <key>LSBackgroundOnly</key><true/>
+          </dict></plist>
+          PLIST
+          codesign --force --sign - "$APP/Contents/MacOS/kraki"
+          codesign --force --sign - "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Exercise launchd → open → ready → identity → stop
+        run: node packages/tentacle/scripts/daemon-release-smoke.mjs packages/tentacle/dist/sea/Kraki.app/Contents/MacOS/kraki

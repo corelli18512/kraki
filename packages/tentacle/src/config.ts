@@ -73,7 +73,7 @@ export function getVersion(): string {
 
 export function getKrakiHome(): string {
   const override = process.env.KRAKI_HOME?.trim();
-  return override ? join(override) : join(homedir(), '.kraki');
+  return override ? resolve(override) : join(homedir(), '.kraki');
 }
 
 export function getConfigDir(): string {

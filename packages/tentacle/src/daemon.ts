@@ -108,6 +108,31 @@ export function assertNoUntrackedLaunchdDaemon(
 }
 
 export const INTERNAL_DAEMON_WORKER_COMMAND = '__daemon-worker';
+export const INTERNAL_DAEMON_SMOKE_COMMAND = '__daemon-release-smoke';
+
+/**
+ * Prepare the LaunchServices-owned CLI process before daemon-worker imports.
+ *
+ * macOS injects __CFBundleIdentifier when `open` launches Kraki.app. The value
+ * is useful only for the app process's initial Launch Services check-in. If it
+ * remains in the environment, every child process inherits it; Pi's throwaway
+ * Node catalog process then checks in as chat.kraki.cli and replaces/invalidates
+ * the real daemon's runtime identity. The launcher subsequently sees a healthy
+ * worker as identity-less, waits 30 seconds, and kills it.
+ *
+ * Delete the private LS variable before importing adapters or spawning any
+ * children. Publish the PID at the same earliest safe point so launchd startup
+ * failures remain attributable even if a later module import throws. Readiness
+ * is still published only by startWorker() after full initialization.
+ */
+export function prepareDaemonWorkerBootstrap(
+  env: NodeJS.ProcessEnv = process.env,
+  pid = process.pid,
+): void {
+  delete env.__CFBundleIdentifier;
+  clearDaemonReady();
+  saveDaemonPid(pid);
+}
 
 export type DaemonProcessIdentity = 'daemon' | 'other' | 'gone' | 'unknown';
 
@@ -506,6 +531,11 @@ export async function startDaemonLaunchctl(
   const logLevel = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
+  writeFileSync(
+    bootstrapLogPath,
+    `[${new Date().toISOString()}] launching daemon home=${getKrakiHome()}\n`,
+    'utf8',
+  );
 
   const plistDir = join(homedir(), 'Library', 'LaunchAgents');
   mkdirSync(plistDir, { recursive: true });
@@ -519,6 +549,11 @@ export async function startDaemonLaunchctl(
     ['LOG_LEVEL', logLevel],
     ['PATH', [...pathParts].filter(Boolean).join(':')],
     ['HOME', homedir()],
+    // The launchd label is scoped to KRAKI_HOME, so the worker must receive
+    // the exact same home. Without this, an isolated/dev job silently falls
+    // back to ~/.kraki and multiple jobs overwrite the production PID/ready
+    // files while connecting as the same device.
+    ['KRAKI_HOME', getKrakiHome()],
   ];
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
@@ -532,7 +567,13 @@ export async function startDaemonLaunchctl(
     'GITHUB_TOKEN', 'GH_TOKEN',
   ];
   for (const key of forwardVars) {
-    if (process.env[key]) envEntries.push([key, process.env[key]!]);
+    const value = process.env[key];
+    if (!value) continue;
+    // Copilot CLI can inject a session-scoped gho_ token into its child
+    // environment. It is not valid for an independently launched daemon and
+    // must not be persisted in a launchd plist.
+    if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value.startsWith('gho_')) continue;
+    envEntries.push([key, value]);
   }
 
   const appBundle = getKrakiAppBundlePath();
@@ -666,6 +707,36 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   child.unref();
   saveDaemonPid(child.pid);
   return child.pid;
+}
+
+export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number> {
+  if (process.env.KRAKI_RELEASE_SMOKE !== '1') {
+    throw new Error('The internal daemon release smoke command is disabled');
+  }
+
+  let pid: number | null = null;
+  let stopped = false;
+  try {
+    pid = await startDaemon(config);
+    const readyPid = loadDaemonReady();
+    const status = getDaemonStatus();
+    if (readyPid !== pid || !status.running || status.pid !== pid) {
+      throw new Error(
+        `Daemon release smoke observed inconsistent readiness: started=${pid}, ready=${readyPid}, status=${JSON.stringify(status)}`,
+      );
+    }
+
+    if (!stopDaemon()) {
+      throw new Error(`Daemon release smoke could not stop PID ${pid}`);
+    }
+    stopped = true;
+    return pid;
+  } finally {
+    // If an assertion after successful startup throws, best-effort stop only the
+    // PID recorded under this smoke's isolated KRAKI_HOME. stopDaemon() remains
+    // identity-gated and will not signal an unrelated process.
+    if (pid !== null && !stopped) stopDaemon();
+  }
 }
 
 export function stopDaemon(

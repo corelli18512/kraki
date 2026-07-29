@@ -21,7 +21,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
-import { INTERNAL_DAEMON_WORKER_COMMAND, isDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon.js';
+import { INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, isDaemonRunning, getDaemonStatus, startDaemon, runDaemonReleaseSmoke, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
@@ -957,8 +957,20 @@ async function main(): Promise<void> {
   const cmd = args[0];
 
   if (cmd === INTERNAL_DAEMON_WORKER_COMMAND) {
+    // Must run before importing daemon-worker/adapters: Launch Services injects
+    // __CFBundleIdentifier into Kraki.app, and child Node processes must not
+    // inherit it and check in as the Kraki application.
+    prepareDaemonWorkerBootstrap();
     const { startWorker } = await import('./daemon-worker.js');
     await startWorker();
+    return;
+  }
+
+  if (cmd === INTERNAL_DAEMON_SMOKE_COMMAND) {
+    const config = loadConfig();
+    if (!config) throw new Error(`No release smoke config found at ${getConfigPath()}`);
+    const pid = await runDaemonReleaseSmoke(config);
+    process.stdout.write(`daemon-release-smoke-ok pid=${pid}\n`);
     return;
   }
 

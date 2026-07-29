@@ -35,6 +35,8 @@ const mockStopDaemon = vi.fn();
 const mockRunSetup = vi.fn();
 const mockShowPairingQr = vi.fn();
 const mockStartWorker = vi.fn();
+const mockPrepareDaemonWorkerBootstrap = vi.fn();
+const mockRunDaemonReleaseSmoke = vi.fn();
 
 vi.mock('../config.js', () => ({
   configExists: (...args: unknown[]) => mockConfigExists(...args),
@@ -54,9 +56,12 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../daemon.js', () => ({
   INTERNAL_DAEMON_WORKER_COMMAND: '__daemon-worker',
+  INTERNAL_DAEMON_SMOKE_COMMAND: '__daemon-release-smoke',
+  prepareDaemonWorkerBootstrap: (...args: unknown[]) => mockPrepareDaemonWorkerBootstrap(...args),
   isDaemonRunning: (...args: unknown[]) => mockIsDaemonRunning(...args),
   getDaemonStatus: (...args: unknown[]) => mockGetDaemonStatus(...args),
   startDaemon: (...args: unknown[]) => mockStartDaemon(...args),
+  runDaemonReleaseSmoke: (...args: unknown[]) => mockRunDaemonReleaseSmoke(...args),
   stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
 }));
 
@@ -227,7 +232,20 @@ describe('CLI --version', () => {
 describe('CLI internal daemon worker', () => {
   it('runs the hidden daemon worker command', async () => {
     await runCli(['__daemon-worker']);
+    expect(mockPrepareDaemonWorkerBootstrap).toHaveBeenCalledOnce();
     expect(mockStartWorker).toHaveBeenCalled();
+  });
+
+  it('runs the hidden release smoke through the real daemon manager without pairing', async () => {
+    const config = { relay: 'ws://127.0.0.1:1', authMethod: 'open', device: { name: 'smoke' } };
+    mockLoadConfig.mockReturnValue(config);
+    mockRunDaemonReleaseSmoke.mockResolvedValue(4567);
+
+    await runCli(['__daemon-release-smoke']);
+
+    expect(mockRunDaemonReleaseSmoke).toHaveBeenCalledWith(config);
+    expect(mockShowPairingQr).not.toHaveBeenCalled();
+    expect(stdoutOutput.join('')).toContain('daemon-release-smoke-ok pid=4567');
   });
 });
 

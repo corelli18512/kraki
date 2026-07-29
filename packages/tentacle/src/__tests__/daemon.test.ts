@@ -79,6 +79,7 @@ import {
   getDaemonStatus,
   startDaemon,
   startDaemonLaunchctl,
+  prepareDaemonWorkerBootstrap,
   stopDaemon,
   inspectDaemonProcess,
   resolveDaemonLaunch,
@@ -118,6 +119,24 @@ function makeFakeChild(pid = 42) {
   };
   return { child, listeners };
 }
+
+// ── daemon worker bootstrap ─────────────────────────────
+
+describe('prepareDaemonWorkerBootstrap()', () => {
+  it('removes the private Launch Services bundle variable before child processes can inherit it', () => {
+    const env: NodeJS.ProcessEnv = {
+      __CFBundleIdentifier: 'chat.kraki.cli',
+      HOME: '/tmp/home',
+    };
+
+    prepareDaemonWorkerBootstrap(env, 12345);
+
+    expect(env.__CFBundleIdentifier).toBeUndefined();
+    expect(env.HOME).toBe('/tmp/home');
+    expect(mockClearDaemonReady).toHaveBeenCalledOnce();
+    expect(mockSaveDaemonPid).toHaveBeenCalledWith(12345);
+  });
+});
 
 // ── inspectDaemonProcess ─────────────────────────────────
 
@@ -319,6 +338,9 @@ describe('startDaemon()', () => {
       expect.any(String),
       { mode: 0o600 },
     );
+    const plistArg = mockWriteFileSync.mock.calls
+      .find((call: unknown[]) => call[0] === expectedPlistPath)?.[1] as string;
+    expect(plistArg).toMatch(/<key>KRAKI_HOME<\/key>\s*<string>\/tmp\/fake-home\/\.kraki<\/string>/);
     expect(mockChmodSync).toHaveBeenCalledWith(
       expectedPlistPath,
       0o600,
@@ -330,6 +352,33 @@ describe('startDaemon()', () => {
     expect(mockGetProcessBundleIdentity).toHaveBeenCalledWith(4242);
     expect(mockUnlinkSync).toHaveBeenCalled();
     killSpy.mockRestore();
+  });
+
+  it('does not persist a Copilot session-scoped gho_ token in launchd', async () => {
+    vi.useFakeTimers();
+    const previous = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = 'gho_session_only';
+    mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') return '';
+      throw new Error('not inspected');
+    });
+
+    try {
+      const startPromise = startDaemonLaunchctl(fakeConfig, TEST_UID);
+      const rejection = expect(startPromise).rejects.toBeInstanceOf(DaemonStartupError);
+      await vi.advanceTimersByTimeAsync(30_200);
+      await rejection;
+
+      const plistArg = mockWriteFileSync.mock.calls
+        .find((call: unknown[]) => call[0] === expectedPlistPath)?.[1] as string;
+      expect(plistArg).not.toContain('gho_session_only');
+      expect(plistArg).not.toContain('<key>GITHUB_TOKEN</key>');
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previous;
+    }
   });
 
   it('fails closed without removing supervision when startup identity cannot be inspected', async () => {

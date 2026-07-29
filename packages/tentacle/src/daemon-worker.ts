@@ -67,6 +67,12 @@ export interface WorkerResult {
 }
 
 export async function startWorker(): Promise<WorkerResult> {
+  // Launch Services injects this private variable into Kraki.app. It describes
+  // only this app process; child Node/Pi/Copilot processes must not inherit it
+  // and check in as chat.kraki.cli. The SEA banner and CLI bootstrap scrub it
+  // even earlier; this is the source/npm-path belt-and-suspenders guard.
+  delete process.env.__CFBundleIdentifier;
+
   // Clear any stale readiness before publishing this process's PID. This order
   // prevents a reused numeric PID from momentarily matching an old ready file.
   clearDaemonReady();

@@ -163,6 +163,16 @@ describe('daemon-worker: startWorker()', () => {
     mockExecSyncThrow = false;
     mockExit.mockClear();
     delete process.env.GITHUB_TOKEN;
+    delete process.env.__CFBundleIdentifier;
+  });
+
+  it('scrubs the Launch Services bundle variable before adapters can spawn children', async () => {
+    process.env.__CFBundleIdentifier = 'chat.kraki.cli';
+
+    const { shutdown } = await startWorker();
+
+    expect(process.env.__CFBundleIdentifier).toBeUndefined();
+    await shutdown();
   });
 
   it('loads config, resolves gh token, starts adapter, connects relay', async () => {
