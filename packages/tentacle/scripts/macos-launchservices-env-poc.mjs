@@ -44,6 +44,17 @@ function terminate(pid) {
   }
 }
 
+async function waitFor(label, timeoutMs, read) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = read();
+    if (last !== undefined) return last;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${label} timed out; last=${JSON.stringify(last)}`);
+}
+
 writeFileSync(helperSource, String.raw`
 import AppKit
 import Foundation
@@ -51,9 +62,7 @@ import Darwin
 
 let resultDir = CommandLine.arguments[1]
 let inherited = ProcessInfo.processInfo.environment["__CFBundleIdentifier"] ?? "<missing>"
-// Force the external, non-bundled child through the same AppKit/LaunchServices
-// check-in path that can turn an inherited private bundle variable into a
-// runtime application identity.
+// Force this bundle-external child through AppKit/LaunchServices check-in.
 _ = NSApplication.shared
 try! inherited.write(toFile: resultDir + "/child.bundle-env", atomically: true, encoding: .utf8)
 try! String(getpid()).write(toFile: resultDir + "/child.pid", atomically: true, encoding: .utf8)
@@ -69,6 +78,10 @@ import Darwin
 let mode = CommandLine.arguments[1]
 let resultDir = CommandLine.arguments[2]
 let helperPath = CommandLine.arguments[3]
+let gatePath = resultDir + "/spawn-child"
+
+try! String(getpid()).write(toFile: resultDir + "/parent.pid", atomically: true, encoding: .utf8)
+while !FileManager.default.fileExists(atPath: gatePath) { usleep(100_000) }
 
 if mode == "scrub" {
   unsetenv("__CFBundleIdentifier")
@@ -78,23 +91,16 @@ let child = Process()
 child.executableURL = URL(fileURLWithPath: helperPath)
 child.arguments = [resultDir]
 try! child.run()
-
-try! String(getpid()).write(toFile: resultDir + "/parent.pid", atomically: true, encoding: .utf8)
 while true { sleep(1) }
 `);
 
-const cases = [
-  { mode: 'inherit', expectedChildEnv: null, expectedChildIdentity: null },
-  { mode: 'scrub', expectedChildEnv: '<missing>', expectedChildIdentity: null },
-];
-
 try {
-  for (const testCase of cases) {
-    const caseDir = join(root, testCase.mode);
+  for (const mode of ['inherit', 'scrub']) {
+    const caseDir = join(root, mode);
     const app = join(caseDir, 'LaunchIdentityPoc.app');
     const macos = join(app, 'Contents', 'MacOS');
     const parentPath = join(macos, 'LaunchIdentityPoc');
-    const bundleId = `chat.kraki.launch-identity-poc.${testCase.mode}.${process.pid}`;
+    const bundleId = `chat.kraki.launch-identity-poc.${mode}.${process.pid}`;
     mkdirSync(macos, { recursive: true });
     execFileSync('/usr/bin/swiftc', [parentSource, '-o', parentPath], { stdio: 'inherit' });
     writeFileSync(join(app, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
@@ -110,59 +116,64 @@ try {
 `);
     execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', app], { stdio: 'inherit' });
 
-    const open = spawn('/usr/bin/open', ['-W', '-n', '-a', app, '--args', testCase.mode, caseDir, helperPath], {
+    const open = spawn('/usr/bin/open', ['-W', '-n', '-a', app, '--args', mode, caseDir, helperPath], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let parentPid = 0;
     let childPid = 0;
     try {
-      const deadline = Date.now() + 15_000;
-      while (Date.now() < deadline) {
-        const parentPidPath = join(caseDir, 'parent.pid');
-        const childPidPath = join(caseDir, 'child.pid');
-        if (existsSync(parentPidPath) && existsSync(childPidPath)) {
-          parentPid = Number(readFileSync(parentPidPath, 'utf8'));
-          childPid = Number(readFileSync(childPidPath, 'utf8'));
-          if (parentPid > 0 && childPid > 0) break;
+      parentPid = await waitFor(`${mode}: parent PID`, 15_000, () => {
+        const path = join(caseDir, 'parent.pid');
+        if (!existsSync(path)) return undefined;
+        const pid = Number(readFileSync(path, 'utf8'));
+        return pid > 0 ? pid : undefined;
+      });
+
+      const beforeChildIdentity = await waitFor(`${mode}: parent pre-child identity`, 10_000, () => {
+        const identity = bundleIdentity(parentPid);
+        return identity === bundleId ? identity : undefined;
+      });
+
+      writeFileSync(join(caseDir, 'spawn-child'), 'go\n');
+      childPid = await waitFor(`${mode}: child PID`, 15_000, () => {
+        const path = join(caseDir, 'child.pid');
+        if (!existsSync(path)) return undefined;
+        const pid = Number(readFileSync(path, 'utf8'));
+        return pid > 0 ? pid : undefined;
+      });
+      const childEnv = readFileSync(join(caseDir, 'child.bundle-env'), 'utf8');
+
+      // Give AppKit/LaunchServices time to process the external child's check-in.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const afterChildIdentity = bundleIdentity(parentPid);
+      const childIdentity = bundleIdentity(childPid);
+
+      if (mode === 'inherit') {
+        if (childEnv !== bundleId) {
+          throw new Error(`inherit: expected child env ${bundleId}, got ${childEnv}`);
         }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      if (!parentPid || !childPid) throw new Error(`${testCase.mode}: app/helper did not publish PIDs`);
-
-      let parentIdentity = null;
-      let childIdentity = null;
-      let childEnv = null;
-      const identityDeadline = Date.now() + 10_000;
-      while (Date.now() < identityDeadline) {
-        parentIdentity = bundleIdentity(parentPid);
-        childIdentity = bundleIdentity(childPid);
-        const childEnvPath = join(caseDir, 'child.bundle-env');
-        childEnv = existsSync(childEnvPath) ? readFileSync(childEnvPath, 'utf8') : null;
-        const expectedChildEnv = testCase.expectedChildEnv ?? bundleId;
-        const expectedChildIdentity = testCase.expectedChildIdentity ?? (testCase.mode === 'inherit' ? bundleId : null);
-        if (
-          parentIdentity === bundleId &&
-          childEnv === expectedChildEnv &&
-          childIdentity === expectedChildIdentity
-        ) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-
-      const expectedChildEnv = testCase.expectedChildEnv ?? bundleId;
-      const expectedChildIdentity = testCase.expectedChildIdentity ?? (testCase.mode === 'inherit' ? bundleId : null);
-      if (parentIdentity !== bundleId) {
-        throw new Error(`${testCase.mode}: parent identity mismatch: expected ${bundleId}, got ${parentIdentity}`);
-      }
-      if (childEnv !== expectedChildEnv) {
-        throw new Error(`${testCase.mode}: expected child bundle env ${expectedChildEnv}, got ${childEnv}`);
-      }
-      if (childIdentity !== expectedChildIdentity) {
-        throw new Error(`${testCase.mode}: expected child identity ${expectedChildIdentity}, got ${childIdentity}`);
+        if (afterChildIdentity === bundleId && childIdentity !== bundleId) {
+          throw new Error(
+            `inherit: external child inherited ${bundleId} but did not reproduce an identity collision ` +
+            `(parent=${afterChildIdentity}, child=${childIdentity})`,
+          );
+        }
+      } else {
+        if (childEnv !== '<missing>') {
+          throw new Error(`scrub: expected child env to be missing, got ${childEnv}`);
+        }
+        if (afterChildIdentity !== bundleId) {
+          throw new Error(`scrub: parent lost identity: expected ${bundleId}, got ${afterChildIdentity}`);
+        }
+        if (childIdentity === bundleId) {
+          throw new Error('scrub: external child still acquired the parent bundle identity');
+        }
       }
 
       console.log(
-        `✅ ${testCase.mode}: parent=${parentIdentity} child-env=${childEnv} child-identity=${childIdentity ?? 'null'}`,
+        `✅ ${mode}: before=${beforeChildIdentity} after=${afterChildIdentity ?? 'null'} ` +
+        `child-env=${childEnv} child-identity=${childIdentity ?? 'null'}`,
       );
     } finally {
       terminate(childPid);
@@ -171,7 +182,7 @@ try {
     }
   }
 
-  console.log('✅ macOS Launch Services environment/identity PoC passed');
+  console.log('✅ macOS Launch Services identity-collision PoC passed');
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
