@@ -41,6 +41,50 @@ jobs:
       - name: Run validation
         run: pnpm validate
 
+  binary-daemon-launch:
+    name: Binary Daemon Launch (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: Linux x64
+          - runner: windows-2022
+            label: Windows x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install tentacle build dependencies
+        run: pnpm install --frozen-lockfile --filter @kraki/tentacle...
+
+      - name: Build tentacle SEA
+        run: pnpm --filter @kraki/tentacle run build:binary:local
+
+      - name: Exercise background daemon lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Linux) binary="packages/tentacle/dist/sea/kraki-cli-linux-x64" ;;
+            Windows) binary="packages/tentacle/dist/sea/kraki-cli-windows-x64.exe" ;;
+            *) echo "unsupported runner: ${RUNNER_OS}"; exit 1 ;;
+          esac
+          node packages/tentacle/scripts/daemon-release-smoke.mjs "$binary"
+
   macos-daemon-launch:
     name: macOS Daemon Launch
     runs-on: macos-14
