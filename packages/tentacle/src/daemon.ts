@@ -117,16 +117,20 @@ export const INTERNAL_DAEMON_SMOKE_COMMAND = '__daemon-release-smoke';
  * Prepare the LaunchServices-owned CLI process before daemon-worker imports.
  *
  * macOS injects __CFBundleIdentifier when `open` launches Kraki.app. The value
- * is useful only for the app process's initial Launch Services check-in. If it
- * remains in the environment, every child process inherits it; Pi's throwaway
- * Node catalog process then checks in as chat.kraki.cli and replaces/invalidates
- * the real daemon's runtime identity. The launcher subsequently sees a healthy
- * worker as identity-less, waits 30 seconds, and kills it.
+ * is private Launch Services bootstrap state and must not be forwarded as an
+ * application credential to every child process, so it is removed before the
+ * adapters start.
  *
- * Delete the private LS variable before importing adapters or spawning any
- * children. Publish the PID at the same earliest safe point so launchd startup
- * failures remain attributable even if a later module import throws. Readiness
- * is still published only by startWorker() after full initialization.
+ * More importantly, a bundle-external AppKit child can be attributed to the
+ * parent app through responsible-process ancestry even after that variable is
+ * removed. `lsappinfo(parentPid)` can then change from chat.kraki.cli to NULL
+ * while the original daemon remains healthy. Capture the daemon's correct
+ * PID-bound identity before any adapter child exists and persist it as the
+ * immutable startup proof; post-start live LS lookups are diagnostic only.
+ *
+ * Publish the PID at the same earliest safe point so launchd startup failures
+ * remain attributable even if a later module import throws. Readiness is still
+ * published only by startWorker() after full initialization.
  */
 export async function prepareDaemonWorkerBootstrap(
   env: NodeJS.ProcessEnv = process.env,

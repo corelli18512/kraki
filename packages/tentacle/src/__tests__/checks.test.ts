@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 vi.mock('@inquirer/prompts', () => ({
@@ -38,13 +39,14 @@ vi.mock('node:fs', async (importActual) => {
   };
 });
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
 import { existsSync, realpathSync, promises as fsp } from 'node:fs';
 import { platform, homedir } from 'node:os';
 import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, getProcessBundleIdentity, getDaemonTccIdentity, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
+const mockExecFileSync = execFileSync as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
 const mockRealpathSync = realpathSync as unknown as ReturnType<typeof vi.fn>;
@@ -575,27 +577,37 @@ describe('daemon TCC identity proof', () => {
     mockRealpathSync.mockReturnValue('/Users/x/.local/share/kraki/Kraki.app/Contents/MacOS/kraki');
   });
 
-  it('parses a live lsappinfo identity', () => {
-    mockExecSync.mockReturnValue('"CFBundleIdentifier"="chat.kraki.cli"\n');
-    expect(getProcessBundleIdentity(123)).toBe('chat.kraki.cli');
+  it('parses a live lsappinfo identity without leaking the private app variable to the probe child', () => {
+    process.env.__CFBundleIdentifier = 'chat.kraki.cli';
+    mockExecFileSync.mockReturnValue('"CFBundleIdentifier"="chat.kraki.cli"\n');
+    try {
+      expect(getProcessBundleIdentity(123)).toBe('chat.kraki.cli');
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        '/usr/bin/lsappinfo',
+        ['info', '-only', 'bundleid', '123'],
+        expect.objectContaining({ env: expect.not.objectContaining({ __CFBundleIdentifier: expect.anything() }) }),
+      );
+    } finally {
+      delete process.env.__CFBundleIdentifier;
+    }
   });
 
   it('prefers a matching PID-bound proof over a later unstable lsappinfo lookup', () => {
-    mockExecSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
+    mockExecFileSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
     const result = getDaemonTccIdentity(123, { pid: 123, bundleId: 'chat.kraki.cli' });
 
     expect(result.daemonBundleId).toBe('chat.kraki.cli');
     expect(result.healthy).toBe(true);
-    expect(mockExecSync).not.toHaveBeenCalled();
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
   it('does not trust an identity proof for a different PID', () => {
-    mockExecSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
+    mockExecFileSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
     const result = getDaemonTccIdentity(123, { pid: 999, bundleId: 'chat.kraki.cli' });
 
     expect(result.daemonBundleId).toBeNull();
     expect(result.healthy).toBe(false);
-    expect(mockExecSync).toHaveBeenCalled();
+    expect(mockExecFileSync).toHaveBeenCalled();
   });
 });
 

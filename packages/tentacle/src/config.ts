@@ -231,7 +231,9 @@ export function getDaemonIdentityPath(): string {
 
 export function saveDaemonIdentity(proof: DaemonIdentityProof): void {
   getConfigDir();
-  writeFileSync(getDaemonIdentityPath(), JSON.stringify(proof), { mode: 0o600 });
+  const path = getDaemonIdentityPath();
+  writeFileSync(path, JSON.stringify(proof), { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 export function loadDaemonIdentity(): DaemonIdentityProof | null {

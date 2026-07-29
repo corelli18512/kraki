@@ -5,7 +5,7 @@
  * Provides a retry mechanism for interactive setup flows.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -490,10 +490,15 @@ export function registerKrakiAppBundle(appBundlePath?: string): boolean {
 export function getProcessBundleIdentity(pid: number): string | null {
   if (platform() !== 'darwin') return null;
   try {
-    const out = execSync(`/usr/bin/lsappinfo info -only bundleid ${pid}`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const { __CFBundleIdentifier: _privateLaunchServicesIdentity, ...safeEnv } = process.env;
+    const out = execFileSync('/usr/bin/lsappinfo', ['info', '-only', 'bundleid', String(pid)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
       timeout: 5000,
+      // The probe is a child of the LaunchServices-owned daemon during early
+      // bootstrap. Never let the diagnostic helper inherit the private app
+      // identity variable it is trying to measure.
+      env: safeEnv,
     });
     // Present:  "CFBundleIdentifier"="chat.kraki.cli"
     // Absent:   "CFBundleIdentifier"=[ NULL ]

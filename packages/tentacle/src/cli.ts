@@ -957,9 +957,9 @@ async function main(): Promise<void> {
   const cmd = args[0];
 
   if (cmd === INTERNAL_DAEMON_WORKER_COMMAND) {
-    // Must run before importing daemon-worker/adapters: Launch Services injects
-    // __CFBundleIdentifier into Kraki.app, and child Node processes must not
-    // inherit it and check in as the Kraki application.
+    // Must run before importing daemon-worker/adapters: capture the initial
+    // PID-bound Launch Services identity while it is still stable, then scrub
+    // private LS bootstrap state from the child-process environment.
     await prepareDaemonWorkerBootstrap();
     const { startWorker } = await import('./daemon-worker.js');
     await startWorker();
