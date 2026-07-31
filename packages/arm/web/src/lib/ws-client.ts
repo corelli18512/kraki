@@ -571,6 +571,22 @@ export class KrakiWSClient {
     store.setPinnedSessions(currentPinned);
 
     this.subscription.onSessionList(tentacleDeviceId);
+
+    // The mounted detail session is foreground authority and must not depend on
+    // the global warm-up budget. On reconnect, Safari may keep the route
+    // mounted while the SessionPage `sessionId` never changes, so its
+    // ensureLoaded effect does not run again. Reconcile directly from this
+    // post-auth session_list even before the subscription snapshot ACK arrives;
+    // a later snapshot reconcile coalesces through MessageProvider's in-flight
+    // tracking.
+    const activeSessionId = getStore().activeSessionId;
+    const activeDigest = activeSessionId
+      ? tentacleSessions.find((session) => session.id === activeSessionId)
+      : undefined;
+    if (activeDigest && activeDigest.lastSeq > 0) {
+      messageProvider.reconcileTail(activeDigest.id, activeDigest.lastSeq);
+    }
+
     // Tier 1: Budget warm-up — pre-fetch messages for likely-needed sessions
     this.runWarmup(tentacleSessions, pinnedFromTentacle);
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { decodeFrame } from '@coinfra/pulse';
-import { KrakiWSClient } from '../lib/ws-client';
+import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
 
@@ -100,6 +100,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.WebSocket = OriginalWebSocket;
+  messageProvider.setSend((msg) => wsClient.sendEncrypted(msg));
   vi.restoreAllMocks();
 });
 
@@ -1390,6 +1391,66 @@ describe('KrakiWSClient', () => {
       });
       expect(useStore.getState().sessionPreviews.get('sess-agent')?.type).toBe('agent');
       expect(useStore.getState().sessionPreviews.get('sess-agent')?.text).toBe('Done.');
+    });
+
+    it('reconciles the mounted detail session before warm-up even when its tail is outside the global budget', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      useStore.getState().setActiveSessionId('sess-detail');
+      client.setDesiredSession('sess-detail');
+      const providerSends: Record<string, unknown>[] = [];
+      messageProvider.setSend((message) => providerSends.push(message));
+      const reconcileTail = vi.spyOn(messageProvider, 'reconcileTail');
+      const now = Date.now();
+      const budgetFillers = Array.from({ length: 10 }, (_, index) => {
+        const timestamp = new Date(now - index * 1_000).toISOString();
+        return {
+          id: `sess-recent-${index}`,
+          agent: 'pi' as const,
+          state: 'idle' as const,
+          mode: 'execute' as const,
+          lastSeq: 50,
+          readSeq: 50,
+          messageCount: 50,
+          createdAt: timestamp,
+          preview: { text: `Recent ${index}`, type: 'agent', timestamp },
+        };
+      });
+      const oldTimestamp = new Date(now - 72 * 3600_000).toISOString();
+
+      receiveInner({
+        type: 'session_list',
+        deviceId: 'dev-t1',
+        seq: 1,
+        timestamp: new Date(now).toISOString(),
+        payload: {
+          sessions: [
+            ...budgetFillers,
+            {
+              id: 'sess-detail', agent: 'pi', state: 'idle', mode: 'execute',
+              lastSeq: 141, readSeq: 139, messageCount: 141, createdAt: oldTimestamp,
+              preview: { text: 'Old detail', type: 'agent', timestamp: oldTimestamp },
+            },
+          ],
+        },
+      });
+
+      expect(reconcileTail).toHaveBeenCalledWith('sess-detail', 141);
+      await vi.waitFor(() => {
+        const rangeRequest = providerSends.find((message) => {
+          if (message.type !== 'request_session_messages_range') return false;
+          const payload = message.payload as Record<string, unknown> | undefined;
+          return payload?.sessionId === 'sess-detail';
+        });
+        expect(rangeRequest?.payload).toMatchObject({
+          sessionId: 'sess-detail',
+          fromSeq: 92,
+          toSeq: 141,
+          targetDeviceId: 'dev-t1',
+        });
+      });
+      expect(client.isLiveReady('sess-detail')).toBe(false);
     });
 
     it('only warms up sessions within 24h or active/pinned', async () => {
