@@ -8,33 +8,18 @@
 
 import { getStore } from './store-adapter';
 import { createLogger } from './logger';
+import { isDurableSpineMessage } from './message-axis';
 import type { ChatMessage } from '../types/store';
 
 const logger = createLogger('msg-provider');
 
 const BATCH_TIMEOUT_MS = 10_000;
 
-// Rows written by older web clients before runtime/TRACE state was separated
-// from the persistent conversation spine. They must never count toward cache
-// range coverage, or a stale `active` row can hide a missing agent reply at the
+// Only durable spine rows count toward range coverage. TRACE/control records
+// from an old or malformed cache must not hide a missing durable row at the
 // same session seq.
-const NON_SPINE_CACHE_TYPES = new Set([
-  'pending_input',
-  'active',
-  'compacting',
-  'agent_message_delta',
-  'card_action',
-  'agent_narration',
-  'tool_start',
-  'tool_complete',
-  'permission',
-  'question',
-  'permission_resolved',
-  'question_resolved',
-]);
-
 function isSpineCacheMessage(message: ChatMessage): boolean {
-  return !NON_SPINE_CACHE_TYPES.has(message.type);
+  return isDurableSpineMessage(message);
 }
 
 interface PendingRequest {

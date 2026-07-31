@@ -191,7 +191,7 @@ describe('message-provider: range-fetch protocol', () => {
     });
   });
 
-  it('repairs a cached tail where a legacy transient row hides the reply seq', async () => {
+  it('repairs a cached tail where an unknown non-spine row hides the reply seq', async () => {
     setupSession();
     messageProvider.setTentacleInfo('s1', 496, 'd1');
     const sent: Record<string, unknown>[] = [];
@@ -200,7 +200,7 @@ describe('message-provider: range-fetch protocol', () => {
     const cached = Array.from({ length: 50 }, (_, index) => {
       const seq = 447 + index;
       if (seq === 495) {
-        return { type: 'active', sessionId: 's1', deviceId: 'd1', seq, timestamp: '', payload: {} };
+        return { type: 'future_control_message', sessionId: 's1', deviceId: 'd1', seq, timestamp: '', payload: {} };
       }
       return {
         type: seq === 496 ? 'idle' : 'agent_message',

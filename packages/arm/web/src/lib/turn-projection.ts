@@ -1,8 +1,14 @@
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import type { ChatMessage } from '../types/store';
+import { isDurableSpineMessage } from './message-axis';
 
-/** TRACE / transient activity types — never top-level chat bubbles. */
-const TRACE_TYPES = new Set(['tool_start', 'tool_complete', 'agent_narration', 'active']);
+/** Only durable conversation-spine records become settled top-level bubbles.
+ *  Keep the optimistic pending_input placeholder visible until its durable
+ *  user_message echo arrives; all other live/TRACE/control records stay on
+ *  their own axes. */
+function isVisibleSpineMessage(message: ChatMessage): boolean {
+  return message.type === 'pending_input' || isDurableSpineMessage(message);
+}
 
 function attachmentKey(attachment: Attachment): string {
   return attachment.type === 'content_ref'
@@ -106,7 +112,7 @@ export function projectSpineMessages(messages: ChatMessage[]): ChatMessage[] {
   };
 
   for (const msg of messages) {
-    if (TRACE_TYPES.has(msg.type)) continue;
+    if (!isVisibleSpineMessage(msg)) continue;
     segment.push(msg);
     if (msg.type === 'idle') flush();
   }
