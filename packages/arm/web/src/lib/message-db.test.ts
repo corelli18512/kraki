@@ -25,6 +25,20 @@ const STORE_NAME = 'messages';
 
 type Msg = { type: string; seq?: number; payload?: Record<string, unknown>; [k: string]: unknown };
 
+async function rawPut(sessionId: string, seq: number, data: Msg): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const tx = database.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put({ sessionId, seq, data });
+      tx.oncomplete = () => { database.close(); resolve(); };
+      tx.onerror = () => { database.close(); reject(tx.error); };
+    };
+  });
+}
+
 async function freshModule() {
   // Clear the module cache + localStorage sweep flag so each test starts clean.
   localStorage.removeItem('kraki-idb-transient-swept');
@@ -39,9 +53,11 @@ describe('message-db transient filtering on write', () => {
     // the module holds an open connection under fake-indexeddb).
   });
 
-  it('putMessage skips transient types', async () => {
+  it('putMessage skips transient and unknown non-spine types', async () => {
     const db = await freshModule();
     await db.putMessage('sess-pm-1', { type: 'tool_start', seq: 2.5, payload: {} } as Msg);
+    await db.putMessage('sess-pm-1', { type: 'question', seq: 2.6, payload: { id: 'q1', question: 'Q?' } } as Msg);
+    await db.putMessage('sess-pm-1', { type: 'future_control_message', seq: 2.7, payload: {} } as Msg);
     await db.putMessage('sess-pm-1', { type: 'user_message', seq: 1, payload: { content: 'hi' } } as Msg);
     const msgs = await db.getMessages('sess-pm-1');
     expect(msgs).toHaveLength(1);
@@ -83,6 +99,15 @@ describe('message-db transient filtering on read (defense-in-depth)', () => {
     // Note: we don't deleteDB here (it hangs under fake-indexeddb when the
     // module holds an open connection). Instead each test seeds + reads in a
     // distinct session id so they're independent.
+  });
+
+  it('ignores an unknown highest-seq row already present in IndexedDB', async () => {
+    const db = await freshModule();
+    await db.putMessage('sess-read-last-1', { type: 'user_message', seq: 1, payload: { content: 'keep' } } as Msg);
+    await rawPut('sess-read-last-1', 2, { type: 'future_control_message', seq: 2, payload: {} });
+
+    expect(await db.getLastSeq('sess-read-last-1')).toBe(1);
+    expect((await db.getMessages('sess-read-last-1')).map((m) => m.type)).toEqual(['user_message']);
   });
 
   it('getMessages drops transient rows even if they reach IDB via another path', async () => {

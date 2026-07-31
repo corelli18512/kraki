@@ -401,6 +401,33 @@ describe('ChatView', () => {
     expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
   });
 
+  it('does not render question request and resolution TRACE as duplicate spine bubbles', () => {
+    const question = '为了按真实缓冲期计算，请问你目前可用于出国、学费、租房和生活的存款大约在哪个区间？';
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 3 },
+    ]);
+    useStore.setState({
+      messages: new Map([['s1', [
+        { type: 'user_message', deviceId: 'd1', seq: 106, timestamp: '2026-07-31T07:33:50Z', sessionId: 's1', payload: { content: 'continue' } } as ChatMessage,
+        { type: 'question', deviceId: 'd1', seq: 106.25, timestamp: '2026-07-31T07:34:07Z', sessionId: 's1', payload: {
+          id: 'q1', question, choices: ['人民币30万元以上'],
+        } } as ChatMessage,
+        { type: 'question', deviceId: 'd1', seq: 106.5, timestamp: '2026-07-31T07:35:04Z', sessionId: 's1', payload: {
+          id: 'q1', question, answer: '人民币30万元以上',
+        } } as ChatMessage,
+        { type: 'agent_message', deviceId: 'd1', seq: 107, timestamp: '2026-07-31T07:35:30Z', sessionId: 's1', payload: { content: '继续分析结果' } } as ChatMessage,
+        { type: 'idle', deviceId: 'd1', seq: 108, timestamp: '2026-07-31T07:35:31Z', sessionId: 's1', payload: {} } as ChatMessage,
+      ]]]),
+    });
+
+    renderChatView('s1');
+
+    expect(screen.queryByText(question)).not.toBeInTheDocument();
+    expect(screen.queryByText('人民币30万元以上')).not.toBeInTheDocument();
+    expect(screen.getByText('continue')).toBeInTheDocument();
+    expect(screen.getByText('继续分析结果')).toBeInTheDocument();
+  });
+
   it('shows message input for active session', () => {
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 0 },
