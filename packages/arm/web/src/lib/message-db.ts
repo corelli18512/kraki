@@ -7,18 +7,36 @@
 
 import { openDB, type IDBPDatabase } from 'idb';
 import type { ChatMessage } from '../types/store';
-import { isDurableSpineMessage } from './message-axis';
 
 const DB_NAME = 'kraki-messages';
 const DB_VERSION = 5;
 const STORE_NAME = 'messages';
 
-/** IndexedDB is a durable-spine cache, not a generic message log. New wire
- *  types fail closed: only the shared durable allowlist may be written/read.
- *  This keeps TRACE, live-card, optimistic, and control-plane records from
- *  resurrecting as duplicate/spurious bubbles after reload. */
-function isPersistableMessage(message: ChatMessage): boolean {
-  return isDurableSpineMessage(message);
+/** Message types that are TRANSIENT — they stream live for the in-progress turn
+ *  (or are optimistic UI) and are pulled lazily from the tentacle's trace.jsonl.
+ *  They must NEVER be persisted to IndexedDB: they carry fractional seqs
+ *  (assigned by setTurnSteps) and a future load would resurrect them as
+ *  duplicate/spurious bubbles. This is the authoritative filter shared by all
+ *  write paths; read paths also filter as defense-in-depth. */
+const TRANSIENT_TYPES = new Set([
+  'pending_input',
+  'tool_start',
+  'tool_complete',
+  'agent_narration',
+  'active',
+  'compacting',
+  // question/permission/answer are turn-internal mechanics surfaced via the
+  // live card + TRACE, never durable spine bubbles.
+  'question',
+  'permission',
+  'answer',
+  'question_resolved',
+  'permission_resolved',
+]);
+
+/** True for a message that must never be written to / read from IndexedDB. */
+function isTransientMessage(message: ChatMessage): boolean {
+  return TRANSIENT_TYPES.has(message.type);
 }
 
 interface StoredMessage {
@@ -112,11 +130,12 @@ function sweepTransientRows(): Promise<{ before: number; deleted: number }> {
         if (!cursor) return;
         before++;
         const row = cursor.value as unknown as StoredMessage;
+        const dataType = row?.data?.type as string | undefined;
         const seq = row?.seq;
-        const shouldDelete =
-          !row?.data || !isPersistableMessage(row.data) ||
+        const isTransient =
+          (dataType && TRANSIENT_TYPES.has(dataType)) ||
           (typeof seq === 'number' && !Number.isInteger(seq));
-        if (shouldDelete) {
+        if (isTransient) {
           deleted++;
           cursor.delete();
         }
@@ -145,19 +164,21 @@ export async function putMessages(sessionId: string, messages: ChatMessage[]): P
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
   for (const msg of messages) {
-    // Only durable spine records belong in this cache. Fractional TRACE rows
-    // and all non-spine types are rejected by the shared allowlist.
-    if (!isPersistableMessage(msg)) continue;
+    // Never persist transient trace/pending rows — they carry fractional seqs
+    // and would resurrect as duplicate bubbles on the next load.
+    if (isTransientMessage(msg)) continue;
     const seq = 'seq' in msg ? (msg as { seq?: number }).seq ?? 0 : 0;
     await store.put({ sessionId, seq, data: msg } satisfies StoredMessage);
   }
   await tx.done;
 }
 
-/** Store one durable spine record. Both the caller and this cache use the
- *  shared allowlist; this guard remains authoritative defense-in-depth. */
+/**
+ * Store a single message. Filters out transient types (the caller in useStore
+ * already gates on isTransient, but this is the authoritative guard).
+ */
 export async function putMessage(sessionId: string, message: ChatMessage): Promise<void> {
-  if (!isPersistableMessage(message)) return;
+  if (isTransientMessage(message)) return;
   const db = await getDB();
   const seq = 'seq' in message ? (message as { seq?: number }).seq ?? 0 : 0;
   await db.put(STORE_NAME, { sessionId, seq, data: message } satisfies StoredMessage);
@@ -171,9 +192,9 @@ export async function getMessages(sessionId: string): Promise<ChatMessage[]> {
   const index = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).index('sessionId');
   const records = await index.getAll(sessionId) as StoredMessage[];
   records.sort((a, b) => a.seq - b.seq);
-  // Defense-in-depth: expose only durable spine rows, even if an older or
-  // malformed client inserted some other type.
-  return records.map(r => r.data).filter(isPersistableMessage);
+  // Defense-in-depth: drop any transient row that slipped through (older
+  // builds, or a future type). Trace is pulled on demand via request_turn_trace.
+  return records.map(r => r.data).filter((m) => !isTransientMessage(m));
 }
 
 /**
@@ -184,8 +205,8 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
   const records = await db.getAll(STORE_NAME) as StoredMessage[];
   const grouped = new Map<string, ChatMessage[]>();
   for (const r of records) {
-    // Defense-in-depth: IndexedDB exposes only durable spine rows.
-    if (!isPersistableMessage(r.data)) continue;
+    // Defense-in-depth: skip transient rows (trace/pending) — see getMessages.
+    if (isTransientMessage(r.data)) continue;
     if (!grouped.has(r.sessionId)) grouped.set(r.sessionId, []);
     grouped.get(r.sessionId)!.push(r.data);
   }
@@ -206,13 +227,8 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
 export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<number> {
   const db = await getDB();
   const range = IDBKeyRange.bound([sessionId, 0], [sessionId, maxSeq ?? Number.MAX_SAFE_INTEGER]);
-  let cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
-  while (cursor) {
-    const row = cursor.value as StoredMessage;
-    if (isPersistableMessage(row.data) && Number.isInteger(row.seq)) return row.seq;
-    cursor = await cursor.continue();
-  }
-  return 0;
+  const cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
+  return (cursor?.value as StoredMessage | undefined)?.seq ?? 0;
 }
 
 /**
@@ -223,7 +239,7 @@ export async function getMessagesInRange(sessionId: string, fromSeq: number, toS
   const range = IDBKeyRange.bound([sessionId, fromSeq], [sessionId, toSeq]);
   const records = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(range) as StoredMessage[];
   records.sort((a, b) => a.seq - b.seq);
-  return records.map(r => r.data).filter(isPersistableMessage);
+  return records.map(r => r.data).filter((m) => !isTransientMessage(m));
 }
 
 /**
@@ -257,10 +273,10 @@ export async function updateSessionMessages(sessionId: string, messages: ChatMes
     cursor = await cursor.continue();
   }
 
-  // Write updated durable messages. The shared allowlist prevents a whole-array
-  // rewrite from persisting TRACE/live/control rows that only belong in memory.
+  // Write updated messages (transient types are filtered out so a whole-array
+  // rewrite cannot persist trace/pending rows that only live in memory).
   for (const msg of messages) {
-    if (!isPersistableMessage(msg)) continue;
+    if (isTransientMessage(msg)) continue;
     const seq = 'seq' in msg ? (msg as { seq?: number }).seq ?? 0 : 0;
     await store.put({ sessionId, seq, data: msg } satisfies StoredMessage);
   }

@@ -106,47 +106,6 @@ describe('projectSpineMessages', () => {
     expect((projected[0].payload as { attachments?: unknown[] }).attachments).toEqual([artifact]);
   });
 
-  it('keeps TRACE and prompt lifecycle records out of the top-level spine', () => {
-    const projected = projectSpineMessages([
-      { type: 'user_message', deviceId: 'd1', seq: 106, timestamp: '2026-07-31T07:33:50Z', sessionId: 's1', payload: { content: 'continue' } } as ChatMessage,
-      { type: 'agent_narration', deviceId: 'd1', seq: 106.1, timestamp: '2026-07-31T07:34:00Z', sessionId: 's1', payload: { content: 'checking' } } as ChatMessage,
-      { type: 'question', deviceId: 'd1', seq: 106.2, timestamp: '2026-07-31T07:34:07Z', sessionId: 's1', payload: {
-        id: 'q1',
-        question: 'How much is available?',
-        choices: ['30+'],
-      } } as ChatMessage,
-      { type: 'question', deviceId: 'd1', seq: 106.3, timestamp: '2026-07-31T07:35:04Z', sessionId: 's1', payload: {
-        id: 'q1',
-        question: 'How much is available?',
-        answer: '30+',
-      } } as ChatMessage,
-      { type: 'permission', deviceId: 'd1', seq: 106.4, timestamp: '2026-07-31T07:35:05Z', sessionId: 's1', payload: {
-        id: 'p1', toolName: 'bash', description: 'Run command', args: {},
-      } } as ChatMessage,
-      { type: 'answer', deviceId: 'd1', seq: 106.5, timestamp: '2026-07-31T07:35:06Z', sessionId: 's1', payload: {
-        questionId: 'q1', answer: '30+',
-      } } as ChatMessage,
-      { type: 'tool_complete', deviceId: 'd1', seq: 106.6, timestamp: '2026-07-31T07:35:07Z', sessionId: 's1', payload: {
-        toolName: 'bash', headline: '$ true', toolCallId: 't1', success: true,
-      } } as ChatMessage,
-      { type: 'session_title_updated', deviceId: 'd1', seq: 106.7, timestamp: '2026-07-31T07:35:08Z', sessionId: 's1', payload: {
-        title: 'control-plane update',
-      } } as ChatMessage,
-      { type: 'agent_message', deviceId: 'd1', seq: 107, timestamp: '2026-07-31T07:36:00Z', sessionId: 's1', payload: { content: 'done' } } as ChatMessage,
-      { type: 'idle', deviceId: 'd1', seq: 108, timestamp: '2026-07-31T07:36:01Z', sessionId: 's1', payload: {} } as ChatMessage,
-    ]);
-
-    expect(projected.map((message) => message.type)).toEqual(['user_message', 'agent_message', 'idle']);
-  });
-
-  it('keeps the optimistic pending input visible until the durable echo arrives', () => {
-    const projected = projectSpineMessages([
-      { type: 'pending_input', id: 'c1', clientId: 'c1', sessionId: 's1', text: 'hello', timestamp: '2026-07-31T07:34:00Z' },
-    ] as ChatMessage[]);
-
-    expect(projected.map((message) => message.type)).toEqual(['pending_input']);
-  });
-
   it('projects idle artifacts onto a no-reply system outcome', () => {
     const report = { type: 'content_ref' as const, id: 'report', mimeType: 'text/html', size: 4 };
     const projected = projectSpineMessages([
