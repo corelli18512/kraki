@@ -3,7 +3,6 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Store, ChatMessage, ConnectionStatus, PendingInputMessage, SessionCard } from '../types/store';
 import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
-import { isDurableSpineMessage } from '../lib/message-axis';
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -151,10 +150,22 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   appendMessage: (sessionId, message) => {
-    // IndexedDB is exclusively the durable conversation spine. Everything else
-    // (optimistic pending input, live card, TRACE, and control messages) stays
-    // in memory and fails closed unless deliberately added to message-axis.
-    if (isDurableSpineMessage(message)) {
+    // pending_input is optimistic, transient UI — never persist it.
+    // tool_start/tool_complete/agent_narration are the TRACE axis: they stream
+    // live for the in-progress turn but are pulled lazily from the tentacle's
+    // trace.jsonl (see setTurnSteps / messageProvider.requestTurnTrace) rather
+    // than living on the spine — so they are kept in memory for live rendering
+    // but NEVER written to IndexedDB. The compound IDB key is [sessionId, seq]
+    // and ALL pending_input messages have seq=0, so writing them would collide-
+    // and-overwrite each other on rapid send. After resolve, the resulting
+    // user_message has a real seq and goes through updateSessionMessages.
+    const isTransient = message.type === 'pending_input'
+      || message.type === 'tool_start'
+      || message.type === 'tool_complete'
+      || message.type === 'agent_narration'
+      || message.type === 'active'
+      || message.type === 'compacting';
+    if (!isTransient) {
       // Write to IndexedDB (async, fire-and-forget — idempotent by [sessionId, seq])
       import('../lib/message-db').then(db => db.putMessage(sessionId, message)).catch((e) => { console.error('[Kraki:idb]', e); });
     }
