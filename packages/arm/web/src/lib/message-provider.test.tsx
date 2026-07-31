@@ -112,7 +112,7 @@ describe('message-provider: ensureLoaded', () => {
     const spy = vi.spyOn(messageProvider, 'fetchRange');
     messageProvider.ensureLoaded('s1');
 
-    expect(spy).toHaveBeenCalledWith('s1', 51, 100, { initial: true });
+    expect(spy).toHaveBeenCalledWith('s1', 51, 100, { initial: true, foreground: true });
     spy.mockRestore();
   });
 
@@ -130,7 +130,7 @@ describe('message-provider: ensureLoaded', () => {
     const spy = vi.spyOn(messageProvider, 'fetchRange');
     messageProvider.ensureLoaded('s1');
 
-    expect(spy).toHaveBeenCalledWith('s1', 51, 100, { initial: true });
+    expect(spy).toHaveBeenCalledWith('s1', 51, 100, { initial: true, foreground: true });
     spy.mockRestore();
   });
 
@@ -142,7 +142,7 @@ describe('message-provider: ensureLoaded', () => {
     const spy = vi.spyOn(messageProvider, 'fetchRange');
     messageProvider.ensureLoaded('s1');
 
-    expect(spy).toHaveBeenCalledWith('s1', 451, 500, { initial: true });
+    expect(spy).toHaveBeenCalledWith('s1', 451, 500, { initial: true, foreground: true });
     spy.mockRestore();
   });
 
@@ -155,6 +155,40 @@ describe('message-provider: ensureLoaded', () => {
 
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  it('rechecks a foreground tail after an equal-through warm-up finishes', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 318, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((message) => sent.push(message));
+
+    // A background warm-up reached the same authoritative seq first. The
+    // mounted detail reconciliation must not be forgotten merely because the
+    // in-flight range claims to cover the same tail.
+    const warmup = messageProvider.fetchRange('s1', 269, 318);
+    await vi.waitFor(() => {
+      expect(sent.filter((message) => message.type === 'request_session_messages_range')).toHaveLength(1);
+    });
+
+    messageProvider.reconcileTail('s1', 318);
+    messageProvider.handleRangeBatch('s1', [], 269, 318, false);
+    await warmup;
+
+    await vi.waitFor(() => {
+      expect(sent.filter((message) => message.type === 'request_session_messages_range')).toHaveLength(2);
+    });
+    expect(sent.filter((message) => message.type === 'request_session_messages_range')[1]?.payload).toMatchObject({
+      sessionId: 's1',
+      fromSeq: 269,
+      toSeq: 318,
+      targetDeviceId: 'd1',
+    });
+
+    messageProvider.handleRangeBatch('s1', [], 269, 318, false);
+    await vi.waitFor(() => {
+      expect(messageProvider.isLoading('s1')).toBe(false);
+    });
   });
 });
 

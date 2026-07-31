@@ -55,6 +55,8 @@ class MessageProvider {
   private loadingSessions = new Set<string>();
   /** Highest seq covered by each in-flight fetch. */
   private loadingThroughSeq = new Map<string, number>();
+  /** Fetches started by a foreground tail reconciliation. */
+  private loadingForeground = new Set<string>();
   /** Latest tail reconciliation requested beyond an in-flight range. */
   private pendingTailReconciles = new Map<string, number>();
   /** Turn-trace pulls already completed or scheduled, keyed
@@ -113,7 +115,15 @@ class MessageProvider {
 
     if (this.loadingSessions.has(sessionId)) {
       const loadingThrough = this.loadingThroughSeq.get(sessionId) ?? 0;
-      if (authoritativeLastSeq > loadingThrough) {
+      const loadingIsForeground = this.loadingForeground.has(sessionId);
+      // A foreground tail reconciliation must not be swallowed by a background
+      // warm-up that started first. Queue one authoritative recheck even when
+      // both requests end at the same seq; the warm-up may have started before
+      // the digest arrived or may complete without the missing rows. Once a
+      // foreground reconciliation is already in flight, equal-or-older
+      // notifications are redundant, while a newer authoritative tail still
+      // needs a follow-up.
+      if (!loadingIsForeground || authoritativeLastSeq > loadingThrough) {
         const pending = this.pendingTailReconciles.get(sessionId) ?? 0;
         this.pendingTailReconciles.set(sessionId, Math.max(pending, authoritativeLastSeq));
       }
@@ -126,14 +136,14 @@ class MessageProvider {
       fromSeq,
       lastSeq: authoritativeLastSeq,
     });
-    void this.fetchRange(sessionId, fromSeq, authoritativeLastSeq, { initial: true });
+    void this.fetchRange(sessionId, fromSeq, authoritativeLastSeq, { initial: true, foreground: true });
   }
 
   /**
    * Fetch messages in a seq range. Checks IDB first, falls back to tentacle.
    * Puts the complete result into the store in one write.
    */
-  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean }): Promise<void> {
+  async fetchRange(sessionId: string, fromSeq: number, toSeq: number, options?: { initial?: boolean; foreground?: boolean }): Promise<void> {
     if (this.loadingSessions.has(sessionId)) {
       logger.info('fetchRange skipped (loading)', { sessionId, fromSeq, toSeq });
       return;
@@ -146,6 +156,7 @@ class MessageProvider {
 
     this.loadingSessions.add(sessionId);
     this.loadingThroughSeq.set(sessionId, toSeq);
+    if (options?.foreground) this.loadingForeground.add(sessionId);
     if (options?.initial) {
       getStore().setSessionLoading(sessionId, true);
     }
@@ -222,6 +233,7 @@ class MessageProvider {
     } finally {
       this.loadingSessions.delete(sessionId);
       this.loadingThroughSeq.delete(sessionId);
+      this.loadingForeground.delete(sessionId);
       getStore().setSessionLoading(sessionId, false);
       const pendingLastSeq = this.pendingTailReconciles.get(sessionId);
       if (pendingLastSeq !== undefined) {
@@ -284,6 +296,7 @@ class MessageProvider {
     this.tentacleDeviceMap.clear();
     this.loadingSessions.clear();
     this.loadingThroughSeq.clear();
+    this.loadingForeground.clear();
     this.pendingTailReconciles.clear();
     this.tracePulled.clear();
     this.traceInFlight = null;
