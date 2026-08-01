@@ -116,5 +116,7 @@ describe('message-db transient filtering on read (defense-in-depth)', () => {
 
     const msgs = await db.getMessagesInRange('sess-read-range-1', 10, 12);
     expect(msgs.map((m) => (m as { seq?: number }).seq)).toEqual([10, 12]);
+    expect(await db.getLastSeq('sess-read-range-1', 11)).toBe(10);
+    expect(await db.getLastSeq('sess-read-range-1')).toBe(12);
   });
 });

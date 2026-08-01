@@ -237,8 +237,13 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
 export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<number> {
   const db = await getDB();
   const range = IDBKeyRange.bound([sessionId, 0], [sessionId, maxSeq ?? Number.MAX_SAFE_INTEGER]);
-  const cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
-  return (cursor?.value as StoredMessage | undefined)?.seq ?? 0;
+  let cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
+  while (cursor) {
+    const row = cursor.value as StoredMessage;
+    if (isSpineCacheRow(row)) return row.seq;
+    cursor = await cursor.continue();
+  }
+  return 0;
 }
 
 /**
