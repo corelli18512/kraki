@@ -269,6 +269,57 @@ describe('message-provider: range-fetch protocol', () => {
     });
   });
 
+  it('repairs a real tail gap even when fractional cache rows inflate the row count', async () => {
+    setupSession();
+    messageProvider.setTentacleInfo('s1', 334, 'd1');
+    const sent: Record<string, unknown>[] = [];
+    messageProvider.setSend((m) => sent.push(m));
+
+    // Reproduce the monitor profile exactly: the requested 285–334 window has
+    // 46 durable integer rows, is missing 317/318/332/333, and contains eight
+    // old fractional rows. A count-only coverage check sees 54 >= 50 and
+    // falsely declares the cache complete.
+    const missing = new Set([317, 318, 332, 333]);
+    const cached = Array.from({ length: 50 }, (_, index) => 285 + index)
+      .filter((seq) => !missing.has(seq))
+      .map((seq) => ({
+        type: seq === 334 ? 'user_message' : 'agent_message',
+        sessionId: 's1', deviceId: 'd1', seq, timestamp: '',
+        payload: { content: `message ${seq}` },
+      }));
+    cached.push(...Array.from({ length: 8 }, (_, index) => ({
+      // Durable-looking type proves the provider also rejects by seq shape,
+      // rather than relying only on the transient type allowlist.
+      type: 'agent_message', sessionId: 's1', deviceId: 'd1',
+      seq: 285.96 + index * 0.005, timestamp: '', payload: { content: 'old trace row' },
+    })));
+    expect(cached).toHaveLength(54);
+    getMessagesInRange.mockResolvedValue(cached);
+
+    const pending = messageProvider.fetchRange('s1', 285, 334, { initial: true, foreground: true });
+    await vi.waitFor(() => {
+      expect(sent.find((message) => message.type === 'request_session_messages_range')).toBeDefined();
+    });
+
+    const request = sent.find((message) => message.type === 'request_session_messages_range')!;
+    expect(request.payload).toMatchObject({
+      sessionId: 's1', fromSeq: 317, toSeq: 334, targetDeviceId: 'd1',
+    });
+
+    messageProvider.handleRangeBatch('s1', [
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 317, timestamp: '', payload: { content: 'older recovered reply' } },
+      { type: 'idle', sessionId: 's1', deviceId: 'd1', seq: 318, timestamp: '', payload: {} },
+      { type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 332, timestamp: '', payload: { content: 'latest recovered reply' } },
+      { type: 'idle', sessionId: 's1', deviceId: 'd1', seq: 333, timestamp: '', payload: {} },
+      { type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 334, timestamp: '', payload: { content: 'next turn' } },
+    ], 317, 334, false);
+    await pending;
+
+    const delivered = useStore.getState().messages.get('s1') ?? [];
+    expect(delivered.some((message) => 'seq' in message && message.seq === 332)).toBe(true);
+    expect(delivered.every((message) => !('seq' in message) || Number.isInteger(message.seq))).toBe(true);
+  });
+
   it('does not let an older timeout cancel a newer tail request', async () => {
     vi.useFakeTimers();
     try {

@@ -53,11 +53,15 @@ describe('message-db transient filtering on write', () => {
     await db.putMessages('sess-pms-1', [
       { type: 'user_message', seq: 1, payload: { content: 'a' } } as Msg,
       { type: 'agent_narration', seq: 1.5, payload: { content: 'thinking' } } as Msg,
+      // A synthetic row with a durable-looking type must still be rejected by
+      // its fractional seq; type filtering alone is not sufficient.
+      { type: 'agent_message', seq: 1.75, payload: { content: 'synthetic' } } as Msg,
       { type: 'agent_message', seq: 2, payload: { content: 'reply' } } as Msg,
       { type: 'tool_complete', seq: 2.5, payload: {} } as Msg,
     ]);
     const msgs = await db.getMessages('sess-pms-1');
     expect(msgs.map((m) => m.type)).toEqual(['user_message', 'agent_message']);
+    expect(msgs.map((m) => (m as { seq?: number }).seq)).toEqual([1, 2]);
   });
 
   it('updateSessionMessages (whole-array rewrite) drops transient rows', async () => {
@@ -85,19 +89,32 @@ describe('message-db transient filtering on read (defense-in-depth)', () => {
     // distinct session id so they're independent.
   });
 
-  it('getMessages drops transient rows even if they reach IDB via another path', async () => {
+  it('getMessagesInRange drops fractional rows even with a durable-looking type', async () => {
     const db = await freshModule();
-    // The write filters make transient rows unreacheable via the module, so
-    // verify the read filter directly: put a real row, then confirm the type
-    // predicate rejects transient types. (This guards against someone removing
-    // the read .filter() while believing the write filter is enough.)
-    await db.putMessages('sess-read-1', [
-      { type: 'user_message', seq: 1, payload: { content: 'keep' } } as Msg,
-      { type: 'idle', seq: 2, payload: {} } as Msg,
+    await db.putMessages('sess-read-range-1', [
+      { type: 'user_message', seq: 10, payload: { content: 'keep' } } as Msg,
+      { type: 'idle', seq: 12, payload: {} } as Msg,
     ]);
-    const msgs = await db.getMessages('sess-read-1');
-    expect(msgs.map((m) => m.type)).toEqual(['user_message', 'idle']);
-    // Every returned row has an integer seq (no leaked fractional trace).
-    expect(msgs.every((m) => Number.isInteger((m as { seq?: number }).seq))).toBe(true);
+
+    // Bypass module write guards to simulate an old client that leaked a TRACE
+    // projection row whose type looks durable enough to pass a type-only filter.
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME);
+      request.onsuccess = () => {
+        const raw = request.result;
+        const tx = raw.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put({
+          sessionId: 'sess-read-range-1',
+          seq: 10.5,
+          data: { type: 'agent_message', seq: 10.5, payload: { content: 'synthetic trace row' } },
+        });
+        tx.oncomplete = () => { raw.close(); resolve(); };
+        tx.onerror = () => { raw.close(); reject(tx.error); };
+      };
+      request.onerror = () => reject(request.error);
+    });
+
+    const msgs = await db.getMessagesInRange('sess-read-range-1', 10, 12);
+    expect(msgs.map((m) => (m as { seq?: number }).seq)).toEqual([10, 12]);
   });
 });
