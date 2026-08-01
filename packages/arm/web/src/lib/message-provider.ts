@@ -34,7 +34,8 @@ const NON_SPINE_CACHE_TYPES = new Set([
 ]);
 
 function isSpineCacheMessage(message: ChatMessage): boolean {
-  return !NON_SPINE_CACHE_TYPES.has(message.type);
+  const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
+  return typeof seq === 'number' && Number.isInteger(seq) && !NON_SPINE_CACHE_TYPES.has(message.type);
 }
 
 interface PendingRequest {
@@ -180,29 +181,29 @@ class MessageProvider {
         // IDB unavailable
       }
 
-      // Step 2: Check if IDB covers the full range
+      // Step 2: Check whether every integer seq in the requested window exists.
+      // Row count is not sufficient: older builds leaked fractional TRACE rows
+      // into IDB, and those extras can numerically mask missing durable rows.
       const expectedCount = toSeq - clampedFrom + 1;
-      if (idbMessages.length >= expectedCount) {
-        // IDB has everything — put in store and done
+      const idbSeqs = new Set(idbMessages.flatMap(m => {
+        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
+        return typeof seq === 'number' && Number.isInteger(seq) && seq >= clampedFrom && seq <= toSeq
+          ? [seq]
+          : [];
+      }));
+      if (idbSeqs.size === expectedCount) {
+        // IDB has every durable seq — put in store and done.
         this.deliverMessages(sessionId, idbMessages, options?.initial);
         return;
       }
 
-      // Step 3: IDB has partial or no data — request from tentacle
-      // Find the highest seq IDB has to request only the missing portion
-      const idbSeqs = new Set(idbMessages.map(m => {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        return typeof seq === 'number' ? seq : 0;
-      }));
+      // Step 3: IDB has a gap — request from the first missing seq onward.
+      // Tentacle range requests are contiguous, so the response also refreshes
+      // any cached rows after the gap and restores a coherent tail window.
       let afterSeq = clampedFrom - 1;
-      if (idbMessages.length > 0) {
-        // Find the highest contiguous seq from IDB to minimize tentacle request
-        let highestIdb = clampedFrom - 1;
-        for (let s = clampedFrom; s <= toSeq; s++) {
-          if (idbSeqs.has(s)) highestIdb = s;
-          else break;
-        }
-        afterSeq = highestIdb;
+      for (let s = clampedFrom; s <= toSeq; s++) {
+        if (idbSeqs.has(s)) afterSeq = s;
+        else break;
       }
 
       const tentacleMessages = await this.requestFromTentacle(sessionId, afterSeq, toSeq - afterSeq);

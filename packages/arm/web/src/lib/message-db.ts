@@ -39,6 +39,16 @@ function isTransientMessage(message: ChatMessage): boolean {
   return TRANSIENT_TYPES.has(message.type);
 }
 
+function messageSeq(message: ChatMessage): number {
+  return 'seq' in message ? (message as { seq?: number }).seq ?? 0 : 0;
+}
+
+/** Only integer-seq durable rows belong to the persistent spine cache. */
+function isSpineCacheRow(row: StoredMessage): boolean {
+  const dataSeq = messageSeq(row.data);
+  return Number.isInteger(row.seq) && dataSeq === row.seq && !isTransientMessage(row.data);
+}
+
 interface StoredMessage {
   sessionId: string;
   seq: number;
@@ -164,10 +174,10 @@ export async function putMessages(sessionId: string, messages: ChatMessage[]): P
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
   for (const msg of messages) {
-    // Never persist transient trace/pending rows — they carry fractional seqs
-    // and would resurrect as duplicate bubbles on the next load.
-    if (isTransientMessage(msg)) continue;
-    const seq = 'seq' in msg ? (msg as { seq?: number }).seq ?? 0 : 0;
+    // Never persist transient trace/pending rows or any synthetic fractional
+    // seq, even if a future trace type is missing from TRANSIENT_TYPES.
+    const seq = messageSeq(msg);
+    if (isTransientMessage(msg) || !Number.isInteger(seq)) continue;
     await store.put({ sessionId, seq, data: msg } satisfies StoredMessage);
   }
   await tx.done;
@@ -178,9 +188,9 @@ export async function putMessages(sessionId: string, messages: ChatMessage[]): P
  * already gates on isTransient, but this is the authoritative guard).
  */
 export async function putMessage(sessionId: string, message: ChatMessage): Promise<void> {
-  if (isTransientMessage(message)) return;
+  const seq = messageSeq(message);
+  if (isTransientMessage(message) || !Number.isInteger(seq)) return;
   const db = await getDB();
-  const seq = 'seq' in message ? (message as { seq?: number }).seq ?? 0 : 0;
   await db.put(STORE_NAME, { sessionId, seq, data: message } satisfies StoredMessage);
 }
 
@@ -192,9 +202,9 @@ export async function getMessages(sessionId: string): Promise<ChatMessage[]> {
   const index = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).index('sessionId');
   const records = await index.getAll(sessionId) as StoredMessage[];
   records.sort((a, b) => a.seq - b.seq);
-  // Defense-in-depth: drop any transient row that slipped through (older
-  // builds, or a future type). Trace is pulled on demand via request_turn_trace.
-  return records.map(r => r.data).filter((m) => !isTransientMessage(m));
+  // Defense-in-depth: old builds may have leaked both known transient types
+  // and synthetic fractional rows whose type is no longer recognized.
+  return records.filter(isSpineCacheRow).map(r => r.data);
 }
 
 /**
@@ -205,8 +215,8 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
   const records = await db.getAll(STORE_NAME) as StoredMessage[];
   const grouped = new Map<string, ChatMessage[]>();
   for (const r of records) {
-    // Defense-in-depth: skip transient rows (trace/pending) — see getMessages.
-    if (isTransientMessage(r.data)) continue;
+    // Defense-in-depth: only integer-seq durable spine rows hydrate the cache.
+    if (!isSpineCacheRow(r)) continue;
     if (!grouped.has(r.sessionId)) grouped.set(r.sessionId, []);
     grouped.get(r.sessionId)!.push(r.data);
   }
@@ -227,8 +237,13 @@ export async function getAllMessages(): Promise<Map<string, ChatMessage[]>> {
 export async function getLastSeq(sessionId: string, maxSeq?: number): Promise<number> {
   const db = await getDB();
   const range = IDBKeyRange.bound([sessionId, 0], [sessionId, maxSeq ?? Number.MAX_SAFE_INTEGER]);
-  const cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
-  return (cursor?.value as StoredMessage | undefined)?.seq ?? 0;
+  let cursor = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor(range, 'prev');
+  while (cursor) {
+    const row = cursor.value as StoredMessage;
+    if (isSpineCacheRow(row)) return row.seq;
+    cursor = await cursor.continue();
+  }
+  return 0;
 }
 
 /**
@@ -239,7 +254,7 @@ export async function getMessagesInRange(sessionId: string, fromSeq: number, toS
   const range = IDBKeyRange.bound([sessionId, fromSeq], [sessionId, toSeq]);
   const records = await db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll(range) as StoredMessage[];
   records.sort((a, b) => a.seq - b.seq);
-  return records.map(r => r.data).filter((m) => !isTransientMessage(m));
+  return records.filter(isSpineCacheRow).map(r => r.data);
 }
 
 /**
@@ -276,8 +291,8 @@ export async function updateSessionMessages(sessionId: string, messages: ChatMes
   // Write updated messages (transient types are filtered out so a whole-array
   // rewrite cannot persist trace/pending rows that only live in memory).
   for (const msg of messages) {
-    if (isTransientMessage(msg)) continue;
-    const seq = 'seq' in msg ? (msg as { seq?: number }).seq ?? 0 : 0;
+    const seq = messageSeq(msg);
+    if (isTransientMessage(msg) || !Number.isInteger(seq)) continue;
     await store.put({ sessionId, seq, data: msg } satisfies StoredMessage);
   }
   await tx.done;
