@@ -63,17 +63,46 @@
   --color-text-muted: var(--color-slate-500);
 }
 
-/* Prevent iOS bounce scroll on the viewport */
-html, body {
-  overflow: hidden;
-  overscroll-behavior: none;
-  position: fixed;
+/* Keep the document itself fixed to the visual viewport. Only explicit app
+ * scrollers (chat, sidebar, dialogs) may scroll. Safe-area padding belongs on
+ * the single app viewport border box: putting it on both html/body made their
+ * boxes taller than the iOS viewport and exposed Safari chrome on outer bounce. */
+html {
+  --kraki-safe-area-top: env(safe-area-inset-top, 0px);
+  --kraki-safe-area-left: env(safe-area-inset-left, 0px);
+  --kraki-safe-area-right: env(safe-area-inset-right, 0px);
+}
+
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
-  /* Safe area for PWA with viewport-fit=cover */
-  padding-top: env(safe-area-inset-top);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  position: fixed;
+  inset: 0;
+}
+
+#root {
+  position: relative;
+}
+
+.app-viewport {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100dvh;
+  padding-top: var(--kraki-safe-area-top);
+  padding-left: var(--kraki-safe-area-left);
+  padding-right: var(--kraki-safe-area-right);
 }
 
 /* Scrollbar styling */
