@@ -109,7 +109,7 @@ export function App() {
 
   if (status === 'awaiting_login') {
     return (
-      <div className="flex h-dvh overflow-hidden bg-surface-primary">
+      <div className="app-viewport flex overflow-hidden bg-surface-primary">
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
@@ -121,7 +121,7 @@ export function App() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-surface-primary">
+    <div className="app-viewport flex overflow-hidden bg-surface-primary">
       <ErrorBanner />
       <aside className="hidden w-72 shrink-0 flex-col border-r border-border-primary md:flex lg:w-80" aria-hidden={showBlockingOverlay}>
         <Sidebar />
