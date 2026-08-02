@@ -19,9 +19,9 @@ const IMAGE_PLACEHOLDER = '[image]';
 /** Shared pull thunk for any ContentRef rendered inside a message bubble —
  *  args/result on tool calls, images, etc. We lazy-import ws-client to
  *  break the cycle (MessageBubble is re-exported through several layers). */
-const ATTACHMENT_PULL = (sid: string, id: string): void => {
+const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => {
-    wsClient.requestAttachment(sid, id);
+    wsClient.requestAttachment(sid, ref);
   });
 };
 

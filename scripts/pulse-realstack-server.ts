@@ -268,6 +268,23 @@ async function main(): Promise<void> {
   /** Records every paced attachment read so the concurrency spec can prove the
    *  browser pulls one 256 KiB chunk at a time (not the whole blob at once). */
   const attachmentReads: Array<{ ts: number; id: string }> = [];
+  let dropNextAttachmentRequestId: string | null = null;
+  let droppedAttachmentRequests = 0;
+  const installAttachmentDropHook = (client: RelayClient): void => {
+    const internal = client as unknown as {
+      handleRequestAttachment: (msg: Record<string, unknown>) => Promise<void>;
+    };
+    const originalHandleRequest = internal.handleRequestAttachment.bind(client);
+    internal.handleRequestAttachment = async (msg: Record<string, unknown>) => {
+      const payload = msg.payload as { id?: string } | undefined;
+      if (payload?.id === dropNextAttachmentRequestId) {
+        dropNextAttachmentRequestId = null;
+        droppedAttachmentRequests += 1;
+        return;
+      }
+      await originalHandleRequest(msg);
+    };
+  };
   const origRead = attachmentStore.read.bind(attachmentStore);
   attachmentStore.read = (sid: string, id: string) => {
     const r = origRead(sid, id);
@@ -278,6 +295,7 @@ async function main(): Promise<void> {
     relayUrl: RELAY_URL,
     device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
   }, keyManager, attachmentStore);
+  installAttachmentDropHook(relay);
   await new Promise<void>((resolve, reject) => {
     relay!.onAuthenticated = () => resolve();
     relay!.onFatalError = (m: string) => reject(new Error(`tentacle auth failed: ${m}`));
@@ -461,6 +479,7 @@ async function main(): Promise<void> {
             relayUrl: RELAY_URL,
             device: { name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
           }, keyManager, attachmentStore);
+          installAttachmentDropHook(relay);
           await new Promise<void>((resolve, reject) => {
             relay!.onAuthenticated = () => resolve();
             relay!.onFatalError = (m: string) => reject(new Error(`tentacle restart auth failed: ${m}`));
@@ -537,7 +556,13 @@ async function main(): Promise<void> {
           adapter.idle(sid);
           return json(200, { ok: true, marker, sizeKb, chunkCount: Math.ceil((body.length) / (256 * 1024)) });
         }
-        case '/attachmentReads': return json(200, { reads: attachmentReads });
+        case '/attachmentReads': return json(200, { reads: attachmentReads, dropped: droppedAttachmentRequests });
+        case '/dropNextAttachmentRequest': {
+          dropNextAttachmentRequestId = q.get('id');
+          droppedAttachmentRequests = 0;
+          attachmentReads.length = 0;
+          return json(200, { ok: true, id: dropNextAttachmentRequestId });
+        }
         // ── build one real turn with hundreds of trace entries. The browser's
         //    lazy request_turn_trace gets a large turn_trace_batch over bulk
         //    stream 1 while the test injects a concurrent live echo. ──
@@ -596,7 +621,7 @@ async function main(): Promise<void> {
           adapter.toolComplete(sid, 'show_image', '', tcid, [ref]);
           adapter.msg(sid, q.get('reply') ?? 'Here is the generated image.');
           adapter.idle(sid);
-          return json(200, { ok: true, id: ref.id, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / (256 * 1024)) });
+          return json(200, { ok: true, id: ref.id, size: png.length, mimeType: ref.mimeType, sizeKb: Math.round(png.length / 1024), chunkCount: Math.ceil(png.length / (256 * 1024)) });
         }
         case '/shutdown': json(200, { ok: true }); cleanup(); process.exit(0); return;
         default: return json(404, { error: 'unknown control endpoint' });

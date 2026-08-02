@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
+import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
@@ -14,6 +14,7 @@ import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
 import { traceEvent } from './trace';
 import { SessionSubscriptionController } from './session-subscription';
+import { failAttachment } from './attachments';
 import { AttachmentPullQueue } from './attachment-pull-queue';
 
 const logger = createLogger('ws-client');
@@ -37,6 +38,11 @@ export class KrakiWSClient {
       payload: { id, sessionId, mode: 'paced', index },
     });
     return true;
+  }, {
+    onRetry: (sessionId, ref, index, attempt) => {
+      logger.warn('attachment chunk timed out — retrying', { sessionId, id: ref.id, index, attempt });
+    },
+    onFailure: (_sessionId, ref, reason) => failAttachment(ref, reason),
   });
 
   get url(): string { return this.transport.url; }
@@ -306,8 +312,8 @@ export class KrakiWSClient {
    *   - sessionId inside payload too, so the tentacle's AttachmentStore knows
    *     which session dir to read from.
    */
-  requestAttachment(sessionId: string, attachmentId: string) {
-    this.attachmentPulls.request(sessionId, attachmentId);
+  requestAttachment(sessionId: string, ref: ContentRef) {
+    this.attachmentPulls.request(sessionId, ref);
   }
 
   approve(permissionId: string, sessionId: string) {

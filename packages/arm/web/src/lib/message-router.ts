@@ -96,16 +96,16 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // but we route it before the session-existence check because the chunk's
   // session may not be in our store yet during early load.
   if (msg.type === 'attachment_data') {
-    const payload = (msg as { payload: { id: string; index: number; total: number; mimeType: string; data: string; paced?: true; error?: string } }).payload;
-    void ingestChunk(payload.id, payload.index, payload.total, payload.mimeType, payload.data, payload.error).then((accepted) => {
-      if (!accepted) return;
+    const attachmentMsg = msg as { sessionId: string; payload: { id: string; index: number; total: number; mimeType: string; data: string; paced?: true; error?: string } };
+    const payload = attachmentMsg.payload;
+    void ingestChunk(payload.id, payload.index, payload.total, payload.mimeType, payload.data, payload.error).then((result) => {
       ctx.onAttachmentChunk?.({
-        sessionId: msg.sessionId,
+        sessionId: attachmentMsg.sessionId,
         id: payload.id,
         index: payload.index,
         total: payload.total,
         paced: payload.paced,
-        error: payload.error,
+        error: payload.error ?? (result === 'terminal-error' ? 'invalid_attachment' : undefined),
       });
     });
     return;
