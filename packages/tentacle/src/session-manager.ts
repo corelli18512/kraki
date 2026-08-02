@@ -13,6 +13,10 @@ import { getConfigDir } from './config.js';
 import type { CardActionState, ContentRef } from '@kraki/protocol';
 
 const PREVIEW_MAX = 80;
+const PREVIEW_SCAN_CHUNK_BYTES = 32 * 1024;
+// Valid inline-image rows currently reach roughly 1.2 MB. Bound reconstruction
+// well above that so a corrupt newline-free log cannot grow memory without limit.
+const PREVIEW_SCAN_MAX_LINE_BYTES = 16 * 1024 * 1024;
 
 /** Replace lone UTF-16 surrogates before serializing text for strict JSON consumers. */
 function toWellFormedText(text: string): string {
@@ -1126,42 +1130,21 @@ export class SessionManager {
    * and are layered on top separately by `enrichSessionList` (the attention
    * override), so they must never come from this file scan.
    *
-   * Scans the whole 32KB tail (not just the last 20 lines): the spine is now
+   * Scans complete JSONL rows backwards in bounded chunks: the spine is now
    * sparse (`tool_start`/`tool_complete` live in `trace.jsonl`), but older
-   * sessions still carry them and a 20-line window could be entirely
-   * non-anchor entries.
+   * sessions still carry them, and an inline-image row can be much larger than
+   * one read chunk.
    */
   private getSessionPreview(sessionId: string): import('@kraki/protocol').SessionPreviewDigest | undefined {
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
     if (!existsSync(logPath)) return undefined;
 
-    // Read the tail of the file (last 32KB is plenty for the last few messages)
-    const TAIL_BYTES = 32 * 1024;
-    let tail: string;
-    try {
-      const fd = openSync(logPath, 'r');
+    const previewFromLine = (line: string): import('@kraki/protocol').SessionPreviewDigest | undefined => {
       try {
-        const { size } = fstatSync(fd);
-        const readStart = Math.max(0, size - TAIL_BYTES);
-        const buf = Buffer.alloc(Math.min(size, TAIL_BYTES));
-        readSync(fd, buf, 0, buf.length, readStart);
-        tail = buf.toString('utf8');
-      } finally {
-        closeSync(fd);
-      }
-    } catch {
-      return undefined;
-    }
-
-    // Turn-boundary scan (most recent first). Returns the first anchor found.
-    const lines = tail.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i]) continue;
-      try {
-        const entry = JSON.parse(lines[i]) as LoggedMessage;
+        const entry = JSON.parse(line) as LoggedMessage;
         const inner = JSON.parse(entry.payload) as { type?: string; payload?: Record<string, unknown> };
         const payload = inner.payload;
-        if (!payload) continue;
+        if (!payload) return undefined;
 
         switch (inner.type) {
           case 'agent_message': {
@@ -1209,10 +1192,80 @@ export class SessionManager {
           // compacting are intentionally NOT turn boundaries — skip them.
         }
       } catch {
-        // Skip malformed lines
+        // Skip malformed lines.
       }
+      return undefined;
+    };
+
+    try {
+      const fd = openSync(logPath, 'r');
+      try {
+        let position = fstatSync(fd).size;
+        let suffixParts: Buffer[] = [];
+        let suffixBytes = 0;
+        let discardOversizedLine = false;
+
+        const inspectLine = (prefix: Buffer): import('@kraki/protocol').SessionPreviewDigest | undefined => {
+          if (discardOversizedLine) {
+            discardOversizedLine = false;
+            suffixParts = [];
+            suffixBytes = 0;
+            return undefined;
+          }
+
+          const lineBytes = prefix.length + suffixBytes;
+          if (lineBytes === 0) return undefined;
+          if (lineBytes > PREVIEW_SCAN_MAX_LINE_BYTES) {
+            suffixParts = [];
+            suffixBytes = 0;
+            return undefined;
+          }
+
+          const line = suffixParts.length === 0
+            ? prefix
+            : Buffer.concat([prefix, ...suffixParts.reverse()], lineBytes);
+          suffixParts = [];
+          suffixBytes = 0;
+          return previewFromLine(line.toString('utf8'));
+        };
+
+        while (position > 0) {
+          const requested = Math.min(PREVIEW_SCAN_CHUNK_BYTES, position);
+          position -= requested;
+          const buf = Buffer.allocUnsafe(requested);
+          const bytesRead = readSync(fd, buf, 0, requested, position);
+          if (bytesRead <= 0) break;
+          const chunk = bytesRead === requested ? buf : buf.subarray(0, bytesRead);
+
+          let end = chunk.length;
+          while (end > 0) {
+            const newline = chunk.lastIndexOf(0x0a, end - 1);
+            if (newline < 0) break;
+            const preview = inspectLine(chunk.subarray(newline + 1, end));
+            if (preview) return preview;
+            end = newline;
+          }
+
+          if (end > 0 && !discardOversizedLine) {
+            const part = chunk.subarray(0, end);
+            if (suffixBytes + part.length > PREVIEW_SCAN_MAX_LINE_BYTES) {
+              discardOversizedLine = true;
+              suffixParts = [];
+              suffixBytes = 0;
+            } else {
+              suffixParts.push(part);
+              suffixBytes += part.length;
+            }
+          }
+        }
+
+        return inspectLine(Buffer.alloc(0));
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return undefined;
     }
-    return undefined;
   }
 
   // ── Turn-aligned pagination ──────────────────────────

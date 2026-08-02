@@ -698,6 +698,69 @@ describe('SessionManager', () => {
       expect(entry!.preview!.text).toBe('Fix the migration');
     });
 
+    it('finds a preview before errors when its inline-image row exceeds one scan chunk', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message',
+        sessionId,
+        payload: {
+          content: 'Investigate the stalled API',
+          attachments: [{ type: 'image', mimeType: 'image/png', data: 'a'.repeat(400_000) }],
+        },
+      }));
+      for (let i = 0; i < 8; i++) {
+        sm.appendMessage(sessionId, 'error', JSON.stringify({
+          type: 'error', sessionId, payload: { message: '502 status code (no body)' },
+        }));
+      }
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview).toMatchObject({
+        type: 'user',
+        text: 'Investigate the stalled API',
+      });
+    });
+
+    it('reconstructs a multi-chunk Unicode row when the file has no final newline', () => {
+      const { sessionId } = sm.createSession('copilot');
+      const content = `${'界'.repeat(50_000)} final answer`;
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content },
+      }));
+
+      const logPath = join(dir, sessionId, 'messages.jsonl');
+      const log = readFileSync(logPath);
+      expect(log.at(-1)).toBe(0x0a);
+      writeFileSync(logPath, log.subarray(0, -1));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview!.type).toBe('agent');
+      expect(entry!.preview!.text.startsWith('界')).toBe(true);
+      expect(entry!.preview!.text).not.toContain('�');
+    });
+
+    it('skips a malformed row spanning multiple chunks and finds the earlier preview', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Keep this preview' },
+      }));
+      appendFileSync(join(dir, sessionId, 'messages.jsonl'), `${'{'.repeat(100_000)}\n`);
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview).toMatchObject({ type: 'user', text: 'Keep this preview' });
+    });
+
+    it('bounds a corrupt oversized row and continues scanning before it', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
+        type: 'agent_message', sessionId, payload: { content: 'Earlier valid answer' },
+      }));
+      appendFileSync(join(dir, sessionId, 'messages.jsonl'), 'x'.repeat(16 * 1024 * 1024 + 1));
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview).toMatchObject({ type: 'agent', text: 'Earlier valid answer' });
+    });
+
     it('preview stays at the user_message during a multi-tool turn', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({
