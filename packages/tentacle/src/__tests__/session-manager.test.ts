@@ -761,6 +761,51 @@ describe('SessionManager', () => {
       expect(entry!.preview).toMatchObject({ type: 'agent', text: 'Earlier valid answer' });
     });
 
+    it('bounds the number of complete non-preview rows inspected', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({
+        type: 'user_message', sessionId, payload: { content: 'Too far back' },
+      }));
+      for (let i = 0; i < 4096; i++) {
+        sm.appendMessage(sessionId, 'error', JSON.stringify({
+          type: 'error', sessionId, payload: { message: 'retryable error' },
+        }));
+      }
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview).toBeUndefined();
+    });
+
+    it('does not parse a partial row at the total scan-budget boundary', () => {
+      const { sessionId } = sm.createSession('copilot');
+      const fakeBoundaryEntry = JSON.stringify({
+        seq: 1,
+        type: 'user_message',
+        ts: '2026-01-01T00:00:00.000Z',
+        payload: JSON.stringify({
+          type: 'user_message',
+          sessionId,
+          payload: { content: 'Must not escape the scan budget' },
+        }),
+      });
+      const boundarySuffix = Buffer.from(`${fakeBoundaryEntry}\n`);
+      const scanBudget = 32 * 1024 * 1024;
+      const tail = Buffer.concat([
+        boundarySuffix,
+        Buffer.alloc(scanBudget - boundarySuffix.length, 0x0a),
+      ]);
+
+      // The JSON-looking suffix belongs to one malformed row whose prefix is
+      // outside the scan window, so it must not be treated as a complete row.
+      writeFileSync(
+        join(dir, sessionId, 'messages.jsonl'),
+        Buffer.concat([Buffer.from('outside-window-prefix'), tail]),
+      );
+
+      const entry = sm.getSessionList().find(s => s.id === sessionId);
+      expect(entry!.preview).toBeUndefined();
+    });
+
     it('preview stays at the user_message during a multi-tool turn', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({
