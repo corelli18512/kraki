@@ -211,6 +211,17 @@ export interface UserMessage extends BaseEnvelope {
   };
 }
 
+/** A durable turn boundary created by Tentacle when a persisted trigger fires. */
+export interface ScheduledWakeMessage extends BaseEnvelope {
+  type: 'scheduled_wake';
+  payload: {
+    triggerId: string;
+    scheduledFor: string;
+    instruction: string;
+    label?: string;
+  };
+}
+
 export interface AgentMessage extends BaseEnvelope {
   type: 'agent_message';
   payload: {
@@ -893,6 +904,7 @@ export type ProducerMessage =
   | SessionEndedMessage
   | SessionDeletedMessage
   | UserMessage
+  | ScheduledWakeMessage
   | AgentMessage
   | AgentMessageDelta
   | PermissionRequest

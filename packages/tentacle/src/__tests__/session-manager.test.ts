@@ -586,6 +586,26 @@ describe('SessionManager', () => {
       expect(entry!.preview!.timestamp).toBeTruthy();
     });
 
+    it('uses a scheduled wake label as a neutral turn-boundary preview', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.appendMessage(sessionId, 'scheduled_wake', JSON.stringify({
+        type: 'scheduled_wake',
+        sessionId,
+        payload: {
+          triggerId: 'wake-1',
+          scheduledFor: '2026-08-03T01:00:00Z',
+          instruction: 'Check the permit site',
+          label: 'Permit check',
+        },
+      }));
+
+      expect(sm.getSessionList().find((s) => s.id === sessionId)?.preview).toMatchObject({
+        type: 'agent',
+        text: 'Permit check',
+      });
+      expect(sm.getMeta(sessionId)?.currentTurnStartSeq).toBe(1);
+    });
+
     it('should extract user_message preview when it is the last previewable', () => {
       const { sessionId } = sm.createSession('copilot');
 

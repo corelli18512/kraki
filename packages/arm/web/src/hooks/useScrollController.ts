@@ -35,6 +35,7 @@ function lastIsFromUser(spine: ChatMessage[]): boolean {
   const last = spine[spine.length - 1];
   return !!last && (
     last.type === 'user_message' ||
+    last.type === 'scheduled_wake' ||
     last.type === 'pending_input' ||
     last.type === 'send_input' ||
     last.type === 'answer'

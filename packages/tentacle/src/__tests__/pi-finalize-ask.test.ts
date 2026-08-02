@@ -1114,6 +1114,7 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_image"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_html"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "schedule_wake"');
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('present_to_user');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('pi.registerTool');
   });
@@ -1135,6 +1136,7 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"finalize_reply"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_html"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('"schedule_wake"');
     // The gate is loaded in every mode (no KRAKI_PI_GATE env guard); the adapter
     // decides silent-approve vs card per its mode policy.
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('process.env.KRAKI_PI_GATE');

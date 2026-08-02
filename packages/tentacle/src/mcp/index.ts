@@ -1,5 +1,5 @@
 export { KrakiMcpServer } from './server.js';
-export type { KrakiMcpServerOptions, KrakiMcpServerStartResult } from './server.js';
+export type { KrakiMcpServerOptions, KrakiMcpServerStartResult, KrakiMcpSessionCredentials } from './server.js';
 export {
   showImageTool,
   showImageHandler,
@@ -7,6 +7,7 @@ export {
   SHOW_IMAGE_MAX_BYTES,
   SHOW_IMAGE_MIME_BY_EXT,
 } from './tools/show-image.js';
+export { createScheduleWakeTool, SCHEDULE_WAKE_TOOL_NAME } from './tools/schedule-wake.js';
 export { ToolRegistry } from './tools/index.js';
 export type { RegisteredTool, ToolContext, ToolHandler } from './tools/index.js';
 export {

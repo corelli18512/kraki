@@ -15,6 +15,7 @@
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
@@ -43,7 +44,8 @@ import { RelayClient } from './relay-client.js';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
-import { KrakiMcpServer } from './mcp/index.js';
+import { KrakiMcpServer, createScheduleWakeTool, showImageTool } from './mcp/index.js';
+import { WakeRejectedError, WakeScheduler } from './wake-scheduler.js';
 import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile } from './status-file.js';
 import type { AgentAdapter } from './adapters/base.js';
@@ -90,7 +92,7 @@ export async function startWorker(): Promise<WorkerResult> {
   // TCC tracks grants by bundle id (stable across updates) instead of
   // cdhash (invalidated every release). This self-heals machines that
   // installed before the lsregister step existed. Idempotent + cheap.
-  if (platform() === 'darwin') {
+  if (platform() === 'darwin' && process.env.KRAKI_DEV_STACK !== '1') {
     ensureTccBundleRegistered();
     // Also purge zombie Launch Services entries from past updates / builds —
     // a one-time sweep that fixes every already-installed machine.
@@ -105,7 +107,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // macOS: check Full Disk Access status. FDA is required to prevent
   // recurring TCC permission dialogs during agent sessions.
-  if (platform() === 'darwin') {
+  if (platform() === 'darwin' && process.env.KRAKI_DEV_STACK !== '1') {
     const fdaStatus = await probeFda();
     if (fdaStatus !== 'granted') {
       logger.warn(
@@ -151,20 +153,30 @@ export async function startWorker(): Promise<WorkerResult> {
   // 3. Initialize components
   const sessionManager = new SessionManager();
   const attachmentStore = new AttachmentStore(sessionManager.getSessionsRoot());
+  let relayForWake: RelayClient | null = null;
+  const wakeScheduler = new WakeScheduler({
+    storePath: join(sessionManager.getSessionsRoot(), '..', 'wake-triggers.json'),
+    onWake: async (trigger, scheduledFor) => {
+      if (!sessionManager.isSessionActive(trigger.sessionId)) {
+        throw new WakeRejectedError(`Session ${trigger.sessionId} no longer exists`);
+      }
+      if (!relayForWake) throw new Error('relay is not ready');
+      await relayForWake.triggerScheduledWake(trigger, scheduledFor);
+    },
+  });
 
   // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
   //     fails, log and continue without it — daemon stays up.
-  let mcpInfo: { urlForSession: (sid: string) => string; bearerToken: string } | undefined;
+  let mcpInfo: { credentialsForSession: (sid: string) => { url: string; bearerToken: string } } | undefined;
   let mcpServer: KrakiMcpServer | null = null;
   try {
     mcpServer = new KrakiMcpServer({
       version: getVersion(),
       isSessionActive: (id) => sessionManager.isSessionActive(id),
-    });
+    }, [showImageTool, createScheduleWakeTool(wakeScheduler)]);
     const started = await mcpServer.start();
     mcpInfo = {
-      urlForSession: started.urlForSession,
-      bearerToken: started.bearerToken,
+      credentialsForSession: started.credentialsForSession,
     };
     logger.info({ port: started.port }, 'Kraki MCP server started');
   } catch (err) {
@@ -240,6 +252,7 @@ export async function startWorker(): Promise<WorkerResult> {
     keyManager,
     attachmentStore,
   );
+  relayForWake = relay;
 
   relay.onStateChange = (state) => {
     logger.debug({ state }, 'Relay connection state changed');
@@ -263,6 +276,7 @@ export async function startWorker(): Promise<WorkerResult> {
   };
 
   relay.connect();
+  wakeScheduler.start();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
 
   // Write initial status file so toolbar can detect the daemon. Readiness is
@@ -278,6 +292,7 @@ export async function startWorker(): Promise<WorkerResult> {
     clearDaemonReady();
     clearDaemonIdentity();
     clearStatusFile();
+    wakeScheduler.stop();
     relay.disconnect();
     await adapter.stop();
     if (mcpServer) {

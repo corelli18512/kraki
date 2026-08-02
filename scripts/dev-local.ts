@@ -18,7 +18,7 @@
 
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
@@ -47,6 +47,7 @@ const PID_FILES = {
 };
 
 process.env.KRAKI_HOME = ROOT_DIR;
+process.env.KRAKI_DEV_STACK = '1';
 
 let headProcess: ChildProcess | null = null;
 let webProcess: ChildProcess | null = null;
@@ -138,53 +139,6 @@ async function terminatePid(pid: number | null, label: string): Promise<void> {
   }
 }
 
-/** Terminate any processes listening on or connected to a given port. */
-function killPortUsers(port: number): void {
-  try {
-    const output = execSync(`lsof -ti tcp:${port} 2>/dev/null`, { encoding: 'utf8' }).trim();
-    if (!output) return;
-    for (const pidStr of output.split('\n')) {
-      const pid = parseInt(pidStr, 10);
-      if (pid && pid !== process.pid) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
-      }
-    }
-  } catch { /* lsof failed or no listeners — fine */ }
-}
-
-/** Terminate stale local-dev daemon-workers that would reconnect to our relay. */
-function killOrphanDevDaemons(): void {
-  // Check all .tmp/kraki-local dirs for daemon.pid files (covers all worktrees)
-  const searchRoots = [
-    resolve(process.cwd(), '..'),  // sibling worktrees
-    process.cwd(),                  // this worktree
-  ];
-  for (const root of searchRoots) {
-    try {
-      for (const entry of readdirSync(root)) {
-        const pidPath = join(root, entry, '.tmp', 'kraki-local', 'daemon.pid');
-        const pid = readPid(pidPath);
-        if (pid && pid !== process.pid && isPidAlive(pid)) {
-          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
-        }
-      }
-    } catch { /* dir not readable — skip */ }
-  }
-
-  // Find all dev daemon-workers (tsx-based) and terminate them.
-  // Dev daemons use `--import tsx` while the global binary does not.
-  // This runs before the relay starts, so port-based detection won't work.
-  try {
-    const lines = execSync('ps -ww -eo pid,command', { encoding: 'utf8' }).split('\n');
-    for (const line of lines) {
-      if (!line.includes('tsx') || !line.includes('__daemon-worker')) continue;
-      const pid = parseInt(line.trim(), 10);
-      if (!pid || pid === process.pid) continue;
-      try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
-    }
-  } catch { /* ps failed */ }
-}
-
 async function stopLocalStack(options: { includeLauncher: boolean; silent?: boolean } = { includeLauncher: true }): Promise<void> {
   const launcherPid = readPid(PID_FILES.launcher);
   const headPid = readPid(PID_FILES.head);
@@ -202,6 +156,15 @@ async function stopLocalStack(options: { includeLauncher: boolean; silent?: bool
   if (!options.silent) {
     console.log(`🧹 Local Kraki stack stopped (${ROOT_DIR})`);
   }
+}
+
+async function assertPortAvailable(port: number): Promise<void> {
+  const probe = createHttpServer();
+  await new Promise<void>((resolve, reject) => {
+    probe.once('error', () => reject(new Error(`DevStack port ${port} is already in use; refusing to stop or reuse another process.`)));
+    probe.listen(port, '127.0.0.1', () => resolve());
+  });
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
 }
 
 function waitForRelay(url: string, timeoutMs = 15_000): Promise<void> {
@@ -395,9 +358,11 @@ async function start(args: string[]): Promise<void> {
 
   ensureDirs();
   await stopLocalStack({ includeLauncher: true, silent: true });
-  killOrphanDevDaemons();
-  killPortUsers(RELAY_PORT);
-  killPortUsers(REDIRECT_PORT);
+  await Promise.all([
+    assertPortAvailable(RELAY_PORT),
+    assertPortAvailable(REDIRECT_PORT),
+    assertPortAvailable(WEB_DEV_PORT),
+  ]);
   ensureLocalStateVersion();
   writePid(PID_FILES.launcher, process.pid);
 

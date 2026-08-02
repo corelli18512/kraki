@@ -218,6 +218,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       break;
     }
 
+    case 'scheduled_wake': {
+      store.appendMessage(sid, msg);
+      break;
+    }
+
     case 'agent_message': {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       traceEvent({ comp: 'arm', evt: 'APP-AGENT-MESSAGE', sessionId: sid, contentLen: msg.payload.content?.length });

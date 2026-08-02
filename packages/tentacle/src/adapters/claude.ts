@@ -336,8 +336,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
-    urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    credentialsForSession: (sessionId: string) => { url: string; bearerToken: string };
   };
   /**
    * Absolute path to the `claude` binary, set by the multi-adapter via
@@ -351,8 +350,7 @@ export class ClaudeAdapter extends AgentAdapter {
   constructor(options: {
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
     krakiMcp?: {
-      urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      credentialsForSession: (sessionId: string) => { url: string; bearerToken: string };
     };
     claudeExecutablePath?: string;
   } = {}) {
@@ -769,11 +767,12 @@ export class ClaudeAdapter extends AgentAdapter {
     type McpServerConfig = { type: 'http'; url: string; headers?: Record<string, string> };
     let mcpServers: Record<string, McpServerConfig> | undefined;
     if (this.krakiMcp) {
+      const credentials = this.krakiMcp.credentialsForSession(sessionId);
       mcpServers = {
         kraki: {
           type: 'http' as const,
-          url: this.krakiMcp.urlForSession(sessionId),
-          headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+          url: credentials.url,
+          headers: { Authorization: `Bearer ${credentials.bearerToken}` },
         },
       };
       logger.info({ sessionId }, 'wired kraki MCP into session');

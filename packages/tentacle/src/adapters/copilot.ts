@@ -500,8 +500,7 @@ export class CopilotAdapter extends AgentAdapter {
     /** When set, the adapter wires the Kraki MCP server into every Copilot
      *  session it creates/resumes, with the URL scoped per Kraki sessionId. */
     krakiMcp?: {
-      urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      credentialsForSession: (sessionId: string) => { url: string; bearerToken: string };
     };
   } = {}) {
     super();
@@ -512,8 +511,7 @@ export class CopilotAdapter extends AgentAdapter {
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
-    urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    credentialsForSession: (sessionId: string) => { url: string; bearerToken: string };
   };
 
   /** System prompt appended to the SDK's built-in prompt. See system-prompt.md for docs. */
@@ -937,10 +935,11 @@ export class CopilotAdapter extends AgentAdapter {
     // here by using a stable session-scoped URL that the adapter knows
     // up-front via config.sessionId (the Kraki session id we assigned).
     if (this.krakiMcp && config.sessionId) {
+      const credentials = this.krakiMcp.credentialsForSession(config.sessionId);
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
-        url: this.krakiMcp.urlForSession(config.sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        url: credentials.url,
+        headers: { Authorization: `Bearer ${credentials.bearerToken}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
@@ -1470,10 +1469,11 @@ export class CopilotAdapter extends AgentAdapter {
 
     // Wire Kraki MCP into resumed sessions, scoped by the session id.
     if (this.krakiMcp) {
+      const credentials = this.krakiMcp.credentialsForSession(sessionId);
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
-        url: this.krakiMcp.urlForSession(sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        url: credentials.url,
+        headers: { Authorization: `Bearer ${credentials.bearerToken}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
