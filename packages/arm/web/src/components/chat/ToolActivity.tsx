@@ -18,8 +18,8 @@ interface ToolActivityProps {
   /** Lazy ref to the full result body (complete events only). */
   resultRef?: ContentRef;
   sessionId: string;
-  /** Fired with a sessionId/id when the cache misses and we need to pull. */
-  requestPull: (sessionId: string, id: string) => void;
+  /** Fired with a sessionId/ref when the cache misses and we need to pull. */
+  requestPull: (sessionId: string, ref: ContentRef) => void;
   success?: boolean;
   termination?: 'cancelled' | 'interrupted';
   cancelled?: boolean;
@@ -115,7 +115,7 @@ function ToolArgsBody({
   toolName: string;
   argsRef: ContentRef;
   sessionId: string;
-  requestPull: (sessionId: string, id: string) => void;
+  requestPull: (sessionId: string, ref: ContentRef) => void;
   headline: string;
 }) {
   const { status, text, error } = useAttachmentText(argsRef, sessionId, requestPull, true);
@@ -208,7 +208,7 @@ function ToolResultBody({
 }: {
   resultRef: ContentRef;
   sessionId: string;
-  requestPull: (sessionId: string, id: string) => void;
+  requestPull: (sessionId: string, ref: ContentRef) => void;
 }) {
   const { status, text, error } = useAttachmentText(resultRef, sessionId, requestPull, true);
   return (

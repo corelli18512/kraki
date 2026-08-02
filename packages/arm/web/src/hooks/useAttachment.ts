@@ -40,22 +40,22 @@ interface UseAttachmentTextResult {
 }
 
 /** wsClient.requestAttachment thunk — kept loose to avoid an import cycle. */
-type RequestPull = (sessionId: string, id: string) => void;
+type RequestPull = (sessionId: string, ref: ContentRef) => void;
 
 /** Shared hydrate guard so concurrent mounts don't fan out duplicate IDB reads. */
 const hydratedIds = new Set<string>();
 const hydratingIds = new Map<string, Promise<boolean>>();
 
-function hydrateOnce(id: string): Promise<boolean> {
-  if (hydratedIds.has(id)) return Promise.resolve(true);
-  let p = hydratingIds.get(id);
+function hydrateOnce(ref: ContentRef): Promise<boolean> {
+  if (hydratedIds.has(ref.id)) return Promise.resolve(true);
+  let p = hydratingIds.get(ref.id);
   if (!p) {
-    p = hydrateFromIDB(id).then((hit) => {
-      if (hit) hydratedIds.add(id);
-      hydratingIds.delete(id);
+    p = hydrateFromIDB(ref).then((hit) => {
+      if (hit) hydratedIds.add(ref.id);
+      hydratingIds.delete(ref.id);
       return hit;
     });
-    hydratingIds.set(id, p);
+    hydratingIds.set(ref.id, p);
   }
   return p;
 }
@@ -81,11 +81,11 @@ function useAttachmentLifecycle(
       const existing = getState(ref.id);
       if (existing?.kind === 'ready') return;
       if (existing?.kind === 'awaiting-chunks' || existing?.kind === 'fetching') return;
-      const hit = await hydrateOnce(ref.id);
+      const hit = await hydrateOnce(ref);
       if (cancelled) return;
       if (hit) return;
-      markFetching(ref.id);
-      requestPull(sessionId, ref.id);
+      if (!markFetching(ref)) return;
+      requestPull(sessionId, ref);
     }
     void init();
     return () => {

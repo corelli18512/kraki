@@ -18,9 +18,9 @@ import type { Attachment, ContentRef } from '@kraki/protocol';
 
 /** Lazy attachment pull for tool args/result refs rendered in the status
  *  section (mirrors MessageBubble's ATTACHMENT_PULL). */
-const ATTACHMENT_PULL = (sid: string, id: string): void => {
+const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => {
-    wsClient.requestAttachment(sid, id);
+    wsClient.requestAttachment(sid, ref);
   });
 };
 

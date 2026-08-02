@@ -21,6 +21,7 @@
  * only in Blobs, so we don't leak URLs across hook unmounts.
  */
 
+import type { ContentRef } from '@kraki/protocol';
 import { openDB, type IDBPDatabase } from 'idb';
 
 import { createLogger } from './logger';
@@ -82,7 +83,10 @@ export type AttachmentState =
   | { kind: 'ready'; mimeType: string; blob: Blob }
   | { kind: 'error'; reason: string };
 
+export type AttachmentChunkIngestResult = 'accepted' | 'ignored' | 'terminal-error';
+
 const states = new Map<string, AttachmentState>();
+const expectedRefs = new Map<string, ContentRef>();
 const subscribers = new Map<string, Set<() => void>>();
 const PUSH_TIMEOUT_MS = 10_000;
 const pushTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
@@ -113,33 +117,34 @@ export function getState(id: string): AttachmentState | undefined {
 }
 
 /** Called by the message router for every ContentRef in a LIVE message. */
-export function markAwaitingPush(id: string, requestPull: (id: string) => void): void {
+export function markAwaitingPush(ref: ContentRef, requestPull: (ref: ContentRef) => void): void {
+  expectedRefs.set(ref.id, ref);
   // No-op if we already have it or are mid-fetch
-  const current = states.get(id);
+  const current = states.get(ref.id);
   if (current && (current.kind === 'ready' || current.kind === 'awaiting-chunks' || current.kind === 'fetching')) {
     return;
   }
-  states.set(id, {
+  states.set(ref.id, {
     kind: 'awaiting-chunks',
     received: new Map(),
     total: null,
     mimeType: null,
     startedAt: Date.now(),
   });
-  notify(id);
+  notify(ref.id);
   // Safety timeout — if no chunk arrives in PUSH_TIMEOUT_MS, fall back to
   // an explicit attachment_request. Cleared when first chunk arrives or
   // when assembly completes.
-  if (pushTimeouts.has(id)) {
-    clearTimeout(pushTimeouts.get(id)!);
+  if (pushTimeouts.has(ref.id)) {
+    clearTimeout(pushTimeouts.get(ref.id)!);
   }
   pushTimeouts.set(
-    id,
+    ref.id,
     setTimeout(() => {
-      const s = states.get(id);
+      const s = states.get(ref.id);
       if (s?.kind === 'awaiting-chunks' && s.received.size === 0) {
-        logger.warn('push timeout — falling back to fetch', { id });
-        requestPull(id);
+        logger.warn('push timeout — falling back to fetch', { id: ref.id });
+        requestPull(ref);
       }
     }, PUSH_TIMEOUT_MS),
   );
@@ -153,16 +158,29 @@ export async function ingestChunk(
   mimeType: string,
   data: string,
   error?: string,
-): Promise<boolean> {
+): Promise<AttachmentChunkIngestResult> {
+  const existing = states.get(id);
+  if (existing?.kind === 'ready' || existing?.kind === 'error') return 'ignored';
   if (error) {
-    states.set(id, { kind: 'error', reason: error });
-    clearPushTimeout(id);
-    notify(id);
-    return true;
+    setAttachmentError(id, error);
+    return 'terminal-error';
   }
 
-  let current = states.get(id);
-  if (current?.kind === 'ready') return false;
+  const ref = expectedRefs.get(id);
+  if (!ref) {
+    setAttachmentError(id, 'Attachment metadata unavailable');
+    return 'terminal-error';
+  }
+  if (!Number.isInteger(index) || !Number.isInteger(total) || total <= 0 || index < 0 || index >= total) {
+    setAttachmentError(id, 'Invalid attachment chunk index');
+    return 'terminal-error';
+  }
+  if (mimeType !== ref.mimeType) {
+    setAttachmentError(id, `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`);
+    return 'terminal-error';
+  }
+
+  let current = existing;
   if (!current || (current.kind !== 'awaiting-chunks' && current.kind !== 'fetching')) {
     // No active assembly exists. Initialize one defensively for a stray chunk.
     current = {
@@ -185,29 +203,71 @@ export async function ingestChunk(
     states.set(id, current);
   }
 
-  if (current.received.has(index)) return false;
+  if (current.total !== null && current.total !== total) {
+    setAttachmentError(id, `Attachment chunk count changed from ${current.total} to ${total}`);
+    return 'terminal-error';
+  }
+  if (current.mimeType !== null && current.mimeType !== mimeType) {
+    setAttachmentError(id, 'Attachment MIME type changed during transfer');
+    return 'terminal-error';
+  }
+  if (current.received.has(index)) return 'accepted';
+  let decodedLength: number;
+  try {
+    decodedLength = base64Length(data);
+    if (decodedLength < 0) throw new Error('negative decoded length');
+  } catch {
+    setAttachmentError(id, 'Attachment chunk is not valid base64');
+    return 'terminal-error';
+  }
+  let receivedBytes = decodedLength;
+  for (const chunk of current.received.values()) receivedBytes += base64Length(chunk);
+  if (receivedBytes > ref.size) {
+    setAttachmentError(id, `Attachment exceeds declared size ${ref.size}`);
+    return 'terminal-error';
+  }
   current.received.set(index, data);
   current.total = total;
   current.mimeType = mimeType;
   if (current.received.size === total) {
-    // Complete — assemble Blob
-    const sorted = Array.from(current.received.entries()).sort((a, b) => a[0] - b[0]);
-    const buf = new Uint8Array(sorted.reduce((acc, [, b64]) => acc + base64Length(b64), 0));
-    let offset = 0;
-    for (const [, b64] of sorted) {
-      const bytes = base64ToBytes(b64);
-      buf.set(bytes, offset);
-      offset += bytes.length;
+    // Complete — require every expected index, then assemble and verify the
+    // content-addressed ref before exposing or persisting the blob.
+    const chunks: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const chunk = current.received.get(i);
+      if (chunk === undefined) {
+        setAttachmentError(id, `Attachment is missing chunk ${i}`);
+        return 'terminal-error';
+      }
+      chunks.push(chunk);
     }
-    const blob = new Blob([buf], { type: mimeType });
-    states.set(id, { kind: 'ready', mimeType, blob });
-    clearPushTimeout(id);
-    await persistToIDB({ id, mimeType, size: blob.size, blob, lastAccessed: Date.now() });
-    notify(id);
+    try {
+      const buf = new Uint8Array(chunks.reduce((acc, b64) => acc + base64Length(b64), 0));
+      let offset = 0;
+      for (const b64 of chunks) {
+        const bytes = base64ToBytes(b64);
+        buf.set(bytes, offset);
+        offset += bytes.length;
+      }
+      const blob = new Blob([buf], { type: mimeType });
+      const validationError = await validateBlob(ref, mimeType, blob);
+      if (validationError) {
+        void deleteFromIDB(id);
+        setAttachmentError(id, validationError);
+        return 'terminal-error';
+      }
+      states.set(id, { kind: 'ready', mimeType, blob });
+      clearPushTimeout(id);
+      void persistToIDB({ id, mimeType, size: blob.size, blob, lastAccessed: Date.now() });
+      notify(id);
+    } catch (err) {
+      setAttachmentError(id, `Attachment decode failed: ${(err as Error).message}`);
+      return 'terminal-error';
+    }
   } else {
     notify(id);
   }
-  return true;
+  return 'accepted';
 }
 
 function clearPushTimeout(id: string): void {
@@ -218,27 +278,95 @@ function clearPushTimeout(id: string): void {
   }
 }
 
-/** Called by useAttachment to mark a pull in progress. */
-export function markFetching(id: string): void {
-  const current = states.get(id);
-  if (current?.kind === 'ready' || current?.kind === 'awaiting-chunks') return;
-  states.set(id, { kind: 'fetching' });
+function setAttachmentError(id: string, reason: string): void {
+  states.set(id, { kind: 'error', reason });
+  clearPushTimeout(id);
+  logger.warn('attachment rejected', { id, reason });
   notify(id);
 }
 
-/** Try to hydrate state from IDB. Returns true if hit. */
-export async function hydrateFromIDB(id: string): Promise<boolean> {
+export function failAttachment(ref: ContentRef, reason: string): void {
+  expectedRefs.set(ref.id, ref);
+  if (states.get(ref.id)?.kind === 'ready') return;
+  setAttachmentError(ref.id, reason);
+}
+
+async function validateBlob(ref: ContentRef, mimeType: string, blob: Blob): Promise<string | null> {
+  if (!/^[0-9a-f]{32}$/i.test(ref.id)) {
+    return 'Attachment id is not a valid content hash';
+  }
+  if (mimeType !== ref.mimeType) {
+    return `Attachment MIME type mismatch: expected ${ref.mimeType}, got ${mimeType || 'empty'}`;
+  }
+  if (blob.size !== ref.size) {
+    return `Attachment size mismatch: expected ${ref.size}, got ${blob.size}`;
+  }
+  const bytes = await blobToArrayBuffer(blob);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  if (!hex.startsWith(ref.id.toLowerCase())) {
+    return 'Attachment checksum mismatch';
+  }
+  return null;
+}
+
+function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  const modernBlob = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
+  if (typeof modernBlob.arrayBuffer === 'function') return modernBlob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read attachment blob'));
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) resolve(reader.result);
+      else reject(new Error('Attachment blob did not produce bytes'));
+    };
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+/** Called by useAttachment to acquire ownership of a pull. */
+export function markFetching(ref: ContentRef): boolean {
+  expectedRefs.set(ref.id, ref);
+  const current = states.get(ref.id);
+  if (current?.kind === 'ready' || current?.kind === 'awaiting-chunks' || current?.kind === 'fetching') {
+    return false;
+  }
+  states.set(ref.id, { kind: 'fetching' });
+  notify(ref.id);
+  return true;
+}
+
+/** Try to hydrate state from IDB. Returns true if a verified record exists. */
+export async function hydrateFromIDB(ref: ContentRef): Promise<boolean> {
+  expectedRefs.set(ref.id, ref);
   try {
     const db = await getDB();
-    const got = (await db.get(STORE_NAME, id)) as StoredAttachment | undefined;
+    const got = (await db.get(STORE_NAME, ref.id)) as StoredAttachment | undefined;
     if (!got) return false;
-    states.set(id, { kind: 'ready', mimeType: got.mimeType, blob: got.blob });
+    const validationError = await validateBlob(ref, got.mimeType, got.blob);
+    if (validationError) {
+      await db.delete(STORE_NAME, ref.id);
+      logger.warn('discarded invalid attachment cache entry', { id: ref.id, reason: validationError });
+      return false;
+    }
+    states.set(ref.id, { kind: 'ready', mimeType: got.mimeType, blob: got.blob });
     // Update lastAccessed in the background; ignore errors
-    void db.put(STORE_NAME, { ...got, lastAccessed: Date.now() });
-    notify(id);
+    void db.put(STORE_NAME, { ...got, size: got.blob.size, lastAccessed: Date.now() });
+    notify(ref.id);
     return true;
-  } catch {
+  } catch (err) {
+    await deleteFromIDB(ref.id);
+    logger.warn('failed to hydrate attachment from IDB', { id: ref.id, error: (err as Error).message });
     return false;
+  }
+}
+
+async function deleteFromIDB(id: string): Promise<void> {
+  try {
+    const db = await getDB();
+    await db.delete(STORE_NAME, id);
+  } catch {
+    // Best effort. A failed delete must not make corrupt bytes visible.
   }
 }
 
@@ -297,7 +425,12 @@ async function evictIfOverCap(aggressive = false): Promise<void> {
 // ── base64 helpers ─────────────────────────────────────────────────────
 
 function base64Length(b64: string): number {
-  // Approximate decoded length without decoding
+  if (
+    b64.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)
+  ) {
+    throw new Error('invalid base64');
+  }
   let pad = 0;
   if (b64.endsWith('==')) pad = 2;
   else if (b64.endsWith('=')) pad = 1;
@@ -320,6 +453,7 @@ function base64ToBytes(b64: string): Uint8Array {
 /** Reset state. Tests only. */
 export function __resetForTests(): void {
   states.clear();
+  expectedRefs.clear();
   subscribers.clear();
   for (const t of pushTimeouts.values()) clearTimeout(t);
   pushTimeouts.clear();

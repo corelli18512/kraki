@@ -3,9 +3,9 @@ import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { X, Maximize2, FileCode2, LoaderCircle, AlertTriangle } from 'lucide-react';
 
-const ATTACHMENT_PULL = (sessionId: string, id: string): void => {
+const ATTACHMENT_PULL = (sessionId: string, ref: ContentRef): void => {
   void import('../../lib/ws-client').then(({ wsClient }) => {
-    wsClient.requestAttachment(sessionId, id);
+    wsClient.requestAttachment(sessionId, ref);
   });
 };
 
