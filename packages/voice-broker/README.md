@@ -1,12 +1,15 @@
 # @kraki/voice-broker
 
-> **Status:** MVP scaffold + full local mock pipeline. Real Doubao credentials not yet
-> wired in (waiting on Volcengine console). See `kraki-voice-broker-handover.md`
-> in `~/Documents/` for the design background.
+Kraki's product-owned voice authorization and deployment layer. It provides:
 
-The voice-broker is a sidecar process to the Kraki `head`. It holds the
-Doubao/Volcengine streaming-ASR secret, accepts audio over WSS from `arm`
-clients, and streams transcripts back. The phone never sees the key.
+- the original standalone Doubao broker and local mock pipeline under `src/`;
+- signed Kraki voice-lease verification;
+- the production adapter under `deploy/` that plugs Kraki leases into the
+  provider-agnostic `@coinfra/voice` gateway while retaining its streaming
+  correction and authoritative-final protocol.
+
+The Mac/iOS client never receives provider credentials or the legacy gateway
+API key.
 
 ```
 arm  ─audio→  voice-broker  ─audio→  Doubao
@@ -15,15 +18,13 @@ arm  ←text─   voice-broker  ←text─   Doubao
 
 This package currently delivers:
 
-- ✅ Doubao binary wire protocol (frame builders + parser) — pure, unit-tested
-- ✅ `DoubaoClient` — WS wrapper with `connect → start → sendAudio → finish`
-- ✅ Mock Doubao server — speaks the same binary protocol, lets us test
-  end-to-end without real credentials
-- ✅ Broker WSS server — bridges arm clients to Doubao (no auth in this phase)
-- ✅ Phase-0 probe CLI — stream a local WAV/PCM file, print transcripts
-- ✅ Browser mic test page — captures mic → 16 kHz PCM → broker → transcripts
-- ⏸ Lease auth / Apple IAP / multi-region sidecar — explicitly deferred
-  (handover §5, phases 4-6)
+- ✅ Doubao binary wire protocol, client, mock server and standalone broker
+- ✅ Offline RSA verification of Head-issued, user/device/resource-bound leases
+- ✅ Per-session audio limits from signed `quota_seconds`
+- ✅ Production Coinfra adapter with correction deltas and authoritative final
+- ✅ Migration-safe legacy API-key compatibility for non-Kraki clients; a frame
+  carrying a bad lease is never allowed to downgrade to the legacy key path
+- ✅ File probe and browser microphone test page
 
 ---
 
@@ -63,7 +64,53 @@ ffmpeg -i in.m4a -ac 1 -ar 16000 -sample_fmt s16 fixtures/your-clip.wav
 
 ---
 
-## Going live (when credentials arrive)
+## Production Coinfra adapter
+
+`deploy/coinfra-lease-serve.mjs` is the Kraki-owned entrypoint used with a
+built `@coinfra/voice` distribution. Configure:
+
+```text
+KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH=/path/to/voice-lease.pub.pem
+KRAKI_VOICE_SETTLEMENT_URL=http://127.0.0.1:4000/internal/voice/settle
+KRAKI_VOICE_SETTLEMENT_KEY=<same secret as Head VOICE_SETTLEMENT_KEY>
+VOICE_API_KEY=<legacy server-only migration key>
+```
+
+Start frames containing `lease` are verified exclusively as Kraki leases:
+signature, algorithm, issuer, user, device, resource, time window, and quota
+must all match. Frames without `lease` may use the legacy key while older
+VoiceType clients migrate. Never ship `VOICE_API_KEY` in Kraki arm builds.
+
+The gateway first activates each `jti` with a random `activationId`; Head accepts
+that pair exactly once, preventing lease replay. It then reports trusted
+`audioSeconds` exactly once per Kraki session with the same pair. Head reserves
+the full lease budget while an activated session is unsettled, then atomically
+replaces that reservation with rounded-up actual audio seconds. An expired
+never-activated lease releases its reservation; an activated lease whose final
+report is lost remains conservatively reserved. Settlement retries are
+idempotent and conflicting replays are rejected. Legacy-key VoiceType sessions
+have no `jti` and are not reported.
+
+Validate the deployment adapter with:
+
+```bash
+pnpm --filter @kraki/voice-broker test:deploy
+```
+
+---
+
+## Coordinated release requirement
+
+Head settlement and the Broker activation adapter are one rollout unit. Do not
+release only one side while the public voice endpoint remains available: an old
+Broker does not activate sessions, and a new Broker cannot settle against an old
+Head. For production rollout, first stop accepting new voice connections, then
+upgrade both components and configure the matching settlement secret. Start
+Head, start the Broker, verify one activation/settlement probe, and only then
+restore the public voice route. Database backup and schema-v10 verification are
+required before reopening traffic.
+
+## Going live
 
 1. Create a Doubao app at <https://console.volcengine.com/speech> →
    流式语音识别大模型. Note the App Key, Access Key, and Resource ID.

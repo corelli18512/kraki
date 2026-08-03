@@ -24,6 +24,7 @@
     "serve": "tsx src/cli.ts serve",
     "web": "tsx src/cli.ts web",
     "test": "vitest run",
+    "test:deploy": "node --test deploy/kraki-lease-authorizer.test.mjs && node --check deploy/coinfra-lease-serve.mjs",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
