@@ -152,7 +152,8 @@ jobs:
           elif [[ "$TAG" == mac-v* ]]; then
             TAG_VERSION="${TAG#mac-v}"
             PKG_VERSION=$(awk '
-              /^  KrakiMac:/ { in_mac=1; next }
+              /^targets:/ { in_targets=1; next }
+              in_targets && /^  KrakiMac:/ { in_mac=1; next }
               in_mac && /^  [A-Za-z0-9_]+:/ { exit }
               in_mac && /MARKETING_VERSION:/ {
                 value=$2
