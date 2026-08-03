@@ -53,10 +53,18 @@ final class AuthManager {
     /// Suite name for the app group UserDefaults shared with the NSE.
     private static let appGroupSuite = "group.chat.kraki.ios"
 
-    /// UserDefaults shared between the app and KrakiNotification extension.
-    /// The NSE reads `deviceId` from here when decrypting push payloads.
+    /// UserDefaults shared between the app and KrakiNotification extension in
+    /// production. macOS Debug is deliberately isolated from the stable GUI.
     private static var sharedDefaults: UserDefaults {
-        UserDefaults(suiteName: appGroupSuite) ?? .standard
+        #if os(macOS)
+        #if DEBUG
+        return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
+        #else
+        return UserDefaults(suiteName: "chat.kraki.mac") ?? .standard
+        #endif
+        #else
+        return UserDefaults(suiteName: appGroupSuite) ?? .standard
+        #endif
     }
 
     // MARK: State

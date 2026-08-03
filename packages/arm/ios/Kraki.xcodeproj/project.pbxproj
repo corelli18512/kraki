@@ -1452,7 +1452,7 @@
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
+				INFOPLIST_KEY_CFBundleDisplayName = "Kraki (Dev)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Kraki";
@@ -1462,8 +1462,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
-				PRODUCT_NAME = Kraki;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
+				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
 				SWIFT_OBJC_INTERFACE_HEADER_NAME = "";
 			};

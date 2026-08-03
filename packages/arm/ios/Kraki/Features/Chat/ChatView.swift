@@ -260,6 +260,7 @@ struct ChatView: View {
                     pendingPermission: viewModel?.permissions.first,
                     pendingQuestion: viewModel?.questions.first,
                     isCompacting: viewModel?.isCompacting == true,
+                    compactionReason: viewModel?.compactionReason,
                     hasLiveCard: viewModel?.card != nil,
                     onHeightChange: { newHeight in
                         if abs(newHeight - bottomInputHeight) > 0.5 {

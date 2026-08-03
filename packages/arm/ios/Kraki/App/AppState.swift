@@ -122,8 +122,20 @@ final class AppState {
     var devLocalActive: Bool = false
     #endif
 
-    /// App group UserDefaults suite, shared with the NSE.
-    private static let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+    /// Persistence domain shared with the iOS NSE in production. The macOS
+    /// Debug app uses an isolated suite so Dev login/logout/region redirects
+    /// cannot mutate the stable `/Applications/Kraki.app` identity.
+    private static let sharedDefaults: UserDefaults = {
+        #if os(macOS)
+        #if DEBUG
+        return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
+        #else
+        return UserDefaults(suiteName: "chat.kraki.mac") ?? .standard
+        #endif
+        #else
+        return UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+        #endif
+    }()
     /// Key for the persisted relay URL. Set after a successful auth or a
     /// `wrong_region` redirect so we can skip the redirect dance on cold launch.
     private static let relayURLKey = "kraki.relayURL"
@@ -665,11 +677,17 @@ extension AppState: SessionSubscriptionHost {
             )
         }
 
-        switch digest.state {
-        case .compacting:
-            messageStore.setCompacting(sessionId, reason: nil)
-        case .idle, .active:
-            messageStore.clearRuntimeStatus(sessionId)
+        switch digest.runtimeStatus?.status {
+        case "compacting":
+            let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
+            messageStore.setCompacting(sessionId, reason: reason)
+        default:
+            if digest.state == .compacting {
+                // Older tentacles encoded maintenance directly in state.
+                messageStore.setCompacting(sessionId, reason: nil)
+            } else {
+                messageStore.clearRuntimeStatus(sessionId)
+            }
         }
 
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]

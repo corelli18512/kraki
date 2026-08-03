@@ -29,7 +29,13 @@ enum KrakiDataPaths {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
+        let directoryName: String
+        #if DEBUG && os(macOS)
+        directoryName = "Kraki Dev"
+        #else
+        directoryName = "Kraki"
+        #endif
+        let dir = base.appendingPathComponent(directoryName, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -43,7 +49,13 @@ enum KrakiDataPaths {
         }
         #endif
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("kraki-attachments", isDirectory: true)
+        let cacheName: String
+        #if DEBUG && os(macOS)
+        cacheName = "kraki-dev-attachments"
+        #else
+        cacheName = "kraki-attachments"
+        #endif
+        let dir = base.appendingPathComponent(cacheName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

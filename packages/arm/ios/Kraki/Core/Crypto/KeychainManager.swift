@@ -65,8 +65,28 @@ public enum KeychainError: Error, CustomStringConvertible {
 
 public final class KeychainManager {
 
-    private static let signingKeyTag    = "chat.kraki.ios.signing-key"
-    private static let encryptionKeyTag = "chat.kraki.ios.encryption-key"
+    private static let signingKeyTag: String = {
+        #if os(macOS)
+        #if DEBUG
+        return "chat.kraki.mac.dev.signing-key"
+        #else
+        return "chat.kraki.mac.signing-key"
+        #endif
+        #else
+        return "chat.kraki.ios.signing-key"
+        #endif
+    }()
+    private static let encryptionKeyTag: String = {
+        #if os(macOS)
+        #if DEBUG
+        return "chat.kraki.mac.dev.encryption-key"
+        #else
+        return "chat.kraki.mac.encryption-key"
+        #endif
+        #else
+        return "chat.kraki.ios.encryption-key"
+        #endif
+    }()
 
     #if os(macOS)
     /// macOS may deny access to a Keychain item after an app's signing

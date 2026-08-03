@@ -183,6 +183,15 @@ targets:
         ENABLE_HARDENED_RUNTIME: "YES"
         CODE_SIGN_ENTITLEMENTS: Kraki/KrakiMac.entitlements
         SWIFT_OBJC_INTERFACE_HEADER_NAME: ""
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.dev
+          PRODUCT_NAME: "Kraki Dev"
+          INFOPLIST_KEY_CFBundleDisplayName: "Kraki (Dev)"
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
+          PRODUCT_NAME: Kraki
+          INFOPLIST_KEY_CFBundleDisplayName: Kraki
     dependencies:
       - package: GRDB
       - package: Pulse

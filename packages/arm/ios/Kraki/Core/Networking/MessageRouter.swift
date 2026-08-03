@@ -49,6 +49,12 @@ extension SessionDigest {
             return SessionPreview(text: text, type: type, timestamp: timestamp)
         }()
 
+        let runtimeStatus: SessionRuntimeStatusDigest? = {
+            guard let dict = json["runtimeStatus"] as? [String: Any],
+                  let status = dict["status"] as? String else { return nil }
+            return SessionRuntimeStatusDigest(status: status, reason: dict["reason"] as? String)
+        }()
+
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -56,6 +62,7 @@ extension SessionDigest {
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
+            runtimeStatus: runtimeStatus,
             mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
@@ -544,21 +551,18 @@ final class MessageRouter {
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
 
-        case "compacting":
-            // `compacting` is a peer of active/idle on the session-state axis
-            // (see @kraki/protocol CompactingMessage). `phase: 'start'` enters
-            // the compacting state; `phase: 'end'` carries the authoritative
-            // `nextState` ('active' | 'idle') to restore. Never touches the
-            // card action slot, TRACE, or spine. Mirrors web's message-router.
+        case "compact", "compacting":
+            // Transient compaction maintenance, orthogonal to active/idle.
+            // Compatibility accepts both the historical `compact` spelling and
+            // the current protocol `compacting` envelope, but neither mutates
+            // SessionInfo.state: threshold/manual maintenance may continue while
+            // the conversation is idle and accepts a new prompt.
             let phase = payload?["phase"] as? String
             if phase == "start" {
                 let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
                 appState.messageStore.setCompacting(sessionId, reason: reason)
-                appState.sessionStore.updateState(sessionId, state: "compacting")
             } else {
                 appState.messageStore.clearRuntimeStatus(sessionId)
-                let nextState = (payload?["nextState"] as? String) ?? "active"
-                appState.sessionStore.updateState(sessionId, state: nextState)
             }
 
         case "error":
@@ -676,14 +680,18 @@ final class MessageRouter {
             appState.sessionStore.upsertSession(digest, deviceId: tentacleDeviceId, deviceName: deviceName)
 
             // Runtime status is ephemeral and the producer is authoritative.
-            // Active live-card state is restored only by the current session's
-            // subscription ACK; do not pull every active session via the legacy
-            // request_card reconnect path.
-            switch digest.state {
-            case .compacting:
-                appState.messageStore.setCompacting(digest.id, reason: nil)
-            case .idle, .active:
-                appState.messageStore.clearRuntimeStatus(digest.id)
+            // New Tentacles report orthogonal maintenance in runtimeStatus;
+            // older producers encoded compacting directly in state.
+            switch digest.runtimeStatus?.status {
+            case "compacting":
+                let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
+                appState.messageStore.setCompacting(digest.id, reason: reason)
+            default:
+                if digest.state == .compacting {
+                    appState.messageStore.setCompacting(digest.id, reason: nil)
+                } else {
+                    appState.messageStore.clearRuntimeStatus(digest.id)
+                }
             }
 
             // Sync mode
@@ -696,6 +704,18 @@ final class MessageRouter {
 
             // Sync pin
             appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
+
+            // Sidebar preview is the Tentacle's authoritative digest. Apply it
+            // before Chat head reconciliation so list and open Chat converge on
+            // the same producer tail after reconnect/projection boundaries.
+            if let preview = digest.preview {
+                appState.sessionStore.setPreview(
+                    digest.id,
+                    text: preview.text,
+                    type: preview.type,
+                    timestamp: preview.timestamp
+                )
+            }
 
             // Unread is derived from readSeq/lastSeq directly on each
             // SessionInfo. We advance both sides monotonically, then
