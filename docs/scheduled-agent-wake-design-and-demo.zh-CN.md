@@ -146,6 +146,29 @@ interface AgentTrigger {
   missedRunPolicy: "run_once_when_online" | "skip";
   overlapPolicy: "skip" | "queue_one";
 
+  projectionPolicy: {
+    chat: {
+      publishOn: Array<
+        | "every_run"
+        | "change"
+        | "match"
+        | "action_required"
+        | "failure"
+        | "uncertain"
+      >;
+    };
+    push: {
+      notifyOn: Array<
+        | "change"
+        | "match"
+        | "action_required"
+        | "failure"
+        | "uncertain"
+      >;
+    };
+    digest: "off" | "daily" | "weekly";
+  };
+
   status: "active" | "paused" | "completed" | "deleted";
   nextOccurrenceAt?: string;
 
@@ -244,7 +267,51 @@ interface AgentRun {
   finishedAt?: string;
   error?: RunError;
 }
+
+interface RunReport {
+  runId: string;
+  status: "succeeded" | "failed" | "cancelled" | "uncertain";
+
+  classification:
+    | "no_change"
+    | "changed"
+    | "matched"
+    | "action_required";
+
+  summary: string;
+  stateFingerprint?: string;
+  detailsRef?: ContentRef;
+  suggestedAttention: "none" | "info" | "action_required" | "urgent";
+  completedAt: string;
+}
 ```
+
+`RunReport` 是 Agent/adapter 提交给 Tentacle 的执行结果，不是聊天消息。Agent 可以建议 attention level，但不能直接决定是否向用户发言。
+
+Tentacle 根据以下信息计算最终 projection signals：
+
+- Run 的真实状态；
+- 是否存在待审批 capability；
+- 是否发生失败或结果不确定；
+- 本次 `stateFingerprint` 与上次成功 observation 的差异；
+- Trigger 的 `projectionPolicy`；
+- 去重、失败抑制和通知频率规则。
+
+例如“每天检查，没变化不用告诉我”会被确认成：
+
+```ts
+projectionPolicy: {
+  chat: {
+    publishOn: ["change", "match", "action_required", "failure", "uncertain"]
+  },
+  push: {
+    notifyOn: ["match", "action_required", "uncertain"]
+  },
+  digest: "off"
+}
+```
+
+这样每天仍然有完整 Run 和审计结果，但 `no_change` 不会自动产生聊天消息。
 
 ---
 
@@ -387,60 +454,128 @@ Context package 可以包含：
 
 ---
 
-## 7. Session spine 的正确表示
+## 7. Run ledger 与 Chat projection
 
-### 7.1 推荐：通用 Run 边界
+### 7.1 所有 Run 进入独立 ledger
 
-与其为每一种来源新增一个伪消息，建议最终引入通用消息：
+每一次 Scheduled Run 都必须进入 Tentacle 的 durable Run ledger，包括完全静默的检查。
 
-```ts
-interface RunStartedMessage extends BaseEnvelope {
-  type: "run_started";
-  payload: {
-    runId: string;
-    turnId: string;
-    source: AgentRun["source"];
-    label?: string;
-  };
-}
+Run ledger 保存：
 
-interface RunCompletedMessage extends BaseEnvelope {
-  type: "run_completed";
-  payload: {
-    runId: string;
-    outcome: "succeeded" | "failed" | "cancelled" | "uncertain";
-    finishedAt: string;
-  };
-}
-```
+- Run 来源；
+- instruction snapshot；
+- 实际执行设备与 adapter；
+- 状态和耗时；
+- RunReport；
+- TRACE 和 artifact refs；
+- 是否以及为什么投影到聊天、Push 或 Digest。
 
-Scheduled Run 的聊天投影：
+**Run ledger 是执行审计 authority；session spine 不是所有后台执行的流水账。**
+
+因此不能默认让每次 Run 都向聊天写入：
 
 ```text
-run_started(source = scheduled_trigger)
-agent_message(..., runId)
-run_completed(runId, succeeded)
+run_started
+run_completed
 ```
 
-这比把 `scheduled_wake` 同时当作调度事件、Agent 输入和 turn anchor 更清晰。
+否则“每天检查但没变化不要告诉我”仍会每天污染聊天。
 
-### 7.2 迁移兼容
+### 7.2 Projection Policy
 
-第一阶段可以保留：
+Run 完成后，Tentacle 计算 projection：
 
 ```ts
-type: "scheduled_wake"
+interface RunProjectionDecision {
+  runId: string;
+  chat: "silent" | "summary" | "action_card" | "error";
+  push: "none" | "info" | "action_required" | "urgent";
+  digest: "none" | "include";
+  reason:
+    | "policy_every_run"
+    | "state_changed"
+    | "condition_matched"
+    | "approval_required"
+    | "run_failed"
+    | "result_uncertain"
+    | "no_change_suppressed"
+    | "duplicate_suppressed";
+}
 ```
 
-但应把它定义为：
+最终 decision 必须由 Tentacle/Policy Engine 产生，而不是由模型直接控制。
 
-- **Run/turn anchor**；
-- 不包含用户角色语义；
-- 不表示业务执行成功；
-- payload 中增加 `runId` 和 `occurrenceId`；
-- 后续迁移到通用 `run_started`。
+Agent 的 RunReport 可以表达：
 
-建议第一阶段 payload：
+```ts
+classification: "no_change" | "changed" | "matched" | "action_required"
+```
+
+但 Tentacle 仍要用 deterministic signals 核验，例如：
+
+- capability 是否真的进入 waiting approval；
+- Run 是否真的 failed/uncertain；
+- observation fingerprint 是否发生变化；
+- 相同 `dedupeKey` 是否已发布过；
+- Trigger policy 是否允许本次通知。
+
+### 7.3 只有公开 projection 才进入 session spine
+
+当 decision 为 `chat: "silent"`：
+
+- 不写 `run_started`；
+- 不写 agent bubble；
+- 不改变聊天 preview；
+- 不增加 unread；
+- Run 只存在于 Run ledger 和“已安排事项”的运行历史中。
+
+当 decision 需要公开时，spine 可以写一个原子、已完成的 projection：
+
+```ts
+interface RunProjectionMessage extends BaseEnvelope {
+  type: "run_projection";
+  payload: {
+    runId: string;
+    triggerId?: string;
+    occurrenceId?: string;
+    sourceType: "scheduled_trigger" | "external_event" | "retry";
+    kind: "summary" | "action_required" | "failed" | "uncertain";
+    summary: string;
+    completedAt: string;
+    detailsRef?: ContentRef;
+  };
+}
+```
+
+UI 根据 `kind` 渲染为：
+
+- 普通 Agent 总结；
+- 审批卡；
+- 失败提示；
+- 结果不确定提示。
+
+如果用户当时正打开该 session，并且产品希望展示实时后台执行，可以订阅 transient Run activity；这些 live events 不属于 durable chat spine，Run 最终静默时可以无痕消失。
+
+### 7.4 显式“每次都告诉我”
+
+只有 Trigger policy 包含：
+
+```ts
+chat.publishOn = ["every_run", ...]
+```
+
+每次成功 Run 才会生成聊天总结。
+
+### 7.5 迁移兼容
+
+PoC 当前持久化 `scheduled_wake` turn anchor。正式实现有两个选择：
+
+1. 将其限制为仅用于需要公开的 Run projection；或
+2. 迁移为 `run_projection`，静默 Run 完全不进入 spine。
+
+推荐第二种。
+
+如果第一阶段暂时保留 `scheduled_wake`，payload 至少应改成：
 
 ```ts
 interface ScheduledWakeMessage extends BaseEnvelope {
@@ -456,16 +591,7 @@ interface ScheduledWakeMessage extends BaseEnvelope {
 }
 ```
 
-**不建议把完整 instruction 放入长期 spine。**
-
-原因：
-
-- instruction 已存在 Trigger/Run authority store；
-- spine 只需要重建聊天投影和来源；
-- 减少敏感任务内容在多份日志中的复制；
-- 修改 Trigger 后仍能准确区分“当时执行的 instruction snapshot”。
-
-Run store 应保存不可变的 instruction snapshot；spine 通过 `runId` 引用。
+完整 instruction 保存在不可变 Run snapshot 中，不复制进长期 spine。
 
 ---
 
@@ -640,9 +766,9 @@ interface PolicyContext {
 3. Agent 负责理解，Tentacle 负责持久化和计时。
 4. 创建 Trigger 必须有轻量确认。
 5. 确认按钮直接提交结构化命令，不再让模型二次解释。
-6. 到点后结果回到原聊天。
-7. Scheduled Run 与用户消息视觉不同。
-8. 用户始终能看到执行 Agent、设备、下次时间和权限边界。
+6. 到点后的每次执行都进入 Run history，但只有符合 projection policy 的结果才回到原聊天。
+7. Scheduled Run 与用户消息视觉不同；静默 Run 不出现在聊天中。
+8. 用户始终能看到执行 Agent、设备、下次时间和通知规则。
 9. 低优先级结果不强制打扰；重要状态变化才 push。
 10. 离线、错过、失败和结果不确定必须明确显示。
 
@@ -680,6 +806,9 @@ Agent 回复简短解释，并展示结构化确认卡：
 │ 权限：可以自动检查和准备；           │
 │ 不会自动提交、付款或发送。           │
 │                                     │
+│ 告诉我：状态变化、需要操作或失败时   │
+│ 无变化：静默                         │
+│                                     │
 │ [取消]                     [确认安排]│
 └─────────────────────────────────────┘
 ```
@@ -689,7 +818,8 @@ Agent 回复简短解释，并展示结构化确认卡：
 - 首次执行时间；
 - 错过执行策略；
 - 是否允许任务重叠；
-- 当前设备离线时会发生什么。
+- 当前设备离线时会发生什么；
+- 什么情况下写入聊天、发 Push 或进入 Digest。
 
 ### Step 3：用户确认
 
@@ -731,59 +861,99 @@ Session 顶部或详情菜单中增加轻量入口：
 
 ---
 
-## 13. 到点时的聊天体验
+## 13. 到点时的执行与聊天体验
 
-### Step 5：创建 Scheduled Run
+### Step 5：后台创建 Scheduled Run
 
-到 09:00 后，聊天中出现中性分隔：
+到 09:00 后，Tentacle 在 Run ledger 创建 Scheduled Run。默认情况下，聊天中**不会立即出现任何分隔或消息**。
+
+如果用户此时打开“已安排事项 → 运行历史”，可以看到：
 
 ```text
-⏰ 定时任务开始 · 每日检查：入境通行证
-   计划 09:00 · 实际 09:00
+每日检查：入境通行证
+今天 09:00 · 运行中
 ```
 
-它：
+如果产品需要在用户正查看该 session 时显示实时状态，可以临时显示：
+
+```text
+正在执行定时检查：每日检查：入境通行证
+```
+
+这只是 transient activity：
 
 - 不是用户气泡；
 - 不使用用户头像；
-- 不计为用户主动发言；
-- 带 `runId + triggerId + occurrenceId`；
-- 可以点击查看执行来源。
+- 不写入 durable chat spine；
+- 不增加未读；
+- Run 最终静默时可以消失。
 
 ### Step 6：Agent 工作
 
-Agent 的实时状态和平常一致：
+Agent 在后台执行并生成 RunReport：
 
-```text
-正在检查官方网站……
-正在读取申请条件……
+```ts
+{
+  classification: "no_change" | "changed" | "matched" | "action_required",
+  summary,
+  stateFingerprint,
+  suggestedAttention
+}
 ```
 
-工具步骤仍进入 TRACE。
+工具步骤和完整输出进入 Run ledger/TRACE，不自动进入聊天。
 
 如果任务只需要低风险读取，Agent 可以自动继续。
 
-### Step 7A：未开放
+### Step 7A：未开放，且没有变化
 
-Agent 回复：
+Agent RunReport：
 
-```text
-今天 09:00 已检查，入境通行证目前仍未开放。
-
-我会按计划明天继续检查。
+```ts
+{
+  status: "succeeded",
+  classification: "no_change",
+  summary: "入境通行证目前仍未开放",
+  suggestedAttention: "none"
+}
 ```
 
-Sidebar preview：
+由于 Trigger 的默认 policy 是“无变化静默”：
+
+- 聊天不新增消息；
+- sidebar preview 不变化；
+- 不增加 unread；
+- 不发送 Push；
+- Run history 记录本次检查成功。
+
+用户以后打开“运行历史”会看到：
 
 ```text
-通行证仍未开放
+今天 09:00  检查完成 · 无变化
+昨天 09:00  检查完成 · 无变化
 ```
 
-是否 push 由通知策略决定。日常无变化结果默认可静默聚合。
+### Step 7B：状态发生变化
 
-### Step 7B：已开放，需要审批
+如果昨天是“未开放”，今天变成“已开放”，fingerprint 变化，Tentacle 决定发布聊天 projection：
 
-Agent 回复并显示审批卡：
+```text
+入境通行证申请今天已开放。
+
+我已经开始准备申请资料；正式提交前会询问你。
+```
+
+这条消息：
+
+- 是 Agent Run 的公开结果；
+- 关联 `runId`；
+- 不是用户消息；
+- 更新 sidebar preview；
+- 可以依据 policy 发送 Push。
+
+### Step 7C：已开放，需要审批
+
+Agent 生成 `action_required` RunReport，并由受控 capability 创建审批卡：
 
 ```text
 通行证申请已开放。我已经准备好以下内容：
@@ -796,6 +966,8 @@ Agent 回复并显示审批卡：
 
 [查看填写内容]                  [批准提交]
 ```
+
+`action_required` 默认覆盖静默设置，因为 Run 无法继续且需要用户决定。用户可以选择关闭普通变化通知，但不能让待审批或结果不确定永久无提示。
 
 审批卡必须由受控 Browser/Capability Tool 产生，不能只靠模型承诺“提交前问你”。
 
@@ -982,34 +1154,103 @@ Trigger 应自动暂停或失败：
 
 ---
 
-## 18. 通知策略
+## 18. Reporting 与通知策略
 
-Scheduled Run 的结果不应全部即时 push。
+Agent 是否执行和是否向用户说话是两个不同决策：
 
-建议：
+```text
+Trigger → Run → RunReport → Projection Policy
+                               ├─ Chat
+                               ├─ Push
+                               ├─ Digest
+                               └─ Silent
+```
 
-### 立即 push
+### 18.1 用户可选的三个预设
 
-- 需要审批；
+#### 默认：有变化或需要我时告诉我
+
+```ts
+chat.publishOn = ["change", "match", "action_required", "failure", "uncertain"]
+push.notifyOn = ["match", "action_required", "uncertain"]
+digest = "off"
+```
+
+适合周期检查。
+
+#### 每次都告诉我
+
+```ts
+chat.publishOn = ["every_run", "action_required", "failure", "uncertain"]
+push.notifyOn = ["action_required", "uncertain"]
+```
+
+适合用户需要逐次回执的任务。
+
+#### 不要打扰，放进汇总
+
+```ts
+chat.publishOn = ["action_required", "failure", "uncertain"]
+push.notifyOn = ["action_required", "uncertain"]
+digest = "daily"
+```
+
+普通结果进入 Briefing；待审批和结果不确定仍即时提示。
+
+### 18.2 强制可见事件
+
+以下事件不能仅因 Agent 声称 `no_change` 而被静默：
+
+- capability 正在等待用户审批；
 - 需要验证码、人脸识别或用户接管；
-- 状态发生重要变化；
-- Run 失败或结果不确定；
-- 用户明确要求每次通知。
+- Run 失败且影响后续计划；
+- 结果不确定，存在重复提交风险；
+- Trigger 自动暂停或执行设备不可用；
+- Policy Engine 判定为必须通知。
 
-### 静默写回聊天
+用户可以关闭 Push，但这些事件至少要进入 Inbox/badge 和 Run history。
+
+### 18.3 可以完全静默
 
 - 周期检查无变化；
 - 低风险例行成功；
-- 可在 Briefing 中聚合的结果。
+- 与已发布结果相同的重复状态；
+- 用户明确选择仅进入 Digest 的普通结果。
 
-### 聚合
+完全静默表示：
+
+- 不写聊天 spine；
+- 不更新 sidebar preview；
+- 不增加 session unread；
+- 不发送 Push；
+- 仍写 Run ledger。
+
+### 18.4 状态变化判断
+
+不能只问模型“有没有变化”。建议每个观察型 Trigger 保存：
+
+```ts
+lastPublishedFingerprint?: string
+lastObservedFingerprint?: string
+```
+
+本次 RunReport 提供 `stateFingerprint`。Tentacle 比较 fingerprint 并结合 policy 决定：
+
+- 第一次观察是否发布；
+- 真正变化是否发布；
+- 重复状态是否抑制；
+- 变化后是否更新 baseline。
+
+复杂任务可由 capability tool 返回结构化 observation 和 fingerprint，避免完全依赖模型自由文本。
+
+### 18.5 聚合
 
 ```text
 今天的 4 个定时检查
 3 个无变化 · 1 个需要处理
 ```
 
-Inbox/Briefing 是通知聚合层，不替代原 session 的结果 authority。
+Inbox/Briefing 是通知聚合层，不替代原 session 的结果 authority，也不替代 Run ledger。
 
 ---
 
@@ -1025,8 +1266,11 @@ Inbox/Briefing 是通知聚合层，不替代原 session 的结果 authority。
 - pause/resume/delete；
 - 固定 device + adapter + session；
 - `run_once_when_online | skip`；
-- neutral Run divider；
-- 结果回原 session；
+- neutral transient Run activity；
+- 独立 Run ledger 和运行历史；
+- configurable projection policy；
+- 符合策略的结果才回原 session；
+- 静默 Run 不改变聊天、preview 或 unread；
 - daemon restart recovery；
 - session-bound MCP capability。
 
@@ -1074,11 +1318,13 @@ PR #219 应继续保持 Draft，并被视为：
 1. Trigger 与 Run 分表；
 2. 为 occurrence 引入 deterministic ID；
 3. `scheduled_wake` 增加 `runId + occurrenceId`，移除完整 instruction；
-4. adapter 从 `sendMessage` 转为 `startRun(AgentExecutionRequest)`；
-5. compat prompt 只能存在于隔离 runtime，不写 canonical user transcript；
-6. 增加 proposal/commit 协议；
-7. 明确 missed-run、overlap、retry 和 uncertain 语义；
-8. 敏感工具依据 structured run source 做 policy 判断。
+4. 增加独立 Run ledger；静默 Run 不进入 session spine；
+5. 引入 `RunReport + Projection Policy`，区分 Chat、Push、Digest 和 Silence；
+6. adapter 从 `sendMessage` 转为 `startRun(AgentExecutionRequest)`；
+7. compat prompt 只能存在于隔离 runtime，不写 canonical user transcript；
+8. 增加 proposal/commit 协议，并让用户确认 reporting policy；
+9. 明确 missed-run、overlap、retry 和 uncertain 语义；
+10. 敏感工具依据 structured run source 做 policy 判断。
 
 ---
 
@@ -1091,9 +1337,10 @@ PR #219 应继续保持 Draft，并被视为：
 1. 我可以在当前聊天里让这个 Agent 以后继续做事；
 2. Kraki 会让我确认时间、设备和权限边界；
 3. 关掉 App 或重启电脑后，计划不会被 Agent 自己“忘记”；
-4. 到点后还是这个聊天、这个 Agent、这个工作上下文；
-5. 我能看出这是定时触发，不是我刚刚说的话；
-6. Agent 可以自动观察和准备，但敏感动作仍然必须问我；
-7. 我随时可以查看、暂停、修改或删除。
+4. 到点后还是这个 Agent 和工作上下文，但无变化时可以完全不打扰我；
+5. 需要发言时，我能看出这是定时执行结果，不是我刚刚说的话；
+6. 我可以选择“有变化时告诉我”“每次都告诉我”或“只进入汇总”；
+7. Agent 可以自动观察和准备，但敏感动作仍然必须问我；
+8. 我随时可以查看完整运行历史、暂停、修改或删除。
 
 这就是 Scheduled Agent Wake 应该提供的最终体验。
