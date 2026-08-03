@@ -73,6 +73,7 @@ built `@coinfra/voice` distribution. Configure:
 KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH=/path/to/voice-lease.pub.pem
 KRAKI_VOICE_SETTLEMENT_URL=http://127.0.0.1:4000/internal/voice/settle
 KRAKI_VOICE_SETTLEMENT_KEY=<same secret as Head VOICE_SETTLEMENT_KEY>
+KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS=2000
 VOICE_API_KEY=<legacy server-only migration key>
 ```
 
@@ -88,8 +89,10 @@ the full lease budget while an activated session is unsettled, then atomically
 replaces that reservation with rounded-up actual audio seconds. An expired
 never-activated lease releases its reservation; an activated lease whose final
 report is lost remains conservatively reserved. Settlement retries are
-idempotent and conflicting replays are rejected. Legacy-key VoiceType sessions
-have no `jti` and are not reported.
+idempotent and conflicting replays are rejected. Each Head request has a
+bounded timeout (2 seconds by default) plus bounded retries, so activation
+fails closed and graceful shutdown cannot hang forever when Head is unhealthy.
+Legacy-key VoiceType sessions have no `jti` and are not reported.
 
 Validate the deployment adapter with:
 

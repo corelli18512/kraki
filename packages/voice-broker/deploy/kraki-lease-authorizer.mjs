@@ -77,6 +77,10 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
   if (!settlementKey?.trim()) throw new Error('Kraki settlement key must not be empty');
   const request = options.fetch ?? globalThis.fetch;
   const wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const timeoutMs = options.timeoutMs ?? 2_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('Kraki settlement timeout must be a positive number');
+  }
   const post = async (payload) => {
     let lastError;
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -88,6 +92,7 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
             'content-type': 'application/json',
           },
           body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (response.ok) return { ok: true };
         lastError = new Error(`settlement returned ${response.status}`);

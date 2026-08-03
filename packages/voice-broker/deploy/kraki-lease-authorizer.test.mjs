@@ -133,6 +133,7 @@ test('usage reporter settles Kraki leases with retries and skips legacy sessions
   assert.equal(requests.length, 2);
   assert.equal(requests[0].url, 'https://head/internal/voice/settle');
   assert.equal(requests[0].init.headers.authorization, 'Bearer secret');
+  assert.ok(requests[0].init.signal instanceof AbortSignal);
   assert.deepEqual(JSON.parse(requests[0].init.body), {
     action: 'settle', jti: 'lease-1', activationId: 'activation-1',
     audioSeconds: 5.25, reason: 'asr closed',
@@ -140,6 +141,15 @@ test('usage reporter settles Kraki leases with retries and skips legacy sessions
 
   await reporter({ authorization: { ok: true }, audioSeconds: 10, reason: 'legacy' });
   assert.equal(requests.length, 2);
+});
+
+test('settlement client rejects an invalid request timeout', () => {
+  assert.throws(
+    () => createKrakiSettlementClient('https://head/internal/voice/settle', 'secret', {
+      timeoutMs: 0,
+    }),
+    /positive number/,
+  );
 });
 
 test('usage reporter rejects permanent settlement failures', async () => {

@@ -58,7 +58,9 @@ async function main() {
       })
     : passthroughCorrector;
 
-  const settlement = createKrakiSettlementClient(settlementUrl, settlementKey);
+  const settlement = createKrakiSettlementClient(settlementUrl, settlementKey, {
+    timeoutMs: envInt('KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS', 2_000),
+  });
   const gateway = await startGateway({
     host: process.env.VOICE_HOST?.trim() || '127.0.0.1',
     port: envInt('VOICE_PORT', 7800),
