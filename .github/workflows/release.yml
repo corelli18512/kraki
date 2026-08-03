@@ -83,10 +83,9 @@ jobs:
             fi
             checkout_ref="${release_tag}"
           else
-            test "${GITHUB_REF_NAME}" = "main" || {
-              echo "Dry-run builds must run from main."
-              exit 1
-            }
+            # Dry-run validates the exact branch/ref selected in the workflow
+            # dispatch. It never publishes, so it need not already be on main.
+            checkout_ref="${GITHUB_SHA}"
           fi
 
           git checkout --detach "${checkout_ref}"
@@ -100,6 +99,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Ensure release source is main
+        if: steps.meta.outputs.publish_mode == 'publish'
         run: |
           set -euo pipefail
           git fetch origin main
@@ -109,6 +109,7 @@ jobs:
           }
 
       - name: Ensure CI passed for this commit
+        if: steps.meta.outputs.publish_mode == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
