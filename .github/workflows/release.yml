@@ -391,8 +391,8 @@ jobs:
     if: |
       startsWith(github.ref_name, 'mac-v')
       || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'mac-v'))
-    runs-on: macos-14
-    timeout-minutes: 45
+    runs-on: macos-26
+    timeout-minutes: 50
 
     steps:
       - name: Check out repository

@@ -43,8 +43,8 @@ jobs:
 
   build-mac-gui:
     name: Build macOS GUI (KrakiMac)
-    runs-on: macos-14
-    timeout-minutes: 40
+    runs-on: macos-26
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
