@@ -228,9 +228,10 @@ describe('@kraki/crypto', () => {
     it('exported key should be compact (no PEM headers)', () => {
       const kp = generateKeyPair();
       const exported = exportPublicKey(kp.publicKey);
-      expect(exported).not.toContain('BEGIN');
-      expect(exported).not.toContain('END');
+      expect(exported).not.toContain('-----BEGIN PUBLIC KEY-----');
+      expect(exported).not.toContain('-----END PUBLIC KEY-----');
       expect(exported).not.toContain('\n');
+      expect(Buffer.from(exported, 'base64').toString('base64')).toBe(exported);
     });
 
     it('should handle empty key string', () => {
