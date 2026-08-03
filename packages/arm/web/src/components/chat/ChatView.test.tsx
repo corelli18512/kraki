@@ -67,13 +67,15 @@ describe('ChatView', () => {
 
   it('renders compacting as page runtime state without creating a live bubble', () => {
     useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'compacting', messageCount: 0 },
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 0 },
     ]);
+    useStore.getState().setRuntimeStatus('s1', { status: 'compacting', reason: 'threshold' });
     useStore.getState().setDevices([{ id: 'd1', name: 'Mac', role: 'tentacle', online: true }]);
     const { container } = renderChatView('s1');
     expect(screen.getByRole('status')).toHaveTextContent('Compacting context…');
     expect(container.querySelector('[data-session-runtime-status="compacting"]')).toBeInTheDocument();
     expect(container.querySelector('[data-live-bubble]')).toBeNull();
+    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
   });
 
   it('renders inline permission card', () => {

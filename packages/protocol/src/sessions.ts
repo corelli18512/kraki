@@ -43,6 +43,11 @@ export interface SessionPreviewDigest {
   timestamp: string;
 }
 
+export interface SessionRuntimeStatusDigest {
+  status: 'compacting';
+  reason?: 'manual' | 'threshold' | 'overflow';
+}
+
 /** Compact session metadata sent in session_list for sync. */
 export interface SessionDigest {
   id: string;
@@ -51,6 +56,8 @@ export interface SessionDigest {
   title?: string;
   autoTitle?: string;
   state: SessionState;
+  /** Orthogonal runtime maintenance. Does not make an idle conversation busy. */
+  runtimeStatus?: SessionRuntimeStatusDigest;
   mode: SessionMode;
   lastSeq: number;
   readSeq: number;

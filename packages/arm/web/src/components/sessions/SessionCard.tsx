@@ -40,7 +40,10 @@ export function SessionCard({ session, pinned, openSwipeId, setOpenSwipeId }: Se
     : undefined;
   const isDeviceOnline = device?.online ?? false;
   const livePending = useStore((s) => countPendingQuestions(session.id, s.cards));
-  const status = getSessionStatus(session, livePending, sessionPreview?.type);
+  const runtimeStatus = useStore((s) => s.runtimeStatuses.get(session.id));
+  const status = runtimeStatus?.status === 'compacting'
+    ? 'compacting'
+    : getSessionStatus(session, livePending, sessionPreview?.type);
   const machineName = session.deviceName || device?.name;
 
   // Context menu (desktop right-click only, not mobile long-press)

@@ -87,6 +87,11 @@ final class ChatViewModel {
         return false
     }
 
+    var compactionReason: CompactionReason? {
+        if case .compacting(let reason) = runtimeStatus { return reason }
+        return nil
+    }
+
     /// Pulled TRACE steps for a concluded bubble (for the "Steps" popup).
     func steps(forBubbleSeq seq: Int) -> [ChatMessage] {
         appState?.messageStore.turnSteps(sessionId, bubbleSeq: seq) ?? []

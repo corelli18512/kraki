@@ -247,9 +247,9 @@ export class RelayClient {
     }
     this.resolveTurnIdle(sessionId);
     this.sessionManager.markIdle(sessionId);
-    // Idle ends the turn: any in-flight compaction is over. Clear before idle
-    // so clients never show compacting once idle lands.
-    this.clearCompacting(sessionId);
+    // Compaction is an orthogonal maintenance axis. A successful turn may be
+    // idle while threshold/manual compaction continues; its own end event clears
+    // the runtime indicator. Overflow recovery never reaches this idle path.
     const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
     if (usage) this.sessionManager.setUsage(sessionId, usage);
     this.sendTurnIdle(sessionId, { usage, ...(terminalError && { reason: 'failed' as const }) });
@@ -313,28 +313,24 @@ export class RelayClient {
    *  `agent_message_delta` text deltas). */
   private card = new CardManager((msg) => this.send(msg as Partial<ProducerMessage>));
 
-  /** Sessions whose agent runtime is currently compacting context. This is the
-   *  single in-memory source of truth for the compacting session-state (a peer
-   *  of active/idle). It is NEVER written to meta.json - a tentacle restart
-   *  means the compacting process is gone, so no stale disk state survives.
-   *  {@link getSessionList} overlays it onto the digest `state`. */
-  private compactingSessions = new Set<string>();
+  /** Sessions whose agent runtime is currently compacting context. The reason
+   *  determines whether new user work may queue behind it: threshold/manual
+   *  compaction is maintenance; overflow compaction remains part of recovery. */
+  private compactingSessions = new Map<string, 'manual' | 'threshold' | 'overflow' | undefined>();
 
-  /** Enter/leave the compacting session-state. Broadcasts a transient
-   *  `compacting` message (peer of active/idle) so clients update the runtime
-   *  indicator without it ever touching the card action slot, TRACE, or spine. */
+  /** Enter/leave transient compaction maintenance. This no longer overwrites
+   *  the conversational session state: a completed turn may stay `idle` while
+   *  threshold compaction runs, keeping the composer available. */
   private setCompacting(sessionId: string, active: boolean, reason?: 'manual' | 'threshold' | 'overflow'): void {
     if (active) {
       if (!this.compactingSessions.has(sessionId)) {
-        this.compactingSessions.add(sessionId);
+        this.compactingSessions.set(sessionId, reason);
         this.send({ type: 'compacting', sessionId, payload: { phase: 'start', ...(reason && { reason }) } });
       }
-    } else {
-      if (this.compactingSessions.delete(sessionId)) {
-        const metaState = this.sessionManager.getMeta(sessionId)?.state;
-        const nextState = metaState === 'active' ? 'active' : 'idle';
-        this.send({ type: 'compacting', sessionId, payload: { phase: 'end', nextState } });
-      }
+    } else if (this.compactingSessions.delete(sessionId)) {
+      const metaState = this.sessionManager.getMeta(sessionId)?.state;
+      const nextState = metaState === 'active' ? 'active' : 'idle';
+      this.send({ type: 'compacting', sessionId, payload: { phase: 'end', nextState } });
     }
   }
 
@@ -1098,10 +1094,17 @@ export class RelayClient {
             try {
               await this.dispatchInput(sessionId, async () => {
                 await this.ensureSessionResumed(sessionId);
+                const compactionReason = this.compactingSessions.get(sessionId);
+                const queueBehindMaintenance = this.sessionManager.getMeta(sessionId)?.state === 'idle'
+                  && (compactionReason === 'threshold' || compactionReason === 'manual');
                 this.send({ type: 'active', sessionId, payload: {} });
-                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId });
+                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance });
                 this.sessionManager.markActive(sessionId);
-                await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+                if (queueBehindMaintenance) {
+                  await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' });
+                } else {
+                  await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+                }
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
               });
               await idle;
@@ -2105,23 +2108,26 @@ export class RelayClient {
 
   /** Override each digest's `preview` with the live open question (if any) so a
    *  reloading arm can render the "pending" status - the question no longer
-   *  persists to the spine, so the file-based preview can't surface it. Sessions
-   *  without an open question keep their file-derived preview untouched.
+   *  persists to the spine, so the file-based preview can't surface it.
    *
-   *  Also overlays the in-memory compacting state onto `state`: a session whose
-   *  agent runtime is currently compacting reports `state: 'compacting'`
-   *  (a peer of active/idle) regardless of the disk meta, so a reconnecting
-   *  arm recovers the runtime indicator from the session list alone. */
+   *  Compaction is intentionally NOT overlaid onto `state`: conversation state
+   *  stays active/idle while the transient `compacting` envelope owns the
+   *  orthogonal maintenance indicator. */
   private enrichSessionList<
     T extends { id: string; state: import('@kraki/protocol').SessionState; preview?: import('@kraki/protocol').SessionPreviewDigest },
   >(sessions: T[]): T[] {
     return sessions.map((s) => {
-      const compacting = this.compactingSessions.has(s.id);
+      const compactingReason = this.compactingSessions.get(s.id);
       const attention = this.latestOpenAttention(s.id);
-      if (!compacting && attention === undefined) return s;
+      if (compactingReason === undefined && !this.compactingSessions.has(s.id) && attention === undefined) return s;
       return {
         ...s,
-        ...(compacting && { state: 'compacting' as const }),
+        ...(this.compactingSessions.has(s.id) && {
+          runtimeStatus: {
+            status: 'compacting' as const,
+            ...(compactingReason && { reason: compactingReason }),
+          },
+        }),
         ...(attention !== undefined && {
           preview: {
             type: attention.type,

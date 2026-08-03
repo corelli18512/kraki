@@ -321,6 +321,22 @@ describe('pi prompt recovery', () => {
     expect(session.lastNarration).toBe('working');
   });
 
+  it('queues a fresh turn through Pi followUp during background compaction', async () => {
+    const { adapter, proc, session } = makeAdapter();
+    session.narrationSegments = 2;
+    session.lastNarration = 'old turn';
+
+    await adapter.sendMessage('s1', 'new turn', undefined, { delivery: 'follow_up' });
+
+    expect(proc.request).toHaveBeenCalledWith('prompt', {
+      message: 'new turn',
+      streamingBehavior: 'followUp',
+    }, { timeoutMs: null });
+    expect(proc.request).not.toHaveBeenCalledWith('abort');
+    expect(session.narrationSegments).toBe(0);
+    expect(session.lastNarration).toBe('');
+  });
+
   it('treats isStreaming as accepted while retaining the late ACK cleanup', async () => {
     const { adapter, proc } = makeAdapter({ ackGraceMs: 1, intervalMs: 1 });
     const onError = vi.fn();
@@ -382,7 +398,7 @@ describe('pi prompt recovery', () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
-  it('maps native compaction events once and never forwards summary content', () => {
+  it('maps native compaction events once and never forwards summary content', async () => {
     const { adapter, emit } = makeAdapter();
     const onCompaction = vi.fn();
     adapter.onCompaction = onCompaction;
@@ -393,6 +409,7 @@ describe('pi prompt recovery', () => {
       type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: true,
       result: { summary: 'private conversation summary' },
     });
+    await Promise.resolve();
 
     expect(onCompaction).toHaveBeenCalledTimes(2);
     expect(onCompaction).toHaveBeenNthCalledWith(1, 's1', { phase: 'start', reason: 'threshold' });

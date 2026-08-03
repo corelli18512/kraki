@@ -315,15 +315,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'compacting': {
       const compactingMsg = msg as CompactingMessage;
-      const session = store.sessions.get(sid);
-      if (session) {
-        // `compacting` is a peer of active/idle on the session-state axis. On
-        // `phase: 'start'` the session enters compacting; `end.nextState` is the
-        // authoritative state to restore. Never persists, never creates a bubble.
-        const next: SessionState = compactingMsg.payload.phase === 'start'
-          ? 'compacting'
-          : compactingMsg.payload.nextState;
-        store.upsertSession({ ...session, state: next });
+      if (compactingMsg.payload.phase === 'start') {
+        store.setRuntimeStatus(sid, {
+          status: 'compacting',
+          reason: compactingMsg.payload.reason,
+        });
+      } else {
+        store.setRuntimeStatus(sid, null);
       }
       break;
     }

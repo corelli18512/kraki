@@ -2087,13 +2087,15 @@ describe('RelayClient pending-question digest', () => {
     return { adapter, sm, client, ws, askQ, askP, answerQ, digest, preview };
   }
 
-  it('restores compacting from session_list state without replaying runtime events', () => {
+  it('restores compaction as runtime maintenance without overriding session state', () => {
     const { adapter, ws, digest } = buildClient();
     (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
       phase: 'start', reason: 'threshold',
     });
 
-    expect(digest()?.state).toBe('compacting');
+    const current = digest();
+    expect(current?.state).toBe('active');
+    expect(current?.runtimeStatus).toEqual({ status: 'compacting', reason: 'threshold' });
     expect(decodePulseSends(ws.sent).some((message) => message.type === 'compacting')).toBe(false);
   });
 
@@ -2169,6 +2171,26 @@ describe('RelayClient pending-question digest', () => {
     expect(preview()?.type).toBe('permission');
     (adapter.onIdle as (sid: string) => void)('sess_1');
     expect(preview()?.type).not.toBe('permission');
+  });
+
+  it('queues a fresh normal turn behind idle threshold maintenance without blocking input', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'idle' });
+    (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+      phase: 'start', reason: 'threshold',
+    });
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 599,
+      timestamp: new Date().toISOString(), payload: { text: 'new work during maintenance' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith(
+      'sess_1', 'new work during maintenance', undefined, { delivery: 'follow_up' },
+    );
+    expect(smMock.markActive).toHaveBeenCalledWith('sess_1');
   });
 
   it('serializes distinct composer prompts until the preceding turn idles', async () => {

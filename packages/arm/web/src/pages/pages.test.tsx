@@ -395,6 +395,37 @@ describe('MessageInput', () => {
     expect(screen.getByLabelText('Send message')).toBeDisabled();
   });
 
+  it.each(['threshold', 'manual'] as const)('keeps idle composer non-blocking during %s maintenance', async (reason) => {
+    const user = userEvent.setup();
+    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'pi', state: 'idle', messageCount: 0 });
+    useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason });
+    render(
+      <MemoryRouter>
+        <MessageInput sessionId="sess-1" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByLabelText('Stop')).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText('Send a message…'), 'new turn{Enter}');
+    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'new turn', undefined);
+    expect(screen.getByLabelText('Stop')).toBeInTheDocument();
+  });
+
+  it('keeps overflow compaction blocking as the current run', async () => {
+    const user = userEvent.setup();
+    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'pi', state: 'idle', messageCount: 0 });
+    useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason: 'overflow' });
+    render(
+      <MemoryRouter>
+        <MessageInput sessionId="sess-1" />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByPlaceholderText('Send a message…'), 'recovery guidance{Enter}');
+    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'recovery guidance', undefined, 'steer');
+    expect(screen.getByLabelText('Stop')).toBeInTheDocument();
+  });
+
   it('keeps send and stop as separate controls while the session is active', async () => {
     const user = userEvent.setup();
     useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'copilot', state: 'active', messageCount: 0 });
