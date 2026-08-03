@@ -72,11 +72,11 @@ export interface HeadServerOptions {
   region?: string;
   /** Voice-broker lease signer. If absent, request_voice_lease is rejected with 'not_entitled'. */
   leaseIssuer?: LeaseIssuer;
-  /** Per-lease TTL in seconds. Default 86400 (24h). */
+  /** Authorization-start window in seconds. Default 600 (10m). */
   voiceLeaseTtlSec?: number;
-  /** Quota seconds embedded in each lease. Default 7200 (2h). */
+  /** Per-recording audio budget in seconds. Default 300 (5m). */
   voiceLeaseQuotaSec?: number;
-  /** Per-user-per-day cap on total issued lease quota. Default 7200 (2h). */
+  /** Per-user-per-day cap on reserved/settled seconds. Default 7200 (2h). */
   voiceDailyQuotaSec?: number;
   /**
    * Public WSS URL of the voice broker for this region (e.g.
@@ -94,8 +94,8 @@ export interface HeadServerOptions {
   voiceBrokerUrl?: string;
 }
 
-const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
-const DEFAULT_VOICE_LEASE_QUOTA_SEC = 7_200;
+const DEFAULT_VOICE_LEASE_TTL_SEC = 600;
+const DEFAULT_VOICE_LEASE_QUOTA_SEC = 300;
 const DEFAULT_VOICE_DAILY_QUOTA_SEC = 7_200;
 const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
@@ -657,15 +657,15 @@ export class HeadServer {
     const dailyCap = this.options.voiceDailyQuotaSec ?? DEFAULT_VOICE_DAILY_QUOTA_SEC;
     const nowSec = Math.floor(Date.now() / 1000);
 
-    const issuedToday = this.storage.sumVoiceLeaseQuotaIssuedToday(userId, nowSec);
-    if (issuedToday + quotaPerLease > dailyCap) {
+    const accountedToday = this.storage.sumVoiceLeaseQuotaIssuedToday(userId, nowSec);
+    if (accountedToday + quotaPerLease > dailyCap) {
       logger.info('Voice lease denied: daily quota exhausted', {
-        userId, deviceId, issuedToday, quotaPerLease, dailyCap,
+        userId, deviceId, accountedToday, quotaPerLease, dailyCap,
       });
       this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
         reason: 'quota_exhausted',
-        detail: `Daily quota reached (${issuedToday}/${dailyCap}s)`,
+        detail: `Daily quota reached (${accountedToday}/${dailyCap}s)`,
       });
       return;
     }

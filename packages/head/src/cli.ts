@@ -37,6 +37,7 @@ import { GitHubAuthProvider, OpenAuthProvider, ApiKeyAuthProvider, ThrottledAuth
 import type { AuthProvider } from './auth.js';
 import { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 import { validateVoiceConfig } from './voice-config.js';
+import { handleVoiceSettlement } from './voice-settlement.js';
 import { Logger, setGlobalLogger } from './logger.js';
 import { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
 import type { PushProvider as IPushProvider } from './push/index.js';
@@ -94,10 +95,14 @@ if (args.includes('--help') || args.includes('-h')) {
     VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
     VOICE_LEASE_DIR                Directory for the lease signing keypair
                                    (default: $HOME/.kraki-head).
-    VOICE_LEASE_TTL_SEC            Per-lease TTL in seconds (default: 86400 = 24h).
-    VOICE_LEASE_QUOTA_SEC          Per-lease audio quota in seconds (default: 7200 = 2h).
-    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on issued lease quota
+    VOICE_LEASE_TTL_SEC            Authorization-start window in seconds
+                                   (default: 600 = 10 min).
+    VOICE_LEASE_QUOTA_SEC          Per-recording audio budget in seconds
+                                   (default: 300 = 5 min).
+    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on reserved/settled seconds
                                    (default: 7200 = 2h).
+    VOICE_SETTLEMENT_KEY           Shared secret for broker usage settlement.
+                                   Required when voice leases are enabled.
     VOICE_BROKER_URL               Public WSS URL of this region's voice broker
                                    (e.g. wss://cn.stt.kraki.chat/voice).
                                    Advertised in auth_ok so clients render the
@@ -450,9 +455,10 @@ if (IS_CONNECTED_MODE) {
 
 // --- Voice lease issuance (optional) ---
 const VOICE_LEASE_DIR = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
-const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '86400', 10) || 86400);
-const VOICE_LEASE_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_LEASE_QUOTA_SEC || '7200', 10) || 7200);
+const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '600', 10) || 600);
+const VOICE_LEASE_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_LEASE_QUOTA_SEC || '300', 10) || 300);
 const VOICE_DAILY_QUOTA_SEC = Math.max(VOICE_LEASE_QUOTA_SEC, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
+const VOICE_SETTLEMENT_KEY = process.env.VOICE_SETTLEMENT_KEY?.trim() || '';
 
 let voiceConfig;
 try {
@@ -466,6 +472,11 @@ try {
 }
 const VOICE_LEASE_ENABLED = voiceConfig.enabled;
 const VOICE_BROKER_URL = voiceConfig.brokerUrl;
+
+if (VOICE_LEASE_ENABLED && !VOICE_SETTLEMENT_KEY) {
+  console.error('[fatal] VOICE_LEASE_ENABLED=1 requires VOICE_SETTLEMENT_KEY for actual-usage settlement');
+  process.exit(1);
+}
 
 let voiceLeaseIssuer: LeaseIssuer | undefined;
 if (VOICE_LEASE_ENABLED) {
@@ -509,6 +520,56 @@ const httpServer = createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'internal_error' }));
       return;
     }
+  }
+
+  if (url.pathname === '/internal/voice/settle') {
+    if (!VOICE_LEASE_ENABLED || !VOICE_SETTLEMENT_KEY) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+    const authHeader = req.headers.authorization ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!token || !safeEqual(token, VOICE_SETTLEMENT_KEY)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'method_not_allowed' }));
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let tooLarge = false;
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length;
+      if (total <= 16 * 1024) chunks.push(chunk);
+      else tooLarge = true;
+    });
+    req.on('end', () => {
+      if (tooLarge) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'payload_too_large' }));
+        return;
+      }
+      const result = handleVoiceSettlement(storage!, VOICE_SETTLEMENT_KEY, {
+        authorization: req.headers.authorization,
+        body: Buffer.concat(chunks).toString('utf8'),
+      });
+      if (result.status === 200) {
+        logger.info('Voice lease accounting updated', {
+          action: result.body.activationStatus ? 'activate' : 'settle',
+          usedSeconds: result.body.usedSeconds,
+          status: result.body.activationStatus ?? result.body.settlementStatus,
+        });
+      }
+      res.writeHead(result.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result.body));
+    });
+    return;
   }
 
   if (url.pathname === '/admin/stats') {
