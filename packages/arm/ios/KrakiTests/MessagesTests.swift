@@ -546,7 +546,7 @@ final class AuthMethodTests: XCTestCase {
     func testGithubOAuthEncodeDecode() throws {
         let method = AuthMethod.githubOAuth(code: "gh-code")
         let decoded = try roundTrip(method)
-        if case .githubOAuth(let code) = decoded {
+        if case .githubOAuth(let code, _, _) = decoded {
             XCTAssertEqual(code, "gh-code")
         } else {
             XCTFail("Expected githubOAuth")

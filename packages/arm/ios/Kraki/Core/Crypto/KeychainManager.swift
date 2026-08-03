@@ -68,6 +68,19 @@ public final class KeychainManager {
     private static let signingKeyTag    = "chat.kraki.ios.signing-key"
     private static let encryptionKeyTag = "chat.kraki.ios.encryption-key"
 
+    #if os(macOS)
+    /// macOS may deny access to a Keychain item after an app's signing
+    /// identity changes. Keep a process-local fallback so a denied prompt
+    /// does not strand the app offline. Authentication refreshes the relay's
+    /// public keys through the existing CLI token flow; these keys are never
+    /// written to disk.
+    private static let ephemeralLock = NSLock()
+    private static var preferEphemeralKeys = false
+    private static var ephemeralSigningPair: (privateKey: SecKey, publicKey: SecKey)?
+    private static var ephemeralEncryptionPair: (privateKey: SecKey, publicKey: SecKey)?
+    private(set) var usingEphemeralKeys = false
+    #endif
+
     /// Optional app group for shared keychain access (app ↔ notification extension).
     private let accessGroup: String?
 
@@ -77,30 +90,86 @@ public final class KeychainManager {
 
     // MARK: - Public API
 
+    #if os(macOS)
+    /// Use process-local keys for a token-authenticated Mac launch. This
+    /// avoids touching an old Keychain ACL at all; the relay receives the
+    /// fresh public keys as part of the token-auth registration.
+    public func activateEphemeralKeys() {
+        Self.ephemeralLock.lock()
+        Self.preferEphemeralKeys = true
+        Self.ephemeralLock.unlock()
+        usingEphemeralKeys = true
+    }
+    #endif
+
     /// Load or generate the signing key pair (for challenge-response auth).
     public func getOrCreateSigningKey() throws -> (privateKey: SecKey, publicKey: SecKey) {
-        if let existing = try loadKeyPair(tag: Self.signingKeyTag) {
-            return existing
+        #if os(macOS)
+        if Self.preferEphemeralKeys {
+            usingEphemeralKeys = true
+            return try ephemeralKeyPair(tag: Self.signingKeyTag)
         }
-        return try generateAndStoreKeyPair(tag: Self.signingKeyTag)
+        #endif
+        do {
+            if let existing = try loadKeyPair(tag: Self.signingKeyTag) {
+                return existing
+            }
+            return try generateAndStoreKeyPair(tag: Self.signingKeyTag)
+        } catch {
+            #if os(macOS)
+            usingEphemeralKeys = true
+            return try ephemeralKeyPair(tag: Self.signingKeyTag)
+            #else
+            throw error
+            #endif
+        }
     }
 
     /// Load or generate the encryption key pair (for E2E message decryption).
     public func getOrCreateEncryptionKey() throws -> (privateKey: SecKey, publicKey: SecKey) {
-        if let existing = try loadKeyPair(tag: Self.encryptionKeyTag) {
-            return existing
+        #if os(macOS)
+        if Self.preferEphemeralKeys {
+            usingEphemeralKeys = true
+            return try ephemeralKeyPair(tag: Self.encryptionKeyTag)
         }
-        return try generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
+        #endif
+        do {
+            if let existing = try loadKeyPair(tag: Self.encryptionKeyTag) {
+                return existing
+            }
+            return try generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
+        } catch {
+            #if os(macOS)
+            usingEphemeralKeys = true
+            return try ephemeralKeyPair(tag: Self.encryptionKeyTag)
+            #else
+            throw error
+            #endif
+        }
     }
 
     /// Check if both key pairs exist without generating them.
     public func hasKeys() -> Bool {
+        #if os(macOS)
+        if Self.ephemeralSigningPair != nil && Self.ephemeralEncryptionPair != nil {
+            return true
+        }
+        #endif
         return (try? loadKeyPair(tag: Self.signingKeyTag)) != nil &&
                (try? loadKeyPair(tag: Self.encryptionKeyTag)) != nil
     }
 
     /// Delete all stored keys (for account reset or testing).
     public func deleteAllKeys() throws {
+        #if os(macOS)
+        defer {
+            Self.ephemeralLock.lock()
+            Self.preferEphemeralKeys = false
+            Self.ephemeralSigningPair = nil
+            Self.ephemeralEncryptionPair = nil
+            Self.ephemeralLock.unlock()
+        }
+        #endif
         try deleteKeyPair(tag: Self.signingKeyTag)
         try deleteKeyPair(tag: Self.encryptionKeyTag)
     }
@@ -128,8 +197,35 @@ public final class KeychainManager {
             attrs[kSecAttrAccessGroup as String] = group
         }
 
+        return try generateKeyPair(attributes: attrs)
+    }
+
+    #if os(macOS)
+    private func ephemeralKeyPair(tag: String) throws -> (privateKey: SecKey, publicKey: SecKey) {
+        Self.ephemeralLock.lock()
+        defer { Self.ephemeralLock.unlock() }
+
+        if tag == Self.signingKeyTag, let pair = Self.ephemeralSigningPair { return pair }
+        if tag == Self.encryptionKeyTag, let pair = Self.ephemeralEncryptionPair { return pair }
+
+        let attrs: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 4096,
+            kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: false],
+        ]
+        let pair = try generateKeyPair(attributes: attrs)
+        if tag == Self.signingKeyTag {
+            Self.ephemeralSigningPair = pair
+        } else if tag == Self.encryptionKeyTag {
+            Self.ephemeralEncryptionPair = pair
+        }
+        return pair
+    }
+    #endif
+
+    private func generateKeyPair(attributes: [String: Any]) throws -> (privateKey: SecKey, publicKey: SecKey) {
         var error: Unmanaged<CFError>?
-        guard let privateKey = SecKeyCreateRandomKey(attrs as CFDictionary, &error) else {
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
             throw KeychainError.keyGenerationFailed(
                 error.map { String(describing: $0.takeRetainedValue()) } ?? "unknown"
             )

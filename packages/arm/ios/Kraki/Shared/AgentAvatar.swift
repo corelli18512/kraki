@@ -1,4 +1,3 @@
-#if os(iOS)
 /// AgentAvatar — Exact match of web AgentAvatar.tsx.
 ///
 /// - Rounded rect (not circle) with per-session hue-based color
@@ -73,6 +72,7 @@ enum AvatarSize {
 
 struct AgentAvatar: View {
     let agent: String
+    var model: String? = nil
     var sessionId: String? = nil
     var size: AvatarSize = .md
     var status: SessionState? = nil
@@ -110,7 +110,15 @@ struct AgentAvatar: View {
             // Per-agent SVG icon (Copilot / Claude / fallback Copilot)
             agentIcon
                 .frame(width: size.iconSize, height: size.iconSize)
+
+            if let family = ModelLogoFamily.resolve(model) {
+                ModelSlashCorner(family: family, size: size)
+            }
         }
+        .frame(width: size.dimension, height: size.dimension)
+        .clipShape(
+            RoundedRectangle(cornerRadius: size.cornerRadius, style: .circular)
+        )
         .overlay(alignment: .bottomTrailing) {
             // Permission-pending shield. Solid red — stays readable
             // on any avatar hue without needing a backing disc.
@@ -143,8 +151,8 @@ struct AgentAvatar: View {
                     .controlSize(.mini)
                     .tint(status == .compacting
                           ? Color(hex: 0x06B6D4)
-                          : Color(light: UIColor(Color.kraki500),
-                                  dark: UIColor(Color.kraki400)))
+                          : Color(light: PlatformColor(Color.kraki500),
+                                  dark: PlatformColor(Color.kraki400)))
                     .offset(x: 4, y: -1)
                     .transition(.opacity)
             }
@@ -248,6 +256,95 @@ private struct PiIcon: Shape {
     }
 }
 
+// MARK: - Model Slash Corner
+
+enum ModelLogoFamily: String, CaseIterable {
+    case claude, openAI, zAI, deepSeek, gemini
+
+    static func resolve(_ rawModel: String?) -> Self? {
+        guard let model = rawModel?.lowercased(), !model.isEmpty else { return nil }
+        if model.contains("deepseek") { return .deepSeek }
+        if model.contains("gemini") { return .gemini }
+        if model.contains("glm") || model.contains("zai") || model.contains("z.ai") || model.contains("zhipu") {
+            return .zAI
+        }
+        if model.contains("gpt") || model.contains("openai") || model.range(of: #"(^|[/_-])o[134]([/_-]|$)"#, options: .regularExpression) != nil {
+            return .openAI
+        }
+        if model.contains("claude") || model.contains("anthropic") { return .claude }
+        return nil
+    }
+
+    var color: Color {
+        switch self {
+        case .claude: return Color(hex: 0xC15A38)
+        case .openAI: return Color(hex: 0x147E69)
+        case .zAI: return Color(hex: 0x247BBB)
+        case .deepSeek: return Color(hex: 0x4D62C3)
+        case .gemini: return Color(hex: 0x8068B5)
+        }
+    }
+
+    var assetName: String {
+        switch self {
+        case .claude: return "ModelClaude"
+        case .openAI: return "ModelOpenAI"
+        case .zAI: return "ModelZAI"
+        case .deepSeek: return "ModelDeepSeek"
+        case .gemini: return "ModelGemini"
+        }
+    }
+}
+
+private struct ModelSlashCorner: View {
+    let family: ModelLogoFamily
+    let size: AvatarSize
+
+    private var scale: CGFloat { size.dimension / AvatarSize.sm.dimension }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Color.clear
+            slashBand
+            modelLogo
+        }
+        .frame(width: size.dimension, height: size.dimension)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var slashBand: some View {
+        ZStack(alignment: .top) {
+            Rectangle().fill(family.color)
+            Rectangle()
+                .fill(Color.white.opacity(0.60))
+                .frame(height: 0.5 * scale)
+        }
+        .frame(width: 24 * scale, height: 13 * scale)
+        .rotationEffect(.degrees(-38))
+        .offset(x: 4.5 * scale, y: 2.5 * scale)
+    }
+
+    private var logoImage: Image {
+        switch family {
+        case .claude: return Image("ModelClaude")
+        case .openAI: return Image("ModelOpenAI")
+        case .zAI: return Image("ModelZAI")
+        case .deepSeek: return Image("ModelDeepSeek")
+        case .gemini: return Image("ModelGemini")
+        }
+    }
+
+    private var modelLogo: some View {
+        logoImage
+            .resizable()
+            .renderingMode(.template)
+            .foregroundColor(.white)
+            .frame(width: 6.8 * scale, height: 6.8 * scale)
+            .offset(x: -0.8 * scale, y: -0.8 * scale)
+    }
+}
+
 // MARK: - HSL to HSB conversion
 
 /// Converts CSS HSL values to SwiftUI HSB values.
@@ -283,5 +380,3 @@ struct AgentInfo {
         }
     }
 }
-
-#endif

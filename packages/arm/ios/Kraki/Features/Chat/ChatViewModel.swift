@@ -1,5 +1,4 @@
-#if os(iOS)
-/// ChatViewModel — pure-data view model for a single chat session.
+// ChatViewModel — pure-data view model for a single chat session.
 ///
 /// Pure-spine model: the loaded window is already message-only (tools /
 /// narration / permission / question live off-spine as the card + trace), so
@@ -87,11 +86,6 @@ final class ChatViewModel {
         return false
     }
 
-    var compactionReason: CompactionReason? {
-        if case .compacting(let reason) = runtimeStatus { return reason }
-        return nil
-    }
-
     /// Pulled TRACE steps for a concluded bubble (for the "Steps" popup).
     func steps(forBubbleSeq seq: Int) -> [ChatMessage] {
         appState?.messageStore.turnSteps(sessionId, bubbleSeq: seq) ?? []
@@ -165,22 +159,30 @@ final class ChatViewModel {
         return device.online
     }
 
-    /// Keep stale cached history off-screen until the loaded window reaches the
-    /// authoritative session head. Otherwise chat opens on an older tail and
-    /// visibly jumps when the latest bubble arrives.
+    /// Keep stale cached history off-screen only while a real head request is
+    /// still in flight. `SessionInfo.lastSeq` covers the complete protocol
+    /// stream, while the render window contains only persistent spine rows; a
+    /// terminal idle/status event can therefore make the two seqs differ by one
+    /// even though every visible message is already authoritative.
     var isWaitingForLatestBubble: Bool {
+        guard isDeviceOnline else { return false }
+        let sessionLoading = appState?.sessionStore.loadingSessions.contains(sessionId) ?? false
+        guard sessionLoading else { return false }
         let expectedLastSeq = max(session?.lastSeq ?? 0, sessionLastSeq)
         return ChatEntryLoading.isWaitingForLatest(
             expectedLastSeq: expectedLastSeq,
             windowBottomSeq: windowBottomSeq,
             hasMessages: !filteredMessages.isEmpty,
-            sessionLoading: appState?.sessionStore.loadingSessions.contains(sessionId) ?? false
+            sessionLoading: sessionLoading
         )
     }
 
     // MARK: - Edge state (top/bottom spinners)
 
-    var isLoadingOlder: Bool { appState?.messageProvider?.isLoadingOlder(sessionId) ?? false }
+    var isLoadingOlder: Bool {
+        guard let provider = appState?.messageProvider else { return false }
+        return provider.isLoadingOlder(sessionId) || provider.isLoadingOlderDB(sessionId)
+    }
     var isFillingTail: Bool { appState?.messageProvider?.isFillingTail(sessionId) ?? false }
     var atHistoryStart: Bool { appState?.messageProvider?.atHistoryStart(sessionId) ?? false }
     var atHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? false }
@@ -229,4 +231,3 @@ final class ChatViewModel {
         appState?.messageProvider?.jumpToHead(sessionId: sessionId)
     }
 }
-#endif

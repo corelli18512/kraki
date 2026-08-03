@@ -94,7 +94,15 @@ final class MessageStore {
         msg.seq > 0 && persistentTypes.contains(msg.type)
     }
 
+    /// iOS keeps the production 200-row bootstrap. The Mac viewport is much
+    /// wider and has edge-triggered DB pagination, so opening 200 raw rows only
+    /// creates an unnecessarily long scrollbar and extra height warm-up. Start
+    /// with a compact tail and lazy-load the rest as the user reaches the top.
+    #if os(macOS)
+    private static let initialWindowSize = 60
+    #else
     private static let initialWindowSize = 200
+    #endif
     /// Maximum count of in-memory window before `expandWindow` trims
     /// the opposite end. DB still has everything; trimmed rows can
     /// be pulled back via `dbMessages` on the next ensureOlder/Newer.
@@ -271,6 +279,49 @@ final class MessageStore {
         try? db.insert(sessionId, batch)
     }
 
+    /// Prepend a page selected by persistent-spine order. Unlike live-tail
+    /// ingestion, history paging must not require `seq == topSeq - 1`: protocol
+    /// seq values also belong to off-spine tools/narration that are deliberately
+    /// absent from this table and render window.
+    func prependOlderPage(_ sessionId: String, _ rawPage: [ChatMessage]) {
+        let page = rawPage.filter(Self.isPersistent)
+        guard !page.isEmpty,
+              let state = windows[sessionId], state.bottomSeq > 0 else { return }
+        let older = page.filter { $0.seq < state.topSeq }
+        guard !older.isEmpty else { return }
+
+        var window = messages[sessionId] ?? []
+        let existing = Set(window.map(\.seq))
+        let prepend = older.filter { !existing.contains($0.seq) }
+        guard !prepend.isEmpty else { return }
+        window = prepend + window
+        var updated = state
+        updated.topSeq = prepend.first!.seq
+
+        if let h = heightForSeq, maxWindowPx.isFinite {
+            let oldCount = window.count - prepend.count
+            let maxRemove = min(prepend.count, max(0, oldCount - 1))
+            var removed = 0
+            func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
+            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+                window.removeLast()
+                updated.bottomSeq = window.last!.seq
+                removed += 1
+            }
+        }
+
+        let countCeiling = heightForSeq != nil ? Self.pxModeCountCeiling : Self.maxWindowSize
+        if window.count > countCeiling {
+            let overflow = min(window.count - countCeiling, max(0, window.count - prepend.count - 1))
+            if overflow > 0 {
+                window.removeLast(overflow)
+                updated.bottomSeq = window.last!.seq
+            }
+        }
+        messages[sessionId] = window
+        windows[sessionId] = updated
+    }
+
     /// Extend the in-memory window with rows from `batch` that
     /// adjoin either end of the current window. **No DB write.**
     /// Used both by `ingestBatch` (after persist) and by the
@@ -421,6 +472,38 @@ final class MessageStore {
 
     // MARK: - Memory window control
 
+    /// Trim an already-loaded tail window after rendered heights have warmed.
+    /// `expandWindow` enforces the px cap while paging, but the initial 200-row
+    /// bootstrap predates the height oracle and otherwise remains arbitrarily
+    /// tall. This keeps the newest tail, removes only the oldest in-memory rows,
+    /// and leaves SQLite untouched so scrolling to the top can page them back.
+    @discardableResult
+    func trimTailWindowToRenderedHeight(_ sessionId: String) -> Bool {
+        guard let heightForSeq,
+              maxWindowPx.isFinite,
+              var window = messages[sessionId],
+              var state = windows[sessionId],
+              window.count > 1 else { return false }
+
+        var renderedHeight = window.reduce(CGFloat.zero) {
+            $0 + heightForSeq(sessionId, $1.seq)
+        }
+        guard renderedHeight > maxWindowPx else { return false }
+
+        var removeCount = 0
+        while removeCount < window.count - 1, renderedHeight > maxWindowPx {
+            renderedHeight -= heightForSeq(sessionId, window[removeCount].seq)
+            removeCount += 1
+        }
+        guard removeCount > 0 else { return false }
+
+        window.removeFirst(removeCount)
+        state.topSeq = window.first!.seq
+        messages[sessionId] = window
+        windows[sessionId] = state
+        return true
+    }
+
     /// Drop the current window entries for `sessionId` and rebuild
     /// fresh from DB. Used internally when the window is in an
     /// "empty bootstrap" state (placeholder set on session-open
@@ -551,19 +634,8 @@ final class MessageStore {
 
     // MARK: - Sidebar conveniences
 
-    /// Content of the latest `agent_message` for this session,
-    /// reading from DB so callers stay accurate even when no window
-    /// is open. Bounded scan (last 30 messages) — agent_messages are
-    /// frequent.
-    func lastAgentMessageContent(_ sessionId: String) -> String? {
-        for m in db.recentMessages(sessionId, limit: 30).reversed() {
-            if m.type == "agent_message" { return m.content }
-        }
-        return nil
-    }
-
     /// Content of the latest `user_message` (or send_input) for
-    /// this session. Same shape as `lastAgentMessageContent`.
+    /// this session, independent of the currently loaded window.
     func lastUserMessageContent(_ sessionId: String) -> String? {
         for m in db.recentMessages(sessionId, limit: 30).reversed() {
             if m.type == "user_message" || m.type == "send_input" {
@@ -672,6 +744,10 @@ final class MessageStore {
     /// the concluding bubble's spine seq. In-memory only — the "Steps" popup
     /// re-pulls; nothing here is persisted.
     var traces: [String: [Int: [ChatMessage]]] = [:]
+    /// Explicit invalidation token for views that read a nested trace bucket.
+    /// Swift Observation does not reliably invalidate through in-place nested
+    /// dictionary writes, so every authoritative trace replacement advances it.
+    private(set) var traceRevision: UInt64 = 0
 
     /// Reopen transient draft/action state for an accepted user input. A normal
     /// prompt starts a fresh turn and clears stale card state; a steer is a
@@ -753,7 +829,10 @@ final class MessageStore {
 
     /// `turn_trace_batch`: replace a turn's pulled steps.
     func setTurnSteps(_ sessionId: String, bubbleSeq: Int, _ entries: [ChatMessage]) {
-        traces[sessionId, default: [:]][bubbleSeq] = entries
+        var sessionTraces = traces[sessionId] ?? [:]
+        sessionTraces[bubbleSeq] = entries
+        traces[sessionId] = sessionTraces
+        traceRevision &+= 1
     }
 
     /// A turn's pulled steps, or nil if not pulled yet.

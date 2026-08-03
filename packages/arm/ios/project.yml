@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: chat.kraki.ios
   deploymentTarget:
     iOS: "18.0"
+    macOS: "15.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: false
   createIntermediateGroups: true
@@ -16,6 +17,8 @@ packages:
     exactVersion: 2.3.0
   Pulse:
     path: ./Vendor/Pulse
+  VoiceInputCore:
+    path: ./Vendor/VoiceInputCore
 
 settings:
   base:
@@ -33,6 +36,12 @@ schemes:
       config: Debug
       targets:
         - KrakiTests
+  KrakiMac:
+    build:
+      targets:
+        KrakiMac: all
+    run:
+      config: Debug
 
 targets:
   Kraki:
@@ -73,6 +82,7 @@ targets:
       - package: GRDB
       - package: Highlightr
       - package: Pulse
+      - package: VoiceInputCore
 
   KrakiNotification:
     type: app-extension
@@ -107,3 +117,74 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
       - target: Kraki
+
+  KrakiMac:
+    type: application
+    platform: macOS
+    sources:
+      # Core layer — cross-platform after the M0 platformization pass.
+      - path: Kraki/Core
+      # Shared platform shims (KrakiPlatform exposes PlatformColor + helpers;
+      # ThemePlatform is the macOS palette; Theme.swift stays iOS-only).
+      - path: Kraki/Shared/KrakiPlatform.swift
+      - path: Kraki/Shared/ThemePlatform.swift
+      - path: Kraki/Shared/AppColorScheme.swift
+      - path: Kraki/Shared/AgentAvatar.swift
+      - path: Kraki/Shared/Helpers.swift
+      - path: Kraki/Shared/KrakiLogger.swift
+      - path: Kraki/Shared/LucideIcon.swift
+      - path: Kraki/Shared/NavigationIDs.swift
+      - path: Kraki/Shared/ToolStatusIcon.swift
+      # AppState is platformized (push + willTerminate guarded).
+      - path: Kraki/App/AppState.swift
+      # Mac-only app shell, scenes, commands.
+      - path: Kraki/App/Mac
+      # Mac-only feature surfaces (sidebar, welcome, tentacle, preferences,
+      # chat placeholder, pairing). Their iOS analogues stay iOS-only — the
+      # macOS chat surface will be rewritten against the pure-spine model.
+      - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
+      - path: Kraki/Features/Sessions/NewSessionSheet+macOS.swift
+      - path: Kraki/Features/Sessions/SessionCardView.swift
+      - path: Kraki/Features/Sessions/ActivityRow.swift
+      - path: Kraki/Features/Auth/ConnectionStatusChip.swift
+      - path: Kraki/Features/Auth/LoginView+macOS.swift
+      - path: Kraki/Features/Chat/ToolChipHeader.swift
+      - path: Kraki/Features/Chat/ChatViewModel.swift
+      - path: Kraki/Features/Chat/TurnSpineProjection.swift
+      - path: Kraki/Features/Chat/ChatLoadingState.swift
+      - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
+      - path: Kraki/Features/Chat/Mac
+      - path: Kraki/Features/Welcome
+      - path: Kraki/Features/Tentacle
+      - path: Kraki/Features/Settings/MacPanes
+      - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
+      - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
+      # Asset catalog (iOS universal icon + macOS icon sizes).
+      - path: Kraki/Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
+        PRODUCT_NAME: Kraki
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_CFBundleDisplayName: Kraki
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone to transcribe voice input into the current Session draft."
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Kraki"
+        INFOPLIST_KEY_LSUIElement: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 3A83X5JZ3S
+        # No App Sandbox — we need to spawn the kraki CLI binary
+        # (Process.launch) and tail logs from ~/.kraki/logs. Hardened
+        # runtime + Developer ID notarization is the security envelope
+        # instead. This is the same model as iTerm / Docker Desktop.
+        ENABLE_HARDENED_RUNTIME: "YES"
+        CODE_SIGN_ENTITLEMENTS: Kraki/KrakiMac.entitlements
+        SWIFT_OBJC_INTERFACE_HEADER_NAME: ""
+    dependencies:
+      - package: GRDB
+      - package: Pulse
+      - package: Highlightr
+      - package: VoiceInputCore

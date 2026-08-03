@@ -16,6 +16,39 @@
 import Foundation
 import GRDB
 
+enum KrakiDataPaths {
+    static func persistentDirectory() -> URL {
+        let fm = FileManager.default
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["KRAKI_DATA_DIR"], !override.isEmpty {
+            let dir = URL(fileURLWithPath: override, isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        #endif
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func attachmentCacheDirectory() -> URL {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["KRAKI_DATA_DIR"]?.isEmpty == false {
+            let dir = persistentDirectory().appendingPathComponent("attachments", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        #endif
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("kraki-attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+}
+
 /// Thin wrapper around a `DatabasePool` that exposes the message
 /// queries `MessageStore` needs. All methods are synchronous because
 /// GRDB's pool already serialises writes and SQLite reads are fast
@@ -43,8 +76,18 @@ final class MessageDatabase {
     /// path. Throws if the directory can't be created or the pool
     /// can't be opened — the caller (AppState) should treat this as
     /// fatal because the chat surface is unusable without it.
-    init() throws {
-        let url = try Self.databaseURL()
+    convenience init() throws {
+        try self.init(databaseURL: Self.databaseURL())
+    }
+
+    /// Opens an explicitly located database. Used by the macOS Debug scroll
+    /// harness to exercise the full production store/provider/list stack in an
+    /// isolated temporary directory without touching production history.
+    init(databaseURL url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         var config = Configuration()
         config.prepareDatabase { db in
             // WAL gives readers concurrent access while a single
@@ -123,13 +166,19 @@ final class MessageDatabase {
     // MARK: - File location
 
     private static func databaseURL() throws -> URL {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = KrakiDataPaths.persistentDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("messages.sqlite", isDirectory: false)
+    }
+
+    /// Create a transactionally consistent SQLite clone, including committed
+    /// WAL contents, without decoding/re-encoding any ChatMessage payloads.
+    /// The macOS production-snapshot harness uses this so data bytes, indexes,
+    /// holes and per-Session cache coverage are identical to the live store.
+    func snapshotDatabase(at url: URL) throws -> MessageDatabase {
+        let snapshot = try MessageDatabase(databaseURL: url)
+        try dbPool.backup(to: snapshot.dbPool)
+        return snapshot
     }
 
     // MARK: - Write

@@ -18,6 +18,7 @@ struct ChatView: View {
     /// full-screen spinner just because the window intentionally slides away
     /// from the newest edge.
     @State private var hasMaterializedLatest = false
+    @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
 
     /// Measured height of the floating input capsule (incl. its own
     /// vertical padding and any pending-permission row). Drives the
@@ -104,7 +105,13 @@ struct ChatView: View {
                     agent: session?.agent ?? "claude",
                     bottomContentInset: effectiveBottomInputHeight,
                     onResolvePermission: resolveLivePermission,
-                    onAnswerQuestion: answerLiveQuestion
+                    onAnswerQuestion: answerLiveQuestion,
+                    onOpenHTMLArtifact: { ref in
+                        selectedHTMLArtifact = IOSSelectedHTMLArtifact(
+                            sessionId: sessionId,
+                            ref: ref
+                        )
+                    }
                 )
             }
         }
@@ -142,6 +149,13 @@ struct ChatView: View {
         // always render its glass material so the chat cells blur
         // underneath instead of revealing RootView's solid bg.
         .toolbarBackground(.visible, for: .navigationBar)
+        .sheet(item: $selectedHTMLArtifact) { selection in
+            IOSHTMLArtifactPreview(selection: selection)
+                .environment(appState)
+        }
+        .onChange(of: sessionId, initial: true) { _, _ in
+            selectedHTMLArtifact = nil
+        }
         .onChange(of: entryDiagnosticSignature, initial: true) { _, state in
             KLog.chatEntry("surface \(state)")
         }
@@ -246,7 +260,6 @@ struct ChatView: View {
                     pendingPermission: viewModel?.permissions.first,
                     pendingQuestion: viewModel?.questions.first,
                     isCompacting: viewModel?.isCompacting == true,
-                    compactionReason: viewModel?.compactionReason,
                     hasLiveCard: viewModel?.card != nil,
                     onHeightChange: { newHeight in
                         if abs(newHeight - bottomInputHeight) > 0.5 {
@@ -289,40 +302,6 @@ struct ChatView: View {
             questionId: questionId,
             answer: answer
         )
-    }
-}
-
-enum ChatEntryLoading {
-    static func isEntryGateActive(
-        providerWaitingForLatest: Bool,
-        hasMaterializedLatest: Bool
-    ) -> Bool {
-        !hasMaterializedLatest && providerWaitingForLatest
-    }
-
-    static func isWaitingForLatest(
-        expectedLastSeq: Int,
-        windowBottomSeq: Int,
-        hasMessages: Bool,
-        sessionLoading: Bool
-    ) -> Bool {
-        if expectedLastSeq > 0 {
-            return windowBottomSeq < expectedLastSeq
-        }
-        return !hasMessages && sessionLoading
-    }
-}
-
-enum ChatBottomObstruction {
-    static func height(
-        measuredComposerHeight: CGFloat,
-        composerVisible: Bool,
-        compacting: Bool
-    ) -> CGFloat {
-        let composerFloor: CGFloat = composerVisible ? 54 : 0
-        let compactionFloor: CGFloat = compacting ? 40 : 0
-        let spacing: CGFloat = composerVisible && compacting ? 8 : 0
-        return max(measuredComposerHeight, composerFloor + compactionFloor + spacing)
     }
 }
 #endif

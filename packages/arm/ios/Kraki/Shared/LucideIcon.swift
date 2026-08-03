@@ -1,4 +1,3 @@
-#if os(iOS)
 /// LucideIcon — SwiftUI view that renders Lucide icons from SVG path data.
 ///
 /// All icons use viewBox 0 0 24 24, stroke rendering (no fill),
@@ -72,6 +71,7 @@ struct LucideIcon: View {
 extension LucideIconType {
     /// Renders the icon as a template-mode `Image` suitable for use in `tabItem` or other
     /// contexts where SwiftUI requires a concrete `Image` rather than an arbitrary `View`.
+    #if os(iOS)
     @MainActor
     func tabImage(size: CGFloat = 24) -> Image {
         let view = LucideIcon(self, size: size, color: .black)
@@ -88,6 +88,7 @@ extension LucideIconType {
     func swipeImage(size: CGFloat = 22) -> Image {
         tabImage(size: size)
     }
+    #endif
 }
 
 // MARK: - SVG Element
@@ -900,5 +901,3 @@ private func arcToBezier(
         control2: CGPoint(x: cp2x, y: cp2y)
     )
 }
-
-#endif

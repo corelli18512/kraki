@@ -436,14 +436,16 @@ export interface CardAction extends BaseEnvelope {
 }
 
 /**
- * The agent runtime is compacting its context. This is transient maintenance,
- * orthogonal to the active/idle conversational state: a completed turn may be
- * idle and accept a fresh user message while threshold compaction continues.
- * Overflow recovery can still coincide with an active turn.
+ * The agent runtime is compacting its context. This is a peer of
+ * {@link ActiveMessage} / {@link IdleMessage} on the session-state axis: it is
+ * transient (never persisted to the spine or trace, never replayed) and may
+ * occur before streaming starts (prompt preflight) or after output completes
+ * (finalize / auto-retry continuation), so it is NOT a subset of `active`.
  *
- * Never persisted to spine/TRACE. `phase: 'end'.nextState` remains for wire
- * compatibility with older clients; new clients use it only as a fallback and
- * keep compaction in their independent runtime-status store.
+ * `phase: 'start'` enters the compacting state; `phase: 'end'` carries the
+ * authoritative state to restore. The session's current compacting state is
+ * also reflected in {@link SessionState} (carried by the session-list digest)
+ * so reconnects recover it authoritatively.
  */
 export interface CompactingMessage extends BaseEnvelope {
   type: 'compacting';
@@ -1257,8 +1259,6 @@ export interface AuthOkMessage {
 
 export type AuthErrorCode =
   | 'auth_rejected'
-  | 'auth_unavailable'
-  | 'service_unavailable'
   | 'unknown_auth_method'
   | 'pairing_disabled'
   | 'invalid_pairing_token'
@@ -1268,7 +1268,9 @@ export type AuthErrorCode =
   | 'invalid_signature'
   | 'user_not_found'
   | 'device_registration_failed'
-  | 'wrong_region';
+  | 'wrong_region'
+  | 'auth_unavailable'
+  | 'service_unavailable';
 
 export interface AuthErrorMessage {
   type: 'auth_error';

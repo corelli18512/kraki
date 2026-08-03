@@ -286,6 +286,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private static let liveCardID = "__live_card__"
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
+    var onOpenHTMLArtifact: (ContentRef) -> Void = { _ in }
 
     /// Flat pure-spine data source. `vm.displayMessages` contains one item per renderable persisted message; paging moves the raw seq window,
     /// then `refreshSpineSnapshot()` snapshots it off the scroll frame.
@@ -314,12 +315,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     init(sessionId: String, appState: AppState, agent: String, bottomContentInset: CGFloat,
          onResolvePermission: @escaping (String, String?, String) -> Void = { _, _, _ in },
-         onAnswerQuestion: @escaping (String, String) -> Void = { _, _ in }) {
+         onAnswerQuestion: @escaping (String, String) -> Void = { _, _ in },
+         onOpenHTMLArtifact: @escaping (ContentRef) -> Void = { _ in }) {
         self.sessionId = sessionId
         self.agentName = agent
         self.bottomContentInset = bottomContentInset
         self.onResolvePermission = onResolvePermission
         self.onAnswerQuestion = onAnswerQuestion
+        self.onOpenHTMLArtifact = onOpenHTMLArtifact
         self.vm = ChatViewModel(sessionId: sessionId, appState: appState)
         self.appState = appState
         self.store = appState.messageStore
@@ -411,6 +414,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var lastSyncedSignature = ""
     private var lastLiveCardSignature = ""
     private var lastEntryDiagnosticSignature = ""
+    #if DEBUG
+    private var alignmentRevision = 0
+    private var alignmentLoggingEnabled: Bool {
+        ProcessInfo.processInfo.environment["KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW"] == "1"
+    }
+    #endif
 
     private func logEntryState(_ reason: String) {
         let collectionCount = collectionView?.numberOfItems(inSection: 0) ?? -1
@@ -674,6 +683,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         cell.attachmentStore = appState.attachmentStore
         cell.onResolvePermission = onResolvePermission
         cell.onAnswerQuestion = onAnswerQuestion
+        cell.onOpenHTMLArtifact = onOpenHTMLArtifact
         cell.onShowTable = { [weak self] layout in
             let table = TKTableSheetViewController(layout: layout)
             let navigation = UINavigationController(rootViewController: table)
@@ -681,13 +691,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             self?.present(navigation, animated: true)
         }
         cell.onActionHeightChange = { [weak self, weak cell] in
-            // SwiftUI action/image UI resized (e.g. permission buttons
-            // appeared, or a lazy image hydrated). Bust the cached height
-            // for this item and relayout.
-            if let cell, let content = cell.contentSnapshot {
+            guard let self, let cell else { return }
+            // SwiftUI action/image UI resized (permission state or lazy image).
+            // Preserve the cell and animate only its geometry from the current
+            // presentation state; a reload would flash reused TextKit surfaces.
+            if let content = cell.contentSnapshot {
                 TKBubbleContent.bust(content.message.id)
             }
-            self?.collectionView.collectionViewLayout.invalidateLayout()
+            self.animateHeightChange(for: cell)
         }
         if isLiveCard(indexPath.item), let card = vm.card {
             // Streaming tail: ONE component — same TKBubbleCell as a completed
@@ -706,7 +717,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                                                 sessionId: sessionId,
                                                 steps: message.steps ?? 0,
                                                 isFrozen: true,
-                                                frozenTimestamp: message.finishedAt ?? message.timestamp)
+                                                frozenTimestamp: message.finishedAt ?? message.timestamp,
+                                                attachments: message.contentRefAttachments)
             cell.configure(content, cellWidth: collectionView.bounds.width)
             cell.onOpenSteps = { [weak self] _ in self?.presentSteps(for: message) }
         } else if indexPath.item < items.count, let message = message(items[indexPath.item]) {
@@ -737,7 +749,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let content = TKBubbleContent.live(card: frozenCard(from: message), agent: agentName,
                                                 sessionId: sessionId, steps: message.steps ?? 0,
                                                 isFrozen: true,
-                                                frozenTimestamp: message.finishedAt ?? message.timestamp)
+                                                frozenTimestamp: message.finishedAt ?? message.timestamp,
+                                                attachments: message.contentRefAttachments)
             return CGSize(width: w, height: content.cellHeight(cellWidth: w))
         }
         guard indexPath.item < items.count, let message = message(items[indexPath.item]) else {
@@ -1137,36 +1150,77 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func refreshVisibleLiveCard(at index: Int, duringPaging: Bool) {
+        guard index < collectionView.numberOfItems(inSection: 0),
+              let card = vm.card else { return }
         let indexPath = IndexPath(item: index, section: 0)
-        if duringPaging {
-            // A collection batch owns the data-source index space. Avoid a
-            // nested item reload; update the already-visible cell in place and
-            // let the deferred post-page sync perform the authoritative reload.
-            if let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell,
-               let card = vm.card {
-                let content = TKBubbleContent.live(
-                    card: card,
-                    agent: agentName,
-                    sessionId: sessionId,
-                    steps: vm.lastUserStepsHint
+        if let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell {
+            let content = TKBubbleContent.live(
+                card: card,
+                agent: agentName,
+                sessionId: sessionId,
+                steps: vm.lastUserStepsHint
+            )
+            cell.configure(content, cellWidth: collectionView.bounds.width)
+            cell.onOpenSteps = { [weak self] _ in self?.presentLiveSteps() }
+            #if DEBUG
+            if alignmentLoggingEnabled {
+                alignmentRevision += 1
+                let presentationHeight = cell.layer.presentation()?.frame.height ?? cell.frame.height
+                IOSChatAlignmentLog.write(
+                    "revision=\(alignmentRevision) cell=\(ObjectIdentifier(cell)) oldHeight=\(String(format: "%.2f", cell.bounds.height)) presentationHeight=\(String(format: "%.2f", presentationHeight)) targetHeight=\(String(format: "%.2f", content.cellHeight(cellWidth: collectionView.bounds.width))) pinned=\(followingBottom ? 1 : 0)"
                 )
-                cell.configure(content, cellWidth: collectionView.bounds.width)
-                cell.onOpenSteps = { [weak self] _ in self?.presentLiveSteps() }
             }
+            #endif
+        }
+        animateItemGeometry(at: indexPath, animated: !duringPaging)
+    }
+
+    private func animateHeightChange(for cell: TKBubbleCell) {
+        guard let indexPath = collectionView.indexPath(for: cell) else {
             collectionView.collectionViewLayout.invalidateLayout()
             return
         }
+        animateItemGeometry(at: indexPath, animated: true)
+    }
 
-        guard index < collectionView.numberOfItems(inSection: 0) else { return }
-        // Empty delta → permission/question/tool action keeps the same stable
-        // `__live_card__` identity. A reconfigure/direct frame update can race
-        // the preceding insertion layout and leave the old empty cell visible.
-        // Reload exactly this one item so UIKit reruns both cellForItem and the
-        // delegate size query. This is still O(1): no spine/full-table reload.
-        UIView.performWithoutAnimation {
-            collectionView.reloadItems(at: [indexPath])
-            collectionView.collectionViewLayout.invalidateLayout()
-            collectionView.layoutIfNeeded()
+    private func animateItemGeometry(at indexPath: IndexPath, animated: Bool) {
+        let shouldFollow = followingBottom
+            || distanceToBottom() <= Self.bottomFollowTolerance
+        let context = UICollectionViewFlowLayoutInvalidationContext()
+        context.invalidateItems(at: [indexPath])
+        collectionView.collectionViewLayout.invalidateLayout(with: context)
+
+        let updates = {
+            self.collectionView.layoutIfNeeded()
+            if shouldFollow {
+                let minY = -self.collectionView.adjustedContentInset.top
+                let maxY = max(
+                    minY,
+                    self.collectionView.contentSize.height
+                        - self.collectionView.bounds.height
+                        + self.collectionView.adjustedContentInset.bottom
+                )
+                self.collectionView.contentOffset.y = maxY
+                self.followingBottom = true
+            }
+        }
+        guard animated, collectionView.window != nil else {
+            UIView.performWithoutAnimation(updates)
+            return
+        }
+        UIView.animate(
+            withDuration: 0.22,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
+            animations: updates
+        ) { [weak self] finished in
+            #if DEBUG
+            guard let self, self.alignmentLoggingEnabled else { return }
+            let height = self.collectionView.layoutAttributesForItem(at: indexPath)?.frame.height ?? -1
+            IOSChatAlignmentLog.write(
+                "animation item=\(indexPath.item) finished=\(finished ? 1 : 0) height=\(String(format: "%.2f", height)) bottomDistance=\(String(format: "%.2f", self.distanceToBottom()))"
+            )
+            #endif
         }
     }
 
@@ -1925,6 +1979,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
     let bottomContentInset: CGFloat
     let onResolvePermission: (String, String?, String) -> Void
     let onAnswerQuestion: (String, String) -> Void
+    let onOpenHTMLArtifact: (ContentRef) -> Void
     @Environment(AppState.self) private var appState
 
     func makeUIViewController(context: Context) -> ChatPerfListVC {
@@ -1934,7 +1989,8 @@ struct ChatPerfListView: UIViewControllerRepresentable {
             agent: agent,
             bottomContentInset: bottomContentInset,
             onResolvePermission: onResolvePermission,
-            onAnswerQuestion: onAnswerQuestion
+            onAnswerQuestion: onAnswerQuestion,
+            onOpenHTMLArtifact: onOpenHTMLArtifact
         )
     }
 
@@ -1942,6 +1998,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
         vc.updateBottomContentInset(bottomContentInset)
         vc.onResolvePermission = onResolvePermission
         vc.onAnswerQuestion = onAnswerQuestion
+        vc.onOpenHTMLArtifact = onOpenHTMLArtifact
         vc.syncLiveUpdates()
     }
 }

@@ -45,7 +45,6 @@ struct MessageInputView: View {
     var pendingPermission: PendingPermission? = nil
     var pendingQuestion: PendingQuestion? = nil
     var isCompacting: Bool = false
-    var compactionReason: CompactionReason? = nil
     var hasLiveCard: Bool = false
     var onHeightChange: (CGFloat) -> Void = { _ in }
 
@@ -177,11 +176,8 @@ struct MessageInputView: View {
     private var sessionActive: Bool {
         session?.state == .active || session?.state == .compacting
     }
-    private var maintenanceBlocksInput: Bool {
-        isCompacting && compactionReason != .threshold && compactionReason != .manual
-    }
     private var text: String { sessionStore.drafts[sessionId] ?? "" }
-    private var isBusy: Bool { sessionActive || maintenanceBlocksInput || awaitingActive }
+    private var isBusy: Bool { sessionActive || isCompacting || awaitingActive }
     private var isIdle: Bool { !isBusy }
     private var isStructuredResponse: Bool { pendingPermission != nil || pendingQuestion != nil }
     private var submissionIntent: MessageComposerIntent {
@@ -196,7 +192,7 @@ struct MessageInputView: View {
     private var canSend: Bool {
         isStructuredResponse ? hasText : (hasText || hasImage)
     }
-    private var canShowAbort: Bool { sessionActive || maintenanceBlocksInput || hasLiveCard }
+    private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
 
     /// True when we can actually deliver a message right now —
     /// tentacle is online AND the relay channel is up. Drives the
@@ -971,7 +967,12 @@ struct MessageInputView: View {
     private func handleQuestionAnswer() {
         guard hasText, let q = pendingQuestion else { return }
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.answer(sessionId: sessionId, questionId: q.id, answer: answer)
+        appState.commandSender?.answer(
+            sessionId: sessionId,
+            questionId: q.id,
+            answer: answer,
+            wasFreeform: true
+        )
         sessionStore.setDraft(sessionId, "")
         isFocused = false
     }

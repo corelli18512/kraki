@@ -49,12 +49,6 @@ extension SessionDigest {
             return SessionPreview(text: text, type: type, timestamp: timestamp)
         }()
 
-        let runtimeStatus: SessionRuntimeStatusDigest? = {
-            guard let dict = json["runtimeStatus"] as? [String: Any],
-                  let status = dict["status"] as? String else { return nil }
-            return SessionRuntimeStatusDigest(status: status, reason: dict["reason"] as? String)
-        }()
-
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -62,7 +56,6 @@ extension SessionDigest {
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
-            runtimeStatus: runtimeStatus,
             mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
@@ -192,6 +185,13 @@ final class MessageRouter {
                 appState?.deviceStore.removeDevice(deviceId)
             }
 
+        case "device_pending":
+            // Transient liveness signal: the relay sent a ping but hasn't had
+            // a pong back within the grace period. Resolved by a follow-up
+            // device_joined (recovered) or device_left (gone), so leave the
+            // device's online state untouched and just acknowledge.
+            break
+
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
             let message = json["message"] as? String ?? "Unknown server error"
@@ -204,19 +204,40 @@ final class MessageRouter {
             appState?.wsClient?.sendRaw("{\"type\":\"pong\"}")
 
         case "push_token_registered":
+            #if os(iOS)
             appState?.pushManager?.registered = true
+            #endif
             KLog.d("✅ push_token_registered")
+
+        case "voice_lease_grant":
+            if let lease = Self.decodeVoiceLease(json["lease"]) {
+                KLog.d("🎙️ Voice lease grant received")
+                Task { @MainActor in
+                    appState?.voiceInputController.receiveLease(lease)
+                }
+            }
+
+        case "voice_lease_denied":
+            let reason = (json["reason"] as? String).flatMap(VoiceLeaseDeniedReason.init(rawValue:))
+                ?? .invalidRequest
+            let detail = json["detail"] as? String
+            KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue)")
+            Task { @MainActor in
+                appState?.voiceInputController.receiveLeaseDenied(reason: reason, detail: detail)
+            }
 
         case "preferences_updated":
             // Live sync from another device (or echo of our own
             // update). Apply via PreferencesManager — its echo-loop
             // guard prevents the resulting AppStorage write from
-            // bouncing back to the relay.
+            // bouncing back to the relay. iOS-only (mac has no prefs manager yet).
+            #if os(iOS)
             if let prefs = json["preferences"] as? [String: Any] {
                 Task { @MainActor in
                     appState?.preferencesManager?.applyRemote(prefs)
                 }
             }
+            #endif
 
         // ── Encrypted envelopes ──────────────────────────────────────────
         case "unicast", "multicast", "broadcast":
@@ -235,24 +256,21 @@ final class MessageRouter {
         }
     }
 
+    // MARK: - Voice Control Decoding
+
+    private static func decodeVoiceLease(_ raw: Any?) -> VoiceLease? {
+        guard let dictionary = raw as? [String: Any],
+              JSONSerialization.isValidJSONObject(dictionary),
+              let data = try? JSONSerialization.data(withJSONObject: dictionary) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(VoiceLease.self, from: data)
+    }
+
     // MARK: - Encrypted Envelope Handling
 
     private func handleEncryptedEnvelope(_ data: Data) {
-        guard encryptionHandler.isReady else {
-            KLog.d("🔒 Encryption not ready — queuing envelope (deviceId: \(appState?.deviceId ?? "nil"), hasKeys: \(KeychainManager().hasKeys()))")
-            encryptionHandler.enqueue(data)
-            return
-        }
-        do {
-            let result = try encryptionHandler.decryptInbound(data)
-            Task { @MainActor in
-                self.handleDataMessage(result.message)
-            }
-        } catch EncryptionError.notAddressedToUs {
-            KLog.d("📭 Envelope not addressed to us — skipping")
-        } catch {
-            KLog.d("❌ Decryption failed: \(error)")
-        }
+        encryptionHandler.submitForDecryption(data)
     }
 
     // MARK: - Data Message Routing
@@ -424,15 +442,6 @@ final class MessageRouter {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
             registerContentRefs(in: payload, sessionId: sessionId)
-            if let arr = payload?["attachments"] as? [[String: Any]] {
-                for att in arr {
-                    if let type = att["type"] as? String,
-                       (type == "content_ref" || type == "image_ref"),
-                       let id = att["id"] as? String {
-                        appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
-                    }
-                }
-            }
 
         case "turn_status":
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
@@ -474,21 +483,11 @@ final class MessageRouter {
             }
 
         case "card_action":
-            // Compatibility transport for release Tentacles. New producers use
-            // session_runtime_status below, but old compaction actions are still
-            // split atomically out of the card domain.
+            // The single server-owned status-card action slot (see
+            // @kraki/protocol CardAction). A `compaction` action variant is
+            // routed atomically into the runtime-status domain; everything
+            // else lands in the live card action slot verbatim.
             appState.messageStore.applyCardAction(sessionId, Self.decodeCardAction(payload))
-
-        case "session_runtime_status":
-            switch payload?["status"] as? String {
-            case "compacting":
-                let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
-                appState.messageStore.setCompacting(sessionId, reason: reason)
-            default:
-                // Runtime-idle clears only runtime status. It must never mutate
-                // a tool, permission/question, draft, or terminal outcome.
-                appState.messageStore.clearRuntimeStatus(sessionId)
-            }
 
         // ── Tool events (off-spine trace) ────────────────────────────────
         // No longer persisted or seq'd — the live tool surfaces via the card
@@ -509,15 +508,7 @@ final class MessageRouter {
             appState.sessionStore.clearCurrentTool(
                 sessionId, ifMatching: name, success: payload?["success"] as? Bool)
             registerContentRefs(in: payload, sessionId: sessionId)
-            if let arr = payload?["attachments"] as? [[String: Any]] {
-                for att in arr {
-                    if let type = att["type"] as? String,
-                       (type == "content_ref" || type == "image_ref"),
-                       let id = att["id"] as? String {
-                        appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
-                    }
-                }
-            }
+
 
         // ── Attachment chunk push ────────────────────────────────────────
 
@@ -534,11 +525,6 @@ final class MessageRouter {
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let usage = payload?["usage"] as? [String: Any] {
                 appState.sessionStore.setSessionUsage(sessionId, usage: usage)
-            }
-            // Set preview from last agent_message in this turn
-            if let lastContent = appState.messageStore.lastAgentMessageContent(sessionId) {
-                updatePreview(sessionId, text: lastContent, type: "agent",
-                              timestamp: timestamp, notify: true)
             }
             // Turn ended — pull the authoritative trace for its concluding
             // bubble so a later "Steps" open is instant.
@@ -558,14 +544,21 @@ final class MessageRouter {
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
 
-        case "compact", "compacting":
-            // Transient compaction maintenance, orthogonal to active/idle.
+        case "compacting":
+            // `compacting` is a peer of active/idle on the session-state axis
+            // (see @kraki/protocol CompactingMessage). `phase: 'start'` enters
+            // the compacting state; `phase: 'end'` carries the authoritative
+            // `nextState` ('active' | 'idle') to restore. Never touches the
+            // card action slot, TRACE, or spine. Mirrors web's message-router.
             let phase = payload?["phase"] as? String
             if phase == "start" {
                 let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
                 appState.messageStore.setCompacting(sessionId, reason: reason)
+                appState.sessionStore.updateState(sessionId, state: "compacting")
             } else {
                 appState.messageStore.clearRuntimeStatus(sessionId)
+                let nextState = (payload?["nextState"] as? String) ?? "active"
+                appState.sessionStore.updateState(sessionId, state: nextState)
             }
 
         case "error":
@@ -579,8 +572,6 @@ final class MessageRouter {
                appState.commandSender?.pendingPlaceholderIds[requestId] != nil {
                 appState.commandSender?.failPendingRequest(requestId, reason: errorText)
             }
-            updatePreview(sessionId, text: errorText, type: "error",
-                          timestamp: timestamp, notify: true)
 
         // ── Session metadata ─────────────────────────────────────────────
 
@@ -706,19 +697,6 @@ final class MessageRouter {
             // Sync pin
             appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
 
-            // Apply sidebar preview from the digest. Tentacle does the
-            // markdown stripping + 80-char truncation for us, so this
-            // is the cheapest possible sidebar paint — no replay
-            // round-trip needed.
-            if let preview = digest.preview {
-                appState.sessionStore.setPreview(
-                    digest.id,
-                    text: preview.text,
-                    type: preview.type,
-                    timestamp: preview.timestamp
-                )
-            }
-
             // Unread is derived from readSeq/lastSeq directly on each
             // SessionInfo. We advance both sides monotonically, then
             // (if the gap is non-empty) ask the persistent cache
@@ -752,21 +730,35 @@ final class MessageRouter {
             )
         }
 
-        // Warm-up: request latest for the top-N most recent sessions.
-        // See `MessageProvider.runWarmup` for the algorithm.
-        appState.messageProvider?.runWarmup(digests: parsed)
-
-        // Self-heal the currently-open chat. Warm-up only covers the
-        // top-N by recency, so if the user is viewing a session
-        // outside that set when a reconnect lands, the chat view
-        // would otherwise stay frozen at whatever was in the store
-        // before the disconnect. ensureLoaded is idempotent — no-op
-        // when storeLastSeq already ≥ tentacleLastSeq, and no-op
-        // when another tentacle owns the active session (the owning
-        // tentacle's session_list arrival will trigger it).
-        if let active = appState.sessionStore.activeSessionId {
-            appState.messageProvider?.ensureLoaded(sessionId: active, reason: "sessionListSelfHeal")
+        // Self-heal the currently-open chat before background warm-up. The
+        // visible Session must own the first head slot; otherwise a top-N
+        // warm-up request for the same Session can make this explicit path look
+        // like an already-loading no-op.
+        //
+        // The subscription controller deliberately retains its desired Session
+        // across reconnects, while SwiftUI lifecycle/restoration can briefly
+        // clear SessionStore.activeSessionId. Fall back to that connection-stable
+        // authority so a digest preview cannot advance while the visible Chat
+        // remains stranded on an older persisted tail.
+        let visibleSessionId = appState.sessionStore.activeSessionId
+            ?? appState.sessionSubscriptionController.desiredSessionId
+        if let visibleSessionId {
+            if appState.sessionStore.activeSessionId != visibleSessionId {
+                KLog.d(
+                    "🩹 [2/history session-list self-heal] visible=\(visibleSessionId.prefix(12)) "
+                        + "source=subscriptionDesired active=nil"
+                )
+            }
+            appState.messageProvider?.ensureLoaded(
+                sessionId: visibleSessionId,
+                reason: "sessionListSelfHeal"
+            )
         }
+
+        // Warm-up the remaining recent Sessions after the visible head is
+        // reconciled. requestLatest is idempotent and skips the visible Session
+        // if its explicit self-heal already filled or reserved the head slot.
+        appState.messageProvider?.runWarmup(digests: parsed)
 
         // This post-auth list is the inbound stream-0 reconnect barrier. Notify
         // only after routing metadata and provider head state are authoritative.
@@ -781,15 +773,29 @@ final class MessageRouter {
               let accepted = payload["accepted"] as? Bool else { return }
         let sessionId = payload["sessionId"] as? String
         let error = (payload["error"] as? [String: Any])?["message"] as? String
-        appState.sessionSubscriptionController.onAck(
-            SessionSubscriptionAck(
-                tentacleId: tentacleId,
-                sessionId: sessionId,
-                accepted: accepted,
-                snapshot: payload["snapshot"] as? [String: Any],
-                errorMessage: error
-            )
+        let ack = SessionSubscriptionAck(
+            tentacleId: tentacleId,
+            sessionId: sessionId,
+            accepted: accepted,
+            snapshot: payload["snapshot"] as? [String: Any],
+            errorMessage: error
         )
+        // Some Tentacles acknowledge a subscription without an inline digest
+        // snapshot. Reconcile before handing the ACK to the controller so that
+        // both snapshot and no-snapshot producers guarantee the visible Chat
+        // head catches up with the sidebar digest.
+        if accepted,
+           let sessionId,
+           appState.sessionSubscriptionController.desiredSessionId == sessionId {
+            KLog.d(
+                "🩹 [2/history subscription-ack self-heal] session=\(sessionId.prefix(12))"
+            )
+            appState.messageProvider?.ensureLoaded(
+                sessionId: sessionId,
+                reason: "subscriptionAck"
+            )
+        }
+        appState.sessionSubscriptionController.onAck(ack)
     }
 
     private func handleSessionCreated(
@@ -965,7 +971,8 @@ final class MessageRouter {
             sessionId: sessionId,
             messages: parsed,
             lastSeq: lastSeq,
-            totalLastSeq: totalLastSeq
+            totalLastSeq: totalLastSeq,
+            containsHead: nil
         )
     }
 
@@ -981,6 +988,7 @@ final class MessageRouter {
         let messagesArray = payload["messages"] as? [[String: Any]] ?? []
         let firstSeq = payload["firstSeq"] as? Int ?? 0
         let lastSeq = payload["lastSeq"] as? Int ?? 0
+        let containsHead = payload["containsHead"] as? Bool ?? false
         let parsed = ProducerMessageDecoder.decodeBatchMessages(messagesArray)
         let types = Set(parsed.map(\.type)).sorted().joined(separator: ",")
         KLog.chat("📦 [2/history←WS messages_batch] session=\(sessionId.prefix(12)) count=\(parsed.count) seq=[\(firstSeq)…\(lastSeq)] types=[\(types)]")
@@ -988,10 +996,8 @@ final class MessageRouter {
             sessionId: sessionId,
             messages: parsed,
             lastSeq: lastSeq,
-            // The new endpoint doesn't carry a separate head marker;
-            // tentacleLastSeq is kept fresh via session_list and the
-            // store's own ingestion ceiling.
-            totalLastSeq: lastSeq
+            totalLastSeq: lastSeq,
+            containsHead: containsHead
         )
     }
 
@@ -1059,6 +1065,8 @@ final class MessageRouter {
             : text
     }
 
+    /// Optimistic mirror for stable turn boundaries only. The next
+    /// `session_list` digest always replaces this value authoritatively.
     private func updatePreview(
         _ sessionId: String,
         text: String,
@@ -1066,10 +1074,6 @@ final class MessageRouter {
         timestamp: String?,
         notify: Bool = false
     ) {
-        // `notify` retained as a no-op parameter for source
-        // compatibility with existing call sites. Unread state lives
-        // entirely in the seq pipeline now (`bumpLastSeq` / `markRead`),
-        // so a preview update doesn't itself bump anything.
         _ = notify
         guard let appState else { return }
         appState.sessionStore.setSessionPreview(

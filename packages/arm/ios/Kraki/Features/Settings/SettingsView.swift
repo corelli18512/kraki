@@ -19,7 +19,9 @@ struct SettingsView: View {
             preferencesSection
             aboutSection
             rateSection
+            #if DEBUG
             diagnosticsSection
+            #endif
         }
         .formStyle(.grouped)
         .contentMargins(.top, 0)
@@ -330,6 +332,7 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
+    #if DEBUG
     // MARK: - Diagnostics (developer-only data-layer test page)
 
     /// Entry point for the sliding-window diagnostic page. The page
@@ -359,9 +362,8 @@ struct SettingsView: View {
             }
         }
     }
+    #endif
 }
-
-// MARK: - AppColorScheme
 
 enum AppColorScheme: String, CaseIterable {
     case system

@@ -14,14 +14,21 @@
 //  measurement + a trailing "barrier" job to learn when a batch is
 //  done. This keeps the budgeting logic in exactly one place.
 
+import Foundation
 import QuartzCore
 
 @MainActor
 final class HeightMeasurementScheduler {
 
     private var queue: [() -> Void] = []
+    #if os(macOS)
+    private var timer: Timer?
+    #else
     private var link: CADisplayLink?
+    #endif
     private let budgetMs: Double
+    private let maxJobsPerTick: Int?
+    private let tickInterval: TimeInterval
 
     /// When true, the link is suspended and no jobs run — but the
     /// queue is preserved. Used to stand down idle warming while the
@@ -34,12 +41,24 @@ final class HeightMeasurementScheduler {
     private(set) var totalFrames = 0
     private(set) var totalJobs = 0
 
-    init(budgetMs: Double) {
+    init(
+        budgetMs: Double,
+        maxJobsPerTick: Int? = nil,
+        tickInterval: TimeInterval = 1.0 / 60.0
+    ) {
         self.budgetMs = budgetMs
+        self.maxJobsPerTick = maxJobsPerTick
+        self.tickInterval = tickInterval
     }
 
     var pendingCount: Int { queue.count }
-    var isRunning: Bool { link != nil }
+    var isRunning: Bool {
+        #if os(macOS)
+        timer != nil
+        #else
+        link != nil
+        #endif
+    }
 
     /// Enqueue a batch of jobs (run in order) and ensure the link is
     /// pumping.
@@ -75,10 +94,18 @@ final class HeightMeasurementScheduler {
     }
 
     private func startIfNeeded() {
-        guard link == nil, !paused, !queue.isEmpty else { return }
-        let l = CADisplayLink(target: self, selector: #selector(tick))
-        l.add(to: .main, forMode: .common)
-        link = l
+        guard !isRunning, !paused, !queue.isEmpty else { return }
+        #if os(macOS)
+        let next = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(next, forMode: .common)
+        timer = next
+        #else
+        let next = CADisplayLink(target: self, selector: #selector(tick))
+        next.add(to: .main, forMode: .common)
+        link = next
+        #endif
     }
 
     @objc private func tick() {
@@ -90,6 +117,7 @@ final class HeightMeasurementScheduler {
             let job = queue.removeFirst()
             job()
             ran += 1
+            if let maxJobsPerTick, ran >= maxJobsPerTick { break }
             if (CACurrentMediaTime() - start) * 1000.0 >= budgetMs { break }
         }
         totalFrames += 1
@@ -102,7 +130,12 @@ final class HeightMeasurementScheduler {
     }
 
     private func stop() {
+        #if os(macOS)
+        timer?.invalidate()
+        timer = nil
+        #else
         link?.invalidate()
         link = nil
+        #endif
     }
 }

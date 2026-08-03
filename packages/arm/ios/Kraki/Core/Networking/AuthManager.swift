@@ -73,21 +73,96 @@ final class AuthManager {
     private var pendingRegionDeviceId: String?
 
     /// Device id we should use when speaking to the relay right now.
-    /// Prefers the pending wrong-region id (during a redirect) over
-    /// the persisted one. Reset back to `storedDeviceId` after a
-    /// successful redirected `auth_ok` (we then promote pending → stored).
+    /// Dev open-auth deliberately has no persisted relay identity: the local
+    /// relay mints an ephemeral device without replacing production credentials.
     private var activeDeviceId: String? {
-        pendingRegionDeviceId ?? storedDeviceId
+        guard !usesEphemeralOpenAuth else { return nil }
+        return pendingRegionDeviceId ?? storedDeviceId
     }
 
     /// A one-time pairing token (e.g. from a QR code scan or deep link).
     var pairingToken: String?
 
-    /// One-shot flag set by `AppState.devConnect()` to force the next
-    /// `bootstrapAuth()` to send `method: "open"` instead of falling
-    /// through to the auth_info → awaitingLogin dance. Cleared the
-    /// moment `authenticate()` consumes it. DEBUG-only relay path.
-    var forceOpenAuthOnce: Bool = false
+    /// Set by `AppState.devConnect()` for the lifetime of a local-dev process.
+    /// Every reconnect uses open auth with an ephemeral relay identity. This
+    /// never deletes or overwrites production device credentials or RSA keys.
+    var usesEphemeralOpenAuth: Bool = false
+
+    /// Platform-aware device name/kind advertised during auth.
+    #if os(macOS)
+    private static let platformDeviceName = "Kraki Mac"
+    private static let platformDeviceKind = "desktop"
+    #else
+    private static let platformDeviceName = "Kraki iOS"
+    private static let platformDeviceKind = "ios"
+    #endif
+
+    #if os(macOS)
+    /// Use process-local RSA keys for token authentication when the old
+    /// Keychain ACL is unavailable. The token authenticates the user; the
+    /// fresh public keys let the relay continue delivering encrypted data.
+    func useEphemeralKeysForCurrentProcess() {
+        keychain.activateEphemeralKeys()
+    }
+
+    /// Reuse the locally installed CLI credential for every authentication
+    /// attempt in this process. A WebSocket can drop after the auth frame but
+    /// before `auth_ok`; making this one-shot caused the next automatic retry
+    /// to fall back to stale Keychain challenge auth. The token remains
+    /// process-local, is never logged/persisted by Kraki, and is cleared on
+    /// explicit logout through `clearStoredCredentials()`.
+    var cliGitHubToken: String?
+
+    /// Reuse the locally-installed `kraki` CLI's login so the Mac app can
+    /// sign in without a separate pairing/OAuth dance. Returns the relay
+    /// URL + GitHub token when the CLI is installed and logged in.
+    /// Mirrors the kraki daemon's own token resolution order: `gh auth token`
+    /// (gh CLI) first, then the saved device-flow token at ~/.kraki/github-token.
+    /// The Mac app is not sandboxed, so `~/.kraki` is readable and `gh` spawnable.
+    static func loadCLICredentials() async -> (relay: String, token: String)? {
+        let krakiHome = NSHomeDirectory() + "/.kraki"
+        guard let configData = try? Data(contentsOf: URL(fileURLWithPath: krakiHome + "/config.json")),
+              let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+              let relay = config["relay"] as? String,
+              relay.hasPrefix("ws") else { return nil }
+
+        // 1. gh CLI token — the daemon's primary path (used whenever `gh` is
+        //    authenticated, which is the common case on a dev machine).
+        if let ghToken = await runGhAuthToken(), !ghToken.isEmpty {
+            return (relay, ghToken)
+        }
+        // 2. Saved device-flow token (~/.kraki/github-token).
+        if let raw = try? String(contentsOfFile: krakiHome + "/github-token", encoding: .utf8) {
+            let saved = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !saved.isEmpty { return (relay, saved) }
+        }
+        return nil
+    }
+
+    /// Run `gh auth token` via a login shell and return its trimmed output,
+    /// or nil if gh is unavailable / not authenticated. Login shell so a
+    /// GUI-launched app still resolves gh from the user's normal PATH.
+    private static func runGhAuthToken() async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-lc", "gh auth token"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else { return nil }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                return nil
+            }
+        }.value
+    }
+    #endif
 
     #if os(iOS)
     /// Live ASWebAuthenticationSession + its presentation provider. Held
@@ -137,7 +212,12 @@ final class AuthManager {
         // pairing handoff. User experience: tap GitHub → auth sheet
         // completes → app sits on login screen forever.
         let hasActiveDeviceId = activeDeviceId != nil
-        if pairingToken != nil || hasActiveDeviceId || forceOpenAuthOnce {
+        #if os(macOS)
+        let hasCLIToken = cliGitHubToken != nil
+        #else
+        let hasCLIToken = false
+        #endif
+        if pairingToken != nil || hasActiveDeviceId || usesEphemeralOpenAuth || hasCLIToken {
             authenticate()
         } else {
             requestAuthInfo()
@@ -192,15 +272,33 @@ final class AuthManager {
             encryptionPublicKey = nil
         }
 
-        let device: [String: Any?] = [
-            "name": "Kraki iOS",
-            "role": "app",
-            "kind": "ios",
-            "deviceId": activeDeviceId,
-            "publicKey": signingPublicKey,
-            "encryptionKey": encryptionPublicKey,
-        ]
-        let cleanDevice = device.compactMapValues { $0 }
+        let cleanDevice = buildDeviceDict(
+            deviceId: activeDeviceId,
+            signingPublicKey: signingPublicKey,
+            encryptionPublicKey: encryptionPublicKey
+        )
+
+        if usesEphemeralOpenAuth {
+            KLog.d("🔓 Auth method: open (ephemeral local-dev identity)")
+            sendRaw([
+                "type": "auth",
+                "auth": ["method": "open"],
+                "device": cleanDevice,
+            ])
+            return
+        }
+
+        #if os(macOS)
+        if let token = cliGitHubToken {
+            KLog.d("🔑 Auth method: github_token (local kraki CLI)")
+            sendRaw([
+                "type": "auth",
+                "auth": ["method": "github_token", "token": token],
+                "device": cleanDevice,
+            ])
+            return
+        }
+        #endif
 
         var message: [String: Any]
 
@@ -226,7 +324,6 @@ final class AuthManager {
                 "auth": ["method": "open"],
                 "device": cleanDevice,
             ]
-            forceOpenAuthOnce = false
         }
 
         sendRaw(message)
@@ -245,9 +342,25 @@ final class AuthManager {
             ]
             sendRaw(response)
         } catch {
+            KLog.d("⚠️ Challenge signing failed: \(error)")
+            #if os(macOS)
+            // A denied Keychain ACL must be recoverable. Re-authenticate with
+            // the existing CLI token and process-local keys instead of leaving
+            // the socket authenticated-but-stuck on the login screen.
+            Task { @MainActor [weak self] in
+                guard let self, let appState = self.appState else { return }
+                appState.lastError = "Keychain access was denied. Retrying with CLI credentials…"
+                if !(await appState.attemptCLILogin()) {
+                    appState.onAuthFailed(
+                        error: "Keychain access was denied. Allow Kraki in Keychain Access or sign in again with the CLI."
+                    )
+                }
+            }
+            #else
             appState?.onAuthFailed(
                 error: "Challenge signing failed: \(error.localizedDescription)"
             )
+            #endif
         }
     }
 
@@ -290,16 +403,19 @@ final class AuthManager {
 
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
+        let voiceCapability = (message["voice"] as? [String: Any]).flatMap(VoiceCapability.init(json:))
 
-        // Persist device credentials (write to BOTH so NSE can read via app group)
-        storedDeviceId = deviceId
-        // Clear any pending wrong-region transient — it has now been
-        // promoted to the persisted store, so subsequent reconnects
-        // use `storedDeviceId` directly.
-        pendingRegionDeviceId = nil
-        Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
-        UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
-        appState.hasStoredCredentials = true
+        if usesEphemeralOpenAuth {
+            // Keep routing this process with the local relay id, but leave the
+            // production challenge identity in persistent storage untouched.
+            pendingRegionDeviceId = deviceId
+        } else {
+            storedDeviceId = deviceId
+            pendingRegionDeviceId = nil
+            Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
+            UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
+            appState.hasStoredCredentials = true
+        }
 
         // Mark transport as authenticated
         appState.wsClient?.setAuthenticated(true)
@@ -311,10 +427,15 @@ final class AuthManager {
         // `applyPreferences` path.
         if let userDict = message["user"] as? [String: Any],
            let prefs = userDict["preferences"] as? [String: Any] {
+            #if os(iOS)
             Task { @MainActor in
                 appState.preferencesManager?.applyRemote(prefs)
             }
+            #endif
         }
+
+        appState.voiceCapability = voiceCapability
+        KLog.d("🎙️ Voice capability: \(voiceCapability == nil ? "unavailable" : "available")")
 
         // Notify AppState (populates stores, triggers queue drain, etc.)
         appState.onAuthenticated(
@@ -333,6 +454,12 @@ final class AuthManager {
         let code = message["code"] as? String
         let reason = message["message"] as? String
             ?? message["reason"] as? String
+        #if os(macOS)
+        let hasCLITokenForLog = cliGitHubToken != nil
+        #else
+        let hasCLITokenForLog = false
+        #endif
+        KLog.d("❌ auth_error code=\(code ?? "nil") reason=\(reason ?? "nil") cli=\(hasCLITokenForLog ? 1 : 0) stored=\(storedDeviceId == nil ? 0 : 1)")
 
         // wrong_region: relay tells us our user is pinned to a different
         // region. The server includes the deviceId it just registered for
@@ -349,18 +476,54 @@ final class AuthManager {
             return
         }
 
-        if storedDeviceId != nil {
-            // Stored credentials were rejected — clear and surface error
-            clearStoredCredentials()
-            appState.onAuthFailed(
-                error: reason ?? "Authentication failed. Please scan a new pairing QR code."
-            )
-            // The WS may still be alive; re-fetch auth_info so the
-            // login screen knows whether GitHub OAuth is available
-            // (otherwise the user lands on a credential-less login
-            // page with no way to sign in until they relaunch the app).
-            if appState.connectionStatus == .awaitingLogin {
-                requestAuthInfo()
+        #if os(macOS)
+        let recoverableCLIOutage = cliGitHubToken != nil
+            && (code == "service_unavailable" || code == "auth_unavailable")
+        #else
+        let recoverableCLIOutage = false
+        #endif
+
+        if usesEphemeralOpenAuth {
+            // A local relay failure says nothing about production credentials.
+            // Keep them untouched and let the dev socket retry normally.
+            appState.lastError = reason ?? "Local development relay authentication failed. Reconnecting…"
+            appState.wsClient?.resetBackoffAndReconnect()
+        } else if recoverableCLIOutage {
+            // The GitHub token has already been loaded and remains process-local.
+            // Account-service outages are recoverable: retain local Sessions and
+            // retry on a replacement socket instead of falling back to LoginView
+            // or stale Keychain challenge auth.
+            KLog.d("⏳ CLI auth backend unavailable — keeping token, reconnecting")
+            appState.lastError = reason ?? "Authentication service temporarily unavailable. Reconnecting…"
+            appState.wsClient?.resetBackoffAndReconnect()
+        } else if storedDeviceId != nil {
+            // Only destroy the persisted pairing on a DETERMINISTIC failure —
+            // a code that proves this device's credentials are actually
+            // invalid. A transient outage (account backend unreachable →
+            // `auth_unavailable` / `service_unavailable`, or a generic
+            // `auth_rejected` that may itself stem from a backend hiccup) must
+            // NOT clear the paired device: doing so turned a short
+            // account-service timeout into a permanent logout that required a
+            // fresh pairing. Mirrors arm-web's `processAuthError` fatal set.
+            let fatal = code == "invalid_signature"
+                || code == "device_not_found"
+                || code == "unknown_device"
+                || code == "user_not_found"
+            if fatal {
+                KLog.d("🚪 Fatal auth error (code=\(code ?? "nil")) — clearing credentials")
+                clearStoredCredentials()
+                appState.onAuthFailed(
+                    error: reason ?? "Authentication failed. Please scan a new pairing QR code."
+                )
+                if appState.connectionStatus == .awaitingLogin {
+                    requestAuthInfo()
+                }
+            } else {
+                // Transient: keep the paired identity and reconnect — the next
+                // challenge attempt succeeds once the backend recovers.
+                KLog.d("⏳ Transient auth error (code=\(code ?? "nil")) — keeping credentials, reconnecting")
+                appState.lastError = reason ?? "Authentication temporarily unavailable. Reconnecting…"
+                appState.wsClient?.resetBackoffAndReconnect()
             }
         } else {
             appState.onAuthFailed(
@@ -377,6 +540,9 @@ final class AuthManager {
     func clearStoredCredentials() {
         storedDeviceId = nil
         pendingRegionDeviceId = nil
+        #if os(macOS)
+        cliGitHubToken = nil
+        #endif
         Self.sharedDefaults.removeObject(forKey: Self.deviceIdKey)
         UserDefaults.standard.removeObject(forKey: Self.deviceIdKey)
         try? keychain.deleteAllKeys()
@@ -418,15 +584,11 @@ final class AuthManager {
             KLog.d("⚠️ Key generation failed for GitHub OAuth: \(error)")
         }
 
-        let device: [String: Any?] = [
-            "name": "Kraki iOS",
-            "role": "app",
-            "kind": "ios",
-            "deviceId": storedDeviceId,
-            "publicKey": signingPublicKey,
-            "encryptionKey": encryptionPublicKey,
-        ]
-        let cleanDevice = device.compactMapValues { $0 }
+        let cleanDevice = buildDeviceDict(
+            deviceId: storedDeviceId,
+            signingPublicKey: signingPublicKey,
+            encryptionPublicKey: encryptionPublicKey
+        )
         var oauthAuth: [String: Any] = ["method": "github_oauth", "code": code]
         if let codeVerifier { oauthAuth["codeVerifier"] = codeVerifier }
         if let redirectUri { oauthAuth["redirectUri"] = redirectUri }
@@ -592,6 +754,23 @@ final class AuthManager {
     #endif
 
     // MARK: - Helpers
+
+    /// Build the platform-aware device descriptor sent during auth.
+    private func buildDeviceDict(
+        deviceId: String?,
+        signingPublicKey: String?,
+        encryptionPublicKey: String?
+    ) -> [String: Any] {
+        let dict: [String: Any?] = [
+            "name": Self.platformDeviceName,
+            "role": "app",
+            "kind": Self.platformDeviceKind,
+            "deviceId": deviceId,
+            "publicKey": signingPublicKey,
+            "encryptionKey": encryptionPublicKey,
+        ]
+        return dict.compactMapValues { $0 }
+    }
 
     private func sendRaw(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),

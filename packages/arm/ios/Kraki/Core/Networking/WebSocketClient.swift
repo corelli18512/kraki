@@ -3,7 +3,7 @@
 /// Mirrors the behaviour of `transport.ts`:
 /// - Connects to the relay URL over WebSocket
 /// - Auto-reconnects with exponential back-off (1 s base, 30 s cap, 5 attempts)
-/// - Sends a JSON `{"type":"ping"}` every 25 seconds
+/// - Sends a JSON `{"type":"ping"}` every 10 seconds
 /// - Exposes an `isAuthenticated` gate: `send(_:)` is blocked until auth
 ///   succeeds, while `sendRaw(_:)` bypasses the gate for the auth handshake.
 
@@ -32,7 +32,8 @@ final class WebSocketClient: NSObject {
     // app is foregrounded — matching what Slack / WhatsApp / iMessage
     // do. Users get an ambient indicator while we keep trying rather
     // than a blocking "we gave up" dialog.
-    private static let pingInterval: TimeInterval = 25.0
+    private static let pingInterval: TimeInterval = 10.0
+    private static let stableConnectionInterval: TimeInterval = 15.0
 
     // MARK: Observable state
 
@@ -62,6 +63,7 @@ final class WebSocketClient: NSObject {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var pingTimer: Timer?
+    private var stableConnectionWorkItem: DispatchWorkItem?
     private var reconnectWorkItem: DispatchWorkItem?
     private var reconnectDelay: TimeInterval
     private var reconnectAttempts = 0
@@ -104,6 +106,20 @@ final class WebSocketClient: NSObject {
         }
 
         KLog.d("🔌 Connecting to \(relayURL)...")
+        // `connect()` is also the replacement primitive used by auth recovery,
+        // foreground rehydrate and SwiftUI task re-entry. URLSession does not
+        // cancel the previous webSocketTask when its owning properties are
+        // overwritten; without this teardown every retry leaves another live
+        // proxy/TCP connection behind and stale auth callbacks can race the
+        // newest socket.
+        let previousTask = task
+        let previousSession = session
+        task = nil
+        session = nil
+        previousTask?.cancel(with: .goingAway, reason: nil)
+        previousSession?.invalidateAndCancel()
+        cleanup()
+        intentionalClose = false
         state = .connecting
 
         let configuration = URLSessionConfiguration.default
@@ -209,15 +225,43 @@ final class WebSocketClient: NSObject {
             }
             return
         }
-        KLog.d("📤 \(String(string.prefix(120)))")
+        KLog.d("📤 ws frame type=\(Self.frameType(string)) bytes=\(string.utf8.count)")
         writeString(string, retryOnSendError: queueOnFailure)
     }
 
     func setAuthenticated(_ value: Bool) {
         isAuthenticated = value
+        stableConnectionWorkItem?.cancel()
+        stableConnectionWorkItem = nil
         if value {
             flushOutboundQueue()
+            scheduleStableConnectionReset()
         }
+    }
+
+    private func scheduleStableConnectionReset() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.state == .connected,
+                  self.isAuthenticated else { return }
+            self.reconnectDelay = Self.reconnectBase
+            self.reconnectAttempts = 0
+            self.onReconnectAttempt?(0)
+            self.stableConnectionWorkItem = nil
+            KLog.d("✅ WebSocket stable for \(Int(Self.stableConnectionInterval))s — reconnect backoff reset")
+        }
+        stableConnectionWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.stableConnectionInterval,
+            execute: work
+        )
+    }
+
+    private static func frameType(_ string: String) -> String {
+        guard let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else { return "unknown" }
+        return type
     }
 
     // MARK: - Outbound Queue helpers
@@ -365,6 +409,8 @@ final class WebSocketClient: NSObject {
     private func cleanup() {
         isAuthenticated = false
         stopPing()
+        stableConnectionWorkItem?.cancel()
+        stableConnectionWorkItem = nil
         cancelReconnect()
     }
 }
@@ -383,8 +429,11 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
             return
         }
         KLog.d("✅ WebSocket opened")
-        reconnectDelay = Self.reconnectBase
-        reconnectAttempts = 0
+        // Opening the TCP/WebSocket handshake is not enough to call a
+        // connection stable. Proxies can accept and reset it a few seconds
+        // later; resetting here traps us in a 1-second reconnect loop. Keep the
+        // accumulated backoff until the socket remains authenticated for the
+        // stability interval. The UI can still stop showing reconnecting now.
         onReconnectAttempt?(0)
         state = .connected
         startPing()

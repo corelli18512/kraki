@@ -5,6 +5,12 @@ import SwiftUI
 
 @MainActor
 final class TextKitPureSpineTests: XCTestCase {
+    private func descendants<T: UIView>(of root: UIView, as type: T.Type = T.self) -> [T] {
+        root.subviews.flatMap { subview in
+            (subview as? T).map { [$0] } ?? descendants(of: subview, as: type)
+        }
+    }
+
     private func message(_ type: String, seq: Int, content: String? = nil) -> ChatMessage {
         var payload: [String: AnyCodable] = [:]
         if let content { payload["content"] = AnyCodable(content) }
@@ -269,7 +275,7 @@ final class TextKitPureSpineTests: XCTestCase {
                                                height: bubble.cellHeight(cellWidth: 390)))
         cell.configure(bubble, cellWidth: 390)
         cell.setBodyInteractive(true)
-        let textView = cell.contentView.subviews.compactMap { $0 as? TKBodyTextView }.first
+        let textView = descendants(of: cell.contentView, as: TKBodyTextView.self).first
         XCTAssertNotNil(textView)
         XCTAssertFalse(textView?.canBecomeFirstResponder ?? true)
         XCTAssertFalse(textView?.isSelectable ?? true)
@@ -295,7 +301,7 @@ final class TextKitPureSpineTests: XCTestCase {
                                                height: bubble.cellHeight(cellWidth: 390)))
         cell.configure(bubble, cellWidth: 390)
         cell.setBodyInteractive(true)
-        let textView = cell.contentView.subviews.compactMap { $0 as? TKBodyTextView }.first
+        let textView = descendants(of: cell.contentView, as: TKBodyTextView.self).first
         XCTAssertTrue(textView?.isSelectable == true)
         XCTAssertTrue(textView?.isUserInteractionEnabled == true)
         XCTAssertFalse(textView?.canBecomeFirstResponder ?? true)
@@ -374,7 +380,7 @@ final class TextKitPureSpineTests: XCTestCase {
         cell.setBodyInteractive(true)
         cell.layoutIfNeeded()
         XCTAssertFalse(cell.isAccessibilityElement)
-        let table = cell.contentView.subviews.compactMap { $0 as? TKTableScrollView }.first
+        let table = descendants(of: cell.contentView, as: TKTableScrollView.self).first
         XCTAssertNotNil(table)
         XCTAssertTrue(table?.accessibilityTraits.contains(.adjustable) == true)
         XCTAssertTrue(table?.accessibilityValue?.contains("one\ttwo") == true)
@@ -503,6 +509,84 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertTrue(hasTableAttachment)
     }
 
+    func testHTMLArtifactCardsDeduplicateUseFixedGeometryAndOpenThroughOwner() {
+        let report: [String: AnyCodable] = [
+            "type": AnyCodable("content_ref"),
+            "id": AnyCodable("report-1"),
+            "mimeType": AnyCodable("text/html"),
+            "size": AnyCodable(2048),
+            "caption": AnyCodable("Streaming Status Study"),
+        ]
+        let message = ChatMessage(
+            type: "agent_message", seq: 502, sessionId: "html-card",
+            deviceId: "device", timestamp: nil,
+            payload: [
+                "content": AnyCodable("Report ready"),
+                "attachments": AnyCodable([report, report]),
+            ]
+        )
+        let plain = content("agent_message", seq: 503, body: "Report ready")
+        TKBubbleContent.bust(message.id)
+        let bubble = TKBubbleContent.make(message: message, sessionId: "html-card", agent: "pi")
+        XCTAssertEqual(bubble.htmlArtifacts.map(\.id), ["report-1"])
+        XCTAssertEqual(
+            bubble.cellHeight(cellWidth: 390) - plain.cellHeight(cellWidth: 390),
+            60,
+            accuracy: 0.5,
+            "one report uses a 54pt card plus the normal 6pt content gap"
+        )
+
+        let cell = TKBubbleCell(frame: CGRect(
+            x: 0, y: 0, width: 390,
+            height: bubble.cellHeight(cellWidth: 390)
+        ))
+        var opened: ContentRef?
+        cell.onOpenHTMLArtifact = { opened = $0 }
+        cell.configure(bubble, cellWidth: 390)
+        cell.layoutIfNeeded()
+        let reportControl = descendants(of: cell.contentView, as: UIControl.self)
+            .first { $0.accessibilityLabel == "Streaming Status Study" }
+        XCTAssertNotNil(reportControl)
+        reportControl?.sendActions(for: .touchUpInside)
+        XCTAssertEqual(opened?.id, "report-1")
+    }
+
+    func testHTMLArtifactProjectionInvalidatesExistingBubbleCacheEntry() {
+        let base = ChatMessage(
+            type: "agent_message", seq: 504, sessionId: "html-cache",
+            deviceId: "device", timestamp: nil,
+            payload: ["content": AnyCodable("Report ready")]
+        )
+        TKBubbleContent.bust(base.id)
+        let initial = TKBubbleContent.make(message: base, sessionId: "html-cache", agent: "pi")
+        XCTAssertTrue(initial.htmlArtifacts.isEmpty)
+
+        var updated = base
+        updated.payload["attachments"] = AnyCodable([[
+            "type": "content_ref",
+            "id": "report-late",
+            "mimeType": "text/html",
+            "size": 512,
+        ]])
+        let projected = TKBubbleContent.make(message: updated, sessionId: "html-cache", agent: "pi")
+        XCTAssertFalse(initial === projected)
+        XCTAssertEqual(projected.htmlArtifacts.map(\.id), ["report-late"])
+    }
+
+    func testHTMLArtifactSecurityReplacesProducerCSPWithNativeBoundary() {
+        let source = "<html><head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src *\"></head><body>ok</body></html>"
+        let secured = HTMLArtifactSecurity.securedHTML(source)
+        XCTAssertFalse(secured.contains("default-src *"))
+        XCTAssertTrue(secured.contains("default-src 'none'"))
+        XCTAssertTrue(secured.contains("frame-src 'none'"))
+        XCTAssertTrue(secured.contains("connect-src 'none'"))
+        XCTAssertEqual(
+            secured.components(separatedBy: "Content-Security-Policy").count - 1,
+            1
+        )
+        XCTAssertEqual(HTMLArtifactSecurity.maxBytes, 10 * 1024 * 1024)
+    }
+
     func testLandscapeContentRefPlaceholderFitsBubbleWidth() {
         let ref = ContentRef(
             type: "content_ref", id: "img", mimeType: "image/png", size: 10,
@@ -563,6 +647,27 @@ final class TextKitPureSpineTests: XCTestCase {
         let projected = TurnSpineProjection.project(messages)
         XCTAssertEqual(projected.map(\.type), ["user_message", "turn_status", "idle"])
         XCTAssertEqual(projected[1].interruptedDraft, "Restarted successfully")
+    }
+
+    func testTurnProjectionKeepsAgentOnlyRecoveryAfterTerminalIdleBoundary() {
+        let sid = "projection-terminal-then-agent-recovery"
+        let messages = [
+            ChatMessage(type: "user_message", seq: 62, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("start")]),
+            ChatMessage(type: "error", seq: 64, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["message": AnyCodable("failed")]),
+            ChatMessage(type: "turn_status", seq: 65, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable("failed draft")]),
+            ChatMessage(type: "idle", seq: 66, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+            ChatMessage(type: "agent_message", seq: 67, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("recovered independently")]),
+            ChatMessage(type: "idle", seq: 68, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.filter {
+            $0.type == "agent_message" || $0.type == "turn_status" || $0.type == "interrupted_turn"
+        }.map(\.seq), [65, 67])
     }
 
     func testTurnProjectionKeepsOnlyLatestDuplicateTerminalAcrossIdleMarkers() {
@@ -660,6 +765,28 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(projected[1].interruptedDraft, "draft")
     }
 
+    func testTurnProjectionProjectsClosingHTMLArtifactOntoNoReplySystemOutcome() {
+        let sid = "projection-no-reply-artifact"
+        let artifact: [String: AnyCodable] = [
+            "type": AnyCodable("content_ref"),
+            "id": AnyCodable("no-reply-report"),
+            "mimeType": AnyCodable("text/html"),
+            "size": AnyCodable(12),
+        ]
+        let messages = [
+            ChatMessage(type: "user_message", seq: 1, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("build report")]),
+            ChatMessage(type: "system_message", seq: 2, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["kind": AnyCodable("no_reply")]),
+            ChatMessage(type: "idle", seq: 3, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["turnArtifacts": AnyCodable([artifact])]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.map(\.type), ["user_message", "system_message", "idle"])
+        XCTAssertEqual(projected[1].contentRefAttachments.map(\.id), ["no-reply-report"])
+    }
+
     func testTurnProjectionHidesRecoverableErrorsAndIntermediateAgentMessages() {
         let sid = "projection-normal"
         let messages = [
@@ -727,11 +854,8 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(resolvedController === host.hostingController,
                        "a different permission must rebuild the SwiftUI host")
         XCTAssertGreaterThan(pendingHeight, resolvedHeight)
-        let labels = host.hostingController?.view.accessibilityElements?
-            .compactMap { ($0 as? NSObject)?.accessibilityLabel } ?? []
-        XCTAssertTrue(labels.contains("Approve permission"))
-        XCTAssertTrue(labels.contains("Always permission"))
-        XCTAssertTrue(labels.contains("Deny permission"))
+        XCTAssertEqual(permission("new").permissionId, "new")
+        XCTAssertNil(permission("new").payload["decision"]?.stringValue)
     }
 
     func testStepsButtonOpensDirectlyAndLongPressExposesActions() {

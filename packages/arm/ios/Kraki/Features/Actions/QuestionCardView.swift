@@ -71,12 +71,18 @@ struct QuestionCardView: View {
                     .submitLabel(.send)
                     .onSubmit {
                         guard !freeformText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        submitAnswer(freeformText.trimmingCharacters(in: .whitespaces))
+                        submitAnswer(
+                            freeformText.trimmingCharacters(in: .whitespaces),
+                            wasFreeform: true
+                        )
                     }
 
                 Button {
                     guard !freeformText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                    submitAnswer(freeformText.trimmingCharacters(in: .whitespaces))
+                    submitAnswer(
+                        freeformText.trimmingCharacters(in: .whitespaces),
+                        wasFreeform: true
+                    )
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
@@ -105,8 +111,13 @@ struct QuestionCardView: View {
         .sensoryFeedback(.impact(flexibility: .solid, intensity: 0.5), trigger: question.id)
     }
 
-    private func submitAnswer(_ answer: String) {
-        appState.commandSender?.answer(sessionId: question.sessionId, questionId: question.id, answer: answer)
+    private func submitAnswer(_ answer: String, wasFreeform: Bool = false) {
+        appState.commandSender?.answer(
+            sessionId: question.sessionId,
+            questionId: question.id,
+            answer: answer,
+            wasFreeform: wasFreeform
+        )
         isTextFieldFocused = false
         freeformText = ""
     }

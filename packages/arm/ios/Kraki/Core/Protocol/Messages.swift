@@ -75,11 +75,13 @@ struct AuthUser: Codable, Sendable, Equatable {
 enum AuthMethod: Codable, Sendable {
     case pairing(token: String)
     case challenge(deviceId: String)
-    case githubOAuth(code: String)
+    case githubOAuth(code: String, codeVerifier: String? = nil, redirectUri: String? = nil)
+    case githubToken(token: String)
+    case apiKey(key: String)
     case open(sharedKey: String?)
 
     private enum CodingKeys: String, CodingKey {
-        case method, token, deviceId, code, sharedKey
+        case method, token, deviceId, code, sharedKey, codeVerifier, redirectUri, key
     }
 
     init(from decoder: Decoder) throws {
@@ -94,7 +96,15 @@ enum AuthMethod: Codable, Sendable {
             self = .challenge(deviceId: deviceId)
         case "github_oauth":
             let code = try container.decode(String.self, forKey: .code)
-            self = .githubOAuth(code: code)
+            let codeVerifier = try container.decodeIfPresent(String.self, forKey: .codeVerifier)
+            let redirectUri = try container.decodeIfPresent(String.self, forKey: .redirectUri)
+            self = .githubOAuth(code: code, codeVerifier: codeVerifier, redirectUri: redirectUri)
+        case "github_token":
+            let token = try container.decode(String.self, forKey: .token)
+            self = .githubToken(token: token)
+        case "apikey":
+            let key = try container.decode(String.self, forKey: .key)
+            self = .apiKey(key: key)
         case "open":
             let key = try container.decodeIfPresent(String.self, forKey: .sharedKey)
             self = .open(sharedKey: key)
@@ -112,9 +122,17 @@ enum AuthMethod: Codable, Sendable {
         case .challenge(let deviceId):
             try container.encode("challenge", forKey: .method)
             try container.encode(deviceId, forKey: .deviceId)
-        case .githubOAuth(let code):
+        case .githubOAuth(let code, let codeVerifier, let redirectUri):
             try container.encode("github_oauth", forKey: .method)
             try container.encode(code, forKey: .code)
+            try container.encodeIfPresent(codeVerifier, forKey: .codeVerifier)
+            try container.encodeIfPresent(redirectUri, forKey: .redirectUri)
+        case .githubToken(let token):
+            try container.encode("github_token", forKey: .method)
+            try container.encode(token, forKey: .token)
+        case .apiKey(let key):
+            try container.encode("apikey", forKey: .method)
+            try container.encode(key, forKey: .key)
         case .open(let key):
             try container.encode("open", forKey: .method)
             if let key { try container.encode(key, forKey: .sharedKey) }
@@ -351,16 +369,22 @@ struct SessionEndedPayload: Codable, Sendable {
 
 struct UserMessagePayload: Codable, Sendable {
     let content: String
+    var attachments: [ImageAttachment]?
+    var clientId: String?
     var delivery: String?
 }
 
 struct AgentMessagePayload: Codable, Sendable {
     let content: String
     var attachments: [ImageAttachment]?
+    /// TRACE step count stamped on this concluding bubble by the tentacle.
+    var steps: Int?
 }
 
 struct AgentMessageDeltaPayload: Codable, Sendable {
     let content: String
+    /// Keep-last flag: replace the draft with `content` when true.
+    var reset: Bool?
 }
 
 struct PermissionPayload: Codable, Sendable {
@@ -368,25 +392,46 @@ struct PermissionPayload: Codable, Sendable {
     let description: String
     let toolName: String
     let args: [String: AnyCodable]
+    /// Set when this request occupies a RESOLVED card slot.
+    var decision: String?
+    /// Trace/history-only terminal state.
+    var cancelled: Bool?
 }
 
 struct QuestionPayload: Codable, Sendable {
     let id: String
     let question: String
     var choices: [String]?
+    var allowFreeform: Bool?
+    /// Set when this request occupies a RESOLVED card slot.
+    var answer: String?
+    var cancelled: Bool?
 }
 
 struct ToolStartPayload: Codable, Sendable {
     let toolName: String
-    let args: [String: AnyCodable]
+    /// Short user-facing preview composed by the tentacle (always present).
+    let headline: String
+    /// Lazy ref to the full args JSON (absent for trivially small args).
+    var argsRef: ContentRef?
+    /// Unique ID for this tool invocation (matches tool_complete).
     var toolCallId: String?
 }
 
 struct ToolCompletePayload: Codable, Sendable {
     let toolName: String
-    let args: [String: AnyCodable]
-    let result: String
+    /// Same headline as the matching tool_start, repeated for replay.
+    let headline: String
+    /// Lazy ref to the full result body (absent when no result text).
+    var resultRef: ContentRef?
+    /// Lazy ref to the full args JSON, repeated for replay convenience.
+    var argsRef: ContentRef?
     var toolCallId: String?
+    /// Whether the tool execution succeeded (default true if absent).
+    var success: Bool?
+    /// Synthetic terminal outcome: 'cancelled' | 'interrupted'.
+    var termination: String?
+    /// Images produced by the tool (e.g. from kraki-show_image).
     var attachments: [ImageAttachment]?
 }
 
@@ -413,6 +458,7 @@ struct SessionModeSetPayload: Codable, Sendable {
 struct SessionModelSetPayload: Codable, Sendable {
     let model: String
     var reasoningEffort: ReasoningEffort?
+    var contextTier: String?
 }
 
 struct SessionTitleUpdatedPayload: Codable, Sendable {
@@ -726,13 +772,17 @@ struct AlwaysAllowPayload: Codable, Sendable {
 struct AnswerPayload: Codable, Sendable {
     let questionId: String
     let answer: String
+    var attachments: [ImageAttachment]?
+    var wasFreeform: Bool?
 }
 
 struct CreateSessionPayload: Codable, Sendable {
     let requestId: String
     let targetDeviceId: String
+    var agentId: String?
     let model: String
     var reasoningEffort: ReasoningEffort?
+    var contextTier: String?
     var prompt: String?
     var cwd: String?
 }
@@ -749,6 +799,7 @@ struct SetSessionModePayload: Codable, Sendable {
 struct SetSessionModelPayload: Codable, Sendable {
     let model: String
     var reasoningEffort: ReasoningEffort?
+    var contextTier: String?
 }
 
 struct MarkReadPayload: Codable, Sendable {
@@ -983,6 +1034,8 @@ struct AuthOkPayload: Codable, Sendable {
 struct AuthErrorPayload: Codable, Sendable {
     let code: String
     let message: String
+    /// When code is 'wrong_region', the correct relay URL to connect to.
+    var redirect: String?
 }
 
 struct AuthChallengePayload: Codable, Sendable {
@@ -1153,11 +1206,24 @@ struct BlobPayload: Codable, Sendable {
     let keys: [String: String]
 }
 
-/// Push notification preview attached to broadcast envelopes.
-struct PushPreview: Codable, Sendable {
-    var title: String?
-    var body: String?
-    var sessionId: String?
+/// Relay envelope for tentacle → explicit same-user app target set.
+/// Mirrors @kraki/protocol MulticastEnvelope (used for single-session live
+/// subscriptions). `blob`/`keys` are unused in pulse mode (the ciphertext
+/// rides inside the pulse frame's payload).
+struct MulticastEnvelope: Codable, Sendable {
+    let type: String // "multicast"
+    let to: [String]
+    let blob: String
+    let keys: [String: String]
+    var ref: String?
+
+    init(to: [String], blob: String, keys: [String: String], ref: String? = nil) {
+        self.type = "multicast"
+        self.to = to
+        self.blob = blob
+        self.keys = keys
+        self.ref = ref
+    }
 }
 
 /// Relay envelope for point-to-point encrypted messages.
@@ -1182,9 +1248,12 @@ struct BroadcastEnvelope: Codable, Sendable {
     let type: String // "broadcast"
     let blob: String
     let keys: [String: String]
-    var pushPreview: PushPreview?
+    /// Encrypted push preview for offline devices (mirrors
+    /// @kraki/protocol `pushPreview?: BlobPayload`). Arm never decodes this;
+    /// typed for protocol honesty.
+    var pushPreview: BlobPayload?
 
-    init(blob: String, keys: [String: String], pushPreview: PushPreview? = nil) {
+    init(blob: String, keys: [String: String], pushPreview: BlobPayload? = nil) {
         self.type = "broadcast"
         self.blob = blob
         self.keys = keys
@@ -1195,6 +1264,7 @@ struct BroadcastEnvelope: Codable, Sendable {
 /// Discriminated relay envelope (unicast or broadcast).
 enum RelayEnvelope: Codable, Sendable {
     case unicast(UnicastEnvelope)
+    case multicast(MulticastEnvelope)
     case broadcast(BroadcastEnvelope)
 
     private enum CodingKeys: String, CodingKey { case type }
@@ -1205,6 +1275,8 @@ enum RelayEnvelope: Codable, Sendable {
         switch type {
         case "unicast":
             self = .unicast(try UnicastEnvelope(from: decoder))
+        case "multicast":
+            self = .multicast(try MulticastEnvelope(from: decoder))
         case "broadcast":
             self = .broadcast(try BroadcastEnvelope(from: decoder))
         default:
@@ -1218,6 +1290,7 @@ enum RelayEnvelope: Codable, Sendable {
     func encode(to encoder: Encoder) throws {
         switch self {
         case .unicast(let env):   try env.encode(to: encoder)
+        case .multicast(let env): try env.encode(to: encoder)
         case .broadcast(let env): try env.encode(to: encoder)
         }
     }
@@ -1395,6 +1468,7 @@ enum IncomingMessageType {
         case "broadcast":  return .broadcast
         case "auth_ok", "auth_error", "auth_challenge", "auth_response",
              "server_error", "device_joined", "device_left", "device_removed",
+             "device_pending",
              "pong", "push_token_registered", "pairing_token_created",
              "auth_info_response", "preferences_updated":
             return .control(type)

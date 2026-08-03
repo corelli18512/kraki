@@ -25,6 +25,15 @@ final class DeviceStore {
     /// used by the import picker to show a spinner.
     var localSessionsLoading: Set<String> = []
 
+    /// macOS-only flat model lists for the model picker. The new Core
+    /// carries per-agent capability slices (`deviceAgents`); these flat
+    /// projections keep the mac mock-data seeding working until the mac
+    /// picker is ported to the agent-slice model. iOS never reads them.
+    #if os(macOS)
+    var deviceModels: [String: [String]] = [:]
+    var deviceModelDetails: [String: [ModelDetail]] = [:]
+    #endif
+
     /// Device IDs that the relay told us are online (via `auth_ok` or
     /// `device_joined`) but whose `device_greeting` we haven't yet
     /// received in the current connection session. Drives the amber
@@ -59,20 +68,18 @@ final class DeviceStore {
     private static let snapshotSchemaVersion = 2
 
     private static let saveDebounce: TimeInterval = 10.0
+    private let persistenceEnabled: Bool
     private var saveTask: DispatchWorkItem?
     private var pendingSnapshot: Snapshot?
 
     private static let snapshotURL: URL = {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("devices.json", isDirectory: false)
+        KrakiDataPaths.persistentDirectory()
+            .appendingPathComponent("devices.json", isDirectory: false)
     }()
 
-    init() {
+    init(persistenceEnabled: Bool = true) {
+        self.persistenceEnabled = persistenceEnabled
+        guard persistenceEnabled else { return }
         guard FileManager.default.fileExists(atPath: Self.snapshotURL.path),
               let data = try? Data(contentsOf: Self.snapshotURL),
               var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
@@ -96,6 +103,7 @@ final class DeviceStore {
     /// Debounced write of the current persistable state to disk.
     /// Called after any mutation that changes a persisted field.
     fileprivate func scheduleSave() {
+        guard persistenceEnabled else { return }
         pendingSnapshot = Snapshot(
             schemaVersion: Self.snapshotSchemaVersion,
             devices: devices,
@@ -110,6 +118,7 @@ final class DeviceStore {
 
     /// Force-flush the pending snapshot to disk immediately.
     func flushCache() {
+        guard persistenceEnabled else { return }
         saveTask?.cancel()
         saveTask = nil
         guard let snapshot = pendingSnapshot else { return }
@@ -120,6 +129,7 @@ final class DeviceStore {
 
     /// Wipe the on-disk file. Logout / reset.
     func clearPersistentSnapshot() {
+        guard persistenceEnabled else { return }
         saveTask?.cancel()
         saveTask = nil
         pendingSnapshot = nil

@@ -1,4 +1,3 @@
-#if os(iOS)
 /// Lightweight descriptor of a session that exists on a tentacle's
 /// local filesystem (Copilot CLI, VS Code, etc.) but has not yet been
 /// imported into Kraki. Sent by the tentacle in `local_sessions_list`
@@ -59,4 +58,3 @@ struct LocalSessionSummary: Identifiable, Equatable, Sendable {
         )
     }
 }
-#endif

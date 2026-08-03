@@ -19,6 +19,12 @@ final class CommandSender {
     /// during optimistic create/fork. When `session_created` arrives
     /// with this requestId, the router swaps placeholderId → real id.
     var pendingPlaceholderIds: [String: String] = [:]
+    /// Debug automation correlation: resolved request id → authoritative
+    /// session id. This never changes transport behavior; it only lets the
+    /// in-process native automation driver wait for the exact create result.
+    #if DEBUG
+    private(set) var resolvedCreateSessions: [String: String] = [:]
+    #endif
     /// Count of in-flight mode changes per session (for echo suppression).
     private var pendingModeChanges: [String: Int] = [:]
 
@@ -191,10 +197,14 @@ final class CommandSender {
 
     // MARK: - Questions
 
-    func answer(sessionId: String, questionId: String, answer: String) {
+    func answer(sessionId: String, questionId: String, answer: String, wasFreeform: Bool = false) {
         send([
             "type": "answer",
-            "payload": ["questionId": questionId, "answer": answer],
+            "payload": [
+                "questionId": questionId,
+                "answer": answer,
+                "wasFreeform": wasFreeform,
+            ] as [String: Any],
         ], sessionId: sessionId)
     }
 
@@ -599,6 +609,9 @@ final class CommandSender {
     /// Resolve a create request — correlate the requestId with the created sessionId.
     func resolveCreateRequest(_ requestId: String, sessionId: String) {
         guard let appState else { return }
+        #if DEBUG
+        resolvedCreateSessions[requestId] = sessionId
+        #endif
         // Apply pending title (if any) before sending input
         if let title = pendingCreateTitles.removeValue(forKey: requestId), !title.isEmpty {
             renameSession(sessionId: sessionId, title: title)
@@ -643,5 +656,8 @@ final class CommandSender {
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
         pendingModeChanges.removeAll()
+        #if DEBUG
+        resolvedCreateSessions.removeAll()
+        #endif
     }
 }
