@@ -565,11 +565,17 @@ extension AppState: SessionSubscriptionHost {
             )
         }
 
-        switch digest.state {
-        case .compacting:
-            messageStore.setCompacting(sessionId, reason: nil)
-        case .idle, .active:
-            messageStore.clearRuntimeStatus(sessionId)
+        switch digest.runtimeStatus?.status {
+        case "compacting":
+            let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
+            messageStore.setCompacting(sessionId, reason: reason)
+        default:
+            if digest.state == .compacting {
+                // Older tentacles encoded maintenance directly in state.
+                messageStore.setCompacting(sessionId, reason: nil)
+            } else {
+                messageStore.clearRuntimeStatus(sessionId)
+            }
         }
 
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]

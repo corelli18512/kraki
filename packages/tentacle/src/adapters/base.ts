@@ -123,8 +123,10 @@ export interface QuestionAnswer {
 }
 
 export interface SendMessageOptions {
-  /** Normal prompt starts a turn; steer interjects into the active turn. */
-  delivery?: 'prompt' | 'steer';
+  /** Normal prompt starts a turn; steer interjects into the active turn;
+   *  follow_up queues a new turn behind runtime maintenance such as threshold
+   *  compaction without aborting that maintenance. */
+  delivery?: 'prompt' | 'steer' | 'follow_up';
 }
 
 export type QuestionResponseResult = 'accepted' | 'not_found' | 'session_gone';

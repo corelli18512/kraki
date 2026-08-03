@@ -1279,6 +1279,29 @@ describe('KrakiWSClient', () => {
       expect(preview!.type).toBe('agent');
     });
 
+    it('restores runtime maintenance from new and legacy session digests', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
+        payload: { sessions: [
+          {
+            id: 'sess-new', agent: 'pi', state: 'idle', mode: 'execute',
+            lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
+            runtimeStatus: { status: 'compacting', reason: 'threshold' },
+          },
+          {
+            id: 'sess-legacy', agent: 'pi', state: 'compacting', mode: 'execute',
+            lastSeq: 4, readSeq: 4, messageCount: 4, createdAt: new Date().toISOString(),
+          },
+        ] },
+      });
+
+      expect(useStore.getState().runtimeStatuses.get('sess-new')).toEqual({ status: 'compacting', reason: 'threshold' });
+      expect(useStore.getState().runtimeStatuses.get('sess-legacy')).toEqual({ status: 'compacting' });
+    });
+
     it('applies an open-question digest preview to the store session preview', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);

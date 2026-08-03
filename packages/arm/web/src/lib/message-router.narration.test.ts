@@ -91,7 +91,7 @@ describe('handleDataMessage card messages', () => {
     expect(useStore.getState().cards.get('s1')?.action?.type).toBe('question');
   });
 
-  it('routes compacting start/end through session state without touching the card or IndexedDB', async () => {
+  it('keeps compaction on the runtime axis without changing conversation state or IndexedDB', async () => {
     seedSession('runtime-s1');
     useStore.getState().setCardAction('runtime-s1', {
       type: 'question',
@@ -104,7 +104,8 @@ describe('handleDataMessage card messages', () => {
       payload: { phase: 'start', reason: 'threshold' },
     } as unknown as InnerMessage, { cmdState: new CommandState() });
 
-    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('compacting');
+    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('active');
+    expect(useStore.getState().runtimeStatuses.get('runtime-s1')).toEqual({ status: 'compacting', reason: 'threshold' });
     expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
 
     handleDataMessage({
@@ -113,13 +114,14 @@ describe('handleDataMessage card messages', () => {
       payload: { phase: 'end', nextState: 'idle' },
     } as unknown as InnerMessage, { cmdState: new CommandState() });
 
-    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('idle');
+    expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('active');
+    expect(useStore.getState().runtimeStatuses.has('runtime-s1')).toBe(false);
     expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
     await new Promise((r) => setTimeout(r, 5));
     expect(putMessage).not.toHaveBeenCalled();
   });
 
-  it('does not let real card or active updates end new-protocol compacting state', () => {
+  it('does not let card or active updates clear independent compaction maintenance', () => {
     seedSession('mixed-s1');
     handleDataMessage({
       type: 'compacting', deviceId: 'dev-tentacle', seq: 12,
@@ -136,7 +138,8 @@ describe('handleDataMessage card messages', () => {
       timestamp: new Date().toISOString(), sessionId: 'mixed-s1', payload: {},
     } as unknown as InnerMessage, { cmdState: new CommandState() });
 
-    expect(useStore.getState().sessions.get('mixed-s1')?.state).toBe('compacting');
+    expect(useStore.getState().sessions.get('mixed-s1')?.state).toBe('active');
+    expect(useStore.getState().runtimeStatuses.get('mixed-s1')?.status).toBe('compacting');
     expect(useStore.getState().cards.get('mixed-s1')?.action?.type).toBe('tool_start');
   });
 

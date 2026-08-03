@@ -49,6 +49,12 @@ extension SessionDigest {
             return SessionPreview(text: text, type: type, timestamp: timestamp)
         }()
 
+        let runtimeStatus: SessionRuntimeStatusDigest? = {
+            guard let dict = json["runtimeStatus"] as? [String: Any],
+                  let status = dict["status"] as? String else { return nil }
+            return SessionRuntimeStatusDigest(status: status, reason: dict["reason"] as? String)
+        }()
+
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -56,6 +62,7 @@ extension SessionDigest {
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
+            runtimeStatus: runtimeStatus,
             mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
@@ -551,9 +558,8 @@ final class MessageRouter {
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
 
-        case "compact":
-            // Transient compaction runtime status (peer of active/idle).
-            // Never touches the card action slot, TRACE, or spine.
+        case "compact", "compacting":
+            // Transient compaction maintenance, orthogonal to active/idle.
             let phase = payload?["phase"] as? String
             if phase == "start" {
                 let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))

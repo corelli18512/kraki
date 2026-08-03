@@ -842,6 +842,20 @@ export class PiAdapter extends AgentAdapter {
     return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
   }
 
+  private resetTurnTracking(s: PiSession): void {
+    s.narrationSegments = 0;
+    s.toolSinceLastNarration = false;
+    s.lastNarration = '';
+    s.lastStopReason = undefined;
+    s.pendingNarration = '';
+    s.aborting = false;
+    s.finalizing = false;
+    s.finalizeResolved = false;
+    s.finalizeNarration = '';
+    s.finalizeStreamId = undefined;
+    s.finalizeStreamLen = 0;
+  }
+
   /** Wait for the ORIGINAL prompt's preflight ACK without ever resending it.
    *  After the normal 30s grace, bounded get_state probes distinguish healthy
    *  compaction/streaming from a dead RPC channel or a genuinely idle stall. */
@@ -1416,19 +1430,19 @@ export class PiAdapter extends AgentAdapter {
       return;
     }
 
+    if (options?.delivery === 'follow_up') {
+      // The previous conversational turn is already idle while Pi's native
+      // threshold/manual maintenance is still inside the same agent lifecycle.
+      // Queue this canonical new turn with Pi's official follow-up behavior: it
+      // ACKs immediately, survives compaction, and starts after maintenance.
+      this.resetTurnTracking(s);
+      await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'followUp' }, { timeoutMs: null });
+      return;
+    }
+
     // A normal prompt opens a fresh logical turn: reset the finalize/skip
     // tracking so the skip-finalize rule and finalize round apply per user prompt.
-    s.narrationSegments = 0;
-    s.toolSinceLastNarration = false;
-    s.lastNarration = '';
-    s.lastStopReason = undefined;
-    s.pendingNarration = '';
-    s.aborting = false;
-    s.finalizing = false;
-    s.finalizeResolved = false;
-    s.finalizeNarration = '';
-    s.finalizeStreamId = undefined;
-    s.finalizeStreamLen = 0;
+    this.resetTurnTracking(s);
     // Submit exactly once. Pi only ACKs after prompt preflight, which may spend
     // minutes compacting even though the frame was delivered successfully. The
     // state-aware watchdog preserves the original request and never translates a

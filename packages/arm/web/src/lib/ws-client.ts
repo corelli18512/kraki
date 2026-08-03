@@ -554,14 +554,21 @@ export class KrakiWSClient {
       // Store tentacle info for later message loading
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
 
-      // Session metadata is authoritative for coarse liveness; the dedicated
-      // runtime snapshot resolves the finer transient state. Re-request on
-      // every active session_list so an offline compaction end can clear stale
-      // local state. Idle/ended proves compaction is no longer running.
-      if (ts.state === 'active') {
-        messageProvider.requestCard(ts.id, true);
+      const runtimeStatus = tsRecord.runtimeStatus as { status?: string; reason?: 'manual' | 'threshold' | 'overflow' } | undefined;
+      if (runtimeStatus?.status === 'compacting') {
+        store.setRuntimeStatus(ts.id, { status: 'compacting', reason: runtimeStatus.reason });
+      } else if (ts.state === 'compacting') {
+        // Backward compatibility: older tentacles encoded maintenance directly
+        // in session.state and did not send runtimeStatus in the digest.
+        store.setRuntimeStatus(ts.id, { status: 'compacting' });
       } else {
         store.setRuntimeStatus(ts.id, null);
+      }
+
+      // Session metadata is authoritative for conversational liveness. Runtime
+      // maintenance is orthogonal and must not make an idle composer busy.
+      if (ts.state === 'active') {
+        messageProvider.requestCard(ts.id, true);
       }
     }
 

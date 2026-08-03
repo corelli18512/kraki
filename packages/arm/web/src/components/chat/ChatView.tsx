@@ -40,7 +40,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   const isDeviceOnline = useStore(
     useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
   );
-  const isConnected = useStore((s) => s.status === 'connected');
+  const runtimeStatus = useStore((s) => s.runtimeStatuses.get(sessionId));
 
   // ── SPINE ─────────────────────────────────────────────
   // Persistent, replayed bubbles rendered directly in seq order. Excludes the
@@ -95,7 +95,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
   // Compacting is page/session chrome, not a card owner. It must not make an
   // empty card eligible or create a live bubble by itself. Existing real card
   // content/actions may continue rendering independently while compacting.
-  const cardEligible = status === 'working' || status === 'pending' || status === 'compacting';
+  const cardEligible = status === 'working' || status === 'pending';
   const showLive = cardEligible && !!card && (draft.length > 0 || actionLive);
 
   // First seq for prepend tracking (passed to scroll controller)
@@ -215,7 +215,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
         )}
       </div>
 
-      {session.state === 'compacting' && (
+      {runtimeStatus?.status === 'compacting' && (
         <div
           className="border-t border-border-primary bg-surface-secondary/70 px-3 py-2 sm:px-6"
           data-session-runtime-status="compacting"
