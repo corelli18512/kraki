@@ -151,7 +151,17 @@ jobs:
             PKG_NAME="@kraki/head"
           elif [[ "$TAG" == mac-v* ]]; then
             TAG_VERSION="${TAG#mac-v}"
-            PKG_VERSION=$(python3 -c 'import pathlib,re; text=pathlib.Path("packages/arm/ios/project.yml").read_text(); match=re.search(r"MARKETING_VERSION:\s*[\"\x27]?([0-9.]+)", text); print(match.group(1) if match else (_ for _ in ()).throw(SystemExit("KrakiMac MARKETING_VERSION not found")))')
+            PKG_VERSION=$(awk '
+              /^  KrakiMac:/ { in_mac=1; next }
+              in_mac && /^  [A-Za-z0-9_]+:/ { exit }
+              in_mac && /MARKETING_VERSION:/ {
+                value=$2
+                gsub(/"/, "", value)
+                print value
+                exit
+              }
+            ' packages/arm/ios/project.yml)
+            test -n "$PKG_VERSION" || { echo "KrakiMac MARKETING_VERSION not found"; exit 1; }
             PKG_NAME="kraki-mac-gui"
           elif [[ "$TAG" == v* ]]; then
             TAG_VERSION="${TAG#v}"
