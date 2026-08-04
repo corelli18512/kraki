@@ -22,7 +22,11 @@ import Highlightr
 enum MacBubblePalette {
     static let text = NSColor.labelColor
     static let secondary = NSColor.secondaryLabelColor
-    static let link = NSColor.linkColor
+    static let link = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
+            ? NSColor(srgbRed: 0x8F/255, green: 0xD5/255, blue: 1, alpha: 1)
+            : NSColor(srgbRed: 0x00/255, green: 0x56/255, blue: 0xA8/255, alpha: 1)
+    }
     static let tertiary = NSColor.tertiaryLabelColor
 }
 
@@ -416,25 +420,8 @@ private enum MacCodeHighlighter {
     }
     #endif
 
-    private static let languageAliases: [String: String] = [
-        "c++": "cpp", "cxx": "cpp",
-        "c#": "csharp", "cs": "csharp",
-        "html": "xml", "htm": "xml",
-        "js": "javascript", "jsx": "javascript",
-        "ts": "typescript", "tsx": "typescript",
-        "py": "python", "rb": "ruby", "rs": "rust",
-        "kt": "kotlin", "kts": "kotlin",
-        "sh": "bash", "shell": "bash", "zsh": "bash",
-        "yml": "yaml", "objc": "objectivec", "objective-c": "objectivec",
-    ]
-    private static let intentionallyPlainLanguages: Set<String> = [
-        "text", "txt", "plaintext", "plain", "none",
-    ]
-
     private static func normalizedLanguage(_ language: String?) -> String? {
-        guard let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              !raw.isEmpty else { return nil }
-        return languageAliases[raw] ?? raw
+        MarkdownCodeSyntax.normalizedLanguage(language)
     }
 
     private static func highlighted(
@@ -442,9 +429,9 @@ private enum MacCodeHighlighter {
         language: String?,
         engine: Highlightr
     ) -> NSAttributedString {
-        let rawLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rawLanguage = MarkdownCodeSyntax.rawLanguage(language)
         let normalized = normalizedLanguage(language)
-        if let rawLanguage, intentionallyPlainLanguages.contains(rawLanguage) {
+        if MarkdownCodeSyntax.isIntentionallyPlain(language) {
             return NSAttributedString(string: code)
         }
         let highlighted = engine.highlight(code, as: normalized, fastRender: true)
@@ -474,34 +461,17 @@ private enum MacCodeHighlighter {
             }
         }
 
-        let comment = NSColor(srgbRed: 0x9A/255, green: 0xA4/255, blue: 0xB2/255, alpha: 1)
-        let string = NSColor(srgbRed: 0xA5/255, green: 0xD6/255, blue: 0xFF/255, alpha: 1)
-        let number = NSColor(srgbRed: 0xD2/255, green: 0xA8/255, blue: 0xFF/255, alpha: 1)
-        let keyword = NSColor(srgbRed: 0xFF/255, green: 0x8F/255, blue: 0xC7/255, alpha: 1)
-        let type = NSColor(srgbRed: 0xFF/255, green: 0xB8/255, blue: 0x6C/255, alpha: 1)
-
-        apply(#"(?s)/\*.*?\*/|(?m)//.*$|(?m)#(?![A-Fa-f0-9]{3,8}\b).*$|(?m)--.*$"#, color: comment)
-        apply(#"(?s)\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`"#, color: string)
-        apply(#"\b(?:0x[0-9A-Fa-f]+|\d+(?:\.\d+)?)\b"#, color: number)
-
-        let commonKeywords = [
-            "abstract", "async", "await", "break", "case", "catch", "class", "const",
-            "continue", "data", "default", "defer", "do", "else", "enum", "export",
-            "extends", "false", "final", "finally", "for", "from", "fun", "func", "function",
-            "guard", "if", "implements", "import", "in", "interface", "internal", "let", "match",
-            "mut", "new", "nil", "null", "override", "package", "private", "protected", "public",
-            "record", "return", "sealed", "static", "struct", "switch", "throw", "throws", "trait",
-            "true", "try", "type", "typeof", "var", "when", "where", "while", "with", "yield",
-            "select", "insert", "update", "delete", "create", "table", "join", "left", "right",
-            "inner", "outer", "on", "as", "group", "order", "by", "having", "limit", "offset",
-            "flowchart", "graph", "sequenceDiagram", "stateDiagram", "classDiagram", "erDiagram",
-            "participant", "activate", "deactivate", "note", "loop", "alt", "opt", "end",
-        ]
-        let keywordPattern = #"\b(?:"#
-            + commonKeywords.map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
-            + #")\b"#
-        apply(keywordPattern, color: keyword, options: [.caseInsensitive])
-        apply(#"\b[A-Z][A-Za-z0-9_]*\b"#, color: type)
+        for rule in MarkdownCodeSyntax.lexicalRules {
+            let color: NSColor
+            switch rule.role {
+            case .comment: color = NSColor(srgbRed: 0x9A/255, green: 0xA4/255, blue: 0xB2/255, alpha: 1)
+            case .string: color = NSColor(srgbRed: 0xA5/255, green: 0xD6/255, blue: 0xFF/255, alpha: 1)
+            case .number: color = NSColor(srgbRed: 0xD2/255, green: 0xA8/255, blue: 0xFF/255, alpha: 1)
+            case .keyword: color = NSColor(srgbRed: 0xFF/255, green: 0x8F/255, blue: 0xC7/255, alpha: 1)
+            case .type: color = NSColor(srgbRed: 0xFF/255, green: 0xB8/255, blue: 0x6C/255, alpha: 1)
+            }
+            apply(rule.pattern, color: color, options: rule.options)
+        }
         _ = language
         return result
     }
@@ -1134,16 +1104,25 @@ enum MacMarkdown {
         let result = NSMutableAttributedString()
         for (index, line) in lines.enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
-            if let heading = parseHeading(line) {
-                let piece = inlineMarkdown(heading.text, baseFont: heading.font)
+            switch parseMarkdownInlineLine(line) {
+            case .heading(let level, let headingText):
+                let font: NSFont
+                switch level {
+                case 1: font = NSFont.systemFont(ofSize: 22, weight: .bold)
+                case 2: font = NSFont.systemFont(ofSize: 20, weight: .bold)
+                case 3: font = NSFont.systemFont(ofSize: 17, weight: .semibold)
+                case 4: font = NSFont.systemFont(ofSize: 15, weight: .bold)
+                default: font = NSFont.systemFont(ofSize: 13, weight: .bold)
+                }
+                let piece = inlineMarkdown(headingText, baseFont: font)
                 let paragraph = NSMutableParagraphStyle()
-                paragraph.paragraphSpacingBefore = heading.level == 1 ? 2 : 1
-                paragraph.paragraphSpacing = heading.level <= 2 ? 5 : 3
+                paragraph.paragraphSpacingBefore = level == 1 ? 2 : 1
+                paragraph.paragraphSpacing = level <= 2 ? 5 : 3
                 result.append(applyingParagraph(paragraph, to: piece))
-            } else if let list = parseListItem(line) {
-                let marker = list.ordered ? "\(list.number)." : "•"
-                let markerWidth = list.ordered ? 25.0 : 18.0
-                let indent = CGFloat(list.depth) * 18
+            case .list(let item):
+                let marker = item.ordered ? "\(item.number)." : "•"
+                let markerWidth = item.ordered ? 25.0 : 18.0
+                let indent = CGFloat(item.depth) * 18
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.firstLineHeadIndent = indent
                 paragraph.headIndent = indent + markerWidth
@@ -1154,133 +1133,32 @@ enum MacMarkdown {
                     .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
                     .foregroundColor: MacBubblePalette.secondary,
                 ])
-                row.append(inlineMarkdown(list.text, baseFont: NSFont.systemFont(ofSize: 15)))
+                row.append(inlineMarkdown(item.text, baseFont: NSFont.systemFont(ofSize: 15)))
                 row.addAttribute(.paragraphStyle, value: paragraph,
                                  range: NSRange(location: 0, length: row.length))
                 result.append(row)
-            } else {
-                result.append(inlineMarkdown(line, baseFont: NSFont.systemFont(ofSize: 15)))
+            case .text(let content):
+                result.append(inlineMarkdown(content, baseFont: NSFont.systemFont(ofSize: 15)))
             }
         }
         return result
     }
 
     private static func inlineMarkdown(_ text: String, baseFont: NSFont) -> NSAttributedString {
-        inlineMarkdownFragment(text, baseFont: baseFont)
-    }
-
-    private static func inlineMarkdownFragment(
-        _ text: String,
-        baseFont: NSFont,
-        bold: Bool = false,
-        italic: Bool = false,
-        link: URL? = nil
-    ) -> NSAttributedString {
         let result = NSMutableAttributedString()
-        var index = text.startIndex
-        var plainStart = index
-
-        func font(code: Bool = false) -> NSFont {
-            if code { return .monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular) }
-            var resolved = baseFont
-            if bold { resolved = resolved.tkBold }
-            if italic { resolved = resolved.tkItalic }
-            return resolved
-        }
-
-        func append(_ value: String, code: Bool = false, overrideLink: URL? = nil) {
-            guard !value.isEmpty else { return }
-            let activeLink = overrideLink ?? link
-            var attributes: [NSAttributedString.Key: Any] = [
-                .font: font(code: code),
-                .foregroundColor: activeLink == nil ? MacBubblePalette.text : MacBubblePalette.link,
+        for run in parseMarkdownInline(text) {
+            var font = baseFont
+            if run.bold { font = font.tkBold }
+            if run.italic { font = font.tkItalic }
+            if run.code { font = .monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular) }
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: run.link == nil ? MacBubblePalette.text : MacBubblePalette.link,
             ]
-            if let activeLink { attributes[.link] = activeLink }
-            result.append(NSAttributedString(string: value, attributes: attributes))
+            if let link = run.link { attrs[.link] = link }
+            if run.strikethrough { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
-
-        func flushPlain(until end: String.Index) {
-            guard plainStart < end else { return }
-            append(String(text[plainStart..<end]))
-        }
-
-        while index < text.endIndex {
-            let next = text.index(after: index)
-
-            if text[index] == "\\", next < text.endIndex {
-                flushPlain(until: index)
-                append(String(text[next]))
-                index = text.index(after: next)
-                plainStart = index
-                continue
-            }
-
-            if text[index] == "`",
-               let close = text[next...].firstIndex(of: "`") {
-                flushPlain(until: index)
-                append(String(text[next..<close]), code: true)
-                index = text.index(after: close)
-                plainStart = index
-                continue
-            }
-
-            if text[index...].hasPrefix("**") {
-                let contentStart = text.index(index, offsetBy: 2)
-                if let close = text.range(of: "**", range: contentStart..<text.endIndex)?.lowerBound {
-                    flushPlain(until: index)
-                    result.append(inlineMarkdownFragment(
-                        String(text[contentStart..<close]),
-                        baseFont: baseFont,
-                        bold: true,
-                        italic: italic,
-                        link: link
-                    ))
-                    index = text.index(close, offsetBy: 2)
-                    plainStart = index
-                    continue
-                }
-            }
-
-            if text[index] == "*" || text[index] == "_",
-               let close = text[next...].firstIndex(of: text[index]),
-               close > next {
-                flushPlain(until: index)
-                result.append(inlineMarkdownFragment(
-                    String(text[next..<close]),
-                    baseFont: baseFont,
-                    bold: bold,
-                    italic: true,
-                    link: link
-                ))
-                index = text.index(after: close)
-                plainStart = index
-                continue
-            }
-
-            if text[index] == "[",
-               let labelEnd = text[next...].firstIndex(of: "]"),
-               text.index(after: labelEnd) < text.endIndex,
-               text[text.index(after: labelEnd)] == "(" {
-                let destinationStart = text.index(labelEnd, offsetBy: 2)
-                if let destinationEnd = text[destinationStart...].firstIndex(of: ")"),
-                   let destination = URL(string: String(text[destinationStart..<destinationEnd])) {
-                    flushPlain(until: index)
-                    result.append(inlineMarkdownFragment(
-                        String(text[next..<labelEnd]),
-                        baseFont: baseFont,
-                        bold: bold,
-                        italic: italic,
-                        link: destination
-                    ))
-                    index = text.index(after: destinationEnd)
-                    plainStart = index
-                    continue
-                }
-            }
-
-            index = next
-        }
-        flushPlain(until: text.endIndex)
         return result
     }
 
@@ -1292,46 +1170,8 @@ enum MacMarkdown {
         return result
     }
 
-    private static func parseHeading(_ line: String) -> (level: Int, text: String, font: NSFont)? {
-        let chars = Array(line)
-        var level = 0
-        while level < min(chars.count, 6), chars[level] == "#" { level += 1 }
-        guard level > 0, chars.count > level, chars[level] == " " else { return nil }
-        let text = String(chars.dropFirst(level + 1))
-        guard !text.isEmpty else { return nil }
-        let font: NSFont
-        switch level {
-        case 1: font = NSFont.systemFont(ofSize: 22, weight: .bold)
-        case 2: font = NSFont.systemFont(ofSize: 20, weight: .bold)
-        case 3: font = NSFont.systemFont(ofSize: 17, weight: .semibold)
-        case 4: font = NSFont.systemFont(ofSize: 15, weight: .bold)
-        default: font = NSFont.systemFont(ofSize: 13, weight: .bold)
-        }
-        return (level, text, font)
-    }
-
-    private static func parseListItem(_ line: String) -> (ordered: Bool, number: Int, depth: Int, text: String)? {
-        let leading = line.prefix { $0 == " " || $0 == "\t" }
-        let depth = leading.reduce(0) { $1 == "\t" ? $0 + 1 : $0 + 1 } / 2
-        let trimmed = line.dropFirst(leading.count)
-        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-            return (false, 0, depth, String(trimmed.dropFirst(2)))
-        }
-        var digits = ""
-        var cursor = trimmed.startIndex
-        while cursor < trimmed.endIndex, trimmed[cursor].isNumber {
-            digits.append(trimmed[cursor])
-            cursor = trimmed.index(after: cursor)
-        }
-        guard !digits.isEmpty, cursor < trimmed.endIndex, trimmed[cursor] == "." else { return nil }
-        cursor = trimmed.index(after: cursor)
-        guard cursor < trimmed.endIndex, trimmed[cursor] == " " else { return nil }
-        let text = String(trimmed[trimmed.index(after: cursor)...])
-        return (true, Int(digits) ?? 1, depth, text)
-    }
-
     private static func blockquoteSegment(_ content: String) -> NSAttributedString {
-        let normalized = normalizeQuoteWhitespace(content)
+        let normalized = normalizeMarkdownQuoteWhitespace(content)
         let result = NSMutableAttributedString(attributedString: inlineSegment(normalized))
         result.addAttribute(.foregroundColor, value: MacBubblePalette.text,
                             range: NSRange(location: 0, length: result.length))
@@ -1344,21 +1184,6 @@ enum MacMarkdown {
                             range: NSRange(location: 0, length: result.length))
         markBlock(result, kind: .quote)
         return result
-    }
-
-    private static func normalizeQuoteWhitespace(_ content: String) -> String {
-        var lines = content.components(separatedBy: "\n")
-        while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
-        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
-        var normalized: [String] = []
-        var previousWasEmpty = false
-        for line in lines {
-            let empty = line.trimmingCharacters(in: .whitespaces).isEmpty
-            if empty, previousWasEmpty { continue }
-            normalized.append(line)
-            previousWasEmpty = empty
-        }
-        return normalized.joined(separator: "\n")
     }
 
     private static func codeSegment(

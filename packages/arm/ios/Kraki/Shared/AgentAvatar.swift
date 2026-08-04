@@ -315,14 +315,14 @@ private struct ModelSlashCorner: View {
 
     private var slashBand: some View {
         ZStack(alignment: .top) {
-            Rectangle().fill(family.color)
+            Rectangle().fill(family.color.opacity(0.88))
             Rectangle()
                 .fill(Color.white.opacity(0.60))
                 .frame(height: 0.5 * scale)
         }
         .frame(width: 24 * scale, height: 13 * scale)
         .rotationEffect(.degrees(-38))
-        .offset(x: 4.5 * scale, y: 2.5 * scale)
+        .offset(x: 7 * scale, y: 4.3 * scale)
     }
 
     private var logoImage: Image {

@@ -255,9 +255,6 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         let isUnread = appState.sessionStore.isUnread(sessionId)
         let unreadAction = UIContextualAction(style: .normal, title: isUnread ? "Read" : "Unread") { _, _, completion in
             if isUnread {
-                // Optimistically clear locally — the server's
-                // `session_read` echo will reconcile via monotonic max.
-                appState.sessionStore.markRead(sessionId, seq: session.lastSeq)
                 appState.commandSender?.markRead(sessionId: sessionId, seq: session.lastSeq)
             } else {
                 appState.commandSender?.markUnread(sessionId: sessionId)

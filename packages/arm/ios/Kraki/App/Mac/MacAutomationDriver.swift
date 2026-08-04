@@ -790,7 +790,7 @@ final class MacAutomationDriver {
             let previewType = appState.sessionStore.sessionPreviews[session.id]?.type ?? "nil"
             let hasDraft = appState.sessionStore.drafts[session.id]?.isEmpty == false
             let online = appState.deviceStore.devices[session.deviceId]?.online
-            let resolved = MacSessionSidebarStatus.resolve(
+            let resolved = SessionCardStatus.resolve(
                 sessionState: session.state,
                 previewType: previewType == "nil" ? nil : previewType,
                 deviceOnline: online,
@@ -820,7 +820,7 @@ final class MacAutomationDriver {
             previewType: String? = nil,
             online: Bool? = true,
             draft: Bool = false
-        ) -> MacSessionSidebarStatus {
+        ) -> SessionCardStatus {
             .resolve(
                 sessionState: state,
                 previewType: previewType,

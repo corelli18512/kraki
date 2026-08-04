@@ -18,6 +18,7 @@ struct ChatView: View {
     /// full-screen spinner just because the window intentionally slides away
     /// from the newest edge.
     @State private var hasMaterializedLatest = false
+    @State private var selectedImagePreview: IOSImagePreviewSelection?
     @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
 
     /// Measured height of the floating input capsule (incl. its own
@@ -106,6 +107,9 @@ struct ChatView: View {
                     bottomContentInset: effectiveBottomInputHeight,
                     onResolvePermission: resolveLivePermission,
                     onAnswerQuestion: answerLiveQuestion,
+                    onOpenImage: { selection in
+                        selectedImagePreview = selection
+                    },
                     onOpenHTMLArtifact: { ref in
                         selectedHTMLArtifact = IOSSelectedHTMLArtifact(
                             sessionId: sessionId,
@@ -149,11 +153,15 @@ struct ChatView: View {
         // always render its glass material so the chat cells blur
         // underneath instead of revealing RootView's solid bg.
         .toolbarBackground(.visible, for: .navigationBar)
+        .fullScreenCover(item: $selectedImagePreview) { selection in
+            IOSImagePreviewGallery(selection: selection)
+        }
         .sheet(item: $selectedHTMLArtifact) { selection in
             IOSHTMLArtifactPreview(selection: selection)
                 .environment(appState)
         }
         .onChange(of: sessionId, initial: true) { _, _ in
+            selectedImagePreview = nil
             selectedHTMLArtifact = nil
         }
         .onChange(of: entryDiagnosticSignature, initial: true) { _, state in
@@ -260,7 +268,6 @@ struct ChatView: View {
                     pendingPermission: viewModel?.permissions.first,
                     pendingQuestion: viewModel?.questions.first,
                     isCompacting: viewModel?.isCompacting == true,
-                    compactionReason: viewModel?.compactionReason,
                     hasLiveCard: viewModel?.card != nil,
                     onHeightChange: { newHeight in
                         if abs(newHeight - bottomInputHeight) > 0.5 {

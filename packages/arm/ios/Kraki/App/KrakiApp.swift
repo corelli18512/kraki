@@ -8,16 +8,20 @@ struct KrakiApp: App {
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
     @Environment(\.scenePhase) private var scenePhase
     private let alignmentPreviewEnabled: Bool
+    private let clientAlignmentPreviewEnabled: Bool
 
     init() {
         #if DEBUG
         let alignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW"] == "1"
+        let clientAlignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CLIENT_ALIGNMENT_PREVIEW"] == "1"
         self.alignmentPreviewEnabled = alignmentPreviewEnabled
-        _appState = State(initialValue: alignmentPreviewEnabled
+        self.clientAlignmentPreviewEnabled = clientAlignmentPreviewEnabled
+        _appState = State(initialValue: alignmentPreviewEnabled || clientAlignmentPreviewEnabled
             ? IOSChatAlignmentPreviewFixture.makeAppState()
             : AppState())
         #else
         self.alignmentPreviewEnabled = false
+        self.clientAlignmentPreviewEnabled = false
         _appState = State(initialValue: AppState())
         #endif
         TKMarkdown.prewarmSyntaxHighlighter()
@@ -31,6 +35,8 @@ struct KrakiApp: App {
                 #if DEBUG
                 if alignmentPreviewEnabled {
                     IOSChatAlignmentPreview()
+                } else if clientAlignmentPreviewEnabled {
+                    IOSClientAlignmentPreview()
                 } else {
                     RootView()
                         .onAppear {
@@ -66,7 +72,7 @@ struct KrakiApp: App {
                                 // miss notifications.
                                 appState.handleBackground()
                             case .inactive:
-                                break
+                                appState.handleInactive()
                             @unknown default:
                                 break
                             }
@@ -83,7 +89,7 @@ struct KrakiApp: App {
                         switch scenePhase {
                         case .active: appState.handleForegroundRehydrate()
                         case .background: appState.handleBackground()
-                        case .inactive: break
+                        case .inactive: appState.handleInactive()
                         @unknown default: break
                         }
                     }

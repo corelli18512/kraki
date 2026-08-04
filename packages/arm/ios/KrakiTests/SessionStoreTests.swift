@@ -37,7 +37,8 @@ final class SessionStoreTests: XCTestCase {
         SessionDigest(
             id: id, agent: agent, model: model, title: title,
             autoTitle: autoTitle, state: state, mode: mode,
-            lastSeq: lastSeq, readSeq: readSeq, messageCount: messageCount,
+            lastSeq: lastSeq, readSeq: readSeq,
+            messageCount: messageCount,
             createdAt: "2024-01-01T00:00:00.000Z", usage: nil, pinned: pinned
         )
     }
@@ -163,7 +164,7 @@ final class SessionStoreTests: XCTestCase {
         store.incrementUnread("sess-1")
         store.incrementUnread("sess-1")
         store.incrementUnread("sess-1")
-        XCTAssertEqual(store.unreadCounts["sess-1"], 3)
+        XCTAssertEqual(store.unreadCounts["sess-1"], 1)
     }
 
     func testClearUnread() {
@@ -171,6 +172,84 @@ final class SessionStoreTests: XCTestCase {
         store.incrementUnread("sess-1")
         store.clearUnread("sess-1")
         XCTAssertNil(store.unreadCounts["sess-1"])
+    }
+
+    func testUnreadIsSessionBooleanNotCursorGapCount() {
+        store.upsertSession(
+            makeDigest(lastSeq: 20, readSeq: 2),
+            deviceId: "d",
+            deviceName: "n"
+        )
+
+        XCTAssertEqual(store.unreadCount("sess-1"), 1)
+        XCTAssertEqual(store.unreadCounts["sess-1"], 1)
+    }
+
+    func testAuthoritativeSessionReadCanRollBackAndAdvance() {
+        store.upsertSession(
+            makeDigest(lastSeq: 10, readSeq: 10),
+            deviceId: "d",
+            deviceName: "n"
+        )
+
+        store.applyAuthoritativeReadSeq("sess-1", seq: 9)
+        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 9)
+        XCTAssertTrue(store.isUnread("sess-1"))
+        XCTAssertTrue(store.isAutoReadSuppressed("sess-1"))
+
+        store.applyAuthoritativeReadSeq("sess-1", seq: 10)
+        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 10)
+        XCTAssertFalse(store.isUnread("sess-1"))
+        XCTAssertFalse(store.isAutoReadSuppressed("sess-1"))
+    }
+
+    func testAuthoritativeDigestRestoresOfflineManualUnread() {
+        store.upsertSession(
+            makeDigest(lastSeq: 10, readSeq: 10),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        store.upsertSession(
+            makeDigest(lastSeq: 10, readSeq: 9),
+            deviceId: "d",
+            deviceName: "n"
+        )
+
+        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 9)
+        XCTAssertTrue(store.isUnread("sess-1"))
+        XCTAssertTrue(store.isAutoReadSuppressed("sess-1"))
+    }
+
+    func testAuthoritativeDigestReplacesStaleLocalHead() {
+        store.upsertSession(
+            makeDigest(lastSeq: 20, readSeq: 19),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        store.upsertSession(
+            makeDigest(lastSeq: 10, readSeq: 10),
+            deviceId: "d",
+            deviceName: "n"
+        )
+
+        XCTAssertEqual(store.sessions["sess-1"]?.lastSeq, 10)
+        XCTAssertEqual(store.sessions["sess-1"]?.readSeq, 10)
+        XCTAssertFalse(store.isUnread("sess-1"))
+    }
+
+    func testManualUnreadHoldClearsWhenAllowed() {
+        store.upsertSession(
+            makeDigest(lastSeq: 10, readSeq: 10),
+            deviceId: "d",
+            deviceName: "n"
+        )
+
+        store.markUnread("sess-1")
+        XCTAssertTrue(store.isUnread("sess-1"))
+        XCTAssertTrue(store.isAutoReadSuppressed("sess-1"))
+
+        store.allowAutoRead("sess-1")
+        XCTAssertFalse(store.isAutoReadSuppressed("sess-1"))
     }
 
     // MARK: - Preview / Draft
@@ -219,7 +298,7 @@ final class SessionStoreTests: XCTestCase {
         store.incrementUnread("s1")
         store.incrementUnread("s1")
         store.incrementUnread("s2")
-        XCTAssertEqual(store.totalUnread, 3)
+        XCTAssertEqual(store.totalUnread, 2)
     }
 
     // MARK: - Reset
@@ -310,6 +389,6 @@ final class SessionStoreTests: XCTestCase {
         // lastSeq > readSeq should set unread if not already larger
         let digest = makeDigest(lastSeq: 10, readSeq: 5)
         store.upsertSession(digest, deviceId: "d", deviceName: "n")
-        XCTAssertEqual(store.unreadCounts["sess-1"], 5)
+        XCTAssertEqual(store.unreadCounts["sess-1"], 1)
     }
 }

@@ -47,6 +47,61 @@ enum IOSChatAlignmentPreviewFixture {
     </html>
     """
 
+    private static func renderedImage(
+        background: UIColor,
+        accent: UIColor,
+        label: String
+    ) -> UIImage {
+        let size = CGSize(width: 640, height: 360)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            background.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            accent.setFill()
+            context.fill(CGRect(x: 56, y: 54, width: 528, height: 252))
+            let text = NSAttributedString(
+                string: label,
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 54, weight: .heavy),
+                    .foregroundColor: UIColor.white,
+                ]
+            )
+            let textSize = text.size()
+            text.draw(at: CGPoint(
+                x: (size.width - textSize.width) / 2,
+                y: (size.height - textSize.height) / 2
+            ))
+        }
+    }
+
+    private static func inlineImage(
+        background: UIColor,
+        accent: UIColor,
+        label: String
+    ) -> [String: Any] {
+        let image = renderedImage(background: background, accent: accent, label: label)
+        return [
+            "type": "image",
+            "mimeType": "image/png",
+            "data": image.pngData()?.base64EncodedString() ?? "",
+        ]
+    }
+
+    static func imagePreviewSelection() -> IOSImagePreviewSelection {
+        IOSImagePreviewSelection(items: [
+            IOSImagePreviewItem(
+                id: "fixture-image-1",
+                image: renderedImage(background: .systemBlue, accent: .systemTeal, label: "IMAGE 1"),
+                title: "Image 1"
+            ),
+            IOSImagePreviewItem(
+                id: "fixture-image-2",
+                image: renderedImage(background: .systemPurple, accent: .systemPink, label: "IMAGE 2"),
+                title: "Image 2"
+            ),
+        ])
+    }
+
     static func makeAppState() -> AppState {
         do {
             let root = FileManager.default.temporaryDirectory
@@ -77,7 +132,26 @@ enum IOSChatAlignmentPreviewFixture {
                 ChatMessage(
                     type: "user_message", seq: 3, sessionId: sessionID,
                     deviceId: deviceID, timestamp: "2026-08-03T00:00:02Z",
-                    payload: ["content": AnyCodable("Now stream a long answer and keep the bubble stable while it grows.")]
+                    payload: ["content": AnyCodable("Show the mobile attachment gallery without covering this message.")]
+                ),
+                ChatMessage(
+                    type: "agent_message", seq: 4, sessionId: sessionID,
+                    deviceId: deviceID, timestamp: "2026-08-03T00:00:03Z",
+                    payload: [
+                        "content": AnyCodable("Images now live below the text bubble as one compact gallery.\n\n```tsx\nexport const Gallery = () => <Preview count={2} />\n```"),
+                        "attachments": AnyCodable([
+                            inlineImage(
+                                background: .systemBlue,
+                                accent: .systemTeal,
+                                label: "IMAGE 1"
+                            ),
+                            inlineImage(
+                                background: .systemPurple,
+                                accent: .systemPink,
+                                label: "IMAGE 2"
+                            ),
+                        ]),
+                    ]
                 ),
             ]
             try database.insert(sessionID, messages)
@@ -92,9 +166,9 @@ enum IOSChatAlignmentPreviewFixture {
                 title: "iOS Chat Alignment",
                 state: .active,
                 mode: .discuss,
-                lastSeq: 3,
-                readSeq: 3,
-                messageCount: 3,
+                lastSeq: 4,
+                readSeq: 4,
+                messageCount: 4,
                 createdAt: Date(),
                 pinned: false
             )
@@ -109,7 +183,7 @@ enum IOSChatAlignmentPreviewFixture {
                 lastSeen: nil,
                 createdAt: nil
             )
-            app.messageProvider?.setTentacleInfo(sessionId: sessionID, lastSeq: 3, deviceId: deviceID)
+            app.messageProvider?.setTentacleInfo(sessionId: sessionID, lastSeq: 4, deviceId: deviceID)
             _ = app.messageProvider?.openSession(sessionID, reanchorLatest: true)
             app.messageStore.beginCardTurn(sessionID)
             return app
@@ -143,6 +217,7 @@ enum IOSChatAlignmentLog {
 
 struct IOSChatAlignmentPreview: View {
     @Environment(AppState.self) private var appState
+    @State private var selectedImagePreview: IOSImagePreviewSelection?
     @State private var selectedArtifact: IOSSelectedHTMLArtifact?
     @State private var revision = 0
     @State private var phase = "Preparing production Chat path…"
@@ -180,6 +255,9 @@ struct IOSChatAlignmentPreview: View {
                     bottomContentInset: 24,
                     onResolvePermission: { _, _, _ in },
                     onAnswerQuestion: { _, _ in },
+                    onOpenImage: { selection in
+                        selectedImagePreview = selection
+                    },
                     onOpenHTMLArtifact: { ref in
                         selectedArtifact = IOSSelectedHTMLArtifact(
                             sessionId: IOSChatAlignmentPreviewFixture.sessionID,
@@ -191,6 +269,9 @@ struct IOSChatAlignmentPreview: View {
             .background(Color.surfacePrimary)
             .navigationTitle("iOS Chat Alignment")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .fullScreenCover(item: $selectedImagePreview) { selection in
+            IOSImagePreviewGallery(selection: selection)
         }
         .sheet(item: $selectedArtifact) { selection in
             IOSHTMLArtifactPreview(selection: selection)
@@ -209,6 +290,12 @@ struct IOSChatAlignmentPreview: View {
                 error: nil
             )
             try? await Task.sleep(for: .milliseconds(600))
+            if ProcessInfo.processInfo.environment["KRAKI_IOS_IMAGE_PREVIEW_AUTO_OPEN"] == "1" {
+                phase = "Image gallery preview"
+                selectedImagePreview = IOSChatAlignmentPreviewFixture.imagePreviewSelection()
+                IOSChatAlignmentLog.write("image-preview-open requested=1 items=2")
+                return
+            }
             phase = "Streaming through the production collection path"
             for token in tokens {
                 appState.messageStore.applyCardMessage(

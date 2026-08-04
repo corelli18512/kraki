@@ -27,8 +27,8 @@ final class AppState {
     }
     #if os(iOS)
     private(set) var pushManager: PushManager?
-    private(set) var preferencesManager: PreferencesManager?
     #endif
+    private(set) var preferencesManager: PreferencesManager?
     private(set) var pulseManager: PulseManager?
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated
@@ -115,6 +115,59 @@ final class AppState {
     var deviceId: String?
     var user: UserInfo?
 
+    /// Read receipts require both a selected conversation and an actually
+    /// visible foreground surface. Selection alone is not proof the user saw
+    /// an update (for example a minimized/background Mac window).
+    #if os(macOS)
+    var isAppForeground: Bool = false
+    var isConversationWindowVisible: Bool = false
+    #else
+    var isAppForeground: Bool = true
+    var isConversationWindowVisible: Bool = true
+    #endif
+
+    func isActivelyViewingSession(_ sessionId: String) -> Bool {
+        isAppForeground
+            && isConversationWindowVisible
+            && sessionStore.activeSessionId == sessionId
+    }
+
+    /// Shared automatic Read gate for lifecycle hooks and live Spine events.
+    /// Manual Mark Unread suppresses this path until the user leaves/re-enters
+    /// the Session or explicitly marks it read.
+    func markSessionReadIfVisible(_ sessionId: String, seq: Int? = nil) {
+        guard isActivelyViewingSession(sessionId),
+              !sessionStore.isAutoReadSuppressed(sessionId),
+              let session = sessionStore.sessions[sessionId] else { return }
+        let target = seq ?? session.lastSeq
+        guard target > 0 else { return }
+        sessionStore.observeLastSeq(sessionId, seq: target)
+        commandSender?.markRead(sessionId: sessionId, seq: target, automatic: true)
+    }
+
+    func beginViewingSession(_ sessionId: String) {
+        if sessionStore.activeSessionId != sessionId {
+            sessionStore.allowAutoRead(sessionId)
+        }
+        sessionStore.activeSessionId = sessionId
+    }
+
+    func endViewingSession(_ sessionId: String) {
+        sessionStore.allowAutoRead(sessionId)
+        if sessionStore.activeSessionId == sessionId {
+            sessionStore.activeSessionId = nil
+        }
+    }
+
+    func updateReadVisibility(appForeground: Bool, conversationVisible: Bool) {
+        let becameReadable = appForeground && conversationVisible
+            && (!isAppForeground || !isConversationWindowVisible)
+        isAppForeground = appForeground
+        isConversationWindowVisible = conversationVisible
+        guard becameReadable, let sessionId = sessionStore.activeSessionId else { return }
+        markSessionReadIfVisible(sessionId)
+    }
+
     /// macOS dev-local mode: connected to a local `pnpm dev` relay with no
     /// login. Gating for the welcome screen / sidebar. iOS is always
     /// authenticated and does not set this.
@@ -122,9 +175,8 @@ final class AppState {
     var devLocalActive: Bool = false
     #endif
 
-    /// Persistence domain shared with the iOS NSE in production. The macOS
-    /// Debug app uses an isolated suite so Dev login/logout/region redirects
-    /// cannot mutate the stable `/Applications/Kraki.app` identity.
+    /// Persistence is isolated by app identity on macOS so the stable Prod
+    /// app and the local Debug app can run against the same relay concurrently.
     private static let sharedDefaults: UserDefaults = {
         #if os(macOS)
         #if DEBUG
@@ -237,8 +289,8 @@ final class AppState {
         let provider = MessageProvider(appState: self)
         #if os(iOS)
         let push = PushManager(appState: self)
-        let prefs = PreferencesManager(appState: self)
         #endif
+        let prefs = PreferencesManager(appState: self)
 
         client.onMessage = { [weak router] data in
             router?.handleRawMessage(data)
@@ -257,8 +309,8 @@ final class AppState {
         self.messageProvider = provider
         #if os(iOS)
         self.pushManager = push
-        self.preferencesManager = prefs
         #endif
+        self.preferencesManager = prefs
         // Pulse reliable transport — wraps every consumer message through
         // the endpoint before E2E encryption, and unwraps inbound frames
         // after decryption.
@@ -433,6 +485,7 @@ final class AppState {
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate() {
+        updateReadVisibility(appForeground: true, conversationVisible: true)
         guard hasCompletedInitialConnect else { return }
         guard connectionStatus != .connected else { return }
         wsClient?.resetBackoffAndReconnect()
@@ -453,7 +506,12 @@ final class AppState {
     /// GRDB DatabasePool checkpoints WAL on its own — no explicit
     /// flush needed for messages. We still flush the SessionStore /
     /// DeviceStore JSON snapshots so debounced writes don't get lost.
+    func handleInactive() {
+        updateReadVisibility(appForeground: false, conversationVisible: false)
+    }
+
     func handleBackground() {
+        updateReadVisibility(appForeground: false, conversationVisible: false)
         sessionStore.flushCache()
         deviceStore.flushCache()
         wsClient?.disconnect()
@@ -677,17 +735,11 @@ extension AppState: SessionSubscriptionHost {
             )
         }
 
-        switch digest.runtimeStatus?.status {
-        case "compacting":
-            let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
-            messageStore.setCompacting(sessionId, reason: reason)
-        default:
-            if digest.state == .compacting {
-                // Older tentacles encoded maintenance directly in state.
-                messageStore.setCompacting(sessionId, reason: nil)
-            } else {
-                messageStore.clearRuntimeStatus(sessionId)
-            }
+        switch digest.state {
+        case .compacting:
+            messageStore.setCompacting(sessionId, reason: nil)
+        case .idle, .active:
+            messageStore.clearRuntimeStatus(sessionId)
         }
 
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]

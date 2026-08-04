@@ -2,6 +2,14 @@ import UIKit
 import SwiftUI
 import Highlightr
 
+private enum IOSMarkdownPalette {
+    static let link = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x8F/255, green: 0xD5/255, blue: 1, alpha: 1)
+            : UIColor(red: 0x00/255, green: 0x56/255, blue: 0xA8/255, alpha: 1)
+    }
+}
+
 // MARK: - TextKit2 bubble render path
 //
 // Landed pure-spine messages have one renderer and one identity: a TextKit
@@ -33,6 +41,7 @@ private enum TKMetrics {
     /// Image grid: spacing between stacked images + cap on a single image's
     /// rendered height + corner radius (mirrors `imageGrid`).
     static let imageSpacing: CGFloat = 6
+    static let attachmentSpacing = IOSImageGalleryLayout.attachmentSpacing
     static let imageMaxHeight: CGFloat = 240
     static let imageCorner: CGFloat = 12
     /// Nested tool-detail box: inner padding, corner radius, and the gap
@@ -63,6 +72,10 @@ private let tkCodeHighlightCache: NSCache<NSString, NSAttributedString> = {
     return cache
 }()
 
+extension Notification.Name {
+    static let tkCodeHighlightReady = Notification.Name("chat.kraki.tkCodeHighlightReady")
+}
+
 private enum TKCodeHighlighter {
     private static let queue = DispatchQueue(label: "chat.kraki.code-highlight", qos: .utility)
     nonisolated(unsafe) private static var engine: Highlightr?
@@ -80,22 +93,134 @@ private enum TKCodeHighlighter {
         return created
     }
 
-    static func attributed(code: String, language: String?) -> NSAttributedString {
-        let normalizedLanguage = language?.lowercased() ?? "auto"
-        let key = tkContentCacheKey(prefix: normalizedLanguage, content: code)
+    private static func normalizedLanguage(_ language: String?) -> String? {
+        MarkdownCodeSyntax.normalizedLanguage(language)
+    }
+
+    static func attributed(
+        code: String,
+        language: String?,
+        allowHighlighting: Bool
+    ) -> NSAttributedString {
+        guard allowHighlighting else { return NSAttributedString(string: code) }
+        if MarkdownCodeSyntax.isIntentionallyPlain(language) {
+            return NSAttributedString(string: code)
+        }
+        let normalized = normalizedLanguage(language)
+        let key = tkContentCacheKey(prefix: normalized ?? "auto", content: code)
         if let cached = tkCodeHighlightCache.object(forKey: key) { return cached }
+
+        if Thread.isMainThread {
+            queue.async {
+                if tkCodeHighlightCache.object(forKey: key) != nil { return }
+                let result = finalHighlight(code: code, language: language)
+                tkCodeHighlightCache.setObject(result, forKey: key, cost: result.length * 8)
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .tkCodeHighlightReady, object: nil)
+                }
+            }
+            return NSAttributedString(
+                string: code,
+                attributes: [.tkCodeHighlightProvisional: true]
+            )
+        }
 
         return queue.sync {
             if let cached = tkCodeHighlightCache.object(forKey: key) { return cached }
-            let highlighted = makeEngine()?.highlight(code, as: language, fastRender: true)
-                ?? NSAttributedString(string: code)
-            tkCodeHighlightCache.setObject(highlighted, forKey: key, cost: highlighted.length * 8)
-            return highlighted
+            let result = finalHighlight(code: code, language: language)
+            tkCodeHighlightCache.setObject(result, forKey: key, cost: result.length * 8)
+            return result
         }
+    }
+
+    #if DEBUG
+    static func cacheFinalForTesting(code: String, language: String?) {
+        queue.sync {
+            let normalized = normalizedLanguage(language)
+            let key = tkContentCacheKey(prefix: normalized ?? "auto", content: code)
+            let result = finalHighlight(code: code, language: language)
+            tkCodeHighlightCache.setObject(result, forKey: key, cost: result.length * 8)
+        }
+    }
+    #endif
+
+    private static func finalHighlight(code: String, language: String?) -> NSAttributedString {
+        let raw = MarkdownCodeSyntax.rawLanguage(language)
+        let normalized = normalizedLanguage(language)
+        let highlighted = makeEngine()?.highlight(code, as: normalized, fastRender: true)
+            ?? NSAttributedString(string: code)
+        guard foregroundColorCount(in: highlighted) <= 1,
+              let fallbackLanguage = normalized ?? raw else { return highlighted }
+        return lexicalFallback(code: code, language: fallbackLanguage)
+    }
+
+    private static func lexicalFallback(code: String, language: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: code,
+            attributes: [.foregroundColor: UIColor.label]
+        )
+        let fullRange = NSRange(location: 0, length: result.length)
+        var occupied = IndexSet()
+
+        func apply(
+            _ pattern: String,
+            color: UIColor,
+            options: NSRegularExpression.Options = []
+        ) {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+            for match in regex.matches(in: code, range: fullRange) {
+                let range = match.range
+                guard range.length > 0,
+                      !occupied.intersects(integersIn: range.location..<(range.location + range.length)) else {
+                    continue
+                }
+                result.addAttribute(.foregroundColor, value: color, range: range)
+                occupied.insert(integersIn: range.location..<(range.location + range.length))
+            }
+        }
+
+        for rule in MarkdownCodeSyntax.lexicalRules {
+            let color: UIColor
+            switch rule.role {
+            case .comment: color = UIColor(red: 0x9A/255, green: 0xA4/255, blue: 0xB2/255, alpha: 1)
+            case .string: color = UIColor(red: 0xA5/255, green: 0xD6/255, blue: 1, alpha: 1)
+            case .number: color = UIColor(red: 0xD2/255, green: 0xA8/255, blue: 1, alpha: 1)
+            case .keyword: color = UIColor(red: 1, green: 0x8F/255, blue: 0xC7/255, alpha: 1)
+            case .type: color = UIColor(red: 1, green: 0xB8/255, blue: 0x6C/255, alpha: 1)
+            }
+            apply(rule.pattern, color: color, options: rule.options)
+        }
+        _ = language
+        return result
+    }
+
+    private static func foregroundColorCount(in string: NSAttributedString) -> Int {
+        var colors: Set<String> = []
+        string.enumerateAttribute(
+            .foregroundColor,
+            in: NSRange(location: 0, length: string.length)
+        ) { value, _, _ in
+            guard let color = value as? UIColor else {
+                colors.insert("none")
+                return
+            }
+            let resolved = color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+                colors.insert(resolved.description)
+                return
+            }
+            colors.insert("\(red)-\(green)-\(blue)-\(alpha)")
+        }
+        return colors.count
     }
 }
 
 extension NSAttributedString.Key {
+    static let tkCodeHighlightProvisional = NSAttributedString.Key("chat.kraki.tkCodeHighlightProvisional")
     static let tkBlockKind = NSAttributedString.Key("chat.kraki.tkBlockKind")
     static let tkBlockID = NSAttributedString.Key("chat.kraki.tkBlockID")
     static let tkBlockLabel = NSAttributedString.Key("chat.kraki.tkBlockLabel")
@@ -402,16 +527,37 @@ enum TKMarkdown {
         TKCodeHighlighter.prewarm()
     }
 
+    #if DEBUG
+    static func prepareFinalHighlightForTesting(code: String, language: String?) {
+        TKCodeHighlighter.cacheFinalForTesting(code: code, language: language)
+    }
+    #endif
+
     /// Parse `text` to an `NSAttributedString` matching the SwiftUI bubble's
     /// inline-only markdown + heading post-pass. Cached by content.
-    static func attributed(_ text: String, cacheKey: String) -> NSAttributedString {
+    static func attributed(
+        _ text: String,
+        cacheKey: String,
+        allowHighlighting: Bool = true
+    ) -> NSAttributedString {
         // Avoid retaining another full copy of every message inside the cache
         // key. The caller identity + byte length + process-local content hash
         // still distinguishes equal-length streaming replacements.
-        let key = tkContentCacheKey(prefix: cacheKey, content: text)
+        let mode = allowHighlighting ? "final" : "plain"
+        let key = tkContentCacheKey(prefix: "\(cacheKey):\(mode)", content: text)
         if let hit = tkMarkdownCache.object(forKey: key) { return hit }
-        let built = build(text)
-        tkMarkdownCache.setObject(built, forKey: key)
+        let built = build(text, allowHighlighting: allowHighlighting)
+        var provisional = false
+        built.enumerateAttribute(
+            .tkCodeHighlightProvisional,
+            in: NSRange(location: 0, length: built.length)
+        ) { value, _, stop in
+            if value != nil {
+                provisional = true
+                stop.pointee = true
+            }
+        }
+        if !provisional { tkMarkdownCache.setObject(built, forKey: key) }
         return built
     }
 
@@ -419,7 +565,7 @@ enum TKMarkdown {
     /// segments and assemble one styled `NSAttributedString`. Keeping it a
     /// single string lets the cell render it in ONE reused TextKit2
     /// `UITextView` (the proven-fast path) rather than a stack of views.
-    private static func build(_ text: String) -> NSAttributedString {
+    private static func build(_ text: String, allowHighlighting: Bool) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let segments = splitMessageBody(text)
         for (i, seg) in segments.enumerated() {
@@ -430,7 +576,11 @@ enum TKMarkdown {
             case .blockquote(let content):
                 piece = blockquoteSegment(content)
             case .codeBlock(let language, let code):
-                piece = codeSegment(language: language, code: code)
+                piece = codeSegment(
+                    language: language,
+                    code: code,
+                    allowHighlighting: allowHighlighting
+                )
             case .table(let rows, let alignments):
                 piece = tableSegment(rows: rows, alignments: alignments)
             }
@@ -455,16 +605,25 @@ enum TKMarkdown {
         let result = NSMutableAttributedString()
         for (index, line) in lines.enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
-            if let heading = parseHeading(line) {
-                let piece = inlineMarkdown(heading.text, baseFont: heading.font)
+            switch parseMarkdownInlineLine(line) {
+            case .heading(let level, let headingText):
+                let font: UIFont
+                switch level {
+                case 1: font = UIFont.preferredFont(forTextStyle: .title2).tkBold
+                case 2: font = UIFont.preferredFont(forTextStyle: .title3).tkBold
+                case 3: font = UIFont.preferredFont(forTextStyle: .headline)
+                case 4: font = UIFont.preferredFont(forTextStyle: .subheadline).tkBold
+                default: font = UIFont.preferredFont(forTextStyle: .footnote).tkBold
+                }
+                let piece = inlineMarkdown(headingText, baseFont: font)
                 let paragraph = NSMutableParagraphStyle()
-                paragraph.paragraphSpacingBefore = heading.level == 1 ? 2 : 1
-                paragraph.paragraphSpacing = heading.level <= 2 ? 5 : 3
+                paragraph.paragraphSpacingBefore = level == 1 ? 2 : 1
+                paragraph.paragraphSpacing = level <= 2 ? 5 : 3
                 result.append(applyingParagraph(paragraph, to: piece))
-            } else if let list = parseListItem(line) {
-                let marker = list.ordered ? "\(list.number)." : "•"
-                let markerWidth = list.ordered ? 25.0 : 18.0
-                let indent = CGFloat(list.depth) * 18
+            case .list(let item):
+                let marker = item.ordered ? "\(item.number)." : "•"
+                let markerWidth = item.ordered ? 25.0 : 18.0
+                let indent = CGFloat(item.depth) * 18
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.firstLineHeadIndent = indent
                 paragraph.headIndent = indent + markerWidth
@@ -475,42 +634,33 @@ enum TKMarkdown {
                     .font: UIFont.preferredFont(forTextStyle: .subheadline).tkBold,
                     .foregroundColor: UIColor.secondaryLabel,
                 ])
-                row.append(inlineMarkdown(list.text, baseFont: UIFont.preferredFont(forTextStyle: .subheadline)))
+                row.append(inlineMarkdown(item.text, baseFont: UIFont.preferredFont(forTextStyle: .subheadline)))
                 row.addAttribute(.paragraphStyle, value: paragraph,
                                  range: NSRange(location: 0, length: row.length))
                 result.append(row)
-            } else {
-                result.append(inlineMarkdown(line, baseFont: UIFont.preferredFont(forTextStyle: .subheadline)))
+            case .text(let content):
+                result.append(inlineMarkdown(content, baseFont: UIFont.preferredFont(forTextStyle: .subheadline)))
             }
         }
         return result
     }
 
     private static func inlineMarkdown(_ text: String, baseFont: UIFont) -> NSAttributedString {
-        let parsed: AttributedString = (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(text)
         let result = NSMutableAttributedString()
-        for run in parsed.runs {
-            let slice = String(parsed[run.range].characters)
+        for run in parseMarkdownInline(text) {
             var font = baseFont
-            if let intent = run.inlinePresentationIntent {
-                if intent.contains(.stronglyEmphasized) { font = font.tkBold }
-                if intent.contains(.emphasized) { font = font.tkItalic }
-                if intent.contains(.code) {
-                    font = .monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
-                }
-            }
+            if run.bold { font = font.tkBold }
+            if run.italic { font = font.tkItalic }
+            if run.code { font = .monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular) }
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: UIColor.label,
+                .foregroundColor: run.link == nil ? UIColor.label : IOSMarkdownPalette.link,
             ]
-            if let link = run.link {
-                attrs[.link] = link
-                attrs[.foregroundColor] = UIColor.tintColor
+            if let link = run.link { attrs[.link] = link }
+            if run.strikethrough {
+                attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             }
-            result.append(NSAttributedString(string: slice, attributes: attrs))
+            result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
         return result
     }
@@ -523,49 +673,11 @@ enum TKMarkdown {
         return result
     }
 
-    private static func parseHeading(_ line: String) -> (level: Int, text: String, font: UIFont)? {
-        let chars = Array(line)
-        var level = 0
-        while level < min(chars.count, 6), chars[level] == "#" { level += 1 }
-        guard level > 0, chars.count > level, chars[level] == " " else { return nil }
-        let text = String(chars.dropFirst(level + 1))
-        guard !text.isEmpty else { return nil }
-        let font: UIFont
-        switch level {
-        case 1: font = UIFont.preferredFont(forTextStyle: .title2).tkBold
-        case 2: font = UIFont.preferredFont(forTextStyle: .title3).tkBold
-        case 3: font = UIFont.preferredFont(forTextStyle: .headline)
-        case 4: font = UIFont.preferredFont(forTextStyle: .subheadline).tkBold
-        default: font = UIFont.preferredFont(forTextStyle: .footnote).tkBold
-        }
-        return (level, text, font)
-    }
-
-    private static func parseListItem(_ line: String) -> (ordered: Bool, number: Int, depth: Int, text: String)? {
-        let leading = line.prefix { $0 == " " || $0 == "\t" }
-        let depth = leading.reduce(0) { $1 == "\t" ? $0 + 1 : $0 + 1 } / 2
-        let trimmed = line.dropFirst(leading.count)
-        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-            return (false, 0, depth, String(trimmed.dropFirst(2)))
-        }
-        var digits = ""
-        var cursor = trimmed.startIndex
-        while cursor < trimmed.endIndex, trimmed[cursor].isNumber {
-            digits.append(trimmed[cursor])
-            cursor = trimmed.index(after: cursor)
-        }
-        guard !digits.isEmpty, cursor < trimmed.endIndex, trimmed[cursor] == "." else { return nil }
-        cursor = trimmed.index(after: cursor)
-        guard cursor < trimmed.endIndex, trimmed[cursor] == " " else { return nil }
-        let text = String(trimmed[trimmed.index(after: cursor)...])
-        return (true, Int(digits) ?? 1, depth, text)
-    }
-
     /// Blockquote: padded text with a real drawn leading rule. The source `>`
     /// markers are already removed by the body splitter; one block id spans all
     /// wrapped lines so the background/rule is drawn as one continuous region.
     private static func blockquoteSegment(_ content: String) -> NSAttributedString {
-        let normalized = normalizeQuoteWhitespace(content)
+        let normalized = normalizeMarkdownQuoteWhitespace(content)
         let result = NSMutableAttributedString(attributedString: inlineSegment(normalized))
         result.addAttribute(.foregroundColor, value: UIColor.label,
                             range: NSRange(location: 0, length: result.length))
@@ -582,32 +694,25 @@ enum TKMarkdown {
         return result
     }
 
-    private static func normalizeQuoteWhitespace(_ content: String) -> String {
-        var lines = content.components(separatedBy: "\n")
-        while lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeFirst() }
-        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
-        var normalized: [String] = []
-        var previousWasEmpty = false
-        for line in lines {
-            let empty = line.trimmingCharacters(in: .whitespaces).isEmpty
-            if empty, previousWasEmpty { continue }
-            normalized.append(line)
-            previousWasEmpty = empty
-        }
-        return normalized.joined(separator: "\n")
-    }
-
     /// Fenced code uses a neutral editor surface drawn by `TKBodyTextView`.
     /// The language is syntax metadata rather than message content, so it is
     /// intentionally not injected as a fake first line. This matches the web
     /// `<pre>` treatment and keeps copy/selection limited to actual code.
-    private static func codeSegment(language: String?, code: String) -> NSAttributedString {
+    private static func codeSegment(
+        language: String?,
+        code: String,
+        allowHighlighting: Bool
+    ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let topHeight: CGFloat = language?.isEmpty == false ? 20 : 8
         result.append(codeSpacer(height: topHeight, terminatesLine: true))
 
         let highlighted = NSMutableAttributedString(
-            attributedString: TKCodeHighlighter.attributed(code: code, language: language)
+            attributedString: TKCodeHighlighter.attributed(
+                code: code,
+                language: language,
+                allowHighlighting: allowHighlighting
+            )
         )
         if highlighted.length > 0 {
             let paragraph = NSMutableParagraphStyle()
@@ -799,6 +904,21 @@ final class TKBubbleContent {
         (kind == .agent || kind == .system) && (message.steps ?? 0) > 0
     }
 
+    var hasProvisionalCodeHighlight: Bool {
+        guard let body else { return false }
+        var provisional = false
+        body.enumerateAttribute(
+            .tkCodeHighlightProvisional,
+            in: NSRange(location: 0, length: body.length)
+        ) { value, _, stop in
+            if value != nil {
+                provisional = true
+                stop.pointee = true
+            }
+        }
+        return provisional
+    }
+
     /// Build a live/frozen bubble content from a streaming `SessionCard` (or a
     /// frozen terminal card rebuilt from a persisted message). Mirrors the old
     /// LiveAgentBubbleView: the draft becomes the body, the card.action becomes
@@ -816,7 +936,11 @@ final class TKBubbleContent {
                               sessionId: sessionId, deviceId: nil,
                               timestamp: frozenTimestamp, payload: payload)
         let body = draft.isEmpty ? nil
-            : TKMarkdown.attributed(draft, cacheKey: "\(sessionId):live:\(draft.count)")
+            : TKMarkdown.attributed(
+                draft,
+                cacheKey: "\(sessionId):live:\(draft.count)",
+                allowHighlighting: isFrozen
+            )
         return TKBubbleContent(message: msg, kind: .agent, hueSeed: sessionId,
                                body: body, images: [],
                                imageRefs: uniqueRefs(attachments).filter { $0.mimeType.hasPrefix("image/") },
@@ -837,7 +961,7 @@ final class TKBubbleContent {
             // occupying a fixed 82%-wide slab. Images keep the established
             // maximum so their layout remains stable; long text clamps and
             // wraps at that same maximum.
-            guard images.isEmpty, action == nil else { return maximum }
+            guard images.isEmpty, imageRefs.isEmpty, action == nil else { return maximum }
             let naturalBody = body.map(TKMeasure.naturalWidth) ?? 0
             let fitted = ceil(naturalBody) + TKMetrics.msgPadH * 2
             return min(maximum, max(fitted, TKMetrics.msgPadH * 2 + 1))
@@ -871,47 +995,49 @@ final class TKBubbleContent {
         return CGSize(width: width, height: height)
     }
 
+    var hasBubbleContent: Bool {
+        (body?.length ?? 0) > 0 || !htmlArtifacts.isEmpty || action != nil
+    }
+
     func imagesHeight(cellWidth: CGFloat) -> CGFloat {
-        let width = bodyTextWidth(cellWidth: cellWidth)
-        return images.enumerated().reduce(0) { total, pair in
-            total + (pair.offset == 0 ? 0 : TKMetrics.imageSpacing)
-                + imageDisplaySize(pair.element, maxWidth: width).height
-        }
+        IOSImageGalleryLayout.height(
+            images: images,
+            refs: imageRefs,
+            maxWidth: bubbleWidth(cellWidth: cellWidth)
+        )
     }
 
     var footerDate: Date? { nil }
 
     func cellHeight(cellWidth: CGFloat) -> CGFloat {
         if let cached = heightCache[cellWidth] { return cached }
-        let textHeight = bodyTextHeight(cellWidth: cellWidth)
-        let imageHeight = imagesHeight(cellWidth: cellWidth)
-        let textGap = textHeight > 0 && imageHeight > 0 ? TKMetrics.imageSpacing : 0
-        var h = textHeight + textGap + imageHeight
-        // Lazy content-ref images (kraki-show_image). Placeholder height
-        // until chunks hydrate; the live cell invalidates via onHeightChange.
-        if !imageRefs.isEmpty {
-            let refWidth = bubbleWidth(cellWidth: cellWidth) - TKMetrics.msgPadH * 2
-            let imageRefH = TKImageMeasure.height(refs: imageRefs, sessionId: message.sessionId ?? "", width: refWidth)
-            if h > 0 { h += TKMetrics.imageSpacing }
-            h += imageRefH
-        }
+        var bubbleInnerHeight = bodyTextHeight(cellWidth: cellWidth)
         let artifactHeight = TKHTMLArtifactCardsView.height(for: htmlArtifacts.count)
         if artifactHeight > 0 {
-            if h > 0 { h += TKMetrics.imageSpacing }
-            h += artifactHeight
+            if bubbleInnerHeight > 0 { bubbleInnerHeight += TKMetrics.imageSpacing }
+            bubbleInnerHeight += artifactHeight
         }
         // Action slot (streaming / frozen): measured synchronously via the same
         // SwiftUI host the cell uses, so cellHeight matches what configure lays
         // out. The list re-measures on action transitions via onActionHeightChange.
         if let action {
             let actionWidth = bubbleWidth(cellWidth: cellWidth) - TKMetrics.msgPadH * 2
-            let actionH = TKActionMeasure.height(action: action, width: actionWidth)
-            if h > 0 { h += 8 }
-            h += actionH
+            let actionHeight = TKActionMeasure.height(action: action, width: actionWidth)
+            if bubbleInnerHeight > 0 { bubbleInnerHeight += 8 }
+            bubbleInnerHeight += actionHeight
         }
-        if h > 0 || action != nil { h += TKMetrics.msgPadV * 2 }
-        else { h += TKMetrics.msgPadV * 2 }
-        let height = max(h, 1) + TKMetrics.outerV * 2
+        let bubbleCellHeight = hasBubbleContent
+            ? max(bubbleInnerHeight + TKMetrics.msgPadV * 2, 1) + TKMetrics.outerV * 2
+            : 0
+        let imageHeight = imagesHeight(cellWidth: cellWidth)
+        let height: CGFloat
+        if imageHeight > 0 {
+            height = hasBubbleContent
+                ? bubbleCellHeight + TKMetrics.attachmentSpacing + imageHeight
+                : imageHeight + IOSImageGalleryLayout.outerVerticalPadding
+        } else {
+            height = max(bubbleCellHeight, 1)
+        }
         heightCache[cellWidth] = height
         return height
     }
@@ -946,7 +1072,9 @@ final class TKBubbleContent {
         cacheKeysByMessageID[message.id] = key
         if let cached = cache.object(forKey: key) { return cached }
         let built = build(message: message, sessionId: sessionId, agent: agent)
-        cache.setObject(built, forKey: key)
+        if !built.hasProvisionalCodeHighlight {
+            cache.setObject(built, forKey: key)
+        }
         return built
     }
 
@@ -1392,6 +1520,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var onOpenSteps: ((ChatMessage) -> Void)?
     var onResolvePermission: ((String, String?, String) -> Void)?
     var onAnswerQuestion: ((String, String) -> Void)?
+    var onOpenImage: ((IOSImagePreviewSelection) -> Void)?
     var onOpenHTMLArtifact: ((ContentRef) -> Void)?
     var attachmentStore: AttachmentStore?
     var sessionMode: SessionMode = .discuss
@@ -1399,6 +1528,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var onShowTable: ((TKTableLayout) -> Void)?
     private(set) var sessionId: String = ""
     var contentSnapshot: TKBubbleContent? { content }
+    var hasProvisionalCodeHighlight: Bool {
+        content?.hasProvisionalCodeHighlight == true
+    }
+
+    #if DEBUG
+    var imageFrameForRegression: CGRect { imageHost.frame }
+    var bubbleFrameForRegression: CGRect { bubbleBG.frame }
+    var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
+    #endif
 
     private let renderClipView = UIView()
     private let bubbleBG = TKRoundedView()
@@ -1407,7 +1545,6 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private let actionHost = BubbleActionHostView()
     private let imageHost = BubbleImageHostView()
     private let artifactCardsView = TKHTMLArtifactCardsView()
-    private var imageViews: [UIImageView] = []
     private var tableViews: [TKTableScrollView] = []
     private var tableAttachmentIDs: [ObjectIdentifier] = []
     private var bodyHasLinks = false
@@ -1462,8 +1599,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
         imageHost.backgroundColor = .clear
         imageHost.translatesAutoresizingMaskIntoConstraints = false
-        imageHost.onHeightChange = { [weak self] _ in self?.onActionHeightChange?() }
-        renderClipView.addSubview(imageHost)
+        contentView.addSubview(imageHost)
         renderClipView.addSubview(artifactCardsView)
     }
 
@@ -1475,12 +1611,21 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         onOpenSteps = nil
         onResolvePermission = nil
         onAnswerQuestion = nil
+        onOpenImage = nil
         onOpenHTMLArtifact = nil
         attachmentStore = nil
         bodyView.attributedText = nil
         bodyView.isHidden = true
-        imageViews.forEach { $0.isHidden = true }
-        imageHost.configure(refs: [], sessionId: sessionId, attachmentStore: nil)
+        imageHost.configure(
+            images: [],
+            refs: [],
+            sessionId: sessionId,
+            maxWidth: 0,
+            alignment: .leading,
+            attachmentStore: nil,
+            onOpenImage: { _ in }
+        )
+        imageHost.frame = .zero
         imageHost.isHidden = true
         artifactCardsView.reset()
         actionHost.configure(action: nil, sessionMode: sessionMode)
@@ -1525,6 +1670,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         bodyView.isUserInteractionEnabled = false
         bodyView.isOpaque = false
         bodyView.backgroundColor = .clear
+        // UIKit normally derives link color from `tintColor`, but this read-only
+        // view keeps a clear tint so links cannot surface an editor caret.
+        // Pin the link foreground separately so URL runs remain visible.
+        bodyView.linkTextAttributes = [
+            .foregroundColor: IOSMarkdownPalette.link,
+        ]
         bodyView.subviews.forEach {
             $0.isOpaque = false
             $0.backgroundColor = .clear
@@ -1547,33 +1698,24 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         case .error, .system: bubbleBG.radii = (12, 12, 12, 12)
         }
 
-        for (index, image) in content.images.enumerated() {
-            let imageView: UIImageView
-            if index < imageViews.count { imageView = imageViews[index] } else {
-                imageView = UIImageView()
-                imageView.contentMode = .scaleAspectFill
-                imageView.clipsToBounds = true
-                imageView.layer.cornerRadius = TKMetrics.imageCorner
-                imageView.layer.shouldRasterize = true
-                imageView.layer.rasterizationScale = UIScreen.main.scale
-                renderClipView.addSubview(imageView)
-                imageViews.append(imageView)
-            }
-            imageView.image = image
-            imageView.isHidden = false
-        }
-        for index in content.images.count..<imageViews.count { imageViews[index].isHidden = true }
-
-        // Lazy content-ref images (kraki-show_image). Hosted as SwiftUI so
-        // they hydrate through AttachmentStore and grow the cell on load.
+        // Inline and ContentRef images share one fixed-geometry attachment
+        // gallery outside the text bubble. Hydration replaces pixels only;
+        // the message height is stable from the first frame.
         sessionId = content.message.sessionId ?? sessionId
-        if !content.imageRefs.isEmpty {
-            imageHost.configure(refs: content.imageRefs, sessionId: sessionId, attachmentStore: attachmentStore)
-            imageHost.isHidden = false
-        } else {
-            imageHost.isHidden = true
-            imageHost.configure(refs: [], sessionId: sessionId, attachmentStore: attachmentStore)
-        }
+        let hasImages = !content.images.isEmpty || !content.imageRefs.isEmpty
+        let galleryAlignment: Alignment = content.kind == .user ? .trailing : .leading
+        imageHost.configure(
+            images: content.images,
+            refs: content.imageRefs,
+            sessionId: sessionId,
+            maxWidth: content.bubbleWidth(cellWidth: cellWidth),
+            alignment: galleryAlignment,
+            attachmentStore: attachmentStore,
+            onOpenImage: { [weak self] selection in
+                self?.onOpenImage?(selection)
+            }
+        )
+        imageHost.isHidden = !hasImages
 
         moreButton.isHidden = !content.canShowSteps
         artifactCardsView.configure(artifacts: content.htmlArtifacts) { [weak self] artifact in
@@ -1605,6 +1747,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         }
         let exposesInteractiveContent = exposesInteractiveAction
             || exposesInteractiveTable
+            || !content.images.isEmpty
+            || !content.imageRefs.isEmpty
             || !content.htmlArtifacts.isEmpty
         let semanticText = TKMarkdown.plainText(content.body)
         isAccessibilityElement = !exposesInteractiveContent
@@ -1701,29 +1845,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             cursorY += textHeight
         }
         syncTableViews(bodyOrigin: bodyView.frame.origin)
-        if !content.images.isEmpty {
-            if textHeight > 0 { cursorY += TKMetrics.imageSpacing }
-            for (index, image) in content.images.enumerated() where index < imageViews.count {
-                if index > 0 { cursorY += TKMetrics.imageSpacing }
-                let size = content.imageDisplaySize(image, maxWidth: innerWidth)
-                imageViews[index].frame = CGRect(x: innerX, y: cursorY, width: size.width, height: size.height)
-                cursorY += size.height
-            }
-        }
         let actionWidth = bubbleWidth - TKMetrics.msgPadH * 2
-        // Lazy content-ref images (kraki-show_image).
-        if !imageHost.isHidden {
-            if cursorY > y + TKMetrics.msgPadV { cursorY += TKMetrics.imageSpacing }
-            imageHost.frame = CGRect(x: innerX, y: cursorY, width: actionWidth, height: 60)
-            imageHost.setNeedsLayout()
-            imageHost.layoutIfNeeded()
-            let fit = imageHost.hostingController?.view.systemLayoutSizeFitting(
-                CGSize(width: actionWidth, height: .greatestFiniteMagnitude),
-                withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel).height ?? imageHost.frame.height
-            imageHost.frame.size.height = max(1, fit)
-            cursorY += imageHost.frame.height
-        }
         let artifactHeight = TKHTMLArtifactCardsView.height(for: content.htmlArtifacts.count)
         if artifactHeight > 0 {
             if cursorY > y + TKMetrics.msgPadV { cursorY += TKMetrics.imageSpacing }
@@ -1746,8 +1868,27 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             cursorY += actionHost.frame.height
         }
         cursorY += TKMetrics.msgPadV
-        let bubbleHeight = max(cursorY - y, 1)
-        bubbleBG.frame = CGRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
+        let bubbleHeight: CGFloat
+        if content.hasBubbleContent {
+            bubbleHeight = max(cursorY - y, 1)
+            bubbleBG.isHidden = false
+            bubbleBG.frame = CGRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
+        } else {
+            bubbleHeight = 0
+            bubbleBG.isHidden = true
+            bubbleBG.frame = .zero
+        }
+
+        let imageHeight = content.imagesHeight(cellWidth: cellWidth)
+        if imageHeight > 0 {
+            let imageY = content.hasBubbleContent
+                ? y + bubbleHeight + TKMetrics.attachmentSpacing
+                : y
+            imageHost.frame = CGRect(x: x, y: imageY, width: bubbleWidth, height: imageHeight)
+            imageHost.setNeedsLayout()
+        } else {
+            imageHost.frame = .zero
+        }
 
         let buttonSize = moreButton.sizeThatFits(CGSize(width: 80, height: 30))
         moreButton.frame = CGRect(
