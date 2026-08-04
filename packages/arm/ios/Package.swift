@@ -17,11 +17,12 @@ let package = Package(
     platforms: [.iOS(.v18)],
     dependencies: [
         .package(url: "https://github.com/raspu/Highlightr.git", exact: "2.3.0"),
+        .package(path: "Vendor/VoiceInputCore"),
     ],
     targets: [
         .target(
             name: "Kraki",
-            dependencies: ["Highlightr"],
+            dependencies: ["Highlightr", "VoiceInputCore"],
             path: "Kraki"
         ),
         .testTarget(

@@ -971,7 +971,12 @@ struct MessageInputView: View {
     private func handleQuestionAnswer() {
         guard hasText, let q = pendingQuestion else { return }
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.answer(sessionId: sessionId, questionId: q.id, answer: answer)
+        appState.commandSender?.answer(
+            sessionId: sessionId,
+            questionId: q.id,
+            answer: answer,
+            wasFreeform: true
+        )
         sessionStore.setDraft(sessionId, "")
         isFocused = false
     }

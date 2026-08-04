@@ -171,6 +171,17 @@ final class SessionStore {
     /// rapid deletes don't share the same value and get coalesced.
     var popToSessionListSignal: Int = 0
 
+    var navigationOrderedSessions: [SessionInfo] {
+        let previews = sessionPreviews
+        return sessions.values.sorted { a, b in
+            if a.pinned != b.pinned { return a.pinned }
+            let aTs = previews[a.id]?.timestamp ?? ""
+            let bTs = previews[b.id]?.timestamp ?? ""
+            if aTs != bTs { return bTs < aTs }
+            return a.createdAt > b.createdAt
+        }
+    }
+
     // MARK: - Disk snapshot
 
     /// On-disk snapshot of session metadata + previews. Hydrated
@@ -193,6 +204,7 @@ final class SessionStore {
     /// `handleBackground` / `applicationWillTerminate` flush hooks to
     /// guarantee the latest state hits disk before the process dies.
     private static let saveDebounce: TimeInterval = 10.0
+    private let persistenceEnabled: Bool
     private var saveTask: DispatchWorkItem?
     private var pendingSnapshot: Snapshot?
     /// SHA-equivalent stable hash of the bytes last written to disk.
@@ -203,16 +215,13 @@ final class SessionStore {
     private var lastFlushedHash: Int?
 
     private static let snapshotURL: URL = {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fm.temporaryDirectory
-        let dir = base.appendingPathComponent("Kraki", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("sessions.json", isDirectory: false)
+        KrakiDataPaths.persistentDirectory()
+            .appendingPathComponent("sessions.json", isDirectory: false)
     }()
 
-    init() {
+    init(persistenceEnabled: Bool = true) {
+        self.persistenceEnabled = persistenceEnabled
+        guard persistenceEnabled else { return }
         let path = Self.snapshotURL.path
         guard FileManager.default.fileExists(atPath: path) else {
             KLog.d("📂 [snapshot] init: no file at \(path) — starting empty")
@@ -242,6 +251,7 @@ final class SessionStore {
     /// disk. Called after any mutation that changes a card-visible field.
     /// Safe to call frequently — the cache coalesces.
     fileprivate func scheduleSave() {
+        guard persistenceEnabled else { return }
         // Compacting is runtime-only. Persist the underlying working fallback
         // so a cold launch cannot resurrect stale compaction before the next
         // authoritative session_list arrives.
@@ -270,6 +280,7 @@ final class SessionStore {
     /// termination even if the user kills the app before the debounce
     /// fires.
     func flushCache() {
+        guard persistenceEnabled else { return }
         saveTask?.cancel()
         saveTask = nil
         guard let snapshot = pendingSnapshot else { return }
@@ -296,6 +307,7 @@ final class SessionStore {
     /// In-memory state is untouched; callers usually clear it
     /// separately.
     func clearPersistentSnapshot() {
+        guard persistenceEnabled else { return }
         saveTask?.cancel()
         saveTask = nil
         pendingSnapshot = nil
@@ -535,6 +547,16 @@ final class SessionStore {
         sessionModes[digest.id] = mode
         if let usage = digest.usage {
             sessionUsage[digest.id] = usage
+        }
+        // `session_list` is the durable sidebar-preview authority. Its preview
+        // is computed by the tentacle from the latest stable turn boundary and
+        // may be overlaid by an open question/permission. Replace the local
+        // value atomically, including clearing stale optimistic/cache-derived
+        // text when the digest intentionally carries no preview.
+        if let preview = digest.preview {
+            sessionPreviews[digest.id] = preview
+        } else {
+            sessionPreviews.removeValue(forKey: digest.id)
         }
         if pinned {
             pinnedSessions.insert(digest.id)

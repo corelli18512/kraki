@@ -5,6 +5,7 @@ on:
     tags:
       - 'v*'
       - 'head-v*'
+      - 'mac-v*'
   workflow_dispatch:
     inputs:
       mode:
@@ -19,6 +20,14 @@ on:
         description: Existing tag to build from (required for publish)
         required: false
         type: string
+      target:
+        description: Component to build in dry-run mode
+        required: true
+        default: tentacle
+        type: choice
+        options:
+          - tentacle
+          - mac
 
 permissions:
   contents: write
@@ -74,10 +83,9 @@ jobs:
             fi
             checkout_ref="${release_tag}"
           else
-            test "${GITHUB_REF_NAME}" = "main" || {
-              echo "Dry-run builds must run from main."
-              exit 1
-            }
+            # Dry-run validates the exact branch/ref selected in the workflow
+            # dispatch. It never publishes, so it need not already be on main.
+            checkout_ref="${GITHUB_SHA}"
           fi
 
           git checkout --detach "${checkout_ref}"
@@ -91,6 +99,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Ensure release source is main
+        if: steps.meta.outputs.publish_mode == 'publish'
         run: |
           set -euo pipefail
           git fetch origin main
@@ -100,6 +109,7 @@ jobs:
           }
 
       - name: Ensure CI passed for this commit
+        if: steps.meta.outputs.publish_mode == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
@@ -140,12 +150,27 @@ jobs:
             TAG_VERSION="${TAG#head-v}"
             PKG_VERSION=$(node -p "require('./packages/head/package.json').version")
             PKG_NAME="@kraki/head"
+          elif [[ "$TAG" == mac-v* ]]; then
+            TAG_VERSION="${TAG#mac-v}"
+            PKG_VERSION=$(awk '
+              /^targets:/ { in_targets=1; next }
+              in_targets && /^  KrakiMac:/ { in_mac=1; next }
+              in_mac && /^  [A-Za-z0-9_]+:/ { exit }
+              in_mac && /MARKETING_VERSION:/ {
+                value=$2
+                gsub(/"/, "", value)
+                print value
+                exit
+              }
+            ' packages/arm/ios/project.yml)
+            test -n "$PKG_VERSION" || { echo "KrakiMac MARKETING_VERSION not found"; exit 1; }
+            PKG_NAME="kraki-mac-gui"
           elif [[ "$TAG" == v* ]]; then
             TAG_VERSION="${TAG#v}"
             PKG_VERSION=$(node -p "require('./packages/tentacle/package.json').version")
             PKG_NAME="@kraki/tentacle"
           else
-            echo "Unknown tag prefix: $TAG (expected v* or head-v*)"
+            echo "Unknown tag prefix: $TAG (expected v*, head-v*, or mac-v*)"
             exit 1
           fi
 
@@ -162,8 +187,10 @@ jobs:
     needs: prepare
     # Skip for head-only releases — the binary build is tentacle-specific.
     if: |
-      (startsWith(github.ref_name, 'v') && !startsWith(github.ref_name, 'head-v'))
-      || (github.event_name == 'workflow_dispatch' && !startsWith(github.event.inputs.tag, 'head-v'))
+      (github.event_name == 'push' && startsWith(github.ref_name, 'v') && !startsWith(github.ref_name, 'head-v'))
+      || (github.event_name == 'workflow_dispatch' &&
+          ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'tentacle') ||
+           (startsWith(github.event.inputs.tag, 'v') && !startsWith(github.event.inputs.tag, 'head-v'))))
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -377,6 +404,142 @@ jobs:
           path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
           if-no-files-found: error
 
+  # ─── Build macOS GUI App ───────────────────────────────
+
+  build-mac-gui:
+    name: Build macOS GUI App (universal)
+    needs: prepare
+    # Only for mac-v* releases. The archive is universal (arm64 + x86_64).
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref_name, 'mac-v'))
+      || (github.event_name == 'workflow_dispatch' &&
+          ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'mac') ||
+           startsWith(github.event.inputs.tag, 'mac-v')))
+    runs-on: macos-26
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Resolve Swift packages cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/arm/ios/.build
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('packages/arm/ios/Kraki.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-
+
+      - name: Import Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Archive KrakiMac (Release, Developer ID)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          cd packages/arm/ios
+          xcodebuild -project Kraki.xcodeproj -scheme KrakiMac \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RUNNER_TEMP/KrakiMac.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM=3A83X5JZ3S \
+            CODE_SIGN_STYLE=Manual \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            archive | tail -40
+
+      - name: Verify signature
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          test -f "$APP/Contents/MacOS/Kraki"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Notarize and staple
+        if: needs.prepare.outputs.publish_mode == 'publish'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/Kraki.app.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl -a -vvv --type exec "$APP"
+
+      - name: Verify architecture and distribution identity
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/Kraki")
+          echo "Architectures: $ARCHS"
+          grep -qw arm64 <<< "$ARCHS"
+          grep -qw x86_64 <<< "$ARCHS"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          grep -q 'Authority=Developer ID Application:' "$RUNNER_TEMP/codesign.txt"
+          grep -q 'TeamIdentifier=3A83X5JZ3S' "$RUNNER_TEMP/codesign.txt"
+
+      - name: Package .app bundle
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          mkdir -p "$RUNNER_TEMP/stage"
+          ditto "$APP" "$RUNNER_TEMP/stage/Kraki.app"
+          # Package only after notarization/stapling. Do not strip xattrs here:
+          # the stapled ticket is part of the signed distribution artifact.
+          tar -czf "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" \
+            -C "$RUNNER_TEMP/stage" Kraki.app
+          ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz"
+
+      - name: Verify packaged app
+        run: |
+          set -euo pipefail
+          VERIFY_DIR="$RUNNER_TEMP/verify-package"
+          mkdir -p "$VERIFY_DIR"
+          tar -xzf "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" -C "$VERIFY_DIR"
+          APP="$VERIFY_DIR/Kraki.app"
+          test -f "$APP/Contents/MacOS/Kraki"
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/Kraki")
+          grep -qw arm64 <<< "$ARCHS"
+          grep -qw x86_64 <<< "$ARCHS"
+          codesign --verify --strict --verbose=2 "$APP"
+          if [ "${{ needs.prepare.outputs.publish_mode }}" = "publish" ]; then
+            xcrun stapler validate "$APP"
+            spctl -a -vvv --type exec "$APP"
+          fi
+
+      - name: Upload .app bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-kraki-mac-gui-universal-app
+          path: ${{ runner.temp }}/kraki-mac-gui-universal.app.tar.gz
+          if-no-files-found: error
+
   # ─── Publish ────────────────────────────────────────────
 
   publish:
@@ -384,15 +547,31 @@ jobs:
     needs:
       - prepare
       - build-binary
-    # Skip for head-only releases — there are no tentacle binaries to publish.
+      - build-mac-gui
+    # Run for any non-head release where the relevant build succeeded (or was
+    # correctly skipped). build-binary is skipped for head-v*/mac-v*;
+    # build-mac-gui is skipped for v*/head-v*. Neither may have failed.
     if: |
-      (startsWith(github.ref_name, 'v') && !startsWith(github.ref_name, 'head-v'))
-      || (github.event_name == 'workflow_dispatch' && !startsWith(github.event.inputs.tag, 'head-v'))
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.publish_mode == 'publish' &&
+      (
+        (((github.event_name == 'push' && startsWith(github.ref_name, 'v') && !startsWith(github.ref_name, 'head-v')) ||
+          (github.event_name == 'workflow_dispatch' &&
+           ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'tentacle') ||
+            (startsWith(github.event.inputs.tag, 'v') && !startsWith(github.event.inputs.tag, 'head-v'))))) &&
+         needs.build-binary.result == 'success') ||
+        (((github.event_name == 'push' && startsWith(github.ref_name, 'mac-v')) ||
+          (github.event_name == 'workflow_dispatch' &&
+           ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'mac') ||
+            startsWith(github.event.inputs.tag, 'mac-v')))) &&
+         needs.build-mac-gui.result == 'success')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - name: Download binary artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: build-kraki-*

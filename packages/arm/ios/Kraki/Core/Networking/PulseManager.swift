@@ -74,6 +74,26 @@ final class PulseManager {
         guard let payload = try? JSONSerialization.data(
             withJSONObject: ["blob": blob, "keys": keys]
         ) else { return }
+        sendPayload(payload, target: target, connectionScoped: connectionScoped)
+    }
+
+    /// Head-bound control is plaintext by design: the authenticated head is the
+    /// recipient, so there is no peer E2E key. Pulse still supplies ordering,
+    /// acknowledgement and reconnect semantics.
+    func sendControl(_ message: [String: Any], target: String) -> Bool {
+        guard JSONSerialization.isValidJSONObject(message),
+              let payload = try? JSONSerialization.data(withJSONObject: message) else {
+            return false
+        }
+        sendPayload(payload, target: target, connectionScoped: true)
+        return true
+    }
+
+    private func sendPayload(
+        _ payload: Data,
+        target: String?,
+        connectionScoped: Bool
+    ) {
         let (seq, effects) = live.send([UInt8](payload), durable: false, coalesceKey: nil)
         if let target {
             targetByStream[Self.liveStream, default: [:]][seq] = target

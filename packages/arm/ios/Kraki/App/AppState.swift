@@ -5,13 +5,13 @@ import Observation
 @Observable
 final class AppState {
     // MARK: - Stores
-    let sessionStore = SessionStore()
-    let deviceStore = DeviceStore()
+    let sessionStore: SessionStore
+    let deviceStore: DeviceStore
     let messageDatabase: MessageDatabase
     let messageStore: MessageStore
     /// Disk-backed cache + chunk reassembly for ContentRef attachments
-    /// (tool args/result, agent images). Created with a request-pull
-    /// closure that uses our encrypted-send pipeline.
+    /// (tool args/result, agent images). iOS-only: the macOS target does not
+    /// yet run the attachment-pull pipeline, so the property is nil there.
     private(set) var attachmentStore: AttachmentStore!
 
     // MARK: - Networking
@@ -20,12 +20,25 @@ final class AppState {
     private(set) var messageRouter: MessageRouter?
     private(set) var commandSender: CommandSender?
     private(set) var messageProvider: MessageProvider?
+    /// Test-only injection point (headless e2e self-test seeds a provider
+    /// without going through the full network setup).
+    @MainActor func setMessageProviderForTesting(_ provider: MessageProvider) {
+        self.messageProvider = provider
+    }
+    #if os(iOS)
     private(set) var pushManager: PushManager?
     private(set) var preferencesManager: PreferencesManager?
+    #endif
     private(set) var pulseManager: PulseManager?
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
+    /// Region-advertised voice capability from the latest authenticated
+    /// handshake. Nil means the microphone affordance stays hidden.
+    var voiceCapability: VoiceCapability?
+    @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
 
     init() {
+        self.sessionStore = SessionStore()
+        self.deviceStore = DeviceStore()
         // The message DB is the persistence backbone for chat
         // history. Failing to open it is fatal — without it the chat
         // surface can't function and silent degradation would mask
@@ -36,6 +49,8 @@ final class AppState {
             fatalError("Failed to open message database: \(error)")
         }
         self.messageStore = MessageStore(db: messageDatabase)
+        self.voiceInputController = KrakiVoiceInputController()
+        self.voiceInputController.bind(host: self)
         // attachmentStore is set up after the DB-backed stores so the
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
@@ -60,6 +75,7 @@ final class AppState {
         // gives us one last chance to land those mutations on disk.
         // Cheap insurance; KrakiApp's UIApplicationDelegateAdaptor
         // ensures the notification is delivered on the main thread.
+        #if os(iOS)
         NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification,
             object: nil,
@@ -69,15 +85,57 @@ final class AppState {
             self?.sessionStore.flushCache()
             self?.deviceStore.flushCache()
         }
+        #endif
     }
+
+    #if DEBUG
+    /// Fully isolated app graph for native Chat snapshot/alignment harnesses.
+    /// It uses the real stores/provider/command/subscription objects but omits
+    /// Keychain, auth, WebSocket and Pulse setup, so production UI can run
+    /// unchanged against a static temporary database without side effects.
+    init(testDatabase: MessageDatabase) {
+        self.sessionStore = SessionStore(persistenceEnabled: false)
+        self.deviceStore = DeviceStore(persistenceEnabled: false)
+        self.messageDatabase = testDatabase
+        self.messageStore = MessageStore(db: testDatabase)
+        self.voiceInputController = KrakiVoiceInputController()
+        self.voiceInputController.bind(host: self)
+        self.attachmentStore = AttachmentStore { _, _ in }
+        self.commandSender = CommandSender(appState: self)
+        self.messageProvider = MessageProvider(appState: self)
+        self.sessionSubscriptionController = SessionSubscriptionController(host: self)
+        self.hasStoredCredentials = true
+        self.hasCompletedInitialConnect = true
+        self.connectionStatus = .disconnected
+    }
+    #endif
 
     // MARK: - Connection
     var connectionStatus: ConnectionStatus = .awaitingLogin
     var deviceId: String?
     var user: UserInfo?
 
-    /// App group UserDefaults suite, shared with the NSE.
-    private static let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+    /// macOS dev-local mode: connected to a local `pnpm dev` relay with no
+    /// login. Gating for the welcome screen / sidebar. iOS is always
+    /// authenticated and does not set this.
+    #if os(macOS)
+    var devLocalActive: Bool = false
+    #endif
+
+    /// Persistence domain shared with the iOS NSE in production. The macOS
+    /// Debug app uses an isolated suite so Dev login/logout/region redirects
+    /// cannot mutate the stable `/Applications/Kraki.app` identity.
+    private static let sharedDefaults: UserDefaults = {
+        #if os(macOS)
+        #if DEBUG
+        return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
+        #else
+        return UserDefaults(suiteName: "chat.kraki.mac") ?? .standard
+        #endif
+        #else
+        return UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+        #endif
+    }()
     /// Key for the persisted relay URL. Set after a successful auth or a
     /// `wrong_region` redirect so we can skip the redirect dance on cold launch.
     private static let relayURLKey = "kraki.relayURL"
@@ -177,8 +235,10 @@ final class AppState {
         )
         let sender = CommandSender(appState: self)
         let provider = MessageProvider(appState: self)
+        #if os(iOS)
         let push = PushManager(appState: self)
         let prefs = PreferencesManager(appState: self)
+        #endif
 
         client.onMessage = { [weak router] data in
             router?.handleRawMessage(data)
@@ -195,8 +255,10 @@ final class AppState {
         self.messageRouter = router
         self.commandSender = sender
         self.messageProvider = provider
+        #if os(iOS)
         self.pushManager = push
         self.preferencesManager = prefs
+        #endif
         // Pulse reliable transport — wraps every consumer message through
         // the endpoint before E2E encryption, and unwraps inbound frames
         // after decryption.
@@ -239,6 +301,50 @@ final class AppState {
         wsClient?.connect()
     }
 
+    #if os(macOS)
+    private var cliLoginInFlight = false
+
+    /// Reuse the locally-installed `kraki` CLI's login (relay + GitHub token
+    /// from `~/.kraki` / `gh auth token`) to authenticate this Mac as an arm
+    /// device — no manual pairing required. Returns true when a CLI login was
+    /// found and a connection has been started; false when the CLI isn't
+    /// installed/logged in (caller falls back to the login screen).
+    @discardableResult
+    func attemptCLILogin() async -> Bool {
+        // SwiftUI WindowGroup tasks can be recreated while the app is already
+        // connecting/authenticating. Loading the CLI token twice used to call
+        // connect twice and leave parallel sockets behind.
+        if cliLoginInFlight { return true }
+        if authManager?.cliGitHubToken != nil {
+            guard connectionStatus == .awaitingLogin || connectionStatus == .disconnected else {
+                return true
+            }
+            connect()
+            return true
+        }
+        cliLoginInFlight = true
+        defer { cliLoginInFlight = false }
+        guard let creds = await AuthManager.loadCLICredentials() else { return false }
+        // Token auth is independent of the old device's Keychain ACL. Use
+        // process-local keys so a denied Keychain prompt cannot strand the
+        // Mac before the relay refreshes this device's public keys.
+        authManager?.useEphemeralKeysForCurrentProcess()
+        let relayChanged = creds.relay != relayURL
+        if relayChanged {
+            relayURL = creds.relay
+            wsClient?.setRelayURL(creds.relay)
+        }
+        authManager?.cliGitHubToken = creds.token
+        KLog.d("🔑 Reusing local kraki CLI login → \(creds.relay)")
+        // setRelayURL schedules the replacement connection itself. Calling
+        // connect again here would briefly create two authenticated sockets.
+        if !relayChanged {
+            connect()
+        }
+        return true
+    }
+    #endif
+
     /// Connect to local relay with open auth — DEBUG only.
     /// Bypasses pairing and OAuth for fast dev iteration.
     ///
@@ -250,18 +356,11 @@ final class AppState {
     /// works when the dev daemon is up.
     func devConnect() {
         #if DEBUG
-        // Wipe pairing token AND any stored device identity so the next
-        // auth handshake falls through to `method: "open"` — the local
-        // `pnpm dev` head relay (`packages/head` with the `open` provider
-        // configured) accepts that and skips pairing entirely. Without
-        // clearing the deviceId we'd send `method: "challenge"` for a
-        // device the local relay has never seen, and auth would fail.
+        // Local dev is a process-scoped open-auth identity. Keep production
+        // pairing/device credentials and RSA keys intact so entering dev mode
+        // cannot sign the user's real app out.
         authManager?.pairingToken = nil
-        authManager?.clearStoredCredentials()
-        // Tell AuthManager to skip the `auth_info` round-trip and send
-        // `method: "open"` straight away on the next WS open — `auth_info`
-        // would otherwise leave the UI parked on `.awaitingLogin`.
-        authManager?.forceOpenAuthOnce = true
+        authManager?.usesEphemeralOpenAuth = true
         // `KRAKI_LOCAL_RELAY_PORT` env override matches `scripts/dev-local.ts`.
         let port = ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4400"
         let devURL = "ws://localhost:\(port)"
@@ -316,6 +415,8 @@ final class AppState {
         user = nil
         githubClientId = nil
         relayVersion = nil
+        voiceCapability = nil
+        voiceInputController.cancel()
         lastError = nil
         reconnectAttempt = 0
         hasCompletedInitialConnect = false
@@ -370,6 +471,7 @@ final class AppState {
             authManager?.bootstrapAuth()
         case .disconnected:
             sessionSubscriptionController?.onDisconnected()
+            messageProvider?.onDisconnected()
             if connectionStatus == .connected {
                 connectionStatus = .disconnected
             }
@@ -420,7 +522,9 @@ final class AppState {
         messageRouter?.drainQueue()
 
         // Re-register push token if user has it enabled
+        #if os(iOS)
         pushManager?.onAuthenticated()
+        #endif
     }
 
     func onAuthFailed(error: String) {
@@ -457,11 +561,19 @@ final class AppState {
         // owning device when a sessionId is present, else broadcast.
         let sessionId = message["sessionId"] as? String
         let explicitTarget = message["targetDeviceId"] as? String
+        // Commands such as create_session and request_local_sessions carry
+        // their target inside the protocol payload, but relay routing happens
+        // before decryption and therefore needs the same target separately.
+        // Resolve both shapes so a targeted command is encrypted to, and
+        // delivered by the relay to, the intended Tentacle.
+        let payloadTarget = (message["payload"] as? [String: Any])?["targetDeviceId"] as? String
         let targetDeviceId: String?
         if let routingTarget {
             targetDeviceId = routingTarget
         } else if let explicitTarget {
             targetDeviceId = explicitTarget
+        } else if let payloadTarget {
+            targetDeviceId = payloadTarget
         } else if let sessionId, let session = sessionStore.sessions[sessionId] {
             targetDeviceId = session.deviceId
         } else {
@@ -606,6 +718,42 @@ extension AppState: SessionSubscriptionHost {
     }
 }
 
+// MARK: - Voice input host
+
+extension AppState: KrakiVoiceInputHost {
+    static let headPulseTarget = "@head"
+
+    var voiceUserID: String? { user?.id }
+    var voiceDeviceID: String? { deviceId }
+    var voiceTransportReady: Bool { connectionStatus == .connected }
+
+    @discardableResult
+    func requestVoiceLease(resource: String) -> Bool {
+        guard connectionStatus == .connected, let deviceId, let wsClient,
+              JSONSerialization.isValidJSONObject([
+                "type": "request_voice_lease",
+                "deviceId": deviceId,
+                "resource": resource,
+              ]),
+              let data = try? JSONSerialization.data(withJSONObject: [
+                "type": "request_voice_lease",
+                "deviceId": deviceId,
+                "resource": resource,
+              ]),
+              let string = String(data: data, encoding: .utf8) else {
+            KLog.d("🎙️ Voice lease request blocked: transport unavailable")
+            return false
+        }
+        // The deployed Head's raw authenticated control path supports voice
+        // leases. Its @head Pulse self-channel historically omitted
+        // request_voice_lease from the whitelist, so use this non-retryable
+        // one-shot control frame; a new gesture always acquires a fresh lease.
+        wsClient.sendRaw(string)
+        KLog.d("🎙️ Voice lease request sent resource=\(resource)")
+        return true
+    }
+}
+
 // MARK: - PulseHost
 
 extension AppState: PulseHost {
@@ -616,6 +764,9 @@ extension AppState: PulseHost {
         if let target {
             envelope["type"] = "unicast"
             envelope["to"] = target
+            if target == Self.headPulseTarget {
+                KLog.d("🎙️ Voice control Pulse frame → @head bytes=\(b64.utf8.count)")
+            }
         } else {
             envelope["type"] = "broadcast"
         }
@@ -625,18 +776,26 @@ extension AppState: PulseHost {
     }
 
     func onDelivered(json: String) {
-        // `json` is the in-order `{blob, keys}` payload — E2E-decrypt it.
-        guard let data = json.data(using: .utf8) else { return }
-        do {
-            let result = try messageRouter?.encryptionHandler.decryptInbound(data)
-                ?? (message: Data(), sessionId: nil)
-            guard !result.message.isEmpty else { return }
-            Task { @MainActor in
-                messageRouter?.handleDataMessage(result.message)
-            }
-        } catch {
-            KLog.d("❌ pulse deliver decrypt failed: \(error)")
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
         }
+
+        // Head-originated control (presence, preferences, voice lease) is
+        // intentionally plaintext inside ordered Pulse. Route its inner message
+        // through the same control dispatcher as a raw WebSocket frame.
+        if object["from"] as? String == Self.headPulseTarget,
+           let message = object["msg"] as? [String: Any],
+           let messageData = try? JSONSerialization.data(withJSONObject: message) {
+            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "unknown")")
+            messageRouter?.handleRawMessage(messageData)
+            return
+        }
+
+        // All other delivered payloads are `{blob, keys}` E2E ciphertext from a
+        // tentacle. Submit to the ordered background decrypt pipeline so RSA
+        // work never competes with AppKit scrolling on the main thread.
+        messageRouter?.encryptionHandler.submitForDecryption(data)
     }
 
     func onAcked(seqUpTo: UInt64) {

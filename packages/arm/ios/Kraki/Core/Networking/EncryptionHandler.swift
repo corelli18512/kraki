@@ -50,8 +50,18 @@ final class EncryptionHandler {
     /// Encrypted envelopes received before we had a deviceId / ready keystore.
     private var encryptedQueue: [Data] = []
 
-    /// Called for each successfully decrypted message during `drainQueue()`.
+    /// Called for each successfully decrypted message. Delivery is marshalled
+    /// back to the main actor by MessageRouter, while RSA/Keychain work stays on
+    /// this strictly ordered background queue.
     var onDecrypted: ((Data) -> Void)?
+
+    private let decryptQueue = DispatchQueue(
+        label: "chat.kraki.inbound-decrypt",
+        qos: .userInitiated
+    )
+    private let keyStateLock = NSLock()
+    private var keyAvailabilityConfirmed = false
+    private var cachedEncryptionKeyPair: (privateKey: SecKey, publicKey: SecKey)?
 
     // MARK: Init
 
@@ -66,7 +76,18 @@ final class EncryptionHandler {
     /// The handler is ready when we have a confirmed deviceId and both key
     /// pairs are present in the Keychain.
     var isReady: Bool {
-        appState?.deviceId != nil && keychain.hasKeys()
+        guard appState?.deviceId != nil else { return false }
+        keyStateLock.lock()
+        let confirmed = keyAvailabilityConfirmed
+        keyStateLock.unlock()
+        if confirmed { return true }
+        let available = keychain.hasKeys()
+        if available {
+            keyStateLock.lock()
+            keyAvailabilityConfirmed = true
+            keyStateLock.unlock()
+        }
+        return available
     }
 
     // MARK: - Outbound Encryption
@@ -185,6 +206,28 @@ final class EncryptionHandler {
     ///
     /// - Returns: The inner plaintext JSON and the `sessionId` extracted from it
     ///   (if present).
+    func submitForDecryption(_ envelope: Data) {
+        decryptQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.isReady else {
+                self.encryptedQueue.append(envelope)
+                return
+            }
+            self.decryptAndDeliver(envelope)
+        }
+    }
+
+    private func decryptAndDeliver(_ envelope: Data) {
+        do {
+            let result = try decryptInbound(envelope)
+            onDecrypted?(result.message)
+        } catch EncryptionError.notAddressedToUs {
+            KLog.d("📭 Envelope not addressed to us — skipping")
+        } catch {
+            KLog.d("❌ Decryption failed: \(error)")
+        }
+    }
+
     func decryptInbound(_ envelope: Data) throws -> (message: Data, sessionId: String?) {
         guard let appState, let deviceId = appState.deviceId else {
             KLog.d("❌ decrypt: not ready (deviceId: \(appState?.deviceId ?? "nil"))")
@@ -213,7 +256,20 @@ final class EncryptionHandler {
         }
 
         let cryptoPayload = CryptoBlobPayload(blob: blob, keys: keys)
-        let encryptionKey = try keychain.getOrCreateEncryptionKey()
+        let encryptionKey: (privateKey: SecKey, publicKey: SecKey)
+        keyStateLock.lock()
+        let cached = cachedEncryptionKeyPair
+        keyStateLock.unlock()
+        if let cached {
+            encryptionKey = cached
+        } else {
+            let loaded = try keychain.getOrCreateEncryptionKey()
+            keyStateLock.lock()
+            cachedEncryptionKeyPair = loaded
+            keyAvailabilityConfirmed = true
+            keyStateLock.unlock()
+            encryptionKey = loaded
+        }
         let plaintext = try crypto.decryptFromBlob(
             cryptoPayload,
             deviceId: deviceId,
@@ -236,24 +292,23 @@ final class EncryptionHandler {
 
     /// Stash an encrypted envelope for later processing (before auth completes).
     func enqueue(_ envelope: Data) {
-        encryptedQueue.append(envelope)
+        decryptQueue.async { [weak self] in
+            self?.encryptedQueue.append(envelope)
+        }
     }
 
     /// Decrypt all queued envelopes and deliver them via `onDecrypted`.
     /// Called by `MessageRouter.drainQueue()` after auth succeeds.
     func drainQueue() {
-        KLog.d("🔄 Drain queue: \(encryptedQueue.count) items, ready: \(isReady)")
-        guard isReady, !encryptedQueue.isEmpty else { return }
+        decryptQueue.async { [weak self] in
+            guard let self else { return }
+            KLog.d("🔄 Drain queue: \(self.encryptedQueue.count) items, ready: \(self.isReady)")
+            guard self.isReady, !self.encryptedQueue.isEmpty else { return }
 
-        let queued = encryptedQueue
-        encryptedQueue = []
-
-        for envelope in queued {
-            do {
-                let result = try decryptInbound(envelope)
-                onDecrypted?(result.message)
-            } catch {
-                KLog.d("❌ Queued decrypt failed: \(error)")
+            let queued = self.encryptedQueue
+            self.encryptedQueue = []
+            for envelope in queued {
+                self.decryptAndDeliver(envelope)
             }
         }
     }

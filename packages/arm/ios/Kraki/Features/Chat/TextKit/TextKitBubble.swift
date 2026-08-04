@@ -44,6 +44,12 @@ private enum TKMetrics {
 
 // MARK: - Markdown → NSAttributedString
 
+private func tkContentCacheKey(prefix: String, content: String) -> NSString {
+    var hasher = Hasher()
+    hasher.combine(content)
+    return "\(prefix)\u{1F}\(content.utf8.count)\u{1F}\(hasher.finalize())" as NSString
+}
+
 private let tkMarkdownCache: NSCache<NSString, NSAttributedString> = {
     let c = NSCache<NSString, NSAttributedString>()
     c.countLimit = 512
@@ -76,7 +82,7 @@ private enum TKCodeHighlighter {
 
     static func attributed(code: String, language: String?) -> NSAttributedString {
         let normalizedLanguage = language?.lowercased() ?? "auto"
-        let key = "\(normalizedLanguage)\u{1F}\(code)" as NSString
+        let key = tkContentCacheKey(prefix: normalizedLanguage, content: code)
         if let cached = tkCodeHighlightCache.object(forKey: key) { return cached }
 
         return queue.sync {
@@ -399,10 +405,10 @@ enum TKMarkdown {
     /// Parse `text` to an `NSAttributedString` matching the SwiftUI bubble's
     /// inline-only markdown + heading post-pass. Cached by content.
     static func attributed(_ text: String, cacheKey: String) -> NSAttributedString {
-        // The caller key identifies the message/slot, but live content can
-        // change in-place. Include the complete source so equal-length updates
-        // cannot inherit stale block metadata (for example code → plain text).
-        let key = "\(cacheKey)\u{1F}\(text)" as NSString
+        // Avoid retaining another full copy of every message inside the cache
+        // key. The caller identity + byte length + process-local content hash
+        // still distinguishes equal-length streaming replacements.
+        let key = tkContentCacheKey(prefix: cacheKey, content: text)
         if let hit = tkMarkdownCache.object(forKey: key) { return hit }
         let built = build(text)
         tkMarkdownCache.setObject(built, forKey: key)
@@ -754,6 +760,9 @@ final class TKBubbleContent {
     /// Surfaced through the `AttachmentStore` chunk pipeline; rendered as a
     /// SwiftUI grid inside the cell. Mirrors web `content_ref` handling.
     let imageRefs: [ContentRef]
+    /// Fixed-geometry HTML report metadata cards. The report WebView is owned
+    /// by ChatView, never by a reusable bubble cell.
+    let htmlArtifacts: [ContentRef]
     /// Optional action slot for a streaming / frozen turn: tool_start /
     /// tool_complete / tool_batch / permission / question / user_abort /
     /// failed. nil on ordinary completed bubbles. Replaces the old
@@ -770,7 +779,7 @@ final class TKBubbleContent {
 
     init(message: ChatMessage, kind: Kind, hueSeed: String,
          body: NSAttributedString?, images: [UIImage] = [],
-         imageRefs: [ContentRef] = [],
+         imageRefs: [ContentRef] = [], htmlArtifacts: [ContentRef] = [],
          action: ChatMessage? = nil, isLive: Bool = false,
          isFrozen: Bool = false, frozenTimestamp: String? = nil) {
         self.message = message
@@ -779,6 +788,7 @@ final class TKBubbleContent {
         self.body = body
         self.images = images
         self.imageRefs = imageRefs
+        self.htmlArtifacts = htmlArtifacts
         self.action = action
         self.isLive = isLive
         self.isFrozen = isFrozen
@@ -796,7 +806,8 @@ final class TKBubbleContent {
     /// TextKit path as a completed bubble.
     static func live(card: MessageStore.SessionCard, agent: String, sessionId: String,
                      steps: Int, isFrozen: Bool = false,
-                     frozenTimestamp: String? = nil) -> TKBubbleContent {
+                     frozenTimestamp: String? = nil,
+                     attachments: [ContentRef] = []) -> TKBubbleContent {
         let draft = card.text
         var payload: [String: AnyCodable] = [:]
         if !draft.isEmpty { payload["content"] = AnyCodable(draft) }
@@ -807,7 +818,10 @@ final class TKBubbleContent {
         let body = draft.isEmpty ? nil
             : TKMarkdown.attributed(draft, cacheKey: "\(sessionId):live:\(draft.count)")
         return TKBubbleContent(message: msg, kind: .agent, hueSeed: sessionId,
-                               body: body, images: [], action: card.action,
+                               body: body, images: [],
+                               imageRefs: uniqueRefs(attachments).filter { $0.mimeType.hasPrefix("image/") },
+                               htmlArtifacts: uniqueRefs(attachments).filter { $0.mimeType == "text/html" },
+                               action: card.action,
                                isLive: !isFrozen, isFrozen: isFrozen,
                                frozenTimestamp: frozenTimestamp)
     }
@@ -881,6 +895,11 @@ final class TKBubbleContent {
             if h > 0 { h += TKMetrics.imageSpacing }
             h += imageRefH
         }
+        let artifactHeight = TKHTMLArtifactCardsView.height(for: htmlArtifacts.count)
+        if artifactHeight > 0 {
+            if h > 0 { h += TKMetrics.imageSpacing }
+            h += artifactHeight
+        }
         // Action slot (streaming / frozen): measured synchronously via the same
         // SwiftUI host the cell uses, so cellHeight matches what configure lays
         // out. The list re-measures on action transitions via onActionHeightChange.
@@ -917,16 +936,42 @@ final class TKBubbleContent {
         cache.countLimit = 600
         return cache
     }()
+    nonisolated(unsafe) private static var cacheKeysByMessageID: [String: NSString] = [:]
 
     static func make(message: ChatMessage, sessionId: String, agent: String) -> TKBubbleContent {
-        let key = message.id as NSString
+        let key = visualCacheKey(message)
+        if let previous = cacheKeysByMessageID[message.id], previous != key {
+            cache.removeObject(forKey: previous)
+        }
+        cacheKeysByMessageID[message.id] = key
         if let cached = cache.object(forKey: key) { return cached }
         let built = build(message: message, sessionId: sessionId, agent: agent)
         cache.setObject(built, forKey: key)
         return built
     }
 
-    static func bust(_ id: String) { cache.removeObject(forKey: id as NSString) }
+    static func bust(_ id: String) {
+        guard let key = cacheKeysByMessageID.removeValue(forKey: id) else { return }
+        cache.removeObject(forKey: key)
+    }
+
+    private static func visualCacheKey(_ message: ChatMessage) -> NSString {
+        var hasher = Hasher()
+        hasher.combine(message.id)
+        let text = message.content ?? message.result ?? ""
+        hasher.combine(text.utf8.count)
+        hasher.combine(Data(text.utf8.suffix(512)))
+        hasher.combine(message.attachments?.count ?? 0)
+        hasher.combine(message.steps ?? 0)
+        for ref in message.contentRefAttachments {
+            hasher.combine(ref.id)
+            hasher.combine(ref.mimeType)
+            hasher.combine(ref.size)
+            hasher.combine(ref.width ?? 0)
+            hasher.combine(ref.height ?? 0)
+        }
+        return "\(message.id)\u{1F}\(hasher.finalize())" as NSString
+    }
 
     private static func build(message: ChatMessage, sessionId: String, agent: String) -> TKBubbleContent {
         let isUser = ["user_message", "send_input", "pending_input"].contains(message.type)
@@ -956,10 +1001,17 @@ final class TKBubbleContent {
         case .system, .agent:
             body = rawBody
         }
+        let refs = uniqueRefs(message.contentRefAttachments)
         return TKBubbleContent(
             message: message, kind: kind, hueSeed: sessionId.isEmpty ? agent : sessionId,
             body: body, images: decodeImages(message.attachments),
-            imageRefs: message.contentRefAttachments.filter { $0.mimeType.hasPrefix("image/") })
+            imageRefs: refs.filter { $0.mimeType.hasPrefix("image/") },
+            htmlArtifacts: refs.filter { $0.mimeType == "text/html" })
+    }
+
+    private static func uniqueRefs(_ refs: [ContentRef]) -> [ContentRef] {
+        var seen = Set<String>()
+        return refs.filter { seen.insert($0.id).inserted }
     }
 
     private static let imageCache: NSCache<NSString, UIImage> = {
@@ -1199,6 +1251,140 @@ final class TKTableSheetViewController: UIViewController {
     @objc private func dismissSheet() { dismiss(animated: true) }
 }
 
+private final class TKHTMLArtifactButton: UIControl {
+    private let iconBackground = UIView()
+    private let iconView = UIImageView()
+    private let titleLabel = UILabel()
+    private let detailLabel = UILabel()
+    private let openIcon = UIImageView()
+    private var artifact: ContentRef?
+    private var onOpen: ((ContentRef) -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 8
+        layer.borderWidth = 0.5
+        backgroundColor = .secondarySystemBackground
+        layer.borderColor = UIColor.separator.withAlphaComponent(0.55).cgColor
+
+        iconBackground.backgroundColor = UIColor.tintColor.withAlphaComponent(0.12)
+        iconBackground.layer.cornerRadius = 7
+        iconBackground.isUserInteractionEnabled = false
+        addSubview(iconBackground)
+
+        iconView.image = UIImage(systemName: "doc.richtext")
+        iconView.tintColor = .tintColor
+        iconView.contentMode = .scaleAspectFit
+        iconBackground.addSubview(iconView)
+
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .label
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+
+        detailLabel.font = .systemFont(ofSize: 10)
+        detailLabel.textColor = .secondaryLabel
+        detailLabel.lineBreakMode = .byTruncatingTail
+        addSubview(detailLabel)
+
+        openIcon.image = UIImage(systemName: "chevron.right")
+        openIcon.tintColor = .tertiaryLabel
+        openIcon.contentMode = .scaleAspectFit
+        addSubview(openIcon)
+
+        addTarget(self, action: #selector(openArtifact), for: .touchUpInside)
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(artifact: ContentRef, onOpen: @escaping (ContentRef) -> Void) {
+        self.artifact = artifact
+        self.onOpen = onOpen
+        let caption = artifact.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = caption?.isEmpty == false
+            ? caption!
+            : (name?.isEmpty == false ? name! : "HTML Report")
+        titleLabel.text = title
+        detailLabel.text = "HTML Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
+        accessibilityLabel = title
+        accessibilityValue = detailLabel.text
+        accessibilityHint = "Opens report preview"
+    }
+
+    func reset() {
+        artifact = nil
+        onOpen = nil
+        titleLabel.text = nil
+        detailLabel.text = nil
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        iconBackground.frame = CGRect(x: 10, y: 10, width: 34, height: 34)
+        iconView.frame = iconBackground.bounds.insetBy(dx: 8, dy: 8)
+        openIcon.frame = CGRect(x: bounds.width - 25, y: 20, width: 10, height: 14)
+        let textX: CGFloat = 54
+        let textWidth = max(1, bounds.width - textX - 36)
+        titleLabel.frame = CGRect(x: textX, y: 9, width: textWidth, height: 18)
+        detailLabel.frame = CGRect(x: textX, y: 29, width: textWidth, height: 14)
+    }
+
+    @objc private func openArtifact() {
+        guard let artifact else { return }
+        onOpen?(artifact)
+    }
+}
+
+private final class TKHTMLArtifactCardsView: UIView {
+    static let cardHeight: CGFloat = 54
+    static let spacing: CGFloat = 6
+    private var buttons: [TKHTMLArtifactButton] = []
+
+    static func height(for count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        return CGFloat(count) * cardHeight + CGFloat(count - 1) * spacing
+    }
+
+    func configure(artifacts: [ContentRef], onOpen: @escaping (ContentRef) -> Void) {
+        while buttons.count < artifacts.count {
+            let button = TKHTMLArtifactButton(frame: .zero)
+            addSubview(button)
+            buttons.append(button)
+        }
+        for (index, button) in buttons.enumerated() {
+            if index < artifacts.count {
+                button.isHidden = false
+                button.configure(artifact: artifacts[index], onOpen: onOpen)
+            } else {
+                button.isHidden = true
+                button.reset()
+            }
+        }
+        isHidden = artifacts.isEmpty
+        setNeedsLayout()
+    }
+
+    func reset() {
+        buttons.forEach {
+            $0.reset()
+            $0.isHidden = true
+        }
+        isHidden = true
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        var y: CGFloat = 0
+        for button in buttons where !button.isHidden {
+            button.frame = CGRect(x: 0, y: y, width: bounds.width, height: Self.cardHeight)
+            y += Self.cardHeight + Self.spacing
+        }
+    }
+}
+
 /// Flat, single-message TextKit cell used by the production chat list.
 final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
     static let reuseID = "TKBubbleCell"
@@ -1206,6 +1392,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var onOpenSteps: ((ChatMessage) -> Void)?
     var onResolvePermission: ((String, String?, String) -> Void)?
     var onAnswerQuestion: ((String, String) -> Void)?
+    var onOpenHTMLArtifact: ((ContentRef) -> Void)?
     var attachmentStore: AttachmentStore?
     var sessionMode: SessionMode = .discuss
     var onActionHeightChange: (() -> Void)?
@@ -1213,11 +1400,13 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private(set) var sessionId: String = ""
     var contentSnapshot: TKBubbleContent? { content }
 
+    private let renderClipView = UIView()
     private let bubbleBG = TKRoundedView()
     private let bodyView: TKBodyTextView
     private let moreButton = UIButton(type: .system)
     private let actionHost = BubbleActionHostView()
     private let imageHost = BubbleImageHostView()
+    private let artifactCardsView = TKHTMLArtifactCardsView()
     private var imageViews: [UIImageView] = []
     private var tableViews: [TKTableScrollView] = []
     private var tableAttachmentIDs: [ObjectIdentifier] = []
@@ -1228,7 +1417,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         bodyView = TKBodyTextView(usingTextLayoutManager: true)
         super.init(frame: frame)
         contentView.clipsToBounds = false
-        contentView.addSubview(bubbleBG)
+        renderClipView.clipsToBounds = true
+        contentView.addSubview(renderClipView)
+        renderClipView.addSubview(bubbleBG)
 
         bodyView.isEditable = false
         bodyView.isScrollEnabled = false
@@ -1245,7 +1436,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         bodyView.textContainer.lineFragmentPadding = 0
         bodyView.adjustsFontForContentSizeCategory = true
         bodyView.dataDetectorTypes = []
-        contentView.addSubview(bodyView)
+        renderClipView.addSubview(bodyView)
 
         // Historical bubble affordance (786cbdf3): a compact "···" capsule
         // floating over the bubble's top-right edge. For traceable messages it
@@ -1267,15 +1458,39 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         actionHost.backgroundColor = .clear
         actionHost.translatesAutoresizingMaskIntoConstraints = false
         actionHost.onHeightChange = { [weak self] _ in self?.onActionHeightChange?() }
-        contentView.addSubview(actionHost)
+        renderClipView.addSubview(actionHost)
 
         imageHost.backgroundColor = .clear
         imageHost.translatesAutoresizingMaskIntoConstraints = false
         imageHost.onHeightChange = { [weak self] _ in self?.onActionHeightChange?() }
-        contentView.addSubview(imageHost)
+        renderClipView.addSubview(imageHost)
+        renderClipView.addSubview(artifactCardsView)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        content = nil
+        onOpenSteps = nil
+        onResolvePermission = nil
+        onAnswerQuestion = nil
+        onOpenHTMLArtifact = nil
+        attachmentStore = nil
+        bodyView.attributedText = nil
+        bodyView.isHidden = true
+        imageViews.forEach { $0.isHidden = true }
+        imageHost.configure(refs: [], sessionId: sessionId, attachmentStore: nil)
+        imageHost.isHidden = true
+        artifactCardsView.reset()
+        actionHost.configure(action: nil, sessionMode: sessionMode)
+        actionHost.isHidden = true
+        tableViews.forEach { $0.removeFromSuperview() }
+        tableViews.removeAll(keepingCapacity: true)
+        tableAttachmentIDs.removeAll(keepingCapacity: true)
+        moreButton.isHidden = true
+        bubbleBG.frame = .zero
+    }
 
     func setBodyInteractive(_ enabled: Bool) {
         // Plain text never needs UITextView selection: whole-message Copy and
@@ -1341,7 +1556,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 imageView.layer.cornerRadius = TKMetrics.imageCorner
                 imageView.layer.shouldRasterize = true
                 imageView.layer.rasterizationScale = UIScreen.main.scale
-                contentView.addSubview(imageView)
+                renderClipView.addSubview(imageView)
                 imageViews.append(imageView)
             }
             imageView.image = image
@@ -1361,6 +1576,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         }
 
         moreButton.isHidden = !content.canShowSteps
+        artifactCardsView.configure(artifacts: content.htmlArtifacts) { [weak self] artifact in
+            self?.onOpenHTMLArtifact?(artifact)
+        }
 
         // Action slot (streaming / frozen turns). Hosts the SwiftUI action UI
         // inside this UIKit cell — same component as a completed bubble.
@@ -1385,7 +1603,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 }
             }
         }
-        let exposesInteractiveContent = exposesInteractiveAction || exposesInteractiveTable
+        let exposesInteractiveContent = exposesInteractiveAction
+            || exposesInteractiveTable
+            || !content.htmlArtifacts.isEmpty
         let semanticText = TKMarkdown.plainText(content.body)
         isAccessibilityElement = !exposesInteractiveContent
         accessibilityLabel = exposesInteractiveContent ? nil : semanticText
@@ -1412,7 +1632,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                     self?.onShowTable?(placement.attachment.tableLayout)
                 }
                 view.isUserInteractionEnabled = bodyView.isUserInteractionEnabled
-                contentView.addSubview(view)
+                renderClipView.addSubview(view)
                 return view
             }
         }
@@ -1424,7 +1644,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             view.frame = frame
             view.showsHorizontalScrollIndicator = placement.attachment.tableLayout.contentSize.width > frame.width
             view.showsVerticalScrollIndicator = placement.attachment.tableLayout.contentSize.height > frame.height
-            contentView.bringSubviewToFront(view)
+            renderClipView.bringSubviewToFront(view)
         }
     }
 
@@ -1461,6 +1681,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        renderClipView.frame = contentView.bounds
         guard let content else { return }
         let cellWidth = bounds.width
         let bubbleWidth = content.bubbleWidth(cellWidth: cellWidth)
@@ -1483,56 +1704,48 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         if !content.images.isEmpty {
             if textHeight > 0 { cursorY += TKMetrics.imageSpacing }
             for (index, image) in content.images.enumerated() where index < imageViews.count {
+                if index > 0 { cursorY += TKMetrics.imageSpacing }
                 let size = content.imageDisplaySize(image, maxWidth: innerWidth)
                 imageViews[index].frame = CGRect(x: innerX, y: cursorY, width: size.width, height: size.height)
-                cursorY += size.height + TKMetrics.imageSpacing
+                cursorY += size.height
             }
         }
-        // Action slot (streaming / frozen). Placed inside the bubble width with
-        // the same tertiary background + divider the old live card used.
         let actionWidth = bubbleWidth - TKMetrics.msgPadH * 2
+        // Lazy content-ref images (kraki-show_image).
+        if !imageHost.isHidden {
+            if cursorY > y + TKMetrics.msgPadV { cursorY += TKMetrics.imageSpacing }
+            imageHost.frame = CGRect(x: innerX, y: cursorY, width: actionWidth, height: 60)
+            imageHost.setNeedsLayout()
+            imageHost.layoutIfNeeded()
+            let fit = imageHost.hostingController?.view.systemLayoutSizeFitting(
+                CGSize(width: actionWidth, height: .greatestFiniteMagnitude),
+                withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel).height ?? imageHost.frame.height
+            imageHost.frame.size.height = max(1, fit)
+            cursorY += imageHost.frame.height
+        }
+        let artifactHeight = TKHTMLArtifactCardsView.height(for: content.htmlArtifacts.count)
+        if artifactHeight > 0 {
+            if cursorY > y + TKMetrics.msgPadV { cursorY += TKMetrics.imageSpacing }
+            artifactCardsView.frame = CGRect(x: innerX, y: cursorY, width: actionWidth, height: artifactHeight)
+            cursorY += artifactHeight
+        } else {
+            artifactCardsView.frame = .zero
+        }
+        // Action slot (streaming / frozen).
         if !actionHost.isHidden {
-            if cursorY > y + TKMetrics.msgPadV {
-                cursorY += 8 // gap between body and action
-            }
-            actionHost.frame = CGRect(x: x + TKMetrics.msgPadH, y: cursorY, width: actionWidth, height: 60)
+            if cursorY > y + TKMetrics.msgPadV { cursorY += 8 }
+            actionHost.frame = CGRect(x: innerX, y: cursorY, width: actionWidth, height: 60)
             actionHost.setNeedsLayout()
             actionHost.layoutIfNeeded()
             let fit = actionHost.hostingController?.view.systemLayoutSizeFitting(
                 CGSize(width: actionWidth, height: .greatestFiniteMagnitude),
                 withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel).height ?? 0
-            if fit > 0 {
-                actionHost.frame.size.height = fit
-                cursorY += fit
-            } else {
-                cursorY += actionHost.frame.height
-            }
-            cursorY += TKMetrics.msgPadV
-        } else {
-            cursorY += textHeight > 0 || !content.images.isEmpty ? TKMetrics.msgPadV : 0
+                verticalFittingPriority: .fittingSizeLevel).height ?? actionHost.frame.height
+            actionHost.frame.size.height = max(1, fit)
+            cursorY += actionHost.frame.height
         }
-        // Lazy content-ref images (kraki-show_image). Same SwiftUI host as
-        // the action slot: size to fit, advance cursor.
-        if !imageHost.isHidden {
-            if cursorY > y + TKMetrics.msgPadV {
-                cursorY += TKMetrics.imageSpacing
-            }
-            imageHost.frame = CGRect(x: x + TKMetrics.msgPadH, y: cursorY, width: actionWidth, height: 60)
-            imageHost.setNeedsLayout()
-            imageHost.layoutIfNeeded()
-            let imgFit = imageHost.hostingController?.view.systemLayoutSizeFitting(
-                CGSize(width: actionWidth, height: .greatestFiniteMagnitude),
-                withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel).height ?? 0
-            if imgFit > 0 {
-                imageHost.frame.size.height = imgFit
-                cursorY += imgFit
-            } else {
-                cursorY += imageHost.frame.height
-            }
-            cursorY += TKMetrics.msgPadV
-        }
+        cursorY += TKMetrics.msgPadV
         let bubbleHeight = max(cursorY - y, 1)
         bubbleBG.frame = CGRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
 

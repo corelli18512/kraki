@@ -1,4 +1,3 @@
-#if os(iOS)
 /// AttachmentStore — chunk reassembly + disk-backed cache for lazy
 /// content referenced by `ContentRef`.
 ///
@@ -32,6 +31,34 @@ enum AttachmentState: Equatable {
     case fetching
     case ready(mimeType: String, data: Data)
     case error(reason: String)
+}
+
+enum HTMLArtifactSecurity {
+    static let maxBytes = 10 * 1024 * 1024
+
+    private static let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; connect-src 'none'; media-src 'none'; manifest-src 'none'; worker-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;\">"
+
+    static func securedHTML(_ html: String) -> String {
+        let cspPattern = #"<meta[^>]+http-equiv\s*=\s*[\"']Content-Security-Policy[\"'][^>]*>"#
+        if let regex = try? NSRegularExpression(pattern: cspPattern, options: [.caseInsensitive]),
+           regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)) != nil {
+            return regex.stringByReplacingMatches(
+                in: html,
+                range: NSRange(html.startIndex..., in: html),
+                withTemplate: NSRegularExpression.escapedTemplate(for: csp)
+            )
+        }
+
+        let headPattern = #"<head(?:\s[^>]*)?>"#
+        if let regex = try? NSRegularExpression(pattern: headPattern, options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+           let range = Range(match.range, in: html) {
+            var result = html
+            result.insert(contentsOf: csp, at: range.upperBound)
+            return result
+        }
+        return csp + html
+    }
 }
 
 /// Observable store. Views read `store.state(for: id)` and SwiftUI
@@ -83,10 +110,7 @@ final class AttachmentStore {
     )
 
     @ObservationIgnored private let cacheDir: URL = {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("kraki-attachments", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        KrakiDataPaths.attachmentCacheDirectory()
     }()
 
     /// Construct with a `requestPull` closure that maps (id, sessionId)
@@ -122,7 +146,7 @@ final class AttachmentStore {
         // would otherwise stall the runloop if done synchronously.
         if hasOnDisk(id: id) {
             states[id] = .fetching
-            hydrateFromDiskAsync(id: id)
+            hydrateFromDiskAsync(id: id, sessionId: sessionId)
             return
         }
 
@@ -148,7 +172,7 @@ final class AttachmentStore {
 
         if hasOnDisk(id: id) {
             states[id] = .fetching
-            hydrateFromDiskAsync(id: id)
+            hydrateFromDiskAsync(id: id, sessionId: sessionId)
             return
         }
         states[id] = .fetching
@@ -279,7 +303,7 @@ final class AttachmentStore {
     /// many frames if read synchronously on the main thread, so we
     /// offload the actual `Data(contentsOf:)` call.
     @MainActor
-    private func hydrateFromDiskAsync(id: String) {
+    private func hydrateFromDiskAsync(id: String, sessionId: String) {
         let bytesPath = bytesURL(id)
         let metaPath = metaURL(id)
         diskQueue.async { [weak self] in
@@ -306,6 +330,7 @@ final class AttachmentStore {
                     // Fall through to the network path — disk read
                     // failed mid-flight (corrupt cache, etc.).
                     self.states[id] = .fetching
+                    self.requestPull(id, sessionId)
                     return
                 }
                 self.states[id] = .ready(mimeType: result.mimeType, data: result.data)
@@ -370,4 +395,3 @@ final class AttachmentStore {
         return nil
     }
 }
-#endif

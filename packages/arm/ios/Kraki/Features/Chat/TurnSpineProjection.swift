@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 
 /// Projects durable wire/history records into the flat visual chat spine.
@@ -124,9 +123,18 @@ enum TurnSpineProjection {
                     terminalOwnsTurn = false
                 }
             case "agent_message":
-                // Multiple normal replies collapse to the last one. Once a
-                // terminal exists, malformed/late agent records cannot revive
-                // another reply bubble in the same user-bounded turn.
+                // An idle boundary closes the preceding segment even when no
+                // new user_message exists (production can emit a recovered or
+                // resumed agent-only turn). Do not let a prior terminal hide
+                // that independent conclusion. Consecutive terminals still
+                // replace one another across idle markers below.
+                if terminalOwnsTurn,
+                   index > messages.startIndex,
+                   messages[index - 1].type == "idle" {
+                    retainSelected()
+                    selectedIndex = nil
+                    terminalOwnsTurn = false
+                }
                 if !terminalOwnsTurn { selectedIndex = index }
             case "turn_status", "interrupted_turn":
                 // Terminal always wins over a normal reply. Duplicate terminal
@@ -150,4 +158,3 @@ enum TurnSpineProjection {
         }
     }
 }
-#endif

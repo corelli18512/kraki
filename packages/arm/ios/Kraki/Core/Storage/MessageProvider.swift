@@ -12,7 +12,6 @@ import Foundation
 final class MessageProvider {
     private static let pageSize = 100
     private static let latestSize = 50
-    private static let previewMaxLength = 80
 
     // MARK: - Outstanding-request state
 
@@ -115,6 +114,33 @@ final class MessageProvider {
     /// session. Used by `SlidingWindowTestView` to verify dedup.
     func outstandingKinds(_ sessionId: String) -> [OutstandingKind] {
         outstanding[sessionId]?.map(\.kind) ?? []
+    }
+
+    /// Remove the turn-aligned request slot answered by a batch. The response
+    /// does not echo `beforeSeq`, and historical logs may contain off-spine
+    /// events whose seqs are filtered from `messages`, so `lastSeq + 1` is not
+    /// a valid way to recover the request boundary. For an older response,
+    /// choose the nearest outstanding `beforeSeq` strictly above the last
+    /// returned persistent seq; UX paging permits only one such slot in flight.
+    private func removeTurnAlignedSlot(
+        _ sessionId: String,
+        containsHead: Bool?,
+        lastPersistentSeq: Int
+    ) -> OutstandingKind? {
+        if containsHead == true {
+            return removeFirstSlot(sessionId) { if case .head = $0 { return true }; return false }
+        }
+        if containsHead == nil,
+           hasSlot(sessionId, where: { if case .head = $0 { return true }; return false }) {
+            return removeFirstSlot(sessionId) { if case .head = $0 { return true }; return false }
+        }
+        let candidates = outstanding[sessionId, default: []].compactMap { slot -> Int? in
+            guard case .before(let beforeSeq) = slot.kind else { return nil }
+            if lastPersistentSeq <= 0 || beforeSeq > lastPersistentSeq { return beforeSeq }
+            return nil
+        }
+        guard let matched = candidates.min() else { return nil }
+        return removeFirstSlot(sessionId) { $0 == .before(matched) }
     }
 
     // MARK: - Configuration
@@ -245,14 +271,22 @@ final class MessageProvider {
     /// loaded slice. Idempotent — repeated calls during a session's
     /// lifetime are no-ops once the window is already populated.
     @discardableResult
-    func openSession(_ sessionId: String) -> [ChatMessage] {
+    func openSession(_ sessionId: String, reanchorLatest: Bool = false) -> [ChatMessage] {
         guard let appState else { return [] }
+        if reanchorLatest {
+            // A Session can be left in history mode after older pagination.
+            // Re-entering it must show the authoritative local tail rather than
+            // reuse that stale in-memory slice forever while ensureLoaded sees
+            // the SQLite DB itself is already at head and correctly sends no
+            // network request.
+            appState.messageStore.resetWindowToHead(sessionId)
+        }
         let loaded = appState.messageStore.loadInitialWindow(sessionId)
         appState.messageStore.restoreCardTurnGate(sessionId, from: loaded)
         let firstSeq = loaded.first?.seq ?? 0
         let lastSeq = loaded.last?.seq ?? 0
         let types = Set(loaded.map(\.type)).sorted().joined(separator: ",")
-        KLog.chat("📥 [2/history←DB openSession] session=\(sessionId.prefix(12)) loaded=\(loaded.count) seq=[\(firstSeq)…\(lastSeq)] types=[\(types)] source=initialWindow(GRDB)")
+        KLog.d("📥 [2/history←DB openSession] session=\(sessionId.prefix(12)) loaded=\(loaded.count) seq=[\(firstSeq)…\(lastSeq)] types=[\(types)] source=initialWindow(GRDB)")
         return loaded
     }
 
@@ -261,13 +295,6 @@ final class MessageProvider {
     /// callers don't take a dependency on MessageStore directly.
     func currentWindow(_ sessionId: String) -> [ChatMessage] {
         appState?.messageStore.currentWindow(sessionId) ?? []
-    }
-
-    /// Latest persisted agent_message text for a session, regardless
-    /// of window state. Used by the session list's "current activity"
-    /// row.
-    func lastAgentMessageContent(_ sessionId: String) -> String? {
-        appState?.messageStore.lastAgentMessageContent(sessionId)
     }
 
     /// Latest persisted user-side message text for a session.
@@ -310,10 +337,6 @@ final class MessageProvider {
 
         let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
         KLog.d("📩 requestLatest(\(sessionId.prefix(12))): store=\(storeLastSeq) tentacle=\(totalLastSeq) reason=\(reason)")
-
-        if storeLastSeq > 0 {
-            rebuildPreview(sessionId: sessionId)
-        }
 
         // No-op if our cache is already at head — nothing to fetch.
         if storeLastSeq >= totalLastSeq { return false }
@@ -442,8 +465,14 @@ final class MessageProvider {
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq, reason: reason)
     }
 
-    /// Page size for ensure-older / ensure-newer DB-first reads.
+    /// Page size for ensure-older / ensure-newer DB-first reads. macOS uses a
+    /// smaller incremental page so reaching the history edge does not replace a
+    /// compact scrollbar with another 200-row slab in one update.
+    #if os(macOS)
+    private static let ensurePageSize = 10
+    #else
     private static let ensurePageSize = 200
+    #endif
 
     /// Load one page of older messages, DB-first. Reads the page
     /// `[topSeq - PAGE..topSeq - 1]` from disk; if that page is
@@ -477,7 +506,6 @@ final class MessageProvider {
             appState.messageStore.expandWindow(sessionId, page)
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
             KLog.diag("📥 [2/history←DB ensureOlderLoaded] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) source=GRDB count=\(page.count)")
-            rebuildPreview(sessionId: sessionId)
             return true
         }
 
@@ -532,6 +560,21 @@ final class MessageProvider {
         loadingOlderDB.insert(sessionId)
         defer { loadingOlderDB.remove(sessionId) }
 
+        #if DEBUG
+        // Isolated Chat performance runs can inject a realistic round-trip so
+        // spinner visibility and prepend anchoring are tested over time rather
+        // than against an unrealistically instant local SQLite read. This is
+        // deliberately unavailable to ordinary production-connected launches.
+        let environment = ProcessInfo.processInfo.environment
+        let isIsolatedChatTest = environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+            || environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+        if isIsolatedChatTest,
+           let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
+           let delayMs = UInt64(rawDelay), delayMs > 0 {
+            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        }
+        #endif
+
         // Off-main read. Keeps the scroll/runloop free — the core fix
         // that stops a fast flick from freezing the UI.
         let db = appState.messageStore.db
@@ -550,14 +593,17 @@ final class MessageProvider {
             return false
         }
 
-        if let last = page.last, last.seq == to {
+        if !page.isEmpty {
             let tExp0 = CFAbsoluteTimeGetCurrent()
-            appState.messageStore.expandWindow(sessionId, page)
+            // Persistent spine rows are ordered but need not be integer-adjacent;
+            // off-spine events legitimately consume protocol seq values.
+            appState.messageStore.prependOlderPage(sessionId, page)
             let expMs = (CFAbsoluteTimeGetCurrent() - tExp0) * 1000
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
-            KLog.diag("📥 [2/history←DB ensureOlderLoadedAsync] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) count=\(page.count) ⏱️read=\(Int(readMs))ms expandWindow=\(String(format: "%.1f", expMs))ms")
-            rebuildPreview(sessionId: sessionId)
-            return true
+            if newTop < topSeq {
+                KLog.diag("📥 [2/history←DB ensureOlderLoadedAsync] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) count=\(page.count) ⏱️read=\(Int(readMs))ms prepend=\(String(format: "%.1f", expMs))ms")
+                return true
+            }
         }
 
         // DB exhausted (hole or genuine start) → WS fallback, slot-guarded.
@@ -603,10 +649,10 @@ final class MessageProvider {
         return false
     }
 
-    /// Discard the current in-memory window and rebuild it from DB's
-    /// most recent rows (default `initialWindowSize` = 200). Mirrors
-    /// the UX "jump to latest" gesture — instant snap rather than
-    /// the per-page extension that `ensureNewerLoaded` provides.
+    /// Discard the current in-memory window and rebuild it from DB's most
+    /// recent platform-sized tail. Mirrors the UX "jump to latest" gesture —
+    /// an instant snap rather than the per-page extension that
+    /// `ensureNewerLoaded` provides.
     /// If DB's tail still trails tentacle's lastSeq, fires a head
     /// fetch so the missing rows arrive shortly after.
     func jumpToHead(sessionId: String) {
@@ -628,7 +674,8 @@ final class MessageProvider {
         sessionId: String,
         messages: [ChatMessage],
         lastSeq: Int,
-        totalLastSeq: Int
+        totalLastSeq: Int,
+        containsHead: Bool?
     ) {
         guard let appState else { return }
 
@@ -646,7 +693,6 @@ final class MessageProvider {
         if !messages.isEmpty {
             appState.messageStore.ingestBatch(sessionId, messages)
             KLog.d("📥 [2/history←DB ingestBatch] session=\(sessionId.prefix(12)) batchSize=\(messages.count) windowSize=\(appState.messageStore.currentWindow(sessionId).count)")
-            rebuildPreview(sessionId: sessionId)
         }
 
         // Update tentacle last seq if server reports higher
@@ -654,17 +700,25 @@ final class MessageProvider {
             tentacleLastSeq[sessionId] = totalLastSeq
         }
 
-        // Identify and remove the specific outstanding slot this
-        // batch answers. Heuristic from the wire format:
-        //   - Head request → first `.head` slot
-        //   - "before X" request → `.before(lastSeq + 1)`
-        //     (tentacle's response to beforeSeq=X always has lastSeq=X-1)
-        // Sibling slots (other beforeSeqs, the .head while a .before
-        // is also pending) stay; we only remove what we matched.
-        let removedKind = removeFirstSlot(sessionId) { kind in
-            if case .head = kind { return true }
-            if case .before(let b) = kind, b == lastSeq + 1 { return true }
-            return false
+        // Identify the exact turn-aligned request answered by this batch.
+        // `messages` contains only persistent spine rows, while older session
+        // logs may have filtered tool/narration seqs near the upper boundary;
+        // therefore the final persistent seq can legitimately be several
+        // integers below `beforeSeq - 1`.
+        let lastPersistentSeq = messages.last?.seq ?? lastSeq
+        let removedKind = removeTurnAlignedSlot(
+            sessionId,
+            containsHead: containsHead,
+            lastPersistentSeq: lastPersistentSeq
+        )
+        if case .before(let requestedBefore) = removedKind,
+           appState.messageStore.windowState(sessionId)?.topSeq == requestedBefore {
+            appState.messageStore.prependOlderPage(sessionId, messages)
+            let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? requestedBefore
+            KLog.diag(
+                "📥 [2/history←WS prepend] session=\(sessionId.prefix(12)) "
+                    + "topSeq=\(requestedBefore)→\(newTop) count=\(messages.count)"
+            )
         }
         let wasHeadRequest: Bool = {
             if case .head = removedKind { return true }
@@ -780,7 +834,6 @@ final class MessageProvider {
         if !action.toCommit.isEmpty {
             KLog.d("📥 [2/history←pendingTail commit] session=\(sessionId.prefix(12)) count=\(action.toCommit.count) seq=[\(action.toCommit.first!.seq)…\(action.toCommit.last!.seq)] buffered=\(buf.messages.count)")
             appState.messageStore.ingestBatch(sessionId, action.toCommit)
-            rebuildPreview(sessionId: sessionId)
         } else if let head = buf.minSeq {
             // No commit but buffer non-empty → gap detected. Single
             // line that explains why the next `📤 request_range` (if
@@ -914,76 +967,6 @@ final class MessageProvider {
 
     // MARK: - Preview
 
-    /// Recompute session preview from the persisted message stream.
-    /// Reads the tail of the DB (independent of the in-memory window
-    /// state) so the sidebar shows the real last meaningful message
-    /// even when the user is scrolled into history. Scans backwards
-    /// for the first message that matches one of the preview-worthy
-    /// types.
-    ///
-    /// Forked / freshly-imported sessions need their fork timestamp
-    /// preserved so they sort next to other freshly-touched sessions
-    /// instead of next to their parent's old last-message — detect by
-    /// comparing the existing preview's timestamp to the new one and
-    /// keep the newer.
-    func rebuildPreview(sessionId: String) {
-        guard let appState else { return }
-        let msgs = appState.messageStore.recentFromDB(sessionId, limit: 30)
-        guard !msgs.isEmpty else { return }
-
-        let existing = appState.sessionStore.sessionPreviews[sessionId]
-
-        func write(text: String, type: String, timestamp: String) {
-            let chosenTs: String = {
-                guard let e = existing,
-                      let existingDate = Self.parseISO(e.timestamp),
-                      let newDate = Self.parseISO(timestamp),
-                      existingDate > newDate else { return timestamp }
-                return e.timestamp
-            }()
-            appState.sessionStore.setPreview(
-                sessionId,
-                text: String(text.prefix(Self.previewMaxLength)),
-                type: type,
-                timestamp: chosenTs
-            )
-        }
-
-        for i in stride(from: msgs.count - 1, through: 0, by: -1) {
-            let m = msgs[i]
-
-            switch m.type {
-            case "question":
-                write(text: m.question ?? "", type: "question", timestamp: m.timestamp ?? "")
-                return
-            case "permission":
-                write(text: m.toolName ?? "", type: "permission", timestamp: m.timestamp ?? "")
-                return
-            case "error":
-                write(text: m.errorMessage ?? "Error", type: "error", timestamp: m.timestamp ?? "")
-                return
-            case "user_message":
-                write(text: m.content ?? "", type: "user", timestamp: m.timestamp ?? "")
-                return
-            case "answer":
-                let answer = m.answer ?? ""
-                if !answer.isEmpty {
-                    write(text: answer, type: "answer", timestamp: m.timestamp ?? "")
-                    return
-                }
-            case "agent_message":
-                let content = m.content ?? ""
-                let next = i + 1 < msgs.count ? msgs[i + 1] : nil
-                if next == nil || next?.type == "idle" {
-                    write(text: content, type: "agent", timestamp: m.timestamp ?? "")
-                    return
-                }
-            default:
-                continue
-            }
-        }
-    }
-
     // MARK: - Private
 
     private func requestFromTentacle(sessionId: String, beforeSeq: Int?, reason: String = "?") {
@@ -1063,7 +1046,42 @@ final class MessageProvider {
         appState?.commandSender?.requestCard(sessionId: sessionId)
     }
 
+    #if DEBUG
+    /// Seed representative connection-scoped requests without sending network
+    /// traffic. Used by the native disconnect regression.
+    func debugSeedDisconnectRegressionState(_ sessionId: String) {
+        let makeSlot: (OutstandingKind) -> RequestSlot = { kind in
+            RequestSlot(kind: kind, timeout: DispatchWorkItem {})
+        }
+        addSlot(sessionId, makeSlot(.head))
+        addSlot(sessionId, makeSlot(.before(42)))
+        addSlot(sessionId, makeSlot(.range(43...44)))
+        tentacleLastSeq[sessionId] = 99
+        appState?.sessionStore.setLoading(sessionId, true)
+    }
+    #endif
+
     // MARK: - Cleanup
+
+    /// Drop every connection-scoped request when the WebSocket closes.
+    /// Responses for these slots can no longer arrive on the old socket; keeping
+    /// them until their 10-second timeout blocks the post-reconnect
+    /// `sessionListSelfHeal` request and strands Chat behind a loading spinner.
+    /// Persisted messages and the current in-memory window remain untouched, so
+    /// the UI can keep presenting local history while the new connection forms.
+    func onDisconnected() {
+        let slotCount = outstanding.values.reduce(0) { $0 + $1.count }
+        for (_, slots) in outstanding {
+            for slot in slots { slot.timeout.cancel() }
+        }
+        outstanding.removeAll()
+        tentacleLastSeq.removeAll()
+        pendingTail.removeAll()
+        tracePulled.removeAll()
+        cardRequested.removeAll()
+        appState?.sessionStore.loadingSessions.removeAll()
+        KLog.chat("🧹 [2/history disconnect] clearedSlots=\(slotCount) preservedWindows=1")
+    }
 
     func clear() {
         for (_, slots) in outstanding {
