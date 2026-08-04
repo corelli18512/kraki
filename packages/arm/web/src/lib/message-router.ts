@@ -7,6 +7,7 @@ import { messageProvider } from './message-provider';
 import { ingestChunk } from './attachments';
 import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
+import { allowAutoRead, suppressAutoRead } from './read-visibility';
 
 const logger = createLogger('msg-router');
 
@@ -14,12 +15,6 @@ const PREVIEW_MAX = 80;
 function truncPreview(s: string): string {
   return s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX) + '…' : s;
 }
-
-/**
- * Message types that can trigger an unread badge.
- * Used by the live message handler and the reconnect IDB scan.
- */
-export const UNREAD_CANDIDATE_TYPES = new Set(['error', 'idle']);
 
 const RETIRED_LIVE_TYPES = new Set([
   'agent_narration',
@@ -35,20 +30,16 @@ const RETIRED_LIVE_TYPES = new Set([
   'answer',
 ]);
 
-/** Set session preview and optionally increment unread. */
-function updatePreview(sid: string, preview: SessionPreview, notify: boolean): void {
-  const store = getStore();
-  const shouldIncrement = notify && (!isViewingSession(sid) || !document.hasFocus());
-  store.setSessionPreview(sid, preview, shouldIncrement);
+/** Preview is display data only. The unread dot is projected from Tentacle's
+ * authoritative lastSeq/readSeq cursors in session_list/session_read. */
+function updatePreview(sid: string, preview: SessionPreview, _notify: boolean): void {
+  getStore().setSessionPreview(sid, preview, false);
 }
 
-/** Drive only the unread badge for a notify-worthy event. The preview text line
- *  is owned by the session_list digest (the tentacle is the single authority);
- *  some events still need to light up the unread dot without touching preview. */
-function notifyUnread(sid: string, notify: boolean): void {
-  if (!notify) return;
-  if (isViewingSession(sid) && document.hasFocus()) return;
-  getStore().incrementUnread(sid);
+function isActivelyReading(sessionId: string): boolean {
+  return isViewingSession(sessionId)
+    && document.visibilityState === 'visible'
+    && document.hasFocus();
 }
 
 export interface RouterContext {
@@ -175,6 +166,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         model: msg.payload.model,
         state: 'active',
         messageCount: 0,
+        lastSeq: msg.payload.lastSeq ?? 0,
+        readSeq: msg.payload.lastSeq ?? 0,
       });
       // Clear pending state — session is now real
       store.removePendingSession(sid);
@@ -235,10 +228,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         store.removePendingSession(sid);
       }
       store.appendMessage(sid, msg);
-      // Preview text is owned by the session_list digest; a transient error is
-      // not a turn boundary and must not displace the stable preview. Only the
-      // unread badge is driven here.
-      notifyUnread(sid, !replaying);
+      // A transient error does not own unread state. If the turn ultimately
+      // fails, the Tentacle's terminal boundary + session_list creates it.
       break;
 
     case 'turn_status': {
@@ -290,13 +281,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const idlePayload = (msg as IdleMessage).payload;
       const idleUsage = idlePayload?.usage;
       if (idleUsage) store.setSessionUsage(sid, idleUsage);
-      const idleReason = idlePayload?.reason;
-      // Preview is owned by the session_list digest (tentacle broadcasts on
-      // turn-close so the post-turn agent outcome advances authoritatively).
-      // Only drive the unread badge for completed (non-aborted) turns.
-      if (idleReason !== 'aborted') notifyUnread(sid, !replaying);
-      if (!replaying && isViewingSession(sid) && document.hasFocus()) {
-        import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid)).catch(() => {});
+      // Preview and unread state are reconciled by the closing session_list
+      // digest. Synthetic create/fork/import idles therefore never manufacture
+      // a local badge.
+      if (!replaying && isActivelyReading(sid)) {
+        import('./ws-client').then(({ wsClient }) => wsClient.markRead(sid, msg.seq, true)).catch(() => {});
       }
       break;
     }
@@ -374,20 +363,17 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_read': {
       const readSeq = (msg as SessionReadMessage).payload?.seq;
-      if (typeof readSeq === 'number' && !isViewingSession(sid)) {
-        // Only clear unread up to the broadcast seq — keep unread for messages beyond it
-        const msgs = store.messages.get(sid);
-        if (msgs) {
-          const maxLocalSeq = msgs.reduce((max, m) => {
-            const s = 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
-            return s > max ? s : max;
-          }, 0);
-          if (readSeq >= maxLocalSeq) {
-            store.clearUnread(sid);
-          }
-        } else {
-          store.clearUnread(sid);
-        }
+      const session = getStore().sessions.get(sid);
+      if (session && typeof readSeq === 'number') {
+        if (readSeq < (session.readSeq ?? 0)) suppressAutoRead(sid);
+        else if (readSeq > (session.readSeq ?? 0)) allowAutoRead(sid);
+        getStore().upsertSession({
+          ...session,
+          lastSeq: Math.max(session.lastSeq ?? 0, readSeq),
+          // Tentacle is authoritative in both directions. A lower value is a
+          // legitimate mark_unread result and must not be swallowed by max().
+          readSeq: Math.max(0, readSeq),
+        });
       }
       break;
     }

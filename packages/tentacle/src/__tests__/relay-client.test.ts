@@ -178,7 +178,7 @@ function createSessionManager(): Record<string, unknown> {
     setAutoTitle: vi.fn(),
     setMode: vi.fn(),
     deleteSession: vi.fn(),
-    markRead: vi.fn(),
+    markRead: vi.fn((_sessionId: string, seq: number) => seq),
     markUnread: vi.fn(() => 41),
     getSessionList: vi.fn(() => []),
     getPendingHumanAction: vi.fn(() => null),
@@ -625,7 +625,7 @@ describe('RelayClient set_session_model', () => {
       setMode: vi.fn(),
       markIdle: vi.fn(),
       markActive: vi.fn(),
-      markRead: vi.fn(),
+      markRead: vi.fn((_sessionId: string, seq: number) => seq),
       markUnread: vi.fn(() => 41),
       deleteSession: vi.fn(),
       removeLinkByKrakiId: vi.fn(),
@@ -1029,6 +1029,27 @@ describe('RelayClient set_session_model', () => {
     expect(readMsg).toBeDefined();
     expect(readMsg.payload.seq).toBe(42);
     expect(readMsg.sessionId).toBe('sess_1');
+  });
+
+  it('broadcasts the persisted session_read cursor, not the client input', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+    (sm.markRead as ReturnType<typeof vi.fn>).mockReturnValue(40);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'mark_read',
+      sessionId: 'sess_1',
+      deviceId: 'dev_1',
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      payload: { seq: 999_999 },
+    })));
+
+    const sent = decodePulseSends(ws.sent);
+    const readMsg = sent.find(m => m.type === 'session_read');
+    expect(sm.markRead).toHaveBeenCalledWith('sess_1', 999_999);
+    expect(readMsg?.payload.seq).toBe(40);
   });
 
   it('rolls readSeq back and broadcasts session_read on mark_unread', () => {
@@ -2471,6 +2492,7 @@ describe('RelayClient pending-question digest', () => {
     expect(status.payload).toMatchObject({
       action: { type: 'user_abort' },
     });
+    expect(statusCall![3]).toBe(false);
     const cancelledQuestion = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
       .find((entry) => entry.type === 'question' && entry.payload.id === 'q1' && entry.payload.cancelled === true);
@@ -2491,6 +2513,7 @@ describe('RelayClient pending-question digest', () => {
     const idleCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((call) => call[1] === 'idle');
     expect(idleCall).toBeDefined();
     expect(JSON.parse(idleCall![2]).payload).toEqual({ reason: 'aborted', turnArtifacts: [artifact] });
+    expect(idleCall![3]).toBe(false);
     expect(sm.readCurrentTurnArtifacts).toHaveBeenCalledWith('sess_1');
     expect(adapter.abortSession).toHaveBeenCalledWith('sess_1');
   });
@@ -2512,6 +2535,7 @@ describe('RelayClient pending-question digest', () => {
     expect(status.payload).toMatchObject({
       action: { type: 'failed', payload: { message: '524 status code (no body)', source: 'backend' } },
     });
+    expect(statusCall![3]).toBe(true);
     expect(status.payload.steps).toBe(2);
     const tracedError = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
@@ -2524,6 +2548,7 @@ describe('RelayClient pending-question digest', () => {
     expect(interruptedTool).toBeDefined();
     const idleCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((call) => call[1] === 'idle');
     expect(JSON.parse(idleCall![2]).payload).toEqual({ reason: 'failed', turnArtifacts: [artifact] });
+    expect(idleCall![3]).toBe(true);
   });
 
   it('dispatches push through @head when every consumer is offline', () => {

@@ -1140,12 +1140,41 @@ describe('SessionManager', () => {
       expect(meta.readSeq).toBe(2);
     });
 
-    it('still advances readSeq when seq is within range', () => {
+    it('keeps ordinary Spine entries read while the session is fully read', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
       sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
-      sm.markRead(sessionId, 2);
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.lastSeq).toBe(3);
+      expect(meta.readSeq).toBe(3);
+    });
+
+    it('creates one unread gap only at an attention boundary', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ payload: {} }), true);
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.lastSeq).toBe(3);
+      expect(meta.readSeq).toBe(2);
+    });
+
+    it('does not let later ordinary entries clear an existing unread gap', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ payload: {} }), true);
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      const meta = sm.getMeta(sessionId)!;
+      expect(meta.lastSeq).toBe(3);
+      expect(meta.readSeq).toBe(1);
+    });
+
+    it('still advances readSeq when seq is within an unread range', () => {
+      const { sessionId } = sm.createSession('copilot');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ payload: {} }), true);
       expect(sm.getMeta(sessionId)!.readSeq).toBe(2);
       sm.markRead(sessionId, 3);
       expect(sm.getMeta(sessionId)!.readSeq).toBe(3);
@@ -1174,11 +1203,11 @@ describe('SessionManager', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
       sm.appendMessage(sessionId, 'agent_message', JSON.stringify({ payload: {} }));
-      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ payload: {} }));
-      sm.markRead(sessionId, 1);
-      expect(sm.markUnread(sessionId)).toBe(1);
-      expect(sm.markUnread(sessionId)).toBe(1);
-      expect(sm.getMeta(sessionId)!.readSeq).toBe(1);
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ payload: {} }), true);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(2);
+      expect(sm.markUnread(sessionId)).toBe(2);
+      expect(sm.markUnread(sessionId)).toBe(2);
+      expect(sm.getMeta(sessionId)!.readSeq).toBe(2);
     });
   });
 

@@ -5,10 +5,11 @@ import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
-import { handleDataMessage, UNREAD_CANDIDATE_TYPES } from './message-router';
+import { handleDataMessage } from './message-router';
 import { getStore, setStoreState } from './store-adapter';
 import { messageProvider } from './message-provider';
 import { CommandState } from './commands';
+import { allowAutoRead, isAutoReadSuppressed, suppressAutoRead } from './read-visibility';
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
@@ -430,19 +431,20 @@ export class KrakiWSClient {
     return commands.importSession(localSessionId, targetDeviceId, (msg) => this.sendEncrypted(msg), this.cmdState, meta);
   }
 
-  markRead(sessionId: string, seq?: number): void {
-    markSessionRead(sessionId);
-    // Send to tentacle so it persists readSeq and broadcasts to other arms.
-    // When no explicit seq is supplied, fall back to the authoritative
-    // `lastSeq` carried on the session digest from session_list. The
-    // previous fallback walked `store.messages.get(sessionId)` and picked
-    // the last element's `seq`, which could be polluted by transient
-    // entries (envelope-level seq, replay residue, etc.) and produced
-    // wildly inflated values (~35 % of sessions on disk ended up with
-    // readSeq > lastSeq, one sample 57× overshoot).
-    const session = getStore().sessions.get(sessionId);
+  markRead(sessionId: string, seq?: number, automatic = false): void {
+    if (automatic && isAutoReadSuppressed(sessionId)) return;
+    if (!automatic) allowAutoRead(sessionId);
+    const store = getStore();
+    const session = store.sessions.get(sessionId);
     const resolvedSeq = seq ?? session?.lastSeq ?? 0;
-    if (resolvedSeq > 0) {
+    if (session && resolvedSeq > 0) {
+      const authoritativeHead = Math.max(session.lastSeq ?? 0, resolvedSeq);
+      store.upsertSession({
+        ...session,
+        lastSeq: authoritativeHead,
+        readSeq: Math.min(resolvedSeq, authoritativeHead),
+      });
+      markSessionRead(sessionId);
       this.sendEncrypted({
         type: 'mark_read',
         sessionId,
@@ -452,7 +454,16 @@ export class KrakiWSClient {
   }
 
   markUnread(sessionId: string): void {
-    getStore().incrementUnread(sessionId);
+    suppressAutoRead(sessionId);
+    const store = getStore();
+    const session = store.sessions.get(sessionId);
+    const lastSeq = session?.lastSeq ?? 0;
+    if (session && lastSeq > 0) {
+      store.upsertSession({
+        ...session,
+        readSeq: Math.min(session.readSeq ?? lastSeq, Math.max(0, lastSeq - 1)),
+      });
+    }
     this.sendEncrypted({
       type: 'mark_unread',
       sessionId,
@@ -498,7 +509,13 @@ export class KrakiWSClient {
     const pinnedFromTentacle = new Set<string>();
     for (const ts of tentacleSessions) {
       const currentStore = getStore();
+      const previousSession = currentStore.sessions.get(ts.id);
       const device = currentStore.devices.get(tentacleDeviceId);
+      if (previousSession && ts.readSeq < (previousSession.readSeq ?? 0)) {
+        suppressAutoRead(ts.id);
+      } else if (previousSession && ts.readSeq > (previousSession.readSeq ?? 0)) {
+        allowAutoRead(ts.id);
+      }
       store.upsertSession({
         id: ts.id,
         deviceId: tentacleDeviceId,
@@ -509,6 +526,8 @@ export class KrakiWSClient {
         autoTitle: ts.autoTitle,
         state: ts.state as SessionState,
         messageCount: ts.messageCount,
+        lastSeq: ts.lastSeq,
+        readSeq: ts.readSeq,
       });
 
       if (ts.mode) {
@@ -540,16 +559,8 @@ export class KrakiWSClient {
         pinnedFromTentacle.add(ts.id);
       }
 
-      // Reconstruct unread badge from readSeq vs lastSeq
-      // Only show badge if there are unread-worthy messages (not just transient state changes)
-      if (ts.lastSeq > (ts.readSeq ?? 0)) {
-        if (store.unreadCount.get(ts.id) === undefined) {
-          // Check IDB for unread-worthy messages between readSeq and lastSeq
-          this.checkUnreadFromDb(ts.id, ts.readSeq ?? 0);
-        }
-      } else {
-        store.clearUnread(ts.id);
-      }
+      // Tentacle's two cursors are the durable unread authority. Local history
+      // loading must never guess and overwrite this state.
 
       // Store tentacle info for later message loading
       messageProvider.setTentacleInfo(ts.id, ts.lastSeq, tentacleDeviceId);
@@ -692,46 +703,6 @@ export class KrakiWSClient {
   /** Clear all in-progress tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
     messageProvider.clear();
-  }
-
-  /**
-   * Check IndexedDB for unread-worthy messages after readSeq.
-   * Only increments unread if there are messages that would produce visible chat bubbles.
-   */
-  private async checkUnreadFromDb(sessionId: string, readSeq: number): Promise<void> {
-    try {
-      const db = await import('./message-db');
-      const allMsgs = await db.getMessages(sessionId);
-      const afterRead = allMsgs.filter(m => {
-        const seq = 'seq' in m ? (m as { seq?: number }).seq : undefined;
-        return typeof seq === 'number' && seq > readSeq;
-      });
-
-      let hasUnreadContent = false;
-      for (let i = 0; i < afterRead.length; i++) {
-        const m = afterRead[i];
-        if (m.type === 'error' || m.type === 'permission' || m.type === 'question') {
-          hasUnreadContent = true;
-          break;
-        }
-        // idle is unread-worthy only if preceded by an agent_message (non-aborted turn)
-        if (m.type === 'idle') {
-          for (let j = i - 1; j >= 0; j--) {
-            const prev = afterRead[j];
-            if (prev.type === 'agent_message') { hasUnreadContent = true; break; }
-            if (prev.type === 'user_message' || prev.type === 'idle') break;
-          }
-          if (hasUnreadContent) break;
-        }
-      }
-
-      if (hasUnreadContent) {
-        getStore().incrementUnread(sessionId);
-      }
-    } catch {
-      // IDB unavailable — fall back to showing unread (better safe than silent)
-      getStore().incrementUnread(sessionId);
-    }
   }
 
   /**

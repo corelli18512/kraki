@@ -772,11 +772,13 @@ export class SessionManager {
    * Append a message to a session's log. Assigns the next per-session seq.
    * Returns the assigned seq number.
    */
-  appendMessage(sessionId: string, type: string, payload: string): number {
+  appendMessage(sessionId: string, type: string, payload: string, createsUnread = false): number {
     const meta = this.readMeta(sessionId);
     if (!meta) return 0;
 
-    const seq = (meta.lastSeq ?? 0) + 1;
+    const previousLastSeq = meta.lastSeq ?? 0;
+    const wasRead = (meta.readSeq ?? 0) >= previousLastSeq;
+    const seq = previousLastSeq + 1;
     const entry: LoggedMessage = { seq, type, payload, ts: new Date().toISOString() };
     const line = JSON.stringify(entry) + '\n';
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
@@ -802,6 +804,11 @@ export class SessionManager {
     }
 
     meta.lastSeq = seq;
+    // Preserve the existing two-cursor contract. Ordinary Spine bookkeeping
+    // must not create a badge when the session was fully read; a genuine
+    // attention boundary advances only lastSeq and intentionally leaves a gap.
+    // Once a gap exists, later ordinary entries must not clear it.
+    if (wasRead && !createsUnread) meta.readSeq = seq;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
 
@@ -813,7 +820,11 @@ export class SessionManager {
    * Much faster than calling appendMessage() N times.
    * Returns the final seq number.
    */
-  appendMessagesBatch(sessionId: string, messages: Array<{ type: string; payload: string; ts?: string }>): number {
+  appendMessagesBatch(
+    sessionId: string,
+    messages: Array<{ type: string; payload: string; ts?: string }>,
+    markAppendedRead = false,
+  ): number {
     const meta = this.readMeta(sessionId);
     if (!meta || messages.length === 0) return meta?.lastSeq ?? 0;
 
@@ -848,6 +859,9 @@ export class SessionManager {
     }
 
     meta.lastSeq = seq;
+    // Imported/backfilled history is pre-existing content, not a new result.
+    // Its caller opts into marking the whole appended range read.
+    if (markAppendedRead) meta.readSeq = seq;
     meta.updatedAt = now;
     this.writeMeta(sessionId, meta);
 
@@ -1033,9 +1047,9 @@ export class SessionManager {
   /**
    * Update read state for a session (cross-device).
    */
-  markRead(sessionId: string, seq: number): void {
+  markRead(sessionId: string, seq: number): number | null {
     const meta = this.readMeta(sessionId);
-    if (!meta) return;
+    if (!meta) return null;
     // Clamp to lastSeq — readSeq must never exceed it. Pre-fix, arms
     // sometimes sent garbage seq values (web's stale `getLastSeq`
     // fallback), and a stuck readSeq > lastSeq broke unread badges
@@ -1046,6 +1060,7 @@ export class SessionManager {
       meta.updatedAt = new Date().toISOString();
       this.writeMeta(sessionId, meta);
     }
+    return meta.readSeq ?? 0;
   }
 
   /**

@@ -118,6 +118,26 @@ describe('useStore', () => {
       expect(sessions.get('sess-2')).toEqual(mockSession2);
     });
 
+    it('setSessions projects Tentacle cursors and removes stale session badges', () => {
+      useStore.setState({ unreadCount: new Map([['stale', 1]]) });
+      useStore.getState().setSessions([
+        { ...mockSession, lastSeq: 10, readSeq: 9 },
+        { ...mockSession2, lastSeq: 7, readSeq: 7 },
+      ]);
+
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(useStore.getState().unreadCount.has('sess-2')).toBe(false);
+      expect(useStore.getState().unreadCount.has('stale')).toBe(false);
+    });
+
+    it('upsertSession accepts a lower authoritative readSeq', () => {
+      useStore.getState().upsertSession({ ...mockSession, lastSeq: 10, readSeq: 10 });
+      useStore.getState().upsertSession({ ...mockSession, lastSeq: 10, readSeq: 9 });
+
+      expect(useStore.getState().sessions.get('sess-1')?.readSeq).toBe(9);
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+    });
+
     it('upsertSession adds a new session', () => {
       useStore.getState().upsertSession(mockSession);
       expect(useStore.getState().sessions.size).toBe(1);
