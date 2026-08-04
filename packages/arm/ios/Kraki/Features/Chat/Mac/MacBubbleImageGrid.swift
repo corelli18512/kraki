@@ -451,8 +451,15 @@ struct MacImagePreviewOverlay: View {
         ZStack {
             Color.black.opacity(0.94)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onClose)
+                .accessibilityHidden(true)
 
-            MacZoomableImageCanvas(image: item.image, zoom: $zoom)
+            MacZoomableImageCanvas(
+                image: item.image,
+                zoom: $zoom,
+                onBackdropClick: onClose
+            )
                 .id(item.id)
                 .padding(.top, 52)
                 .padding(18)
@@ -552,10 +559,12 @@ struct MacImagePreviewOverlay: View {
 private struct MacZoomableImageCanvas: NSViewRepresentable {
     let image: NSImage
     @Binding var zoom: CGFloat
+    let onBackdropClick: () -> Void
 
     func makeNSView(context: Context) -> MacZoomableImageView {
         let view = MacZoomableImageView()
         view.image = image
+        view.onBackdropClick = onBackdropClick
         view.onZoomChanged = { value in
             if abs(zoom - value) > 0.001 { zoom = value }
         }
@@ -565,6 +574,7 @@ private struct MacZoomableImageCanvas: NSViewRepresentable {
     func updateNSView(_ nsView: MacZoomableImageView, context: Context) {
         nsView.image = image
         nsView.setZoom(zoom)
+        nsView.onBackdropClick = onBackdropClick
         nsView.onZoomChanged = { value in
             if abs(zoom - value) > 0.001 { zoom = value }
         }
@@ -573,6 +583,7 @@ private struct MacZoomableImageCanvas: NSViewRepresentable {
 
 final class MacZoomableImageView: NSView {
     var image: NSImage? { didSet { needsDisplay = true } }
+    var onBackdropClick: (() -> Void)?
     var onZoomChanged: ((CGFloat) -> Void)?
 
     private var zoom: CGFloat = 1
@@ -586,6 +597,11 @@ final class MacZoomableImageView: NSView {
     #if DEBUG
     var zoomForRegression: CGFloat { zoom }
     var panForRegression: CGPoint { pan }
+
+    @discardableResult
+    func clickBackdropForRegression(at point: CGPoint) -> Bool {
+        closeIfBackdrop(at: point)
+    }
     #endif
 
     override func viewDidMoveToWindow() {
@@ -610,16 +626,10 @@ final class MacZoomableImageView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let image, image.size.width > 0, image.size.height > 0 else { return }
+        guard let image else { return }
+        let rect = drawnImageRect(for: image)
+        guard rect.width > 0, rect.height > 0 else { return }
         NSGraphicsContext.current?.imageInterpolation = .high
-        let fitted = fittedSize(for: image.size)
-        let drawn = CGSize(width: fitted.width * zoom, height: fitted.height * zoom)
-        let rect = CGRect(
-            x: bounds.midX - drawn.width / 2 + pan.x,
-            y: bounds.midY - drawn.height / 2 + pan.y,
-            width: drawn.width,
-            height: drawn.height
-        )
         image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
     }
 
@@ -644,11 +654,13 @@ final class MacZoomableImageView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard !closeIfBackdrop(at: point) else { return }
         if event.clickCount == 2 {
             updateZoom(zoom > 1.001 ? 1 : 2)
             return
         }
-        dragOrigin = convert(event.locationInWindow, from: nil)
+        dragOrigin = point
         panAtDragStart = pan
     }
 
@@ -679,6 +691,25 @@ final class MacZoomableImageView: NSView {
     private func updateZoom(_ value: CGFloat) {
         setZoom(value)
         onZoomChanged?(zoom)
+    }
+
+    private func drawnImageRect(for image: NSImage) -> CGRect {
+        guard image.size.width > 0, image.size.height > 0 else { return .zero }
+        let fitted = fittedSize(for: image.size)
+        let drawn = CGSize(width: fitted.width * zoom, height: fitted.height * zoom)
+        return CGRect(
+            x: bounds.midX - drawn.width / 2 + pan.x,
+            y: bounds.midY - drawn.height / 2 + pan.y,
+            width: drawn.width,
+            height: drawn.height
+        )
+    }
+
+    @discardableResult
+    private func closeIfBackdrop(at point: CGPoint) -> Bool {
+        guard let image, !drawnImageRect(for: image).contains(point) else { return false }
+        onBackdropClick?()
+        return true
     }
 
     private func fittedSize(for imageSize: CGSize) -> CGSize {

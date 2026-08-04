@@ -4,6 +4,7 @@
 import SwiftUI
 
 struct GeneralPane: View {
+    @Environment(AppState.self) private var appState
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
     @AppStorage("mac.openAtLogin") private var openAtLogin: Bool = false
@@ -39,6 +40,10 @@ struct GeneralPane: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onChange(of: colorScheme) { _, newValue in
+            guard appState.preferencesManager?.isApplyingRemote != true else { return }
+            appState.preferencesManager?.sendTheme(newValue)
+        }
     }
 }
 

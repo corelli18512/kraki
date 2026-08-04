@@ -82,9 +82,11 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
     /// centered inside our taller header band. macOS re-lays them out on
     /// every resize / fullscreen transition, so we re-apply our offset
     /// after those events (our pass runs last and wins).
+    @MainActor
     final class Coordinator {
         private weak var window: NSWindow?
         private var observers: [NSObjectProtocol] = []
+        private let geometryCoordinator = MacWindowGeometryCoordinator()
         private let centerFromTop: CGFloat
 
         init(centerFromTop: CGFloat) {
@@ -111,6 +113,7 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
                     )
                 }
             }
+            geometryCoordinator.attach(window)
             reposition()
         }
 
@@ -132,8 +135,84 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
             }
         }
 
-        deinit {
+        nonisolated deinit {
             observers.forEach { NotificationCenter.default.removeObserver($0) }
+        }
+    }
+}
+
+private struct MacReadVisibilityObserver: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { context.coordinator.attach(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onChange = onChange
+        DispatchQueue.main.async { context.coordinator.attach(nsView.window) }
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onChange: (Bool) -> Void
+        private weak var window: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+
+        init(onChange: @escaping (Bool) -> Void) {
+            self.onChange = onChange
+        }
+
+        func attach(_ window: NSWindow?) {
+            guard let window else { return }
+            if self.window !== window {
+                self.window = window
+                observers.forEach(NotificationCenter.default.removeObserver)
+                observers.removeAll()
+                let center = NotificationCenter.default
+                let windowNames: [Notification.Name] = [
+                    NSWindow.didBecomeKeyNotification,
+                    NSWindow.didResignKeyNotification,
+                    NSWindow.didMiniaturizeNotification,
+                    NSWindow.didDeminiaturizeNotification,
+                    NSWindow.didChangeOcclusionStateNotification,
+                ]
+                for name in windowNames {
+                    observers.append(center.addObserver(
+                        forName: name, object: window, queue: .main
+                    ) { [weak self] _ in self?.refresh() })
+                }
+                observers.append(center.addObserver(
+                    forName: NSWindow.willCloseNotification,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in self?.onChange(false) })
+                for name in [NSApplication.didBecomeActiveNotification,
+                             NSApplication.didResignActiveNotification] {
+                    observers.append(center.addObserver(
+                        forName: name, object: NSApp, queue: .main
+                    ) { [weak self] _ in self?.refresh() })
+                }
+            }
+            refresh()
+        }
+
+        private func refresh() {
+            guard let window else { return }
+            onChange(
+                NSApp.isActive && window.isKeyWindow
+                    && window.isVisible
+                    && window.occlusionState.contains(.visible)
+                    && !window.isMiniaturized
+            )
+        }
+
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
         }
     }
 }
@@ -235,6 +314,14 @@ struct MainWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.surfacePrimary.ignoresSafeArea())
         .background(WindowChromeConfigurator(tint: Color.surfacePrimary))
+        .background(
+            MacReadVisibilityObserver { visible in
+                appState.updateReadVisibility(
+                    appForeground: NSApp.isActive,
+                    conversationVisible: visible
+                )
+            }
+        )
         .sheet(isPresented: $pairingPresented) {
             PairingSheet()
         }
@@ -275,7 +362,6 @@ struct MainWindowView: View {
                 }
             }
             selectedSessionId = ordered[targetIndex].id
-            appState.sessionStore.clearUnread(ordered[targetIndex].id)
         }
         .onReceive(NotificationCenter.default.publisher(for: .macDeleteSession)) { note in
             pendingDeleteSessionId = (note.userInfo?["sessionId"] as? String) ?? selectedSessionId
@@ -316,7 +402,10 @@ struct MainWindowView: View {
             }
             Button("Cancel", role: .cancel) { pendingDeleteSessionId = nil }
         }
-        .onChange(of: selectedSessionId) { _, newValue in
+        .onChange(of: selectedSessionId) { oldValue, newValue in
+            if let oldValue, oldValue != newValue {
+                appState.endViewingSession(oldValue)
+            }
             selectedImagePreview = nil
             selectedHTMLArtifact = nil
             htmlArtifactExpanded = false
@@ -324,7 +413,6 @@ struct MainWindowView: View {
                 prepareSelectedSession(newValue)
             } else {
                 chatPresentation = nil
-                appState.sessionStore.activeSessionId = nil
             }
             #if DEBUG
             MacAutomationDriver.shared.updateSelectedSession(newValue)
@@ -357,8 +445,6 @@ struct MainWindowView: View {
             }
             if let selectedSessionId {
                 prepareSelectedSession(selectedSessionId)
-            } else {
-                appState.sessionStore.activeSessionId = nil
             }
             #if DEBUG
             MacAutomationDriver.shared.updateSelectedSession(selectedSessionId)
@@ -368,6 +454,11 @@ struct MainWindowView: View {
                 selectedSessionId = target
             }
             #endif
+        }
+        .onDisappear {
+            if let selectedSessionId {
+                appState.endViewingSession(selectedSessionId)
+            }
         }
         .onChange(of: appState.sessionStore.totalUnread) { _, total in
             NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : ""
@@ -427,7 +518,7 @@ struct MainWindowView: View {
             viewModel: nextViewModel,
             generation: generation
         )
-        appState.sessionStore.activeSessionId = id
+        appState.beginViewingSession(id)
         appState.sessionSubscriptionController.setDesired(id)
         if isSessionDeviceOnline(id) {
             appState.messageProvider?.ensureLoaded(sessionId: id, reason: "mainWindowSelection")
@@ -445,10 +536,7 @@ struct MainWindowView: View {
                 + "bottom=\(entryBottom) dbLast=\(entryDBLast) expected=\(entryExpected)"
         )
         appState.sessionStore.entryUnreadSnapshots.removeValue(forKey: id)
-        if let session = appState.sessionStore.session(for: id), session.lastSeq > 0 {
-            appState.sessionStore.markRead(id, seq: session.lastSeq)
-            appState.commandSender?.markRead(sessionId: id, seq: session.lastSeq)
-        }
+        appState.markSessionReadIfVisible(id)
     }
 
     private func isSessionDeviceOnline(_ id: String) -> Bool {

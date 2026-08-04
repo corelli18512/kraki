@@ -10,6 +10,8 @@
     "dev:head": "pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm exec tsx packages/head/src/cli.ts --port 4000 --db .tmp/kraki-local/kraki-head.db",
     "dev": "pnpm exec tsx scripts/dev-local.ts",
     "dev:web": "pnpm exec tsx scripts/dev-web.ts",
+    "dev:mac": "bash scripts/install-mac-dev.sh",
+    "dev:mac:reset-microphone": "bash scripts/install-mac-dev.sh --reset-microphone",
     "dev:stop": "pnpm exec tsx scripts/dev-local.ts stop",
     "dev:logs": "pnpm exec tsx scripts/dev-local.ts logs",
     "dev:reset": "pnpm exec tsx scripts/dev-local.ts reset",

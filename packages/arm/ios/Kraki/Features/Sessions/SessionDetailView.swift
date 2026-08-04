@@ -46,7 +46,7 @@ struct SessionDetailView: View {
         .hidesTabBar()
         .onAppear {
             KLog.chat("👆 [2/history TAP] session=\(sessionId.prefix(12)) — entering ChatView")
-            sessionStore.activeSessionId = sessionId
+            appState.beginViewingSession(sessionId)
             // A cached live card is never authoritative across page entry. The
             // matching subscription ACK will replace it before live frames are
             // accepted; persistent spine remains independently visible/loading.
@@ -72,9 +72,7 @@ struct SessionDetailView: View {
             }
         }
         .onDisappear {
-            if sessionStore.activeSessionId == sessionId {
-                sessionStore.activeSessionId = nil
-            }
+            appState.endViewingSession(sessionId)
             // SwiftUI may deliver A.onDisappear before B.onAppear during a
             // detail-to-detail navigation transition. Defer null one runloop so
             // B can atomically replace A on the same Tentacle instead of
@@ -207,10 +205,8 @@ struct SessionDetailView: View {
     // MARK: - Helpers
 
     private func markReadIfFocused() {
-        guard let session else { return }
-        // markRead via the seq pipeline replaces the old clearUnread call.
-        sessionStore.markRead(sessionId, seq: session.lastSeq)
-        appState.commandSender?.markRead(sessionId: sessionId, seq: session.lastSeq)
+        guard scenePhase == .active, session != nil else { return }
+        appState.markSessionReadIfVisible(sessionId)
     }
 }
 

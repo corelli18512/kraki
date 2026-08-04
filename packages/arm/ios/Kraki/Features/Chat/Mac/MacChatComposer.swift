@@ -437,22 +437,11 @@ struct MacChatComposer: View {
     }
 
     private var voiceStatusText: String {
-        switch voiceController.state {
-        case .idle:
-            return ""
-        case .requestingPermission:
-            return "Requesting microphone access…"
-        case .obtainingLease:
-            return "Authorizing voice input…"
-        case .recording:
-            return voiceController.displayText.isEmpty ? "Listening…" : voiceController.displayText
-        case .finishing:
-            return voiceController.displayText.isEmpty
-                ? "Finishing transcription and correction…"
-                : voiceController.displayText
-        case .failed(let message):
-            return message
-        }
+        VoiceComposerPresentation.statusText(
+            state: voiceController.state,
+            rawText: voiceController.rawText,
+            displayText: voiceController.displayText
+        )
     }
 
     private func requestComposerFocus() {
@@ -1089,7 +1078,6 @@ private struct MacComposerVoiceSurface: View {
     let onFinish: () -> Void
 
     private static let textFont = NSFont.systemFont(ofSize: 15)
-    private static let rawLookaheadCharacters = 56
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1097,7 +1085,7 @@ private struct MacComposerVoiceSurface: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: onFinish) {
-                statusModule
+                VoiceComposerStatusModule(state: controller.state)
                     .frame(width: 38, height: 32)
                     .contentShape(Rectangle())
             }
@@ -1112,107 +1100,19 @@ private struct MacComposerVoiceSurface: View {
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
     }
 
-    @ViewBuilder
-    private var statusModule: some View {
-        switch controller.state {
-        case .requestingPermission, .obtainingLease:
-            ProgressView().controlSize(.small)
-        case .recording:
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.14))
-                    .frame(width: 30, height: 30)
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-        case .finishing:
-            MacComposerArmillary()
-        case .idle, .failed:
-            EmptyView()
-        }
-    }
-
     private var revision: String {
         "\(draftPrefix)-\(controller.state)-\(controller.rawText)-\(controller.correctionText)-\(controller.correctionSourceOffset)"
     }
 
     private var displayedText: AttributedString {
-        let voiceText: AttributedString
-        switch controller.state {
-        case .requestingPermission:
-            voiceText = attributed("Requesting microphone access…", opacity: 0.45)
-        case .obtainingLease:
-            voiceText = attributed("Authorizing voice input…", opacity: 0.45)
-        case .recording:
-            voiceText = attributed(
-                controller.rawText.isEmpty ? "Listening…  ⌥ Space to finish" : controller.rawText,
-                opacity: controller.rawText.isEmpty ? 0.45 : 1
-            )
-        case .finishing:
-            voiceText = correctionText
-        case .idle, .failed:
-            voiceText = AttributedString()
-        }
-        return prefixed(voiceText)
-    }
-
-    private func prefixed(_ voiceText: AttributedString) -> AttributedString {
-        guard !draftPrefix.isEmpty else { return voiceText }
-        var output = attributed(draftPrefix, opacity: 1)
-        guard !voiceText.characters.isEmpty else { return output }
-        if draftPrefix.last?.isWhitespace != true {
-            output.append(attributed(" ", opacity: 1))
-        }
-        output.append(voiceText)
-        return output
-    }
-
-    private var correctionText: AttributedString {
-        let source = controller.correctionSource.isEmpty
-            ? controller.rawText
-            : controller.correctionSource
-        guard !controller.correctionText.isEmpty else {
-            return attributed(source.isEmpty ? "Correcting…" : source, opacity: 0.82)
-        }
-
-        let corrected = Array(controller.correctionText)
-        var output = AttributedString()
-        for (offset, character) in corrected.enumerated() {
-            let distanceFromEnd = corrected.count - offset - 1
-            let opacity: Double
-            switch distanceFromEnd {
-            case 0: opacity = 0.48
-            case 1: opacity = 0.64
-            case 2: opacity = 0.78
-            case 3: opacity = 0.90
-            default: opacity = 0.96
-            }
-            output.append(attributed(String(character), opacity: opacity))
-        }
-
-        let raw = Array(source)
-        var remainder = Array(raw.dropFirst(min(controller.correctionSourceOffset, raw.count)))
-        let correctedEndsWithWhitespace = controller.correctionText.last.map {
-            String($0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        } ?? false
-        while correctedEndsWithWhitespace,
-              let first = remainder.first,
-              String(first).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            remainder.removeFirst()
-        }
-        remainder = Array(remainder.prefix(Self.rawLookaheadCharacters))
-        if !remainder.isEmpty {
-            output.append(attributed(String(remainder), opacity: 0.30))
-        }
-        return output
-    }
-
-    private func attributed(_ text: String, opacity: Double) -> AttributedString {
-        var value = AttributedString(text)
-        value.font = .system(size: 15)
-        value.foregroundColor = NSColor.labelColor.withAlphaComponent(opacity)
-        return value
+        VoiceComposerPresentation.attributedTranscript(
+            prefix: draftPrefix,
+            state: controller.state,
+            rawText: controller.rawText,
+            correctionSource: controller.correctionSource,
+            correctionText: controller.correctionText,
+            correctionSourceOffset: controller.correctionSourceOffset
+        )
     }
 }
 
@@ -1390,48 +1290,6 @@ private struct MacComposerWaveform: View {
         }
         .frame(width: 34, height: 28)
         .animation(.linear(duration: 0.1), value: levels)
-    }
-}
-
-private struct MacComposerArmillary: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            ZStack {
-                Circle()
-                    .fill(.white)
-                    .frame(width: 4, height: 4)
-                    .shadow(color: .white.opacity(0.9), radius: 4)
-                    .opacity(0.6 + 0.4 * (0.5 + 0.5 * sin(time * 2 * .pi / 0.9)))
-                orbit(time: time, period: 0.8, reverse: false, size: 24, color: Color(red: 0.42, green: 0.66, blue: 1.0))
-                orbit(time: time, period: 0.6, reverse: true, size: 17, color: Color(red: 0.62, green: 0.52, blue: 1.0))
-                orbit(time: time, period: 1.1, reverse: false, size: 10, color: Color(red: 0.52, green: 0.86, blue: 1.0))
-            }
-        }
-        .frame(width: 28, height: 28)
-    }
-
-    private func orbit(
-        time: TimeInterval,
-        period: Double,
-        reverse: Bool,
-        size: CGFloat,
-        color: Color
-    ) -> some View {
-        let angle = time.truncatingRemainder(dividingBy: period) / period * 360 * (reverse ? -1 : 1)
-        return Circle()
-            .trim(from: 0, to: 0.42)
-            .stroke(
-                AngularGradient(
-                    colors: [color.opacity(0), color],
-                    center: .center,
-                    startAngle: .degrees(0),
-                    endAngle: .degrees(151.2)
-                ),
-                style: StrokeStyle(lineWidth: 1, lineCap: .round)
-            )
-            .frame(width: size, height: size)
-            .rotationEffect(.degrees(angle))
     }
 }
 

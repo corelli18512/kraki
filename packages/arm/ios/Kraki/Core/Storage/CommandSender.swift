@@ -503,23 +503,19 @@ final class CommandSender {
 
     // MARK: - Read State
 
-    func markRead(sessionId: String, seq: Int) {
+    func markRead(sessionId: String, seq: Int, automatic: Bool = false) {
         guard let appState else { return }
+        if automatic && appState.sessionStore.isAutoReadSuppressed(sessionId) { return }
+        if !automatic { appState.sessionStore.allowAutoRead(sessionId) }
         send(["type": "mark_read", "payload": ["seq": seq]], sessionId: sessionId)
         appState.sessionStore.markRead(sessionId, seq: seq)
     }
 
     func markUnread(sessionId: String) {
         guard let appState else { return }
+        appState.sessionStore.suppressAutoRead(sessionId)
         send(["type": "mark_unread", "payload": [:] as [String: Any]], sessionId: sessionId)
-        // Optimistically reflect the server's rollback semantics:
-        // tentacle does `readSeq = max(0, lastSeq − 1)`, which yields
-        // one unread message. Once the `session_read` echo arrives
-        // the monotonic max keeps us consistent.
-        if let session = appState.sessionStore.session(for: sessionId), session.lastSeq > 0 {
-            let rolledBack = max(0, session.lastSeq - 1)
-            appState.sessionStore.sessions[sessionId]?.readSeq = rolledBack
-        }
+        appState.sessionStore.markUnread(sessionId)
     }
 
     // MARK: - Session Metadata

@@ -49,12 +49,6 @@ extension SessionDigest {
             return SessionPreview(text: text, type: type, timestamp: timestamp)
         }()
 
-        let runtimeStatus: SessionRuntimeStatusDigest? = {
-            guard let dict = json["runtimeStatus"] as? [String: Any],
-                  let status = dict["status"] as? String else { return nil }
-            return SessionRuntimeStatusDigest(status: status, reason: dict["reason"] as? String)
-        }()
-
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -62,7 +56,6 @@ extension SessionDigest {
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
-            runtimeStatus: runtimeStatus,
             mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
@@ -111,16 +104,6 @@ final class MessageRouter {
         "session_ended",
         "idle",
         "session_replay_batch",
-    ]
-
-    /// Subset of `persistentTypes` whose arrival should light up the
-    /// unread badge. Everything else in `persistentTypes` silently
-    /// advances `readSeq` so it never produces a phantom badge
-    /// mid-turn — the badge appears in the same SwiftUI tick that
-    /// `updatePreview` flips the card to the agent's final reply (or
-    /// to permission / question / error text).
-    private static let notifyWorthyTypes: Set<String> = [
-        "idle", "error", "turn_status"
     ]
 
     // MARK: Init
@@ -234,17 +217,14 @@ final class MessageRouter {
             }
 
         case "preferences_updated":
-            // Live sync from another device (or echo of our own
-            // update). Apply via PreferencesManager — its echo-loop
-            // guard prevents the resulting AppStorage write from
-            // bouncing back to the relay. iOS-only (mac has no prefs manager yet).
-            #if os(iOS)
+            // Live sync from another device (or echo of our own update).
+            // PreferencesManager's echo-loop guard prevents the resulting
+            // AppStorage write from bouncing back to the relay.
             if let prefs = json["preferences"] as? [String: Any] {
                 Task { @MainActor in
                     appState?.preferencesManager?.applyRemote(prefs)
                 }
             }
-            #endif
 
         // ── Encrypted envelopes ──────────────────────────────────────────
         case "unicast", "multicast", "broadcast":
@@ -358,44 +338,14 @@ final class MessageRouter {
         let payload = dict["payload"] as? [String: Any]
         let timestamp = dict["timestamp"] as? String
 
-        // Per-session seq bookkeeping (drives derived unread).
-        //
-        // IMPORTANT: only persistent message types carry a per-session
-        // conversation seq. Transient envelopes (`active`,
-        // `agent_message_delta`, `session_read`, …) carry a seq from a
-        // different global counter and must be ignored here, otherwise
-        // they'd race ahead of the per-session counter and notify-worthy
-        // events (idle with seq=12) would arrive "behind" lastSeq and
-        // never light up the badge. `session_read` echoes are handled
-        // separately via `payload.seq` in the switch below.
-        //
-        // For persistent events the rule is:
-        //   • lastSeq always advances (so the unread accounting is
-        //     accurate).
-        //   • readSeq silently advances for everything EXCEPT
-        //     notify-worthy events (idle / error / permission /
-        //     question). That way the badge only lights up the moment
-        //     a turn-ending / attention-requiring event lands — the
-        //     same SwiftUI tick `updatePreview` flips the card text.
-        //   • While the user is actively viewing the session, readSeq
-        //     advances on every persistent event AND we send
-        //     `mark_read` upstream so other devices stay in sync.
+        // Only persistent types carry a per-session Spine seq. Keep history
+        // fetch state current, but leave unread cursor projection to Tentacle's
+        // session_list/session_read authority. A genuinely visible Chat may
+        // acknowledge the live seq immediately through the shared auto-read gate.
         if let seq = dict["seq"] as? Int,
            Self.persistentTypes.contains(type) {
-            let isNotify = Self.notifyWorthyTypes.contains(type)
-            appState.sessionStore.bumpLastSeq(sessionId, seq: seq)
-            // Keep `tentacleLastSeq` in sync with what push has
-            // actually delivered so `requestLatest`/`ensureLoaded`'s
-            // at-head check is based on reality, not on the lagging
-            // value from the last `session_list`.
             appState.messageProvider?.observeLiveMessageSeq(sessionId, seq: seq, kind: type)
-            let isActive = appState.sessionStore.activeSessionId == sessionId
-            if isActive || !isNotify {
-                appState.sessionStore.markRead(sessionId, seq: seq)
-            }
-            if isActive {
-                appState.commandSender?.markRead(sessionId: sessionId, seq: seq)
-            }
+            appState.markSessionReadIfVisible(sessionId, seq: seq)
         }
 
         switch type {
@@ -551,18 +501,21 @@ final class MessageRouter {
             // explicitly filters out `active` from rendering anyway, so
             // persisting it had zero UI value.
 
-        case "compact", "compacting":
-            // Transient compaction maintenance, orthogonal to active/idle.
-            // Compatibility accepts both the historical `compact` spelling and
-            // the current protocol `compacting` envelope, but neither mutates
-            // SessionInfo.state: threshold/manual maintenance may continue while
-            // the conversation is idle and accepts a new prompt.
+        case "compacting":
+            // `compacting` is a peer of active/idle on the session-state axis
+            // (see @kraki/protocol CompactingMessage). `phase: 'start'` enters
+            // the compacting state; `phase: 'end'` carries the authoritative
+            // `nextState` ('active' | 'idle') to restore. Never touches the
+            // card action slot, TRACE, or spine. Mirrors web's message-router.
             let phase = payload?["phase"] as? String
             if phase == "start" {
                 let reason = (payload?["reason"] as? String).flatMap(CompactionReason.init(rawValue:))
                 appState.messageStore.setCompacting(sessionId, reason: reason)
+                appState.sessionStore.updateState(sessionId, state: "compacting")
             } else {
                 appState.messageStore.clearRuntimeStatus(sessionId)
+                let nextState = (payload?["nextState"] as? String) ?? "active"
+                appState.sessionStore.updateState(sessionId, state: nextState)
             }
 
         case "error":
@@ -600,7 +553,7 @@ final class MessageRouter {
 
         case "session_read":
             if let readSeq = payload?["seq"] as? Int {
-                appState.sessionStore.setSessionReadSeq(sessionId, seq: readSeq)
+                appState.sessionStore.applyAuthoritativeReadSeq(sessionId, seq: readSeq)
             }
 
         // ── Passthrough ──────────────────────────────────────────────────
@@ -680,18 +633,14 @@ final class MessageRouter {
             appState.sessionStore.upsertSession(digest, deviceId: tentacleDeviceId, deviceName: deviceName)
 
             // Runtime status is ephemeral and the producer is authoritative.
-            // New Tentacles report orthogonal maintenance in runtimeStatus;
-            // older producers encoded compacting directly in state.
-            switch digest.runtimeStatus?.status {
-            case "compacting":
-                let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
-                appState.messageStore.setCompacting(digest.id, reason: reason)
-            default:
-                if digest.state == .compacting {
-                    appState.messageStore.setCompacting(digest.id, reason: nil)
-                } else {
-                    appState.messageStore.clearRuntimeStatus(digest.id)
-                }
+            // Active live-card state is restored only by the current session's
+            // subscription ACK; do not pull every active session via the legacy
+            // request_card reconnect path.
+            switch digest.state {
+            case .compacting:
+                appState.messageStore.setCompacting(digest.id, reason: nil)
+            case .idle, .active:
+                appState.messageStore.clearRuntimeStatus(digest.id)
             }
 
             // Sync mode
@@ -705,41 +654,8 @@ final class MessageRouter {
             // Sync pin
             appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
 
-            // Sidebar preview is the Tentacle's authoritative digest. Apply it
-            // before Chat head reconciliation so list and open Chat converge on
-            // the same producer tail after reconnect/projection boundaries.
-            if let preview = digest.preview {
-                appState.sessionStore.setPreview(
-                    digest.id,
-                    text: preview.text,
-                    type: preview.type,
-                    timestamp: preview.timestamp
-                )
-            }
-
-            // Unread is derived from readSeq/lastSeq directly on each
-            // SessionInfo. We advance both sides monotonically, then
-            // (if the gap is non-empty) ask the persistent cache
-            // whether any messages between them are unread-worthy. If
-            // not — e.g. the gap is pure tool_* / active churn —
-            // silently catch readSeq up so we don't show a phantom
-            // badge.
-            if digest.lastSeq > 0 {
-                appState.sessionStore.bumpLastSeq(digest.id, seq: digest.lastSeq)
-            }
-            if digest.readSeq > 0 {
-                appState.sessionStore.markRead(digest.id, seq: digest.readSeq)
-            }
-            if digest.lastSeq > digest.readSeq {
-                let store = appState.messageStore
-                let hasUnreadWorthy = store.hasUnreadWorthy(digest.id, afterSeq: digest.readSeq)
-                let hasCachedGap = store.dbLastSeq(digest.id) >= digest.lastSeq
-                if hasCachedGap && !hasUnreadWorthy {
-                    // We have the gap fully cached and nothing in it is
-                    // a real unread → suppress the badge.
-                    appState.sessionStore.markRead(digest.id, seq: digest.lastSeq)
-                }
-            }
+            // `upsertSession` has already applied Tentacle's authoritative
+            // last/read cursors. Local history never overrides them.
 
             // Store tentacle info so any later replay request can be
             // routed to the right producer device.
@@ -748,6 +664,11 @@ final class MessageRouter {
                 lastSeq: digest.lastSeq,
                 deviceId: tentacleDeviceId
             )
+        }
+
+        if let activeId = appState.sessionStore.activeSessionId,
+           let active = appState.sessionStore.sessions[activeId] {
+            appState.markSessionReadIfVisible(activeId, seq: active.lastSeq)
         }
 
         // Self-heal the currently-open chat before background warm-up. The

@@ -1,4 +1,3 @@
-#if os(iOS)
 /// PreferencesManager — Cross-device preference sync via head's
 /// `update_preferences` / `preferences_updated` control-plane messages.
 ///
@@ -81,13 +80,8 @@ final class PreferencesManager {
     /// other devices). Unknown keys are silently ignored, matching
     /// the protocol's forward-compatibility contract.
     ///
-    /// **`theme == "system"` is sticky** — when the local preference
-    /// is already System, we deliberately ignore any cloud-pushed
-    /// theme value. The intent is that "System" expresses
-    /// "follow THIS device's OS preference"; overriding it with
-    /// another device's Light/Dark choice would silently break the
-    /// user's chosen behaviour. Users opt back into sync by
-    /// explicitly picking Light or Dark again.
+    /// The relay value is authoritative. `system` remains portable because
+    /// each client resolves it against its own operating-system appearance.
     func applyRemote(_ prefs: [String: Any]) {
         isApplyingRemote = true
         defer {
@@ -103,14 +97,7 @@ final class PreferencesManager {
            let scheme = AppColorScheme(rawValue: themeString) {
             let defaults = UserDefaults.standard
             let current = defaults.string(forKey: Self.themeKey)
-            // Sticky-System guard: stay on system regardless of what
-            // the cloud says. See doc-comment above. Note: this only
-            // skips the THEME assignment — any later preference keys
-            // we add to this method must still run for system-theme
-            // users, so we use a local skip rather than `return`-ing
-            // out of the whole function.
-            let skipTheme = (current == AppColorScheme.system.rawValue)
-            if !skipTheme, current != scheme.rawValue {
+            if current != scheme.rawValue {
                 defaults.set(scheme.rawValue, forKey: Self.themeKey)
             }
         }
@@ -119,5 +106,3 @@ final class PreferencesManager {
         // iOS for now. See the file header for the rationale.
     }
 }
-
-#endif

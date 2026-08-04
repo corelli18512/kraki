@@ -234,6 +234,89 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(rendered.contains("┌"))
     }
 
+    func testSharedInlineMarkdownSemanticsDriveTextKitRendering() {
+        let source = "**bold** *italic* `code` ~~removed~~ [Kraki](https://kraki.chat)"
+        let runs = parseMarkdownInline(source)
+        XCTAssertEqual(runs.map(\.text).joined(), "bold italic code removed Kraki")
+        XCTAssertTrue(runs.contains { $0.text == "bold" && $0.bold })
+        XCTAssertTrue(runs.contains { $0.text == "italic" && $0.italic })
+        XCTAssertTrue(runs.contains { $0.text == "code" && $0.code })
+        XCTAssertTrue(runs.contains { $0.text == "removed" && $0.strikethrough })
+        XCTAssertEqual(runs.first(where: { $0.text == "Kraki" })?.link?.absoluteString,
+                       "https://kraki.chat")
+
+        let rendered = TKMarkdown.attributed(source, cacheKey: "shared-inline-semantics")
+        XCTAssertEqual(rendered.string, "bold italic code removed Kraki")
+        let removedRange = (rendered.string as NSString).range(of: "removed")
+        let strike = rendered.attribute(.strikethroughStyle,
+                                        at: removedRange.location,
+                                        effectiveRange: nil) as? Int
+        XCTAssertEqual(strike, NSUnderlineStyle.single.rawValue)
+        let linkRange = (rendered.string as NSString).range(of: "Kraki")
+        XCTAssertEqual((rendered.attribute(.link, at: linkRange.location,
+                                           effectiveRange: nil) as? URL)?.absoluteString,
+                       "https://kraki.chat")
+    }
+
+    func testSharedMarkdownLineAndLanguageNormalization() {
+        XCTAssertEqual(parseMarkdownInlineLine("### Heading"),
+                       .heading(level: 3, text: "Heading"))
+        XCTAssertEqual(parseMarkdownInlineLine("  - nested"),
+                       .list(MarkdownListItem(ordered: false, number: 0, depth: 1, text: "nested")))
+        XCTAssertEqual(parseMarkdownInlineLine("12. ordered"),
+                       .list(MarkdownListItem(ordered: true, number: 12, depth: 0, text: "ordered")))
+        XCTAssertEqual(normalizeMarkdownQuoteWhitespace("\nStart\n\n\nEnd\n"), "Start\n\nEnd")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("TSX"), "typescript")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("c++"), "cpp")
+        XCTAssertTrue(MarkdownCodeSyntax.isIntentionallyPlain("text"))
+        XCTAssertFalse(MarkdownCodeSyntax.isIntentionallyPlain("swift"))
+    }
+
+    func testSessionCardStatusPriorityAndBooleanUnreadProjection() {
+        XCTAssertEqual(SessionCardStatus.resolve(
+            sessionState: .active, previewType: "question", deviceOnline: false
+        ), .offline)
+        XCTAssertEqual(SessionCardStatus.resolve(
+            sessionState: .active, previewType: "permission", deviceOnline: true
+        ), .approval)
+        XCTAssertEqual(SessionCardStatus.resolve(
+            sessionState: .active, previewType: nil, deviceOnline: true
+        ), .active)
+        XCTAssertEqual(SessionCardStatus.resolve(
+            sessionState: .idle, previewType: "agent_message", deviceOnline: true
+        ), .agentMessage)
+        XCTAssertEqual(SessionCardStatus.resolve(
+            sessionState: .idle, previewType: "agent_message", deviceOnline: true, hasDraft: true
+        ), .humanMessage)
+
+        let session = SessionInfo(
+            id: "card-projection", deviceId: "device", deviceName: "Macbook",
+            agent: "pi", model: "gpt-5.6-sol", title: "Shared Card",
+            state: .idle, mode: .discuss, lastSeq: 91, readSeq: 12,
+            messageCount: 91, createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            pinned: true
+        )
+        let device = DeviceSummary(
+            id: "device", name: "Macbook", role: .tentacle, kind: .desktop,
+            publicKey: nil, encryptionKey: nil, online: true,
+            lastSeen: nil, createdAt: nil
+        )
+        let projection = SessionCardProjection.make(
+            session: session,
+            device: device,
+            preview: SessionPreview(
+                text: "Latest   agent\nmessage", type: "agent_message",
+                timestamp: "2026-08-04T12:00:00.000Z"
+            ),
+            draft: nil
+        )
+        XCTAssertTrue(projection.isUnread, "cursor gaps project one boolean dot, never a count")
+        XCTAssertEqual(projection.previewText, "Latest agent message")
+        XCTAssertEqual(projection.status, .agentMessage)
+        XCTAssertEqual(projection.model, "gpt-5.6-sol")
+        XCTAssertTrue(projection.isPinned)
+    }
+
     func testReusedCodeCellDoesNotLeaveEditorSurfaceBehindPlainText() {
         let codeBubble = content("user_message", seq: 496, body: "```\nhi\n```")
         let plainBubble = content("user_message", seq: 497, body: "say hi")
@@ -342,6 +425,10 @@ final class TextKitPureSpineTests: XCTestCase {
         struct Bubble { let state: String }
         ```
         """
+        TKMarkdown.prepareFinalHighlightForTesting(
+            code: "struct Bubble { let state: String }",
+            language: "swift"
+        )
         let rendered = TKMarkdown.attributed(source, cacheKey: "code-highlight-test")
         var colors = Set<String>()
         rendered.enumerateAttribute(.foregroundColor,
@@ -351,6 +438,34 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertGreaterThan(colors.count, 1)
         XCTAssertEqual(TKMarkdown.plainText(rendered), "struct Bubble { let state: String }")
         XCTAssertFalse(TKMarkdown.plainText(rendered)?.contains("\u{200B}") ?? true)
+    }
+
+    func testCodeHighlightAliasesAndLexicalFallbackMatchMacBehavior() {
+        let samples: [(language: String, code: String)] = [
+            ("tsx", "export const Card = () => <div>{42}</div>"),
+            ("c++", "struct Card { int value = 42; };"),
+            ("mermaid", "flowchart LR\n  A --> B"),
+        ]
+        for sample in samples {
+            TKMarkdown.prepareFinalHighlightForTesting(
+                code: sample.code,
+                language: sample.language
+            )
+            let source = "```\(sample.language)\n\(sample.code)\n```"
+            let rendered = TKMarkdown.attributed(
+                source,
+                cacheKey: "alias-\(sample.language)-\(sample.code.count)"
+            )
+            var colors = Set<String>()
+            rendered.enumerateAttribute(
+                .foregroundColor,
+                in: NSRange(location: 0, length: rendered.length)
+            ) { value, _, _ in
+                if let color = value as? UIColor { colors.insert(color.description) }
+            }
+            XCTAssertGreaterThan(colors.count, 1, "\(sample.language) should render multiple token colors")
+            XCTAssertEqual(TKMarkdown.plainText(rendered), sample.code)
+        }
     }
 
     func testCodeBadgeHasDedicatedLayoutSpaceBeforeLongFirstLine() {
@@ -394,6 +509,10 @@ final class TextKitPureSpineTests: XCTestCase {
         let value: String = "hello"
         ```
         """
+        TKMarkdown.prepareFinalHighlightForTesting(
+            code: "let value: String = \"hello\"",
+            language: "swift"
+        )
         let highlighted = TKMarkdown.attributed(source, cacheKey: "user-code-recolor-test")
         let recolored = TKMarkdown.recolored(highlighted, color: .white)
         var codeColors = Set<String>()
@@ -587,12 +706,109 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(HTMLArtifactSecurity.maxBytes, 10 * 1024 * 1024)
     }
 
-    func testLandscapeContentRefPlaceholderFitsBubbleWidth() {
-        let ref = ContentRef(
-            type: "content_ref", id: "img", mimeType: "image/png", size: 10,
-            caption: nil, name: nil, width: 100, height: 50
+    func testImageAttachmentsUseStableGalleryGeometryOutsideBubble() {
+        let width: CGFloat = 390
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100))
+        let image = renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+        }
+        let firstRef = ContentRef(
+            type: "content_ref", id: "img-1", mimeType: "image/png", size: 10,
+            caption: nil, name: nil, width: 200, height: 100
         )
-        XCTAssertEqual(TKImageMeasure.height(refs: [ref], sessionId: "s", width: 320), 160)
+        let secondRef = ContentRef(
+            type: "content_ref", id: "img-2", mimeType: "image/png", size: 10,
+            caption: nil, name: nil, width: 100, height: 200
+        )
+        let baseMessage = message("agent_message", seq: 505, content: "Image result")
+        let textOnly = TKBubbleContent(
+            message: baseMessage,
+            kind: .agent,
+            hueSeed: "image-gallery",
+            body: TKMarkdown.attributed("Image result", cacheKey: "image-gallery-text")
+        )
+        let textAndImage = TKBubbleContent(
+            message: baseMessage,
+            kind: .agent,
+            hueSeed: "image-gallery",
+            body: TKMarkdown.attributed("Image result", cacheKey: "image-gallery-text"),
+            images: [image]
+        )
+        let stacked = TKBubbleContent(
+            message: baseMessage,
+            kind: .agent,
+            hueSeed: "image-gallery",
+            body: TKMarkdown.attributed("Image result", cacheKey: "image-gallery-text"),
+            imageRefs: [firstRef, secondRef]
+        )
+        let pureImage = TKBubbleContent(
+            message: baseMessage,
+            kind: .agent,
+            hueSeed: "image-gallery",
+            body: nil,
+            images: [image]
+        )
+
+        XCTAssertEqual(
+            textAndImage.cellHeight(cellWidth: width),
+            textOnly.cellHeight(cellWidth: width)
+                + IOSImageGalleryLayout.attachmentSpacing
+                + textAndImage.imagesHeight(cellWidth: width),
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            stacked.imagesHeight(cellWidth: width),
+            IOSImageGalleryLayout.multiCardHeight + IOSImageGalleryLayout.multiStackOffset,
+            accuracy: 0.5,
+            "multiple images occupy one compact fixed-height stack"
+        )
+        XCTAssertEqual(
+            pureImage.cellHeight(cellWidth: width),
+            pureImage.imagesHeight(cellWidth: width) + IOSImageGalleryLayout.outerVerticalPadding,
+            accuracy: 0.5
+        )
+
+        let cell = TKBubbleCell(frame: CGRect(
+            x: 0,
+            y: 0,
+            width: width,
+            height: textAndImage.cellHeight(cellWidth: width)
+        ))
+        cell.configure(textAndImage, cellWidth: width)
+        cell.layoutIfNeeded()
+        XCTAssertFalse(cell.bubbleHiddenForRegression)
+        XCTAssertFalse(cell.imageFrameForRegression.intersects(cell.bubbleFrameForRegression))
+        XCTAssertGreaterThanOrEqual(
+            cell.imageFrameForRegression.minY,
+            cell.bubbleFrameForRegression.maxY + IOSImageGalleryLayout.attachmentSpacing - 0.5
+        )
+
+        cell.frame.size.height = pureImage.cellHeight(cellWidth: width)
+        cell.configure(pureImage, cellWidth: width)
+        cell.layoutIfNeeded()
+        XCTAssertTrue(cell.bubbleHiddenForRegression)
+        XCTAssertEqual(cell.bubbleFrameForRegression, .zero)
+        XCTAssertGreaterThan(cell.imageFrameForRegression.height, 0)
+    }
+
+    func testImagePreviewBackdropClosesWithoutStealingImageTap() {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100))
+        let image = renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+        }
+        let view = IOSZoomableImageView(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        view.image = image
+        var closeCount = 0
+        view.onBackdropTap = { closeCount += 1 }
+        view.layoutIfNeeded()
+
+        XCTAssertFalse(view.tapForRegression(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY)))
+        XCTAssertEqual(closeCount, 0)
+        XCTAssertTrue(view.tapForRegression(at: CGPoint(x: 1, y: 1)))
+        XCTAssertEqual(closeCount, 1)
+        XCTAssertEqual(view.maximumZoomScaleForRegression, 8)
     }
 
     func testLongQuestionChoiceExpandsActionHeightInsteadOfTruncating() {
@@ -668,6 +884,83 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(projected.filter {
             $0.type == "agent_message" || $0.type == "turn_status" || $0.type == "interrupted_turn"
         }.map(\.seq), [65, 67])
+    }
+
+    func testTurnProjectionKeepsRecoveredAgentAfterSteerFollowingTerminalIdle() {
+        let sid = "projection-terminal-idle-steer-agent"
+        let messages = [
+            ChatMessage(type: "agent_message", seq: 315, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("earlier reply")]),
+            ChatMessage(type: "turn_status", seq: 316, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable(""), "action": AnyCodable(["type": "failed"])]),
+            ChatMessage(type: "idle", seq: 317, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+            ChatMessage(type: "user_message", seq: 318, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("continue"), "delivery": AnyCodable("steer")]),
+            ChatMessage(type: "agent_message", seq: 319, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("recovered reply")]),
+            ChatMessage(type: "idle", seq: 320, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.filter {
+            $0.type == "agent_message" || $0.type == "turn_status" || $0.type == "interrupted_turn"
+        }.map(\.seq), [316, 319])
+        XCTAssertEqual(projected.first(where: { $0.seq == 319 })?.content, "recovered reply")
+    }
+
+    func testTurnProjectionStartsNewTerminalConclusionAfterIdleAndSteer() {
+        let sid = "projection-terminal-idle-steer-terminal"
+        let messages = [
+            ChatMessage(type: "turn_status", seq: 1, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable("first")]),
+            ChatMessage(type: "idle", seq: 2, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+            ChatMessage(type: "user_message", seq: 3, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("continue"), "delivery": AnyCodable("steer")]),
+            ChatMessage(type: "turn_status", seq: 4, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable("second")]),
+            ChatMessage(type: "idle", seq: 5, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.filter {
+            $0.type == "agent_message" || $0.type == "turn_status" || $0.type == "interrupted_turn"
+        }.map(\.seq), [1, 4])
+    }
+
+    func testTurnProjectionStartsNewAgentConclusionAfterIdleAndSteer() {
+        let sid = "projection-agent-idle-steer-agent"
+        let messages = [
+            ChatMessage(type: "agent_message", seq: 1, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("first reply")]),
+            ChatMessage(type: "idle", seq: 2, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+            ChatMessage(type: "user_message", seq: 3, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("continue"), "delivery": AnyCodable("steer")]),
+            ChatMessage(type: "agent_message", seq: 4, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("second reply")]),
+            ChatMessage(type: "idle", seq: 5, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.filter { $0.type == "agent_message" }.map(\.seq), [1, 4])
+    }
+
+    func testTurnProjectionDoesNotSplitDuplicateTerminalAfterIdle() {
+        let sid = "projection-terminal-idle-terminal"
+        let messages = [
+            ChatMessage(type: "user_message", seq: 1, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["content": AnyCodable("abort")]),
+            ChatMessage(type: "turn_status", seq: 2, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable("first")]),
+            ChatMessage(type: "idle", seq: 3, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+            ChatMessage(type: "interrupted_turn", seq: 4, sessionId: sid, deviceId: "d", timestamp: nil,
+                        payload: ["draft": AnyCodable("second")]),
+            ChatMessage(type: "idle", seq: 5, sessionId: sid, deviceId: "d", timestamp: nil, payload: [:]),
+        ]
+
+        let projected = TurnSpineProjection.project(messages)
+        XCTAssertEqual(projected.filter {
+            $0.type == "agent_message" || $0.type == "turn_status" || $0.type == "interrupted_turn"
+        }.map(\.seq), [4])
     }
 
     func testTurnProjectionKeepsOnlyLatestDuplicateTerminalAcrossIdleMarkers() {

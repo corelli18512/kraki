@@ -45,12 +45,10 @@ struct MessageInputView: View {
     var pendingPermission: PendingPermission? = nil
     var pendingQuestion: PendingQuestion? = nil
     var isCompacting: Bool = false
-    var compactionReason: CompactionReason? = nil
     var hasLiveCard: Bool = false
     var onHeightChange: (CGFloat) -> Void = { _ in }
 
     @Environment(AppState.self) private var appState
-    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var imageMimeType: String = "image/jpeg"
@@ -60,34 +58,8 @@ struct MessageInputView: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    @State private var voiceDraftPrefix = ""
     @FocusState private var isFocused: Bool
-
-    // Voice
-    @State private var speech = SpeechRecognizer()
-    /// Persists across sessions + app launches on this device. The
-    /// user's last keyboard-vs-mic choice carries over so they don't
-    /// have to re-toggle when opening any other session. Per-device
-    /// (not synced) — matches the local-only nature of voice input.
-    @AppStorage("kraki.input.voiceMode") private var voiceMode = false
-    @State private var isPressing = false
-    @State private var cancelArmed = false
-    /// Shows the "Enable Dictation" alert when the user toggles into
-    /// voice mode but `SFSpeechRecognizer.isAvailable` is false
-    /// (system Dictation toggle off, no language pack, etc.).
-    @State private var showDictationDisabledAlert = false
-
-    // Hold-to-talk vs mode-swipe arbitration (voice mode only).
-    // The hold-to-talk gesture pivots into one of these branches
-    // within the first 200ms of a touch, then stays there for the
-    // rest of that touch. `holdDwellTask` is the 200ms timer that
-    // fires the RECORD pivot if no horizontal motion happens first.
-    @State private var holdDwellTask: Task<Void, Never>? = nil
-    @State private var holdPivot: HoldGesturePivot? = nil
-
-    private enum HoldGesturePivot {
-        case record
-        case modeSwipe
-    }
 
     // Mode swipe — the send icon doubles as the mode selector.
     // Swiping it horizontally cycles SessionMode (looping). The input
@@ -177,11 +149,8 @@ struct MessageInputView: View {
     private var sessionActive: Bool {
         session?.state == .active || session?.state == .compacting
     }
-    private var maintenanceBlocksInput: Bool {
-        isCompacting && compactionReason != .threshold && compactionReason != .manual
-    }
     private var text: String { sessionStore.drafts[sessionId] ?? "" }
-    private var isBusy: Bool { sessionActive || maintenanceBlocksInput || awaitingActive }
+    private var isBusy: Bool { sessionActive || isCompacting || awaitingActive }
     private var isIdle: Bool { !isBusy }
     private var isStructuredResponse: Bool { pendingPermission != nil || pendingQuestion != nil }
     private var submissionIntent: MessageComposerIntent {
@@ -193,10 +162,14 @@ struct MessageInputView: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { imageData != nil }
-    private var canSend: Bool {
-        isStructuredResponse ? hasText : (hasText || hasImage)
+    private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
+    private var voiceOwnsComposer: Bool {
+        voiceController.isBusy && voiceController.activeSessionID == sessionId
     }
-    private var canShowAbort: Bool { sessionActive || maintenanceBlocksInput || hasLiveCard }
+    private var canSend: Bool {
+        !voiceOwnsComposer && (isStructuredResponse ? hasText : (hasText || hasImage))
+    }
+    private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
 
     /// True when we can actually deliver a message right now —
     /// tentacle is online AND the relay channel is up. Drives the
@@ -224,15 +197,16 @@ struct MessageInputView: View {
         return nil
     }
 
-    /// Voice toggle is hidden in permission flows (responses are structured,
-    /// not freeform speech).
-    ///
-    /// Currently disabled across the board — the voice input flow doesn't
-    /// function reliably enough to ship, so we hide the toggle (and the
-    /// hold-to-talk surface) until it's reworked. The underlying
-    /// `SpeechRecognizer` plumbing is left in place so we can re-enable
-    /// by flipping this back to `pendingPermission == nil`.
-    private var canShowVoiceToggle: Bool { false }
+    /// Product voice input is advertised by authenticated Head capability and
+    /// stays hidden for structured permission/question responses.
+    private var canShowVoiceToggle: Bool {
+        appState.voiceCapability != nil && !isStructuredResponse
+    }
+
+    private var isVoiceFailure: Bool {
+        if case .failed = voiceController.state { return true }
+        return false
+    }
 
     var body: some View {
         composeCard
@@ -241,13 +215,6 @@ struct MessageInputView: View {
             } action: { height in
                 guard height > 0 else { return }
                 onHeightChange(height)
-            }
-            .overlay(alignment: .top) {
-                if isPressing {
-                    recordingOverlay
-                        .offset(y: -96)
-                        .transition(.scale.combined(with: .opacity))
-                }
             }
             .overlay(alignment: .topTrailing) {
                 // Mode-change toast — floats above the send icon
@@ -265,7 +232,17 @@ struct MessageInputView: View {
                     .offset(y: -28)
                     .allowsHitTesting(false)
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isPressing)
+            .task(id: sessionId) {
+                if let activeVoiceSession = voiceController.activeSessionID,
+                   activeVoiceSession != sessionId {
+                    voiceController.cancel()
+                }
+            }
+            .onDisappear {
+                if voiceController.activeSessionID == sessionId {
+                    voiceController.cancel()
+                }
+            }
             .onChange(of: session?.state) { _, newState in
                 // A normal prompt's local latch ends at the first authoritative
                 // session-state transition. Once active, subsequent submissions
@@ -279,17 +256,6 @@ struct MessageInputView: View {
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
-            // If the user toggled iOS Dictation while away from the
-            // app, clear the latched "disabled" state so the next
-            // mic-toggle tap gets a fresh probe instead of bouncing
-            // straight to the alert. `scenePhase` fires `.active` on
-            // any return-to-foreground, including coming back from
-            // Settings.
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active && speech.dictationDisabled {
-                    speech.clearRecognizerError()
-                }
-            }
             .alert(
                 "Couldn't attach image",
                 isPresented: Binding(
@@ -301,24 +267,6 @@ struct MessageInputView: View {
                 Button("OK", role: .cancel) { imageAttachError = nil }
             } message: { error in
                 Text(error)
-            }
-            // Voice input requires Dictation to be enabled at the iOS
-            // level. We can't deep-link straight to that pane (Apple
-            // removed third-party `prefs:` URLs), but we surface the
-            // exact path and a one-tap shortcut to the app's Settings
-            // entry so the user can navigate from there.
-            .alert(
-                "Voice input needs Dictation",
-                isPresented: $showDictationDisabledAlert
-            ) {
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                }
-                Button("Not Now", role: .cancel) {}
-            } message: {
-                Text("Push-to-talk uses iOS Dictation. Open Settings → General → Keyboard and turn on Enable Dictation.")
             }
     }
 
@@ -335,6 +283,7 @@ struct MessageInputView: View {
     @ViewBuilder
     private var composeCard: some View {
         VStack(spacing: 8) {
+            if isVoiceFailure { voiceFailureRow }
             // Permission/question controls live in the production live bubble.
             // The composer only changes its textual submission intent (answer
             // or deny-with-reason); it must not duplicate those action rows.
@@ -356,7 +305,7 @@ struct MessageInputView: View {
             inputBox
             if canShowAbort { abortButton }
         }
-        .animation(.easeInOut(duration: 0.2), value: voiceMode)
+        .animation(.easeInOut(duration: 0.2), value: voiceOwnsComposer)
     }
 
     /// The input box. Voice/keyboard toggle on the LEFT, content in
@@ -373,15 +322,16 @@ struct MessageInputView: View {
     /// the input box's content without resizing or losing the swipe
     /// strip / voice toggle / send icon.
     private var inputBox: some View {
-        HStack(alignment: .center, spacing: 0) {
-            if canShowVoiceToggle {
-                voiceToggleButton
+        Group {
+            if voiceOwnsComposer {
+                voiceInputSurface
+            } else {
+                HStack(alignment: .center, spacing: 0) {
+                    if canShowVoiceToggle { voiceToggleButton }
+                    textFieldForMode
+                    sendIconButton
+                }
             }
-            // Voice mode is currently disabled (see `canShowVoiceToggle`),
-            // so we always render the text field even if a stale
-            // `voiceMode = true` is sitting in AppStorage from a prior build.
-            textFieldForMode
-            sendIconButton
         }
         .frame(maxWidth: .infinity)
         // `minHeight` (not fixed `height`) so the TextField's
@@ -394,8 +344,6 @@ struct MessageInputView: View {
         .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
         .contentShape(Capsule())
-        // Voice mode is gone for now, so the whole input box is always
-        // swipeable for mode changes (no hold-to-talk gesture to race with).
         .simultaneousGesture(inputBoxModeSwipeGesture)
         .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
     }
@@ -465,6 +413,7 @@ struct MessageInputView: View {
     private var inputBoxModeSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
+                guard !voiceOwnsComposer else { return }
                 if dragStartMode == nil {
                     // Lock in: only start a swipe if the first
                     // motion is more horizontal than vertical.
@@ -483,75 +432,98 @@ struct MessageInputView: View {
     // MARK: - Voice Toggle (lives inside the input box, leading edge)
 
     private var voiceToggleButton: some View {
-        Button {
-            // Gate before flipping into voice mode. Two checks:
-            //
-            //   1. Latched failure from a previous press-to-talk
-            //      attempt that hit "Siri and Dictation are disabled."
-            //      That error is set on the recognition callback and
-            //      cleared on app foreground (so flipping the iOS
-            //      Dictation toggle ON and returning gets a fresh
-            //      shot).
-            //
-            //   2. `isAvailable == false` — covers missing language
-            //      packs and similar non-Dictation cases. Note this
-            //      flag is unreliable for the Dictation toggle itself
-            //      (returns true even when Dictation is off), which is
-            //      why we also need the latch above.
-            if !voiceMode && (speech.dictationDisabled || !speech.isAvailable) {
-                NSLog("[VOICE] toggle into voice mode blocked — dictationDisabled=\(speech.dictationDisabled) isAvailable=\(speech.isAvailable)")
-                showDictationDisabledAlert = true
-                return
-            }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                voiceMode.toggle()
-                if voiceMode { isFocused = false }
-            }
-            // Proactively prompt for mic + speech-recognition
-            // permissions the first time the user switches into
-            // voice mode. The system prompts only appear if not
-            // previously granted, so this is a no-op on subsequent
-            // toggles. Calling it BEFORE first press-to-talk avoids
-            // a crash on cold mic-session start.
-            if voiceMode {
-                speech.requestPermissionsIfNeeded()
-                // Fire-and-forget probe: start a tiny recognition
-                // session and immediately finish it. If the user has
-                // Dictation disabled the framework will fire the
-                // error callback within ~100ms, latch
-                // `dictationDisabled`, and the next tap will bounce
-                // them to the alert. The user sees a brief mic
-                // permission grant (if first time) and then nothing
-                // — voice mode appears to work. The probe is
-                // throwaway: any transcript from it is discarded
-                // since we `cancelRecording()` right after.
-                Task { @MainActor in
-                    speech.startRecording()
-                    try? await Task.sleep(for: .milliseconds(250))
-                    if speech.isRecording {
-                        speech.cancelRecording()
-                    }
-                    // If the probe latched the Dictation-disabled
-                    // error, bounce the user back out of voice mode
-                    // AND show the alert. Same UX as if they'd
-                    // tapped mic the second time.
-                    if speech.dictationDisabled {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            voiceMode = false
-                        }
-                        showDictationDisabledAlert = true
-                    }
-                }
-            }
-        } label: {
-            LucideIcon(voiceMode ? .keyboard : .mic, size: 22, strokeWidth: 2.25, color: .secondary)
+        Button(action: handleVoiceButton) {
+            LucideIcon(.mic, size: 21, strokeWidth: 2.2, color: .secondary)
                 .frame(width: 40, height: Self.inputBoxHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // Nudge inward so the icon doesn't kiss the capsule's left
-        // rounded edge — more breathing room on the leading side.
+        .disabled(!isIdle)
+        .opacity(isIdle ? 1 : 0.4)
         .padding(.leading, 6)
+        .accessibilityLabel("Start voice input")
+        .accessibilityHint("Transcribes speech into the current draft")
+    }
+
+    private var voiceInputSurface: some View {
+        IOSVoiceComposerSurface(
+            pieces: voiceTranscriptPieces,
+            state: voiceController.state,
+            statusText: voiceStatusText,
+            onFinish: { voiceController.finish() }
+        )
+        .frame(minHeight: Self.inputBoxHeight)
+    }
+
+    private var voiceTranscriptPieces: [(text: String, opacity: Double)] {
+        VoiceComposerPresentation.transcriptPieces(
+            prefix: voiceDraftPrefix,
+            state: voiceController.state,
+            rawText: voiceController.rawText,
+            correctionSource: voiceController.correctionSource,
+            correctionText: voiceController.correctionText,
+            correctionSourceOffset: voiceController.correctionSourceOffset
+        )
+    }
+
+    @ViewBuilder
+    private var voiceFailureRow: some View {
+        HStack(spacing: 8) {
+            Text(voiceStatusText)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss") {
+                voiceDraftPrefix = ""
+                voiceController.clearFailure()
+            }
+            .buttonStyle(.plain)
+            .font(.caption.weight(.medium))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 48)
+    }
+
+    private var voiceStatusText: String {
+        VoiceComposerPresentation.statusText(
+            state: voiceController.state,
+            rawText: voiceController.rawText,
+            displayText: voiceController.displayText
+        )
+    }
+
+    private func handleVoiceButton() {
+        if voiceController.activeSessionID == sessionId {
+            if voiceController.isRecording { voiceController.finish() }
+            return
+        }
+        guard isIdle, let session else { return }
+        voiceController.clearFailure()
+        let existingDraft = text
+        voiceDraftPrefix = existingDraft
+        isFocused = false
+        let voiceContext = VoiceSessionContextBuilder.build(
+            session: session,
+            recentMessages: appState.messageStore.recentFromDB(sessionId, limit: 20)
+        )
+        Task { @MainActor in
+            await voiceController.begin(
+                sessionID: sessionId,
+                context: voiceContext,
+                onFinal: { final in
+                    guard appState.sessionStore.sessions[sessionId] != nil else { return }
+                    appState.sessionStore.setDraft(
+                        sessionId,
+                        VoiceDraftMerger.merge(existing: existingDraft, final: final)
+                    )
+                    voiceDraftPrefix = ""
+                    isFocused = true
+                }
+            )
+        }
     }
 
     // MARK: - Send Icon (trailing edge of input box)
@@ -633,195 +605,6 @@ struct MessageInputView: View {
         }
     }
 
-    // MARK: - Hold to Talk Prompt
-    //
-    // Replaces the text field's content area in voice mode. Same
-    // height as the text field so the surrounding input box (with
-    // its voice toggle, mode-color strip, send icon, and glass
-    // background) keeps the same size and shape. The user
-    // press-and-holds anywhere across this center label to record;
-    // drag-up while holding arms cancellation (visualized by the
-    // tint shift on the label).
-
-    private var holdToTalkPrompt: some View {
-        let activeTint: Color = cancelArmed ? .red : .krakiPrimary
-        let label: String = isPressing
-            ? (cancelArmed ? "Release to cancel" : "Recording…")
-            : "Hold to Talk"
-        let icon: String = isPressing
-            ? (cancelArmed ? "xmark.circle.fill" : "waveform")
-            : "mic.fill"
-
-        return HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
-            Text(label)
-                .font(.subheadline)
-        }
-        .foregroundStyle(isPressing ? activeTint : .secondary)
-        .frame(maxWidth: .infinity)
-        .frame(height: Self.inputBoxHeight)
-        .contentShape(Rectangle())
-        .scaleEffect(isPressing ? 0.98 : 1)
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isPressing)
-        .animation(.easeInOut(duration: 0.15), value: cancelArmed)
-        .gesture(holdToTalkGesture)
-    }
-
-    // The hold-to-talk gesture is a 3-state machine that coexists
-    // with the horizontal mode-swipe gesture on the same surface:
-    //
-    //  Touch-down → DWELL (200ms timer).
-    //   ├── 200ms passes with no significant horizontal motion →
-    //   │     pivot RECORD: start speech, drag-up arms cancel.
-    //   ├── |dx| ≥ 10pt AND |dx| > |dy| BEFORE 200ms elapses →
-    //   │     pivot MODE_SWIPE: cancel dwell, forward to
-    //   │     handleModeSwipeChanged; release calls
-    //   │     handleModeSwipeEnded (momentum + spring + commit).
-    //   └── Release before 200ms with sub-threshold motion →
-    //         quick tap on the prompt area, no-op.
-    //
-    // Because the gesture pivots into exactly one branch and stays
-    // there for the rest of the touch, there's no ambiguity: a flick
-    // can't accidentally start recording, and a long press can't
-    // accidentally switch modes.
-    private var holdToTalkGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if let pivot = holdPivot {
-                    switch pivot {
-                    case .record:
-                        cancelArmed = value.translation.height < -60
-                    case .modeSwipe:
-                        handleModeSwipeChanged(value.translation.width)
-                    }
-                    return
-                }
-
-                // Not yet pivoted. Schedule the dwell timer on first
-                // contact, then check whether horizontal motion has
-                // already crossed the pivot threshold.
-                if holdDwellTask == nil {
-                    holdDwellTask = Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(200))
-                        guard !Task.isCancelled else { return }
-                        // 200ms elapsed without a horizontal pivot →
-                        // commit to RECORD.
-                        NSLog("[VOICE] dwell expired → pivot=record, startRecording")
-                        holdPivot = .record
-                        isPressing = true
-                        cancelArmed = false
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        speech.startRecording()
-                    }
-                }
-
-                let dx = value.translation.width
-                let dy = value.translation.height
-                if abs(dx) >= 10, abs(dx) > abs(dy) {
-                    holdDwellTask?.cancel()
-                    holdDwellTask = nil
-                    holdPivot = .modeSwipe
-                    handleModeSwipeChanged(dx)
-                }
-            }
-            .onEnded { value in
-                holdDwellTask?.cancel()
-                holdDwellTask = nil
-                let pivot = holdPivot
-                holdPivot = nil
-
-                switch pivot {
-                case .record:
-                    let cancelled = cancelArmed
-                    NSLog("[VOICE] release pivot=record cancelArmed=\(cancelled)")
-                    Task { @MainActor in
-                        if cancelled {
-                            NSLog("[VOICE] cancelled → cancelRecording, no send")
-                            speech.cancelRecording()
-                            isPressing = false
-                            cancelArmed = false
-                            return
-                        }
-                        NSLog("[VOICE] awaiting finishRecording…")
-                        await speech.finishRecording()
-                        let captured = speech.transcript
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        NSLog("[VOICE] finishRecording done hasTranscript=\(!captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) isRecording=\(speech.isRecording)")
-                        if !captured.isEmpty {
-                            let prior = text
-                            let merged = prior.isEmpty ? captured : (prior + " " + captured)
-                            NSLog("[VOICE] submitting captured transcript")
-                            sessionStore.setDraft(sessionId, merged)
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                voiceMode = false
-                            }
-                            NSLog("[VOICE] transcript staged for send")
-                            handleSend()
-                            NSLog("[VOICE] handleSend returned")
-                        } else {
-                            NSLog("[VOICE] empty transcript, skip send")
-                        }
-                        isPressing = false
-                        cancelArmed = false
-                    }
-                case .modeSwipe:
-                    handleModeSwipeEnded(value.velocity.width)
-                case .none:
-                    // Tap or sub-threshold motion before pivot →
-                    // nothing to do.
-                    break
-                }
-            }
-    }
-
-    // MARK: - Recording Overlay
-
-    private var recordingOverlay: some View {
-        VStack(spacing: 8) {
-            // Animated bars
-            HStack(spacing: 4) {
-                ForEach(0..<9, id: \.self) { i in
-                    WaveformBar(index: i, color: cancelArmed ? .red : .krakiPrimary)
-                }
-            }
-            .frame(height: 28)
-
-            if cancelArmed {
-                Text("Release to cancel")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Text(speech.transcript.isEmpty ? "Listening…" : speech.transcript)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                    .frame(maxWidth: 240)
-
-                Text("Slide up ↑ to cancel")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(recordingOverlayBackground)
-        .shadow(color: .black.opacity(0.15), radius: 14, y: 4)
-    }
-
-    @ViewBuilder
-    private var recordingOverlayBackground: some View {
-        if #available(iOS 26.0, *) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.clear)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.ultraThickMaterial)
-        }
-    }
-
     // MARK: - Image Attach
 
     @ViewBuilder
@@ -854,8 +637,8 @@ struct MessageInputView: View {
                     .contentShape(Rectangle())
             }
         }
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.4)
+        .disabled(!isIdle || voiceOwnsComposer)
+        .opacity(isIdle && !voiceOwnsComposer ? 1 : 0.4)
     }
 
     // MARK: - Mode-Aware Text Field
@@ -1196,30 +979,6 @@ struct MessageInputView: View {
             selectedPhoto = nil
             imageData = nil
         }
-    }
-}
-
-// MARK: - Waveform Bar (recording overlay)
-
-private struct WaveformBar: View {
-    let index: Int
-    let color: Color
-    @State private var phase: CGFloat = 0.4
-
-    var body: some View {
-        Capsule()
-            .fill(color)
-            .frame(width: 3, height: 6 + phase * 22)
-            .onAppear {
-                let delay = Double(index) * 0.08
-                withAnimation(
-                    .easeInOut(duration: 0.45)
-                        .repeatForever(autoreverses: true)
-                        .delay(delay)
-                ) {
-                    phase = 1.0
-                }
-            }
     }
 }
 

@@ -103,7 +103,11 @@ enum VoiceInputError: LocalizedError, Equatable {
         case .offline:
             return "Reconnect to Kraki before starting voice input."
         case .microphoneDenied:
+            #if os(iOS)
+            return "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone."
+            #else
             return "Microphone access is required. Enable it in System Settings → Privacy & Security → Microphone."
+            #endif
         case .leaseInFlight:
             return "A previous voice request is still finishing. Try again in a moment."
         case .leaseTimedOut:

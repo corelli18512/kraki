@@ -53,8 +53,9 @@ final class AuthManager {
     /// Suite name for the app group UserDefaults shared with the NSE.
     private static let appGroupSuite = "group.chat.kraki.ios"
 
-    /// UserDefaults shared between the app and KrakiNotification extension in
-    /// production. macOS Debug is deliberately isolated from the stable GUI.
+    /// UserDefaults shared with the iOS notification extension in production.
+    /// The macOS Debug app uses its own suite so its device identity and relay
+    /// redirects cannot mutate the stable Prod app.
     private static var sharedDefaults: UserDefaults {
         #if os(macOS)
         #if DEBUG
@@ -435,11 +436,9 @@ final class AuthManager {
         // `applyPreferences` path.
         if let userDict = message["user"] as? [String: Any],
            let prefs = userDict["preferences"] as? [String: Any] {
-            #if os(iOS)
             Task { @MainActor in
                 appState.preferencesManager?.applyRemote(prefs)
             }
-            #endif
         }
 
         appState.voiceCapability = voiceCapability

@@ -286,6 +286,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private static let liveCardID = "__live_card__"
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
+    var onOpenImage: (IOSImagePreviewSelection) -> Void = { _ in }
     var onOpenHTMLArtifact: (ContentRef) -> Void = { _ in }
 
     /// Flat pure-spine data source. `vm.displayMessages` contains one item per renderable persisted message; paging moves the raw seq window,
@@ -316,12 +317,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     init(sessionId: String, appState: AppState, agent: String, bottomContentInset: CGFloat,
          onResolvePermission: @escaping (String, String?, String) -> Void = { _, _, _ in },
          onAnswerQuestion: @escaping (String, String) -> Void = { _, _ in },
+         onOpenImage: @escaping (IOSImagePreviewSelection) -> Void = { _ in },
          onOpenHTMLArtifact: @escaping (ContentRef) -> Void = { _ in }) {
         self.sessionId = sessionId
         self.agentName = agent
         self.bottomContentInset = bottomContentInset
         self.onResolvePermission = onResolvePermission
         self.onAnswerQuestion = onAnswerQuestion
+        self.onOpenImage = onOpenImage
         self.onOpenHTMLArtifact = onOpenHTMLArtifact
         self.vm = ChatViewModel(sessionId: sessionId, appState: appState)
         self.appState = appState
@@ -529,6 +532,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var worstFrameMs: Double = 0
 
     private let overlay = UILabel()
+    private var codeHighlightObserver: NSObjectProtocol?
+    private var codeHighlightSettleWork: DispatchWorkItem?
+    private var pendingCodeHighlightRefresh = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -536,6 +542,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         chatPerfLog.log("[cfg] renderer=textkit localSeamless=\(localSeamless)")
         chatPerfLog.log("[diag] viewDidLoad turns=\(messages.count) ids=\(items.count) winTop=\(vm.windowTopSeq) winBot=\(vm.windowBottomSeq) sessionLast=\(vm.sessionLastSeq) filtered=\(vm.filteredMessages.count)")
         setupCollectionView()
+        codeHighlightObserver = NotificationCenter.default.addObserver(
+            forName: .tkCodeHighlightReady,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleCodeHighlightReady()
+        }
         setupJumpButton()
         if Self.perfOverlayEnabled {
             setupOverlay()
@@ -549,7 +562,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
-    deinit { displayLink?.invalidate() }
+    deinit {
+        displayLink?.invalidate()
+        codeHighlightSettleWork?.cancel()
+        if let codeHighlightObserver {
+            NotificationCenter.default.removeObserver(codeHighlightObserver)
+        }
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -675,6 +694,65 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         for c in collectionView.visibleCells { (c as? TKBubbleCell)?.setBodyInteractive(on) }
     }
 
+    private func handleCodeHighlightReady() {
+        pendingCodeHighlightRefresh = true
+        scheduleCodeHighlightRefreshIfNeeded()
+    }
+
+    private func scheduleCodeHighlightRefreshIfNeeded() {
+        guard pendingCodeHighlightRefresh,
+              collectionView != nil,
+              !collectionView.isDragging,
+              !collectionView.isTracking,
+              !collectionView.isDecelerating else { return }
+        codeHighlightSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.refreshVisibleCodeHighlights()
+        }
+        codeHighlightSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+    }
+
+    private func refreshVisibleCodeHighlights() {
+        guard pendingCodeHighlightRefresh,
+              !collectionView.isDragging,
+              !collectionView.isTracking,
+              !collectionView.isDecelerating else { return }
+        pendingCodeHighlightRefresh = false
+        codeHighlightSettleWork = nil
+
+        for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell,
+                  cell.hasProvisionalCodeHighlight else { continue }
+            let finalContent: TKBubbleContent?
+            if let message = frozenCardMessage(indexPath.item) {
+                finalContent = TKBubbleContent.live(
+                    card: frozenCard(from: message),
+                    agent: agentName,
+                    sessionId: sessionId,
+                    steps: message.steps ?? 0,
+                    isFrozen: true,
+                    frozenTimestamp: message.finishedAt ?? message.timestamp,
+                    attachments: message.contentRefAttachments
+                )
+            } else if indexPath.item < items.count,
+                      let message = message(items[indexPath.item]) {
+                TKBubbleContent.bust(message.id)
+                finalContent = TKBubbleContent.make(
+                    message: message,
+                    sessionId: sessionId,
+                    agent: agentName
+                )
+            } else {
+                finalContent = nil
+            }
+            guard let finalContent, !finalContent.hasProvisionalCodeHighlight else { continue }
+            cell.configure(finalContent, cellWidth: collectionView.bounds.width)
+            cell.setBodyInteractive(true)
+            cell.setNeedsLayout()
+        }
+    }
+
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let t0 = CFAbsoluteTimeGetCurrent()
         let cell = collectionView.dequeueReusableCell(
@@ -683,6 +761,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         cell.attachmentStore = appState.attachmentStore
         cell.onResolvePermission = onResolvePermission
         cell.onAnswerQuestion = onAnswerQuestion
+        cell.onOpenImage = onOpenImage
         cell.onOpenHTMLArtifact = onOpenHTMLArtifact
         cell.onShowTable = { [weak self] layout in
             let table = TKTableSheetViewController(layout: layout)
@@ -1500,6 +1579,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // ever interrupting the user's momentum.
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         KLog.chat("📜 [scroll] settle session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) distBottom=\(Int(distanceToBottom())) following=\(followingBottom) items=\(items.count)")
+        scheduleCodeHighlightRefreshIfNeeded()
         flushPendingApply()
         // Motion fully stopped → resume idle height warming AND the page
         // measurer. The list is now static, so the (possibly expensive)
@@ -1517,6 +1597,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // Finger lifted with no momentum → settle immediately (no
         // didEndDecelerating will follow).
         if !decelerate {
+            scheduleCodeHighlightRefreshIfNeeded()
             flushPendingApply()
             warmer.resume()
             pager.resume()
@@ -1536,6 +1617,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
+        codeHighlightSettleWork?.cancel()
         // NOTE: we deliberately do NOT flush a pending page here. The pending
         // work is the heavy STEP-2 snapshot refresh+apply; running it at the instant the
         // finger touches down would hitch the drag's first frames. It stays
@@ -1979,6 +2061,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
     let bottomContentInset: CGFloat
     let onResolvePermission: (String, String?, String) -> Void
     let onAnswerQuestion: (String, String) -> Void
+    let onOpenImage: (IOSImagePreviewSelection) -> Void
     let onOpenHTMLArtifact: (ContentRef) -> Void
     @Environment(AppState.self) private var appState
 
@@ -1990,6 +2073,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
             bottomContentInset: bottomContentInset,
             onResolvePermission: onResolvePermission,
             onAnswerQuestion: onAnswerQuestion,
+            onOpenImage: onOpenImage,
             onOpenHTMLArtifact: onOpenHTMLArtifact
         )
     }
@@ -1998,6 +2082,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
         vc.updateBottomContentInset(bottomContentInset)
         vc.onResolvePermission = onResolvePermission
         vc.onAnswerQuestion = onAnswerQuestion
+        vc.onOpenImage = onOpenImage
         vc.onOpenHTMLArtifact = onOpenHTMLArtifact
         vc.syncLiveUpdates()
     }

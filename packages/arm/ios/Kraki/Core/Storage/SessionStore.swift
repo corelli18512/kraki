@@ -49,7 +49,8 @@ struct SessionInfo: Identifiable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id, deviceId, deviceName, agent, model, title, autoTitle
-        case state, mode, lastSeq, readSeq, messageCount, createdAt, usage, pinned
+        case state, mode, lastSeq, readSeq
+        case messageCount, createdAt, usage, pinned
     }
 
     init(
@@ -158,6 +159,10 @@ enum SessionActivity: Equatable {
 final class SessionStore {
     var sessions: [String: SessionInfo] = [:]
     var activeSessionId: String?
+    /// Ephemeral UI guard for a manual Mark Unread on the currently open Chat.
+    /// Tentacle remains durable authority; this only prevents focus/live-event
+    /// auto-read hooks from immediately undoing an intentional rollback.
+    private(set) var autoReadSuppressedSessions: Set<String> = []
     var pinnedSessions: Set<String> = []
     var sessionModes: [String: SessionMode] = [:]
     var sessionUsage: [String: SessionUsage] = [:]
@@ -197,7 +202,7 @@ final class SessionStore {
     }
 
     /// Debounce window for save coalescing. Many small mutations in
-    /// one burst (bumpLastSeq, setPreview, setMode, …) should result
+    /// one burst (observeLastSeq, setPreview, setMode, …) should result
     /// in one write, not N. The snapshot is a cold-launch optimisation
     /// — `session_list` re-authoritatively overwrites it within seconds
     /// of WS connect — so we can afford a long debounce and lean on the
@@ -378,13 +383,11 @@ final class SessionStore {
 
     // MARK: - Computed unread (seq-derived)
 
-    /// Per-session unread count, derived from `lastSeq − readSeq`.
-    /// Mirrors the WhatsApp / Telegram / Slack model: there is no
-    /// separate counter to drift out of sync; `lastSeq` and `readSeq`
-    /// are both monotonic and authoritative.
+    /// Session-level unread indicator. The cursor gap is intentionally not a
+    /// message count: Tentacle owns both cursors and Clients project one dot.
     func unreadCount(_ id: String) -> Int {
         guard let s = sessions[id] else { return 0 }
-        return max(0, s.lastSeq - s.readSeq)
+        return s.readSeq < s.lastSeq ? 1 : 0
     }
 
     /// Convenience boolean for badge-style consumers (red dot).
@@ -402,14 +405,13 @@ final class SessionStore {
     // authoritative without rewriting every test, while production
     // code continues to use the seq-based API directly.
 
-    /// Counter view derived from `lastSeq − readSeq`.
+    /// Compatibility map for callers that still consume count-shaped state.
+    /// Values remain boolean-shaped to match the product contract.
     var unreadCounts: [String: Int] {
-        var out: [String: Int] = [:]
-        for (id, s) in sessions {
-            let c = max(0, s.lastSeq - s.readSeq)
-            if c > 0 { out[id] = c }
-        }
-        return out
+        Dictionary(uniqueKeysWithValues: sessions.keys.compactMap { id in
+            let count = unreadCount(id)
+            return count > 0 ? (id, count) : nil
+        })
     }
 
     /// Simulate "a new message arrived" by bumping `lastSeq` on the
@@ -484,7 +486,7 @@ final class SessionStore {
     }
 
     var totalUnread: Int {
-        sessions.values.reduce(0) { $0 + max(0, $1.lastSeq - $1.readSeq) }
+        sessions.keys.reduce(0) { $0 + unreadCount($1) }
     }
 
     // MARK: - Session CRUD
@@ -496,6 +498,7 @@ final class SessionStore {
         let pinned = digest.pinned ?? pinnedSessions.contains(digest.id)
 
         if var existing = sessions[digest.id] {
+            let previousReadSeq = existing.readSeq
             existing.deviceId = deviceId
             existing.deviceName = deviceName
             existing.agent = digest.agent
@@ -504,24 +507,19 @@ final class SessionStore {
             existing.autoTitle = digest.autoTitle
             existing.state = digest.state
             existing.mode = mode
-            // Monotonic: never let a digest pull our seqs backward.
-            // This is the standard cross-device pattern — both
-            // counters move forward only, and unread = max(0, last - read).
-            existing.lastSeq = max(existing.lastSeq, digest.lastSeq)
-            existing.readSeq = max(existing.readSeq, digest.readSeq)
-            // Defense in depth: clamp readSeq to lastSeq. A readSeq
-            // greater than lastSeq is logically impossible (you can't
-            // have read past the last known message) and indicates
-            // upstream pollution — e.g. an earlier client bug that
-            // sent a mark_read using a transient envelope seq from a
-            // different counter, which tentacle then persisted. The
-            // clamp guarantees the badge can still light up when a
-            // fresh per-session seq comes in.
-            existing.readSeq = min(existing.readSeq, existing.lastSeq)
+            // session_list is Tentacle's reconnect authority. Replace both
+            // cursors, including a legitimate manual-unread rollback.
+            existing.lastSeq = max(0, digest.lastSeq)
+            existing.readSeq = min(max(0, digest.readSeq), existing.lastSeq)
             existing.messageCount = digest.messageCount
             existing.usage = digest.usage
             existing.pinned = pinned
             sessions[digest.id] = existing
+            if existing.readSeq < previousReadSeq && existing.readSeq < existing.lastSeq {
+                suppressAutoRead(digest.id)
+            } else if existing.readSeq >= existing.lastSeq {
+                allowAutoRead(digest.id)
+            }
         } else {
             sessions[digest.id] = SessionInfo(
                 id: digest.id,
@@ -533,8 +531,8 @@ final class SessionStore {
                 autoTitle: digest.autoTitle,
                 state: digest.state,
                 mode: mode,
-                lastSeq: digest.lastSeq,
-                readSeq: min(digest.readSeq, digest.lastSeq),
+                lastSeq: max(0, digest.lastSeq),
+                readSeq: min(max(0, digest.readSeq), max(0, digest.lastSeq)),
                 messageCount: digest.messageCount,
                 createdAt: date,
                 usage: digest.usage,
@@ -561,8 +559,7 @@ final class SessionStore {
         if pinned {
             pinnedSessions.insert(digest.id)
         }
-        // Unread is computed on demand from lastSeq − readSeq; no
-        // separate state to seed here.
+        // Unread is projected from Tentacle's authoritative cursor pair.
         scheduleSave()
     }
 
@@ -573,6 +570,7 @@ final class SessionStore {
         sessionUsage.removeValue(forKey: id)
         sessionPreviews.removeValue(forKey: id)
         drafts.removeValue(forKey: id)
+        autoReadSuppressedSessions.remove(id)
         scheduleSave()
     }
 
@@ -679,36 +677,64 @@ final class SessionStore {
 
     // MARK: - Read / unread (seq-derived)
 
-    /// Move a session's `readSeq` forward. Monotonic — never moves
-    /// backward, so out-of-order `session_read` echoes from the
-    /// server / other devices are safe. Local "mark as read" calls
-    /// from this device also pass through here.
-    ///
-    /// Additionally clamps `readSeq` to `lastSeq` — a readSeq greater
-    /// than lastSeq is logically impossible and indicates upstream
-    /// pollution (see the same defense in `upsertSession`).
+    /// Optimistic local projection for an explicit Mark Read command.
     func markRead(_ id: String, seq: Int) {
-        guard var s = sessions[id] else { return }
-        let clamped = min(seq, s.lastSeq)
-        if clamped > s.readSeq {
-            s.readSeq = clamped
-            sessions[id] = s
-            scheduleSave()
-        }
+        guard var session = sessions[id] else { return }
+        let clamped = min(max(0, seq), session.lastSeq)
+        guard clamped > session.readSeq else { return }
+        session.readSeq = clamped
+        sessions[id] = session
+        scheduleSave()
     }
 
-    /// Move a session's `lastSeq` forward when a new message has been
-    /// observed. Monotonic — never moves backward. Called from the
-    /// message router on every inbound producer envelope that carries
-    /// a `seq`. The unread count is `lastSeq − readSeq`, so advancing
-    /// `lastSeq` is what makes a session light up as unread.
-    func bumpLastSeq(_ id: String, seq: Int) {
-        guard var s = sessions[id] else { return }
-        if seq > s.lastSeq {
-            s.lastSeq = seq
-            sessions[id] = s
-            scheduleSave()
+    /// Apply Tentacle's authoritative session_read cursor in either direction.
+    /// A lower value is the synchronized result of Mark Unread.
+    func applyAuthoritativeReadSeq(_ id: String, seq: Int) {
+        guard var session = sessions[id] else { return }
+        let previous = session.readSeq
+        // A session_read cursor is also evidence of the producer's head. The
+        // next session_list will reconcile any larger head authoritatively.
+        session.lastSeq = max(session.lastSeq, max(0, seq))
+        session.readSeq = min(max(0, seq), session.lastSeq)
+        sessions[id] = session
+        if session.readSeq < previous && session.readSeq < session.lastSeq {
+            suppressAutoRead(id)
+        } else if session.readSeq >= session.lastSeq {
+            allowAutoRead(id)
         }
+        scheduleSave()
+    }
+
+    /// Track the live Spine head without inferring unread locally. Tentacle's
+    /// closing session_list snapshot owns the matching readSeq decision.
+    func observeLastSeq(_ id: String, seq: Int) {
+        guard var session = sessions[id], seq > session.lastSeq else { return }
+        session.lastSeq = seq
+        sessions[id] = session
+        scheduleSave()
+    }
+
+    /// Optimistic projection of Tentacle's manual-unread operation.
+    func markUnread(_ id: String) {
+        guard var session = sessions[id], session.lastSeq > 0 else { return }
+        suppressAutoRead(id)
+        let rolledBack = min(session.readSeq, max(0, session.lastSeq - 1))
+        guard rolledBack != session.readSeq else { return }
+        session.readSeq = rolledBack
+        sessions[id] = session
+        scheduleSave()
+    }
+
+    func suppressAutoRead(_ id: String) {
+        autoReadSuppressedSessions.insert(id)
+    }
+
+    func allowAutoRead(_ id: String) {
+        autoReadSuppressedSessions.remove(id)
+    }
+
+    func isAutoReadSuppressed(_ id: String) -> Bool {
+        autoReadSuppressedSessions.contains(id)
     }
 
     // MARK: - Preview / Draft
@@ -732,6 +758,7 @@ final class SessionStore {
         KLog.d("📂 [snapshot] reset: sessions=\(sessions.count) → 0 (clearing persistent snapshot)")
         sessions.removeAll()
         activeSessionId = nil
+        autoReadSuppressedSessions.removeAll()
         pinnedSessions.removeAll()
         sessionModes.removeAll()
         sessionUsage.removeAll()
@@ -804,9 +831,9 @@ final class SessionStore {
         setPinned(id, pinned)
     }
 
-    /// Set session read seq (alias).
+    /// Apply Tentacle's authoritative session_read cursor (alias).
     func setSessionReadSeq(_ id: String, seq: Int) {
-        markRead(id, seq: seq)
+        applyAuthoritativeReadSeq(id, seq: seq)
     }
 
     /// Set session usage from a raw dictionary.
@@ -827,10 +854,8 @@ final class SessionStore {
         setUsage(id, parsed)
     }
 
-    /// Set session preview text — pure data plumbing. Unread is now
-    /// derived from `lastSeq − readSeq` and lives entirely in the
-    /// seq pipeline (see `bumpLastSeq` / `markRead`), so preview
-    /// updates no longer carry an unread side-effect.
+    /// Set session preview text — pure data plumbing. Unread lives on
+    /// Tentacle's authoritative cursor pair, so preview has no side effect.
     func setSessionPreview(
         _ id: String,
         text: String,

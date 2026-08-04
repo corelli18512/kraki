@@ -8,7 +8,10 @@ import Foundation
 /// - A terminal record owns its turn. If an agent_message landed first, its
 ///   draft/attachments are folded into the terminal record and the agent record
 ///   is hidden.
-/// - A user-bounded turn exposes at most one agent_message: the final one.
+/// - A logical lifecycle exposes at most one conclusion, except when an idle
+///   boundary is followed by an independently resumed/recovered conclusion.
+/// - Duplicate terminal records without a reopened lifecycle collapse to the
+///   latest terminal record.
 enum TurnSpineProjection {
     private static let traceTypes: Set<String> = [
         "tool_start", "tool_complete", "agent_narration", "active",
@@ -52,7 +55,7 @@ enum TurnSpineProjection {
         }
         flushSegment()
 
-        return keepOnlyFinalConclusionPerUserTurn(projected)
+        return keepOnlyFinalConclusionPerLogicalLifecycle(projected)
     }
 
     private static func normalizedTerminal(
@@ -102,10 +105,12 @@ enum TurnSpineProjection {
         return result
     }
 
-    private static func keepOnlyFinalConclusionPerUserTurn(_ messages: [ChatMessage]) -> [ChatMessage] {
+    private static func keepOnlyFinalConclusionPerLogicalLifecycle(_ messages: [ChatMessage]) -> [ChatMessage] {
         var retainedConclusionIndices = Set<Int>()
         var selectedIndex: Int?
         var terminalOwnsTurn = false
+        var crossedIdleBoundary = false
+        var sawSteerAfterIdleBoundary = false
 
         func retainSelected() {
             if let selectedIndex { retainedConclusionIndices.insert(selectedIndex) }
@@ -121,28 +126,41 @@ enum TurnSpineProjection {
                     retainSelected()
                     selectedIndex = nil
                     terminalOwnsTurn = false
+                    crossedIdleBoundary = false
+                    sawSteerAfterIdleBoundary = false
+                } else if crossedIdleBoundary {
+                    sawSteerAfterIdleBoundary = true
                 }
             case "agent_message":
-                // An idle boundary closes the preceding segment even when no
-                // new user_message exists (production can emit a recovered or
-                // resumed agent-only turn). Do not let a prior terminal hide
-                // that independent conclusion. Consecutive terminals still
-                // replace one another across idle markers below.
-                if terminalOwnsTurn,
-                   index > messages.startIndex,
-                   messages[index - 1].type == "idle" {
+                // `idle` is a boundary, not necessarily the immediately prior
+                // record: a persisted steer may arrive between idle and a
+                // recovered/resumed agent reply. The old adjacent-record check
+                // hid that reply behind the previous conclusion.
+                if crossedIdleBoundary {
                     retainSelected()
                     selectedIndex = nil
                     terminalOwnsTurn = false
                 }
                 if !terminalOwnsTurn { selectedIndex = index }
+                crossedIdleBoundary = false
+                sawSteerAfterIdleBoundary = false
             case "turn_status", "interrupted_turn":
                 // Terminal always wins over a normal reply. Duplicate terminal
                 // records can straddle idle markers (seen in production abort
-                // history), so keep replacing with the latest terminal until
-                // the next user boundary.
+                // history), so keep replacing with the latest terminal unless
+                // a steer explicitly reopened the lifecycle after that idle.
+                if crossedIdleBoundary && sawSteerAfterIdleBoundary {
+                    retainSelected()
+                    selectedIndex = nil
+                    terminalOwnsTurn = false
+                }
                 selectedIndex = index
                 terminalOwnsTurn = true
+                crossedIdleBoundary = false
+                sawSteerAfterIdleBoundary = false
+            case "idle":
+                crossedIdleBoundary = true
+                sawSteerAfterIdleBoundary = false
             default:
                 break
             }

@@ -349,7 +349,6 @@ struct SessionsSidebarView: View {
             }
             Button(appState.sessionStore.isUnread(session.id) ? "Mark Read" : "Mark Unread") {
                 if appState.sessionStore.isUnread(session.id) {
-                    appState.sessionStore.markRead(session.id, seq: session.lastSeq)
                     appState.commandSender?.markRead(sessionId: session.id, seq: session.lastSeq)
                 } else {
                     appState.commandSender?.markUnread(sessionId: session.id)
@@ -370,13 +369,12 @@ struct SessionsSidebarView: View {
 
     private func selectSession(_ sessionId: String) {
         selectedSessionId = sessionId
-        appState.sessionStore.clearUnread(sessionId)
     }
 
     private func accessibilityValue(for session: SessionInfo) -> String {
         let preview = appState.sessionStore.sessionPreviews[session.id]
         let hasDraft = appState.sessionStore.drafts[session.id]?.isEmpty == false
-        let status = MacSessionSidebarStatus.resolve(
+        let status = SessionCardStatus.resolve(
             sessionState: session.state,
             previewType: preview?.type,
             deviceOnline: appState.deviceStore.devices[session.deviceId]?.online,
@@ -458,10 +456,13 @@ private struct MacSidebarSessionRow: View {
         appState.sessionStore.sessionPreviews[session.id]
     }
 
-    private var machineName: String? {
-        let name = session.deviceName.isEmpty ? device?.name : session.deviceName
-        guard let name, !name.isEmpty else { return nil }
-        return name
+    private var projection: SessionCardProjection {
+        SessionCardProjection.make(
+            session: session,
+            device: device,
+            preview: preview,
+            draft: appState.sessionStore.drafts[session.id]
+        )
     }
 
     var body: some View {
@@ -507,12 +508,12 @@ private struct MacSidebarSessionRow: View {
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(session.displayTitle)
+            Text(projection.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.textTitle)
                 .lineLimit(1)
 
-            if session.pinned {
+            if projection.isPinned {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Color.krakiPrimary)
@@ -520,15 +521,14 @@ private struct MacSidebarSessionRow: View {
 
             Spacer(minLength: 4)
 
-            if appState.sessionStore.isUnread(session.id) {
+            if projection.isUnread {
                 Circle()
                     .fill(Color.red)
                     .frame(width: 7, height: 7)
             }
 
-            let ts = SessionTimeFormatter.format(displayTimestamp)
-            if !ts.isEmpty {
-                Text(ts)
+            if !projection.timeLabel.isEmpty {
+                Text(projection.timeLabel)
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textMuted)
             }
@@ -537,7 +537,7 @@ private struct MacSidebarSessionRow: View {
 
     private var metadataRow: some View {
         HStack(spacing: 6) {
-            if let machineName {
+            if let machineName = projection.machineName {
                 Text(machineName)
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textSecondary)
@@ -545,13 +545,13 @@ private struct MacSidebarSessionRow: View {
                     .truncationMode(.tail)
             }
 
-            if machineName != nil, let model = session.model, !model.isEmpty {
+            if projection.machineName != nil, let model = projection.model, !model.isEmpty {
                 Rectangle()
                     .fill(Color.borderPrimary)
                     .frame(width: 1, height: 9)
             }
 
-            if let model = session.model, !model.isEmpty {
+            if let model = projection.model, !model.isEmpty {
                 Text(model)
                     .font(.system(size: 10))
                     .foregroundStyle(Color.textMuted)
@@ -564,34 +564,13 @@ private struct MacSidebarSessionRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Last-activity timestamp, falling back to `createdAt` so fresh
-    /// sessions still show a time after a cold relaunch (mirrors iOS).
-    private var displayTimestamp: String {
-        if let ts = preview?.timestamp, !ts.isEmpty { return ts }
-        return ISO8601.withFractional.string(from: session.createdAt)
-    }
-
     @ViewBuilder
     private var previewRow: some View {
-        let draft = appState.sessionStore.drafts[session.id]
-        let hasDraft = draft?.isEmpty == false
-
         HStack(spacing: 5) {
-            MacSessionStatusGlyph(
-                sessionState: session.state,
-                previewType: preview?.type,
-                deviceOnline: device?.online,
-                hasDraft: hasDraft
-            )
+            MacSessionStatusGlyph(status: projection.status, hasDraft: projection.isDraft)
 
-            if let draft, !draft.isEmpty {
-                Text(draft.collapseWhitespace())
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            } else if let text = preview?.text, !text.isEmpty {
-                Text(text.collapseWhitespace())
+            if let previewText = projection.previewText {
+                Text(previewText)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textSecondary)
                     .lineLimit(1)
@@ -608,70 +587,14 @@ private struct MacSidebarSessionRow: View {
     }
 }
 
-enum MacSessionSidebarStatus: Equatable {
-    case active, compacting, waiting, approval, error, offline
-    case agentMessage, humanMessage, idle
-
-    static func resolve(
-        sessionState: SessionState,
-        previewType: String?,
-        deviceOnline: Bool?,
-        hasDraft: Bool = false
-    ) -> Self {
-        if deviceOnline == false { return .offline }
-        switch previewType {
-        case "question": return .waiting
-        case "permission": return .approval
-        case "error": return .error
-        default: break
-        }
-        switch sessionState {
-        case .active: return .active
-        case .compacting: return .compacting
-        case .idle:
-            if hasDraft { return .humanMessage }
-            switch previewType {
-            case "agent", "agent_message": return .agentMessage
-            case "user", "user_message": return .humanMessage
-            default: return .idle
-            }
-        }
-    }
-
-    var accessibilityLabel: String? {
-        switch self {
-        case .active: return "Running"
-        case .compacting: return "Compacting"
-        case .waiting: return "Waiting for an answer"
-        case .approval: return "Waiting for approval"
-        case .error: return "Failed"
-        case .offline: return "Offline"
-        case .agentMessage: return "Last message from agent"
-        case .humanMessage: return "Last message from you"
-        case .idle: return nil
-        }
-    }
-}
-
 /// A fixed 16pt leading slot that expresses coarse Session state without
 /// using loading language. The animated dots mean "active work"; they do
 /// not imply progress, network loading, or a specific tool call.
 private struct MacSessionStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    let sessionState: SessionState
-    let previewType: String?
-    let deviceOnline: Bool?
-    let hasDraft: Bool
-
-    private var status: MacSessionSidebarStatus {
-        .resolve(
-            sessionState: sessionState,
-            previewType: previewType,
-            deviceOnline: deviceOnline,
-            hasDraft: hasDraft
-        )
-    }
+    let status: SessionCardStatus
+    var hasDraft: Bool = false
 
     var body: some View {
         Group {
@@ -836,9 +759,12 @@ struct MacSessionSpeakerGlyphRegressionView: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 8) {
                     MacSessionStatusGlyph(
-                        sessionState: row.1,
-                        previewType: row.2,
-                        deviceOnline: row.3,
+                        status: SessionCardStatus.resolve(
+                            sessionState: row.1,
+                            previewType: row.2,
+                            deviceOnline: row.3,
+                            hasDraft: row.4
+                        ),
                         hasDraft: row.4
                     )
                     Text(row.0)

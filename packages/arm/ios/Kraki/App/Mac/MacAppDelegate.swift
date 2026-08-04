@@ -126,23 +126,36 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // off-screen and never activated, and it never touches focus, the
         // Dock, or the foreground app. A lightweight file-watch lets an
         // external tool request a shot by touching a sentinel file.
-        if ProcessInfo.processInfo.environment["KRAKI_DEV_LOCAL"] == "1" {
+        let environment = ProcessInfo.processInfo.environment
+        let devLocal = environment["KRAKI_DEV_LOCAL"] == "1"
+        let headlessShot = environment["KRAKI_HEADLESS_SHOT"] == "1"
+        if devLocal {
             // The shot watcher is harmless in normal viewing — it only
             // renders on an explicit file trigger.
             startHeadlessShotWatcher()
-            // Off-screen parking is ONLY for headless capture runs. If we
-            // parked on every dev-local launch the user could never see
-            // the window during normal local builds. Opt in explicitly.
-            if ProcessInfo.processInfo.environment["KRAKI_HEADLESS_SHOT"] == "1" {
-                ensureMainWindowLaidOutOffscreen()
-            } else {
-                // Normal local-build viewing. A shell-launched (`open`)
-                // SwiftUI WindowGroup window never gets user-driven
-                // activation, so it stays parked at a ~108x105 placeholder
-                // surface and never lays out. Do ONE deferred inflate:
-                // size it to 1100x720, center on the built-in display, and
-                // bring it to the front. One-shot (not a repeating timer)
-                // so we don't fight SwiftUI's own layout pass.
+        }
+        if headlessShot {
+            ensureMainWindowLaidOutOffscreen()
+        } else {
+            let automatedWindowMode = nativeAutomation || [
+                "KRAKI_HTML_ARTIFACT_BENCH",
+                "KRAKI_IMAGE_PREVIEW_BENCH",
+                "KRAKI_CORETEXT_SCROLL_BENCH",
+                "KRAKI_CORETEXT_BENCH",
+                "KRAKI_CODE_HIGHLIGHT_BENCH",
+                "KRAKI_CODE_HIGHLIGHT_UPGRADE_BENCH",
+                "KRAKI_VOICE_TRANSCRIPT_BENCH",
+                "KRAKI_RENDER_BUBBLE_TEST",
+                "KRAKI_RENDER_CHAT_TEST",
+                "KRAKI_RENDER_COMPOSER_TEST",
+                "KRAKI_E2E_SELFTEST",
+                "KRAKI_MAC_CHAT_SNAPSHOT_TEST",
+                "KRAKI_MAC_CHAT_PERF_PAGE",
+            ].contains { environment[$0] == "1" }
+            if !automatedWindowMode {
+                // Any ordinary foreground Debug launch may start with the
+                // tiny SwiftUI placeholder surface. Inflate only when needed;
+                // this covers both production-relay Dev and local-relay Dev.
                 inflateAndCenterMainWindowOnce()
             }
         }
@@ -296,6 +309,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
         let canvas = MacZoomableImageView(frame: NSRect(x: 0, y: 0, width: 600, height: 420))
         canvas.image = image
+        var backdropCloseCount = 0
+        canvas.onBackdropClick = { backdropCloseCount += 1 }
+        let imageClickPreserved = !canvas.clickBackdropForRegression(
+            at: CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY)
+        ) && backdropCloseCount == 0
+        let backdropCloses = canvas.clickBackdropForRegression(at: CGPoint(x: 1, y: 1))
+            && backdropCloseCount == 1
         canvas.setZoom(20)
         let upperClamp = abs(canvas.zoomForRegression - 8) < 0.001
         canvas.setZoom(0.1)
@@ -327,11 +347,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                     && upperClamp
                     && lowerClamp
                     && zoomed
+                    && imageClickPreserved
+                    && backdropCloses
                     && captureOK
                     && frame.width > 0
                     && frame.height > 0
                 NSLog(
-                    "[image-preview-regression] click=%d items=%d nativeButton=%d hitTest=%d separate=%d compactStack=%d pureNoBubble=%d upperClamp=%d lowerClamp=%d zoomed=%d capture=%d frame=%.0fx%.0f passed=%d",
+                    "[image-preview-regression] click=%d items=%d nativeButton=%d hitTest=%d separate=%d compactStack=%d pureNoBubble=%d upperClamp=%d lowerClamp=%d zoomed=%d imageClick=%d backdropClose=%d capture=%d frame=%.0fx%.0f passed=%d",
                     opened ? 1 : 0,
                     openedCount,
                     result.found ? 1 : 0,
@@ -342,6 +364,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                     upperClamp ? 1 : 0,
                     lowerClamp ? 1 : 0,
                     zoomed ? 1 : 0,
+                    imageClickPreserved ? 1 : 0,
+                    backdropCloses ? 1 : 0,
                     captureOK ? 1 : 0,
                     frame.width,
                     frame.height,
@@ -1068,7 +1092,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
             guard let target = NSScreen.screens.first ?? NSScreen.main ?? builtin else { return }
             let vf = target.visibleFrame
-            let size = NSSize(width: 1100, height: 720)
+            let size = MacLocalConfigStore.shared.constrainedMainWindowSize(to: vf.size)
             let origin = NSPoint(x: vf.midX - size.width / 2, y: vf.midY - size.height / 2)
             for window in NSApp.windows
             where window.styleMask.contains(.titled) && window.contentView != nil {
