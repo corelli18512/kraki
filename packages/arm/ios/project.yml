@@ -165,8 +165,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: 2
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_CFBundleDisplayName: Kraki
