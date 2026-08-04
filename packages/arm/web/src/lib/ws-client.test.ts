@@ -3,6 +3,7 @@ import { decodeFrame } from '@coinfra/pulse';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';
+import { allowAutoRead, isAutoReadSuppressed } from './read-visibility';
 
 /** Recover the inner producer message from a captured wire send. Reliable
  *  consumer messages now ride pulse: the arm emits a `unicast` envelope whose
@@ -99,6 +100,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  allowAutoRead('sess-1');
   globalThis.WebSocket = OriginalWebSocket;
   messageProvider.setSend((msg) => wsClient.sendEncrypted(msg));
   vi.restoreAllMocks();
@@ -317,6 +319,73 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().cards.get('sess-1')?.text).toBe('Reset');
     });
 
+    it('accepts authoritative read cursor rollbacks and later advances', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'pi', state: 'idle', messageCount: 10, lastSeq: 10, readSeq: 10,
+      });
+
+      receiveInner({
+        type: 'session_read', deviceId: 'dev-1', seq: 20, timestamp: '',
+        sessionId: 'sess-1', payload: { seq: 9 },
+      });
+      expect(useStore.getState().sessions.get('sess-1')?.readSeq).toBe(9);
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(isAutoReadSuppressed('sess-1')).toBe(true);
+
+      receiveInner({
+        type: 'session_read', deviceId: 'dev-1', seq: 21, timestamp: '',
+        sessionId: 'sess-1', payload: { seq: 10 },
+      });
+      expect(useStore.getState().sessions.get('sess-1')?.readSeq).toBe(10);
+      expect(useStore.getState().unreadCount.has('sess-1')).toBe(false);
+      expect(isAutoReadSuppressed('sess-1')).toBe(false);
+    });
+
+    it('uses the Tentacle processing order for read followed by unread', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'pi', state: 'idle', messageCount: 10, lastSeq: 10, readSeq: 9,
+      });
+
+      receiveInner({
+        type: 'session_read', deviceId: 'dev-1', seq: 30, timestamp: '',
+        sessionId: 'sess-1', payload: { seq: 10 },
+      });
+      receiveInner({
+        type: 'session_read', deviceId: 'dev-1', seq: 31, timestamp: '',
+        sessionId: 'sess-1', payload: { seq: 9 },
+      });
+
+      expect(useStore.getState().sessions.get('sess-1')?.readSeq).toBe(9);
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+    });
+
+    it('restores an offline manual-unread result from session_list', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'pi', state: 'idle', messageCount: 10, lastSeq: 10, readSeq: 10,
+      });
+
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-1', seq: 40, timestamp: '',
+        payload: { sessions: [{
+          id: 'sess-1', agent: 'pi', state: 'idle', mode: 'discuss',
+          lastSeq: 10, readSeq: 9, messageCount: 10, createdAt: '',
+        }] },
+      });
+
+      expect(useStore.getState().sessions.get('sess-1')?.readSeq).toBe(9);
+      expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
+      expect(isAutoReadSuppressed('sess-1')).toBe(true);
+    });
+
     it('transitions the session to idle on an idle message', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
@@ -379,7 +448,8 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().unreadCount.get('sess-1')).toBeUndefined();
       expect(useStore.getState().messages.get('sess-1')?.length).toBe(2);
 
-      // New live message after batch should increment unread
+      // A live turn close updates Chat immediately but unread remains owned by
+      // the authoritative session_list digest that follows it.
       receiveInner({
         type: 'agent_message',
         deviceId: 'dev-1',
@@ -396,7 +466,15 @@ describe('KrakiWSClient', () => {
         sessionId: 'sess-1',
         payload: {},
       });
+      expect(useStore.getState().unreadCount.has('sess-1')).toBe(false);
 
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-1', seq: 5, timestamp: '',
+        payload: { sessions: [{
+          id: 'sess-1', agent: 'copilot', state: 'idle', mode: 'execute',
+          lastSeq: 4, readSeq: 2, messageCount: 4, createdAt: '',
+        }] },
+      });
       expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
     });
 
@@ -584,6 +662,25 @@ describe('KrakiWSClient', () => {
       expect(sent.type).toBe('answer');
       expect(sent.payload.questionId).toBe('q-1');
       expect(sent.payload.answer).toBe('A');
+    });
+
+    it('manual unread suppresses automatic read until an explicit read', async () => {
+      const client = await setupClient();
+      useStore.getState().upsertSession({
+        id: 'sess-1', deviceId: 'dev-1', deviceName: 'MacBook',
+        agent: 'pi', state: 'idle', messageCount: 10, lastSeq: 10, readSeq: 10,
+      });
+
+      client.markUnread('sess-1');
+      expect((await waitForDecodedSend(lastWsInstance)).type).toBe('mark_unread');
+      lastWsInstance.sentMessages = [];
+
+      client.markRead('sess-1', undefined, true);
+      await Promise.resolve();
+      expect(lastWsInstance.sentMessages).toHaveLength(0);
+
+      client.markRead('sess-1');
+      expect((await waitForDecodedSend(lastWsInstance)).type).toBe('mark_read');
     });
 
     it('killSession sends correct message', async () => {

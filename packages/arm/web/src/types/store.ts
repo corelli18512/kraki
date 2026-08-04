@@ -56,6 +56,12 @@ export interface SessionPreview {
   timestamp: string;
 }
 
+export interface WebSessionSummary extends SessionSummary {
+  /** Tentacle-owned Spine head/read cursors carried by session_list. */
+  lastSeq?: number;
+  readSeq?: number;
+}
+
 // --- Store ---
 
 export interface AppState {
@@ -69,7 +75,7 @@ export interface AppState {
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown> } | null;
 
   // Data
-  sessions: Map<string, SessionSummary>;
+  sessions: Map<string, WebSessionSummary>;
   devices: Map<string, DeviceSummary>;
   messages: Map<string, ChatMessage[]>;
   cards: Map<string, SessionCard>;
@@ -135,8 +141,8 @@ export interface AppActions {
   setReconnectState: (attempts: number, nextDelayMs: number | null) => void;
 
   // Data
-  setSessions: (sessions: SessionSummary[]) => void;
-  upsertSession: (session: SessionSummary) => void;
+  setSessions: (sessions: WebSessionSummary[]) => void;
+  upsertSession: (session: WebSessionSummary) => void;
   removeSession: (sessionId: string) => void;
   setDevices: (devices: DeviceSummary[]) => void;
   upsertDevice: (device: DeviceSummary) => void;

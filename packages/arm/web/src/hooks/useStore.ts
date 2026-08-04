@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Store, ChatMessage, ConnectionStatus, PendingInputMessage, SessionCard } from '../types/store';
-import type { SessionSummary, DeviceSummary } from '@kraki/protocol';
+import type { Store, ChatMessage, ConnectionStatus, PendingInputMessage, SessionCard, WebSessionSummary } from '../types/store';
+import type { DeviceSummary } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 
 // --- Custom Map/Set JSON serialization ---
@@ -45,7 +45,7 @@ const initialState = {
   reconnectAttempts: 0,
   nextReconnectDelayMs: null,
   user: null,
-  sessions: new Map<string, SessionSummary>(),
+  sessions: new Map<string, WebSessionSummary>(),
   devices: new Map<string, DeviceSummary>(),
   messages: new Map<string, ChatMessage[]>(),
   cards: new Map<string, SessionCard>(),
@@ -86,13 +86,33 @@ export const useStore = create<Store>()(persist((set) => ({
     }),
 
   setSessions: (sessions) =>
-    set({ sessions: new Map(sessions.map((s) => [s.id, s])) }),
+    set((state) => {
+      const incomingIds = new Set(sessions.map((session) => session.id));
+      const unreadCount = new Map(
+        [...state.unreadCount].filter(([sessionId]) => incomingIds.has(sessionId)),
+      );
+      for (const session of sessions) {
+        if (session.lastSeq !== undefined && session.readSeq !== undefined) {
+          if (session.readSeq < session.lastSeq) unreadCount.set(session.id, 1);
+          else unreadCount.delete(session.id);
+        }
+      }
+      return {
+        sessions: new Map(sessions.map((session) => [session.id, session])),
+        unreadCount,
+      };
+    }),
 
   upsertSession: (session) =>
     set((state) => {
-      const next = new Map(state.sessions);
-      next.set(session.id, session);
-      return { sessions: next };
+      const sessions = new Map(state.sessions);
+      sessions.set(session.id, session);
+      const unreadCount = new Map(state.unreadCount);
+      if (session.lastSeq !== undefined && session.readSeq !== undefined) {
+        if (session.readSeq < session.lastSeq) unreadCount.set(session.id, 1);
+        else unreadCount.delete(session.id);
+      }
+      return { sessions, unreadCount };
     }),
 
   removeSession: (sessionId) => {

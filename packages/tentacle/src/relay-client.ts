@@ -143,6 +143,13 @@ export class RelayClient {
     'session_ended',
     'idle',
   ]);
+  /** Persisted boundaries that preserve/create a lastSeq > readSeq gap. Idle is
+   *  contextual: only sendTurnIdle marks it, while create/fork/import idles do
+   *  not manufacture unread state. */
+  private static readonly UNREAD_BOUNDARY_TYPES = new Set([
+    'system_message',
+    'interrupted_turn',
+  ]);
   /** Tool/narration steps of the in-progress turn. No longer broadcast live —
    *  the tentacle folds them into the server-owned status card (see
    *  {@link CardManager}) and mirrors the raw step to `trace.jsonl` for the
@@ -277,7 +284,7 @@ export class RelayClient {
         ...payload,
         ...(turnArtifacts.length > 0 && { turnArtifacts }),
       },
-    });
+    }, payload.reason !== 'aborted');
   }
 
   private dispatchInput(sessionId: string, task: () => Promise<void>): Promise<void> {
@@ -629,7 +636,7 @@ export class RelayClient {
       type: 'turn_status',
       sessionId,
       payload: { draft: snapshot.draft, action, finishedAt, steps },
-    });
+    }, action.type === 'failed');
     this.clearOpenQuestions(sessionId);
     this.card.clear(sessionId);
   }
@@ -1230,14 +1237,17 @@ export class RelayClient {
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
           break;
-        case 'mark_read':
-          this.sessionManager.markRead(sessionId, msg.payload.seq);
-          this.send({
-            type: 'session_read',
-            sessionId,
-            payload: { seq: msg.payload.seq },
-          });
+        case 'mark_read': {
+          const readSeq = this.sessionManager.markRead(sessionId, msg.payload.seq);
+          if (readSeq !== null) {
+            this.send({
+              type: 'session_read',
+              sessionId,
+              payload: { seq: readSeq },
+            });
+          }
           break;
+        }
         case 'mark_unread': {
           const rolledBack = this.sessionManager.markUnread(sessionId);
           if (rolledBack !== null) {
@@ -1521,7 +1531,7 @@ export class RelayClient {
       });
 
       // Batch-write all backfilled messages (single write instead of N appends)
-      const lastSeq = this.sessionManager.appendMessagesBatch(krakiSessionId, backfilledMessages);
+      const lastSeq = this.sessionManager.appendMessagesBatch(krakiSessionId, backfilledMessages, true);
 
       // Write link table entry
       this.sessionManager.addLink({
@@ -2602,7 +2612,7 @@ export class RelayClient {
   // TODO: Make send() accept a discriminated union of ProducerMessage types
   // instead of Partial<ProducerMessage> so TypeScript enforces correct payload
   // shape per message type (e.g. user_message must have payload.content).
-  private send(msg: Partial<ProducerMessage>): void {
+  private send(msg: Partial<ProducerMessage>, createsUnread = false): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     // Coalesce streaming card text deltas to amortize per-recipient RSA cost.
@@ -2680,7 +2690,12 @@ export class RelayClient {
       }
     }
     if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
-      enriched.seq = this.sessionManager.appendMessage(sessionId, type, JSON.stringify(enriched));
+      enriched.seq = this.sessionManager.appendMessage(
+        sessionId,
+        type,
+        JSON.stringify(enriched),
+        createsUnread || RelayClient.UNREAD_BOUNDARY_TYPES.has(type),
+      );
     } else if (sessionId && RelayClient.TRACE_TYPES.has(type)) {
       // Off-spine tool activity: mirror to trace.jsonl (keyed to the current
       // turn) and keep broadcasting transiently below. No per-session seq.

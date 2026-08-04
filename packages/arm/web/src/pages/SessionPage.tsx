@@ -10,6 +10,7 @@ import { messageProvider } from '../lib/message-provider';
 import { HtmlArtifactPanel } from '../components/chat/HtmlArtifactPanel';
 import type { ContentRef } from '@kraki/protocol';
 import { setDesiredSessionSubscription } from '../lib/session-subscription-lifecycle';
+import { allowAutoRead, isAutoReadSuppressed } from '../lib/read-visibility';
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -77,20 +78,30 @@ export function SessionPage() {
     messageProvider.ensureLoaded(sessionId);
   }, [sessionId]);
 
-  // Clear unread when viewing session + notify server
+  // Mark read only while this detail is genuinely visible and focused.
   useEffect(() => {
     if (!sessionId) return;
+    allowAutoRead(sessionId);
 
     const doMarkRead = () => {
-      if (document.hasFocus()) {
+      if (
+        !isAutoReadSuppressed(sessionId)
+        && document.visibilityState === 'visible'
+        && document.hasFocus()
+      ) {
         clearUnread(sessionId);
-        import('../lib/ws-client').then(({ wsClient }) => wsClient.markRead(sessionId));
+        import('../lib/ws-client').then(({ wsClient }) => wsClient.markRead(sessionId, undefined, true));
       }
     };
 
     doMarkRead();
     window.addEventListener('focus', doMarkRead);
-    return () => window.removeEventListener('focus', doMarkRead);
+    document.addEventListener('visibilitychange', doMarkRead);
+    return () => {
+      allowAutoRead(sessionId);
+      window.removeEventListener('focus', doMarkRead);
+      document.removeEventListener('visibilitychange', doMarkRead);
+    };
   }, [sessionId, clearUnread]);
 
   if (!session && isPending) {
