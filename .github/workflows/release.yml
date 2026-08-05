@@ -484,10 +484,27 @@ jobs:
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
-          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
+          set +e
           xcrun notarytool submit "$RUNNER_TEMP/Kraki.app.zip" \
             --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait
+            --team-id "$APPLE_TEAM_ID" --wait --output-format json \
+            > "$RUNNER_TEMP/notary-submit.json"
+          NOTARY_STATUS=$?
+          set -e
+          cat "$RUNNER_TEMP/notary-submit.json"
+          SUBMISSION_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$RUNNER_TEMP/notary-submit.json")
+          NOTARY_RESULT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$RUNNER_TEMP/notary-submit.json")
+          if [ "$NOTARY_STATUS" -ne 0 ] || [ "$NOTARY_RESULT" != "Accepted" ]; then
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" --output-format json \
+                | tee "$RUNNER_TEMP/notary-log.json"
+            fi
+            test "$NOTARY_STATUS" -eq 0
+            test "$NOTARY_RESULT" = "Accepted"
+          fi
           xcrun stapler staple "$APP"
           xcrun stapler validate "$APP"
           spctl -a -vvv --type exec "$APP"
@@ -515,7 +532,7 @@ jobs:
           tar -czf "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" \
             -C "$RUNNER_TEMP/stage" Kraki.app
           # Sparkle updates use a zip containing the notarized app bundle.
-          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
           ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/Kraki.app.zip"
 
       - name: Upload Sparkle update archive
