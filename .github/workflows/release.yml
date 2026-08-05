@@ -475,6 +475,49 @@ jobs:
           test -f "$APP/Contents/MacOS/Kraki"
           codesign --verify --strict --verbose=2 "$APP"
 
+      - name: Re-sign Sparkle helper tools for Developer ID
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+          ENTITLEMENTS="packages/arm/ios/Kraki/KrakiMac.entitlements"
+
+          sign_code() {
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "$1"
+          }
+
+          # SwiftPM ships these helpers with an ad-hoc signature. Sign from
+          # the innermost Mach-O outward so each enclosing bundle seals the
+          # already Developer ID-signed nested code.
+          sign_code "$SPARKLE/Autoupdate"
+          sign_code "$SPARKLE/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+          sign_code "$SPARKLE/XPCServices/Downloader.xpc"
+          sign_code "$SPARKLE/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+          sign_code "$SPARKLE/XPCServices/Installer.xpc"
+          sign_code "$SPARKLE/Updater.app/Contents/MacOS/Updater"
+          sign_code "$SPARKLE/Updater.app"
+          sign_code "$APP/Contents/Frameworks/Sparkle.framework"
+          codesign --force --options runtime --timestamp \
+            --entitlements "$ENTITLEMENTS" \
+            --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          for item in \
+            "$SPARKLE/Autoupdate" \
+            "$SPARKLE/Updater.app" \
+            "$SPARKLE/XPCServices/Downloader.xpc" \
+            "$SPARKLE/XPCServices/Installer.xpc" \
+            "$APP/Contents/Frameworks/Sparkle.framework" \
+            "$APP"; do
+            codesign -dv --verbose=4 "$item" 2>&1 | tee "$RUNNER_TEMP/$(basename "$item").codesign.txt"
+            grep -q 'Authority=Developer ID Application:' "$RUNNER_TEMP/$(basename "$item").codesign.txt"
+            grep -q 'TeamIdentifier=3A83X5JZ3S' "$RUNNER_TEMP/$(basename "$item").codesign.txt"
+            grep -q 'Timestamp=' "$RUNNER_TEMP/$(basename "$item").codesign.txt"
+          done
+
       - name: Notarize and staple
         if: needs.prepare.outputs.publish_mode == 'publish'
         env:
