@@ -549,17 +549,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             "A short live transcript that updates while voice input is recording.",
             String(repeating: "This longer transcript verifies an eight-line scroller-free viewport and bottom anchoring without recursive AppKit layout. ", count: 14),
         ]
-        func transcriptText(_ voice: String) -> AttributedString {
-            var text = AttributedString(VoiceDraftMerger.merge(existing: existingDraft, final: voice))
-            text.font = .system(size: 15)
-            text.foregroundColor = NSColor.labelColor
-            return text
+        func transcriptPieces(_ voice: String) -> [MacComposerVoiceTranscriptView.Piece] {
+            [(VoiceDraftMerger.merge(existing: existingDraft, final: voice), 1)]
         }
-        func voiceOnlyText(_ voice: String) -> AttributedString {
-            var text = AttributedString(voice)
-            text.font = .system(size: 15)
-            text.foregroundColor = NSColor.labelColor
-            return text
+        func voiceOnlyPieces(_ voice: String) -> [MacComposerVoiceTranscriptView.Piece] {
+            [(voice, 1)]
         }
         func descendants(of view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants(of: $0) }
@@ -567,7 +561,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let host = NSHostingView(
             rootView: AnyView(
                 MacComposerVoiceTranscript(
-                    text: transcriptText(samples[0]),
+                    pieces: transcriptPieces(samples[0]),
                     revision: "0"
                 )
                 .frame(width: 560)
@@ -586,7 +580,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         for round in 0..<200 {
             let index = round % samples.count
             host.rootView = AnyView(
-                MacComposerVoiceTranscript(text: transcriptText(samples[index]), revision: "\(round)")
+                MacComposerVoiceTranscript(pieces: transcriptPieces(samples[index]), revision: "\(round)")
                     .frame(width: 560)
             )
             host.layoutSubtreeIfNeeded()
@@ -616,7 +610,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         for count in 1...chineseStream.count {
             let streamed = String(chineseStream.prefix(count))
             host.rootView = AnyView(
-                MacComposerVoiceTranscript(text: voiceOnlyText(streamed), revision: "cjk-\(count)")
+                MacComposerVoiceTranscript(pieces: voiceOnlyPieces(streamed), revision: "cjk-\(count)")
                     .frame(width: 560)
             )
             host.layoutSubtreeIfNeeded()
@@ -648,19 +642,40 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let renderedFont = rendered?.length ?? 0 > 0
             ? rendered?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
             : nil
-        let renderedColor = rendered?.length ?? 0 > 0
-            ? rendered?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
-            : nil
-        let labelColorMatch = renderedColor?.usingColorSpace(.deviceRGB)
-            == NSColor.labelColor.usingColorSpace(.deviceRGB)
+        let appearancePieces: [MacComposerVoiceTranscriptView.Piece] = [
+            ("Streaming voice transcript", 1),
+            (" lookahead", 0.30),
+        ]
+        let lightText = MacComposerVoiceTranscriptView.debugAttributedText(
+            pieces: appearancePieces,
+            appearance: NSAppearance(named: .aqua)!
+        )
+        let darkText = MacComposerVoiceTranscriptView.debugAttributedText(
+            pieces: appearancePieces,
+            appearance: NSAppearance(named: .darkAqua)!
+        )
+        let lightColor = lightText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        let darkColor = darkText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        let lightBrightness = lightColor?.usingColorSpace(.deviceRGB)?.brightnessComponent ?? 1
+        let darkBrightness = darkColor?.usingColorSpace(.deviceRGB)?.brightnessComponent ?? 0
+        let adaptiveColor = lightBrightness < 0.25 && darkBrightness > 0.75
+        let lookaheadAlpha = darkText.attribute(
+            .foregroundColor,
+            at: max(0, darkText.length - 1),
+            effectiveRange: nil
+        ) as? NSColor
+        let lookaheadOpacityOK = abs((lookaheadAlpha?.alphaComponent ?? 0) - 0.30) < 0.01
         NSLog(
-            "[voice-transcript-regression] rounds=200 ms=%.3f pureCoreText=%d scrollViews=%d prefixOK=%d font=%.1f labelColor=%d height=%.1f",
+            "[voice-transcript-regression] rounds=200 ms=%.3f pureCoreText=%d scrollViews=%d prefixOK=%d font=%.1f adaptiveColor=%d lookaheadOpacity=%d lightBrightness=%.3f darkBrightness=%.3f height=%.1f",
             elapsed,
             transcriptView == nil ? 0 : 1,
             scrollViewCount,
             prefixPreserved ? 1 : 0,
             renderedFont?.pointSize ?? 0,
-            labelColorMatch ? 1 : 0,
+            adaptiveColor ? 1 : 0,
+            lookaheadOpacityOK ? 1 : 0,
+            lightBrightness,
+            darkBrightness,
             transcriptView?.bounds.height ?? 0
         )
         NSLog(
