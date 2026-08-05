@@ -53,6 +53,7 @@
 		26409CB796F338EFEF4A5DD1 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
 		26EB8AA427A1FAD44EA48D39 /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE814884FDD9A0A46CCCCB69 /* MacApp.swift */; };
 		2A26932045F45889AB8373D9 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA32D66EC88B6BEDF4675518 /* Commands.swift */; };
+		2B734C69AB104A3752E06468 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = CFD03BF89A6EEE14EFB497BF /* Sparkle */; };
 		2C0D85737E6D0F881D7CF1D0 /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
 		2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
 		2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33641605B16E960C6A553E38 /* ChatView.swift */; };
@@ -168,6 +169,7 @@
 		AED2EEE52613B3E5D0C8A542 /* MacAutomationDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */; };
 		AF7953ABEEC72701AE83C546 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */; };
 		B152A5034175B728B186EE0C /* TurnSpineProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B52AA4B3D7FFBB698F94CE9 /* TurnSpineProjection.swift */; };
+		B28AD9034476281891032293 /* MacUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */; };
 		B2B5C216D8E6ECDE5FEDB42B /* MacAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6813B385E0446BBC371C8AD3 /* MacAppDelegate.swift */; };
 		B320E431D3B0720779F6C57B /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
 		B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E805046685AE086D68B890D4 /* MainTabView.swift */; };
@@ -183,6 +185,7 @@
 		BD1B72D8C802E5E5C45BE8CD /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 61D4D890D63054395E2C6FEB /* GRDB */; };
 		BDBC81A8682AC662CD78C2F1 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469FDA14AA91327B6DF4400 /* MainWindowView.swift */; };
 		C00B760A90E96341077B088A /* BubbleCatalogTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF1D3D6CED61870261C4724 /* BubbleCatalogTestView.swift */; };
+		C0AD5E96F22955DB2473E341 /* MacUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */; };
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		C3DD6301585CDBA8DB9E1FA4 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
@@ -385,6 +388,7 @@
 		CA4B2EA2532F558EBA4F7D16 /* MacChatBubbleContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatBubbleContent.swift; sourceTree = "<group>"; };
 		CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC62AF0A675E25283C546919 /* SessionCardPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardPresentation.swift; sourceTree = "<group>"; };
+		CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateController.swift; sourceTree = "<group>"; };
 		D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentacleCLIManager.swift; sourceTree = "<group>"; };
 		D4764BEF479FF106EBE37D34 /* BubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleActionSlot.swift; sourceTree = "<group>"; };
 		D5B791C3F6BA99245733A941 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -422,6 +426,7 @@
 				028B61458E76278B13E26B2F /* Pulse in Frameworks */,
 				00D9A1D724388C88656314A9 /* Highlightr in Frameworks */,
 				EF182DDCEE43C64585164D92 /* VoiceInputCore in Frameworks */,
+				2B734C69AB104A3752E06468 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -460,6 +465,7 @@
 				B66C3EAC80F5625784F50037 /* MacChatPerfTestView.swift */,
 				63302839C21EFDE37CC56C13 /* MacMockData.swift */,
 				C024AE6690757FB0A6916CEE /* MacNotifications.swift */,
+				CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */,
 				5469FDA14AA91327B6DF4400 /* MainWindowView.swift */,
 				735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */,
 				F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */,
@@ -876,6 +882,7 @@
 				7FF5AA6801C008E56910369C /* Pulse */,
 				58A77F08B0D342014F734926 /* Highlightr */,
 				C18741B12304BDBDCC5AF55E /* VoiceInputCore */,
+				CFD03BF89A6EEE14EFB497BF /* Sparkle */,
 			);
 			productName = KrakiMac;
 			productReference = 36547BB6B68E22C1BEB7D1CD /* KrakiMac.app */;
@@ -959,6 +966,7 @@
 			packageReferences = (
 				67485AEC5E20A50F92197C43 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				C1BACD62B59892C792C08AB1 /* XCRemoteSwiftPackageReference "Highlightr" */,
+				DADBF5538A6575068485F6DC /* XCRemoteSwiftPackageReference "Sparkle" */,
 				3F224EC43C74D3ECE997EFD2 /* XCLocalSwiftPackageReference "Vendor/Pulse" */,
 				A64FCAB32F5BA20F2CEE80BC /* XCLocalSwiftPackageReference "Vendor/VoiceInputCore" */,
 			);
@@ -1082,6 +1090,7 @@
 				5C84A7024B48EF2DE6194D83 /* MacNotifications.swift in Sources */,
 				E578C3D28FE88D4B38B71B55 /* MacStepsView.swift in Sources */,
 				058F05193E5F187FE59EA1F9 /* MacToolActivityRow.swift in Sources */,
+				B28AD9034476281891032293 /* MacUpdateController.swift in Sources */,
 				B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */,
 				BDBC81A8682AC662CD78C2F1 /* MainWindowView.swift in Sources */,
 				4E27FE6760FD0B131488F0FF /* MenuBarExtraView.swift in Sources */,
@@ -1190,6 +1199,7 @@
 				2CF36A2578842439CD9CA78A /* MacNotifications.swift in Sources */,
 				40A33A5867D20686790F9258 /* MacStepsView.swift in Sources */,
 				5294ABB3C1CF9D77CD60F131 /* MacToolActivityRow.swift in Sources */,
+				C0AD5E96F22955DB2473E341 /* MacUpdateController.swift in Sources */,
 				1BA230F7EC3DA0D4AF911D14 /* MainWindowView.swift in Sources */,
 				000021788275B9A715E2E204 /* MenuBarExtraView.swift in Sources */,
 				D760ADD6B42A59302671894C /* MessageBodyParser.swift in Sources */,
@@ -1464,20 +1474,17 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KrakiMac.Debug.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kraki (Dev)";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Kraki";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone to transcribe voice input into the current Session draft.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -1543,20 +1550,17 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KrakiMac.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Kraki";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone to transcribe voice input into the current Session draft.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -1642,6 +1646,14 @@
 				version = 2.3.0;
 			};
 		};
+		DADBF5538A6575068485F6DC /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.5;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1675,6 +1687,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 67485AEC5E20A50F92197C43 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
 			productName = GRDB;
+		};
+		CFD03BF89A6EEE14EFB497BF /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DADBF5538A6575068485F6DC /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		D489C81EB3DBE25897423901 /* Highlightr */ = {
 			isa = XCSwiftPackageProductDependency;

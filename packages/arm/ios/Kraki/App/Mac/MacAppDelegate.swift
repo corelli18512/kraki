@@ -47,6 +47,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     @AppStorage("mac.keepRunningInMenuBar")
     private var keepRunningInMenuBar: Bool = true
 
+    private(set) var updateController: MacUpdateController?
+    private var updateNotificationObserver: NSObjectProtocol?
+
+    override init() {
+        updateController = nil
+        super.init()
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         #if DEBUG
         if ProcessInfo.processInfo.environment["KRAKI_HTML_ARTIFACT_BENCH"] == "1" {
@@ -94,6 +102,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
+            updateController = MacUpdateController.makeIfProduction()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                self?.updateController?.start()
+            }
+        }
         #if DEBUG
         let nativeAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
         if !nativeAutomation {
@@ -110,6 +124,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // again whenever the app reactivates.
         removeUnwantedMenus()
         DispatchQueue.main.async { [weak self] in self?.removeUnwantedMenus() }
+
+        updateNotificationObserver = NotificationCenter.default.addObserver(
+            forName: .macCheckForUpdates,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateController?.checkForUpdates()
+            }
+        }
 
         #if DEBUG
         if nativeAutomation {
@@ -1890,6 +1914,12 @@ struct MacChatView: View {
             if let item = mainMenu.items.first(where: { $0.submenu?.title == title }) {
                 mainMenu.removeItem(item)
             }
+        }
+    }
+
+    deinit {
+        if let updateNotificationObserver {
+            NotificationCenter.default.removeObserver(updateNotificationObserver)
         }
     }
 

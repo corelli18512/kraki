@@ -19,6 +19,9 @@ packages:
     path: ./Vendor/Pulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle.git
+    exactVersion: 2.9.5
 
 settings:
   base:
@@ -139,6 +142,9 @@ targets:
       - path: Kraki/App/AppState.swift
       # Mac-only app shell, scenes, commands.
       - path: Kraki/App/Mac
+        excludes:
+          - MacUpdateController.swift
+      - path: Kraki/App/Mac/MacUpdateController.swift
       # Mac-only feature surfaces (sidebar, welcome, tentacle, preferences,
       # chat placeholder, pairing). Their iOS analogues stay iOS-only — the
       # macOS chat surface will be rewritten against the pure-spine model.
@@ -165,14 +171,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: 2
-        GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
-        INFOPLIST_KEY_CFBundleDisplayName: Kraki
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone to transcribe voice input into the current Session draft."
-        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Kraki"
-        INFOPLIST_KEY_LSUIElement: "NO"
+        MARKETING_VERSION: "0.2.1"
+        CURRENT_PROJECT_VERSION: 3
+        GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 3A83X5JZ3S
@@ -187,11 +188,13 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.dev
           PRODUCT_NAME: "Kraki Dev"
+          INFOPLIST_FILE: KrakiMac.Debug.Info.plist
           INFOPLIST_KEY_CFBundleDisplayName: "Kraki (Dev)"
           ASSETCATALOG_COMPILER_APPICON_NAME: DevAppIcon
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
           PRODUCT_NAME: Kraki
+          INFOPLIST_FILE: KrakiMac.Info.plist
           INFOPLIST_KEY_CFBundleDisplayName: Kraki
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
@@ -199,3 +202,4 @@ targets:
       - package: Pulse
       - package: Highlightr
       - package: VoiceInputCore
+      - package: Sparkle
