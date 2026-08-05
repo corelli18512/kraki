@@ -192,6 +192,14 @@ struct MacCommands: Commands {
             }
         }
 
+        // App menu — Sparkle owns the standard update dialog and installation
+        // lifecycle; this command only routes the user's explicit request.
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)
+            }
+        }
+
         // Help menu — replace the default (search field + nothing useful)
         // with Feedback + Rate, mirroring the iOS Settings screen.
         CommandGroup(replacing: .help) {
@@ -236,6 +244,7 @@ extension Notification.Name {
     static let macNavigateSession  = Notification.Name("mac.navigateSession")
     static let macDeleteSession   = Notification.Name("mac.deleteSession")
     static let macRequestReview   = Notification.Name("mac.requestReview")
+    static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
 }
 
 #endif

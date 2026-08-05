@@ -514,7 +514,16 @@ jobs:
           # the stapled ticket is part of the signed distribution artifact.
           tar -czf "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" \
             -C "$RUNNER_TEMP/stage" Kraki.app
-          ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz"
+          # Sparkle updates use a zip containing the notarized app bundle.
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
+          ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/Kraki.app.zip"
+
+      - name: Upload Sparkle update archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-kraki-mac-sparkle-update
+          path: ${{ runner.temp }}/Kraki.app.zip
+          if-no-files-found: error
 
       - name: Verify packaged app
         run: |
@@ -610,6 +619,87 @@ jobs:
             --title "${{ needs.prepare.outputs.release_tag }}" \
             --generate-notes \
             release-assets/*
+
+  # ─── Publish Sparkle appcast ───────────────────────────
+
+  publish-mac-appcast:
+    name: Publish macOS Sparkle Appcast
+    needs:
+      - prepare
+      - publish
+    if: |
+      needs.prepare.result == 'success' &&
+      needs.publish.result == 'success' &&
+      startsWith(needs.prepare.outputs.release_tag, 'mac-v')
+    runs-on: macos-26
+    timeout-minutes: 15
+    concurrency:
+      group: mac-updates-appcast
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out appcast branch
+        uses: actions/checkout@v6
+        with:
+          ref: mac-updates
+          fetch-depth: 1
+
+      - name: Generate and publish signed appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test -n "$SPARKLE_ED25519_PRIVATE_KEY"
+
+          WORK_DIR="$RUNNER_TEMP/sparkle-appcast"
+          mkdir -p "$WORK_DIR/archives" "$WORK_DIR/sparkle"
+          cp appcast.xml "$WORK_DIR/archives/appcast.xml"
+
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Kraki.app.zip' \
+            --dir "$WORK_DIR/archives"
+          test -f "$WORK_DIR/archives/Kraki.app.zip"
+
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json body --jq .body > "$WORK_DIR/archives/Kraki.app.md"
+
+          gh release download 2.9.5 --repo sparkle-project/Sparkle \
+            --pattern 'Sparkle-for-Swift-Package-Manager.zip' \
+            --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/Sparkle-for-Swift-Package-Manager.zip" -d "$WORK_DIR/sparkle"
+          GENERATE_APPCAST="$WORK_DIR/sparkle/bin/generate_appcast"
+
+          "$GENERATE_APPCAST" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
+            --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --embed-release-notes \
+            --link "https://kraki.chat" \
+            --maximum-versions 3 \
+            "$WORK_DIR/archives" <<< "$SPARKLE_ED25519_PRIVATE_KEY"
+
+          test -f "$WORK_DIR/archives/appcast.xml"
+          grep -q 'sparkle:edSignature=' "$WORK_DIR/archives/appcast.xml"
+          grep -q 'Kraki.app.zip' "$WORK_DIR/archives/appcast.xml"
+          VERIFY_DIR="$RUNNER_TEMP/sparkle-update-verify"
+          mkdir -p "$VERIFY_DIR"
+          unzip -q "$WORK_DIR/archives/Kraki.app.zip" -d "$VERIFY_DIR"
+          UPDATE_BUILD_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+            "$VERIFY_DIR/Kraki.app/Contents/Info.plist")
+          test -n "$UPDATE_BUILD_VERSION"
+          grep -q "sparkle:version>${UPDATE_BUILD_VERSION}<" "$WORK_DIR/archives/appcast.xml"
+          cp "$WORK_DIR/archives/appcast.xml" appcast.xml
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add appcast.xml
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(mac): publish appcast for ${RELEASE_TAG}"
+          git push origin mac-updates
 
   # ─── Publish npm packages ──────────────────────────────
 
