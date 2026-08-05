@@ -1077,11 +1077,9 @@ private struct MacComposerVoiceSurface: View {
     let draftPrefix: String
     let onFinish: () -> Void
 
-    private static let textFont = NSFont.systemFont(ofSize: 15)
-
     var body: some View {
         HStack(spacing: 12) {
-            MacComposerVoiceTranscript(text: displayedText, revision: revision)
+            MacComposerVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: onFinish) {
@@ -1104,8 +1102,8 @@ private struct MacComposerVoiceSurface: View {
         "\(draftPrefix)-\(controller.state)-\(controller.rawText)-\(controller.correctionText)-\(controller.correctionSourceOffset)"
     }
 
-    private var displayedText: AttributedString {
-        VoiceComposerPresentation.attributedTranscript(
+    private var displayedPieces: [(text: String, opacity: Double)] {
+        VoiceComposerPresentation.transcriptPieces(
             prefix: draftPrefix,
             state: controller.state,
             rawText: controller.rawText,
@@ -1117,23 +1115,18 @@ private struct MacComposerVoiceSurface: View {
 }
 
 final class MacComposerVoiceTranscriptView: NSView {
+    typealias Piece = (text: String, opacity: Double)
+
+    private var pieces: [Piece] = []
     private var value = NSAttributedString(string: "")
     private var framesetter: CTFramesetter?
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
-    func update(text: AttributedString, width: CGFloat) -> CGFloat {
-        let normalized = NSMutableAttributedString(attributedString: NSAttributedString(text))
-        if normalized.length > 0 {
-            normalized.addAttribute(
-                .font,
-                value: NSFont.systemFont(ofSize: 15),
-                range: NSRange(location: 0, length: normalized.length)
-            )
-        }
-        value = normalized.copy() as? NSAttributedString ?? normalized
-        framesetter = CTFramesetterCreateWithAttributedString(value)
+    func update(pieces: [Piece], width: CGFloat) -> CGFloat {
+        self.pieces = pieces
+        rebuildAttributedText()
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Voice transcript")
@@ -1143,16 +1136,44 @@ final class MacComposerVoiceTranscriptView: NSView {
         return height
     }
 
-    static func measure(_ text: AttributedString, width: CGFloat) -> CGFloat {
-        let normalized = NSMutableAttributedString(attributedString: NSAttributedString(text))
-        if normalized.length > 0 {
-            normalized.addAttribute(
-                .font,
-                value: NSFont.systemFont(ofSize: 15),
-                range: NSRange(location: 0, length: normalized.length)
-            )
+    static func measure(_ pieces: [Piece], width: CGFloat) -> CGFloat {
+        measure(attributedText(pieces: pieces, color: .labelColor), width: width)
+    }
+
+    private static func attributedText(pieces: [Piece], color: NSColor) -> NSAttributedString {
+        let output = NSMutableAttributedString()
+        for piece in pieces where !piece.text.isEmpty {
+            output.append(NSAttributedString(
+                string: piece.text,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 15),
+                    .foregroundColor: color.withAlphaComponent(max(0, min(1, piece.opacity))),
+                ]
+            ))
         }
-        return measure(normalized, width: width)
+        return output
+    }
+
+    private static func resolvedLabelColor(for appearance: NSAppearance) -> NSColor {
+        var resolved = NSColor.labelColor
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = NSColor.labelColor.usingColorSpace(.deviceRGB) ?? NSColor.labelColor
+        }
+        return resolved
+    }
+
+    private func rebuildAttributedText() {
+        value = Self.attributedText(
+            pieces: pieces,
+            color: Self.resolvedLabelColor(for: effectiveAppearance)
+        )
+        framesetter = CTFramesetterCreateWithAttributedString(value)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        rebuildAttributedText()
+        needsDisplay = true
     }
 
     private static func measure(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
@@ -1184,7 +1205,9 @@ final class MacComposerVoiceTranscriptView: NSView {
             path,
             nil
         )
-        CTFrameDraw(frame, context)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            CTFrameDraw(frame, context)
+        }
         context.restoreGState()
     }
 
@@ -1223,11 +1246,14 @@ final class MacComposerVoiceTranscriptView: NSView {
     func debugVisibleRange(width: CGFloat, height: CGFloat) -> CFRange {
         visibleSuffixRange(width: width, height: height)
     }
+    static func debugAttributedText(pieces: [Piece], appearance: NSAppearance) -> NSAttributedString {
+        attributedText(pieces: pieces, color: resolvedLabelColor(for: appearance))
+    }
     #endif
 }
 
 struct MacComposerVoiceTranscript: NSViewRepresentable {
-    let text: AttributedString
+    let pieces: [MacComposerVoiceTranscriptView.Piece]
     let revision: String
 
     final class Coordinator {
@@ -1250,7 +1276,7 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
                 || abs(context.coordinator.width - width) > 0.5 else { return }
         context.coordinator.revision = revision
         context.coordinator.width = width
-        transcriptView.update(text: text, width: width)
+        transcriptView.update(pieces: pieces, width: width)
     }
 
     func sizeThatFits(
@@ -1260,7 +1286,7 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
     ) -> CGSize? {
         guard let proposedWidth = proposal.width, proposedWidth > 1 else { return nil }
         let width = proposedWidth
-        let contentHeight = MacComposerVoiceTranscriptView.measure(text, width: width)
+        let contentHeight = MacComposerVoiceTranscriptView.measure(pieces, width: width)
         let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15)))
         return CGSize(width: width, height: min(contentHeight, lineHeight * 8))
     }
