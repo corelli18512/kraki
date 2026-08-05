@@ -688,6 +688,7 @@ jobs:
       - prepare
       - publish
     if: |
+      always() &&
       needs.prepare.result == 'success' &&
       needs.publish.result == 'success' &&
       startsWith(needs.prepare.outputs.release_tag, 'mac-v')
