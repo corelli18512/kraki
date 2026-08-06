@@ -128,6 +128,26 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
     await expect(arm1.page.getByText(after, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
   });
 
+  test('tentacle reconnect reasserts the mounted session subscription', async () => {
+    await openSession(arm1.page, sessionC);
+    await expectSubscribed(arm1.deviceId, sessionC);
+
+    const before = `before-tentacle-reconnect-${Date.now().toString(36)}`;
+    await control('/active', { sid: sessionC });
+    await control('/delta', { sid: sessionC, text: before });
+    await expect(arm1.page.getByText(before, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+
+    await control('/tentacle/disconnect');
+    await arm1.page.waitForTimeout(800);
+    await control('/tentacle/connect');
+    await expect(arm1.page.getByText('RealStack Tentacle').first()).toBeVisible({ timeout: 15_000 });
+    await expectSubscribed(arm1.deviceId, sessionC);
+
+    const after = `after-tentacle-reconnect-${Date.now().toString(36)}`;
+    await control('/delta', { sid: sessionC, text: after });
+    await expect(arm1.page.getByText(after, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+  });
+
   test('leaving the session page confirms null subscription', async () => {
     await arm1.page.goto(WEB_URL);
     await expectSubscribed(arm1.deviceId, null);

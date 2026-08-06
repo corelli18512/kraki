@@ -848,6 +848,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
+          this.subscription.onTentacleDisconnected(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
