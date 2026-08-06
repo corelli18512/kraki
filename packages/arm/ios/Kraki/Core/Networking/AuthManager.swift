@@ -133,42 +133,76 @@ final class AuthManager {
         guard let configData = try? Data(contentsOf: URL(fileURLWithPath: krakiHome + "/config.json")),
               let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
               let relay = config["relay"] as? String,
-              relay.hasPrefix("ws") else { return nil }
+              relay.hasPrefix("ws") else {
+            KLog.diag("Mac CLI login unavailable: ~/.kraki/config.json has no relay")
+            return nil
+        }
 
         // 1. gh CLI token — the daemon's primary path (used whenever `gh` is
         //    authenticated, which is the common case on a dev machine).
         if let ghToken = await runGhAuthToken(), !ghToken.isEmpty {
+            KLog.diag("Mac CLI login resolved a GitHub token")
             return (relay, ghToken)
         }
         // 2. Saved device-flow token (~/.kraki/github-token).
         if let raw = try? String(contentsOfFile: krakiHome + "/github-token", encoding: .utf8) {
             let saved = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !saved.isEmpty { return (relay, saved) }
+            if !saved.isEmpty {
+                KLog.diag("Mac CLI login resolved a saved device-flow token")
+                return (relay, saved)
+            }
         }
+        KLog.diag("Mac CLI login unavailable: no GitHub credential was found")
         return nil
     }
 
-    /// Run `gh auth token` via a login shell and return its trimmed output,
-    /// or nil if gh is unavailable / not authenticated. Login shell so a
-    /// GUI-launched app still resolves gh from the user's normal PATH.
+    /// Resolve `gh` without assuming a GUI process inherited the user's shell
+    /// PATH. Sparkle and LaunchServices relaunch apps with a minimal system
+    /// environment, while MacPorts and Homebrew install `gh` outside it.
     private static func runGhAuthToken() async -> String? {
-        await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = ["-lc", "gh auth token"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else { return nil }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                return String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                return nil
+        let environment = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        var candidates = environment["PATH"]?
+            .split(separator: ":")
+            .map { String($0) + "/gh" } ?? []
+        candidates.append(contentsOf: [
+            "/opt/local/bin/gh",
+            "/opt/homebrew/bin/gh",
+            "/usr/local/bin/gh",
+            "/usr/bin/gh",
+            home + "/.local/bin/gh",
+        ])
+        var seen: Set<String> = []
+        let executables = candidates.filter {
+            seen.insert($0).inserted && FileManager.default.isExecutableFile(atPath: $0)
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            for executable in executables {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = ["auth", "token"]
+                process.standardInput = FileHandle.nullDevice
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else { continue }
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let token = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let token, !token.isEmpty {
+                        KLog.diag("Mac CLI login executed gh from \(executable)")
+                        return token
+                    }
+                } catch {
+                    continue
+                }
             }
+            KLog.diag("Mac CLI login could not execute gh (candidates=\(executables.count))")
+            return nil
         }.value
     }
     #endif
