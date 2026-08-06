@@ -78,6 +78,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         } else if ProcessInfo.processInfo.environment["KRAKI_VOICE_TRANSCRIPT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runVoiceTranscriptRegression() }
+        } else if ProcessInfo.processInfo.environment["KRAKI_MAC_CLI_AUTH_BENCH"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { @MainActor in
+                let found = await AuthManager.loadCLICredentials() != nil
+                KLog.diag("Mac CLI credential regression found=\(found ? 1 : 0)")
+                NSApp.terminate(nil)
+            }
         }
         if ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1" {
             // A native automation host is a background rendering/control
@@ -169,6 +176,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 "KRAKI_CODE_HIGHLIGHT_BENCH",
                 "KRAKI_CODE_HIGHLIGHT_UPGRADE_BENCH",
                 "KRAKI_VOICE_TRANSCRIPT_BENCH",
+                "KRAKI_MAC_CLI_AUTH_BENCH",
                 "KRAKI_RENDER_BUBBLE_TEST",
                 "KRAKI_RENDER_CHAT_TEST",
                 "KRAKI_RENDER_COMPOSER_TEST",
