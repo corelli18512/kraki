@@ -2947,7 +2947,7 @@ export class RelayClient {
     try {
       const preview = JSON.stringify({
         type: previewType,
-        summary: Array.from(normalizedSummary).slice(0, 180).join(''),
+        summary: Array.from(normalizedSummary).slice(0, 50).join(''),
         sessionId: msg.sessionId,
         ...(title ? { title } : {}),
       });
