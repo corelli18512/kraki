@@ -25,17 +25,24 @@ private final class FakeVoiceSession: VoiceInputSessionProtocol {
     let correctionEnabled: Bool
     let pcmDumpPath: String? = nil
     private let onEvent: (VoiceInputEvent) -> Void
+    private let onMetric: (VoiceInputMetric) -> Void
     private(set) var stopCount = 0
     private(set) var closeCount = 0
 
-    init(correctionEnabled: Bool, onEvent: @escaping (VoiceInputEvent) -> Void) {
+    init(
+        correctionEnabled: Bool,
+        onEvent: @escaping (VoiceInputEvent) -> Void,
+        onMetric: @escaping (VoiceInputMetric) -> Void
+    ) {
         self.correctionEnabled = correctionEnabled
         self.onEvent = onEvent
+        self.onMetric = onMetric
     }
 
     func stopCapture() { stopCount += 1 }
     func close() { closeCount += 1 }
     func emit(_ event: VoiceInputEvent) { onEvent(event) }
+    func emitMetric(_ metric: VoiceInputMetric) { onMetric(metric) }
 }
 
 private final class FakeVoiceFactory: VoiceInputSessionFactory {
@@ -50,7 +57,8 @@ private final class FakeVoiceFactory: VoiceInputSessionFactory {
         configurations.append(configuration)
         let session = FakeVoiceSession(
             correctionEnabled: configuration.correctionEnabled,
-            onEvent: onEvent
+            onEvent: onEvent,
+            onMetric: onMetric
         )
         sessions.append(session)
         return session
@@ -125,6 +133,35 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertNil(VoiceCapability(json: ["resource": "voice/doubao"]))
     }
 
+    func testVoiceComposerAccessAllowsSteeringAndStructuredAnswers() {
+        XCTAssertTrue(VoiceComposerAccessPolicy.isVisible(capabilityAvailable: true))
+        XCTAssertTrue(VoiceComposerAccessPolicy.canStart(
+            capabilityAvailable: true,
+            voiceControllerBusy: false
+        ))
+        XCTAssertEqual(
+            MessageComposerPolicy.intent(
+                isBusy: true,
+                hasPermission: false,
+                hasQuestion: false
+            ),
+            .steer
+        )
+        XCTAssertEqual(
+            MessageComposerPolicy.intent(
+                isBusy: true,
+                hasPermission: false,
+                hasQuestion: true
+            ),
+            .answerQuestion
+        )
+        XCTAssertFalse(VoiceComposerAccessPolicy.canStart(
+            capabilityAvailable: true,
+            voiceControllerBusy: true
+        ))
+        XCTAssertFalse(VoiceComposerAccessPolicy.isVisible(capabilityAvailable: false))
+    }
+
     func testFirstPermissionGestureWaitsBeforeLeaseAndThenStartsNormally() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
@@ -152,6 +189,40 @@ final class KrakiVoiceInputTests: XCTestCase {
         controller.receiveLease(lease())
         XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(factory.sessions.count, 1)
+    }
+
+    func testRecordingStartedCallbackFiresOnceForAudioEngineStart() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        var recordingStartedCount = 0
+
+        await controller.begin(
+            sessionID: "session-1",
+            context: context(),
+            onRecordingStarted: { recordingStartedCount += 1 },
+            onFinal: { _ in }
+        )
+        XCTAssertEqual(recordingStartedCount, 0)
+
+        controller.receiveLease(lease())
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(recordingStartedCount, 0)
+
+        factory.sessions[0].emitMetric(.webSocketOpened)
+        XCTAssertEqual(recordingStartedCount, 0)
+
+        factory.sessions[0].emitMetric(.engineStarted)
+        await Task.yield()
+        XCTAssertEqual(recordingStartedCount, 1)
+
+        factory.sessions[0].emitMetric(.engineStarted)
+        await Task.yield()
+        XCTAssertEqual(recordingStartedCount, 1)
     }
 
     func testBeginRequestsLeaseForAdvertisedResourceAndBuildsNestedStartFields() async throws {

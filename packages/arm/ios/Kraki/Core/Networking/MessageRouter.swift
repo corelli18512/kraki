@@ -49,6 +49,15 @@ extension SessionDigest {
             return SessionPreview(text: text, type: type, timestamp: timestamp)
         }()
 
+        let runtimeStatus: SessionRuntimeStatusDigest? = {
+            guard let dict = json["runtimeStatus"] as? [String: Any],
+                  let status = dict["status"] as? String else { return nil }
+            return SessionRuntimeStatusDigest(
+                status: status,
+                reason: dict["reason"] as? String
+            )
+        }()
+
         self.init(
             id: id,
             agent: json["agent"] as? String ?? "",
@@ -56,6 +65,7 @@ extension SessionDigest {
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
+            runtimeStatus: runtimeStatus,
             mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
@@ -345,6 +355,13 @@ final class MessageRouter {
         if let seq = dict["seq"] as? Int,
            Self.persistentTypes.contains(type) {
             appState.messageProvider?.observeLiveMessageSeq(sessionId, seq: seq, kind: type)
+            // Keep the card/read projection in step with the persisted live
+            // head. SQLite alone is not observable to the Session Card.
+            appState.sessionStore.observeLastSeq(
+                sessionId,
+                seq: seq,
+                advancesReadWhenCaughtUp: type == "user_message"
+            )
             appState.markSessionReadIfVisible(sessionId, seq: seq)
         }
 
@@ -636,11 +653,16 @@ final class MessageRouter {
             // Active live-card state is restored only by the current session's
             // subscription ACK; do not pull every active session via the legacy
             // request_card reconnect path.
-            switch digest.state {
-            case .compacting:
-                appState.messageStore.setCompacting(digest.id, reason: nil)
-            case .idle, .active:
-                appState.messageStore.clearRuntimeStatus(digest.id)
+            if digest.runtimeStatus?.status == "compacting" {
+                let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
+                appState.messageStore.setCompacting(digest.id, reason: reason)
+            } else {
+                switch digest.state {
+                case .compacting:
+                    appState.messageStore.setCompacting(digest.id, reason: nil)
+                case .idle, .active:
+                    appState.messageStore.clearRuntimeStatus(digest.id)
+                }
             }
 
             // Sync mode

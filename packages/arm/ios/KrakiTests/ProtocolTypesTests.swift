@@ -276,6 +276,7 @@ final class ProtocolStructTests: XCTestCase {
             title: "My Session",
             autoTitle: "Auto Title",
             state: .active,
+            runtimeStatus: SessionRuntimeStatusDigest(status: "compacting", reason: "threshold"),
             mode: .execute,
             lastSeq: 10,
             readSeq: 5,
@@ -292,6 +293,7 @@ final class ProtocolStructTests: XCTestCase {
         XCTAssertEqual(decoded.title, "My Session")
         XCTAssertEqual(decoded.autoTitle, "Auto Title")
         XCTAssertEqual(decoded.state, .active)
+        XCTAssertEqual(decoded.runtimeStatus, SessionRuntimeStatusDigest(status: "compacting", reason: "threshold"))
         XCTAssertEqual(decoded.mode, .execute)
         XCTAssertEqual(decoded.lastSeq, 10)
         XCTAssertEqual(decoded.readSeq, 5)

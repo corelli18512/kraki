@@ -695,9 +695,15 @@ final class MessageProvider {
             KLog.d("📥 [2/history←DB ingestBatch] session=\(sessionId.prefix(12)) batchSize=\(messages.count) windowSize=\(appState.messageStore.currentWindow(sessionId).count)")
         }
 
-        // Update tentacle last seq if server reports higher
-        if totalLastSeq > (tentacleLastSeq[sessionId] ?? 0) {
-            tentacleLastSeq[sessionId] = totalLastSeq
+        // Update both history and SessionStore heads. The SessionStore head
+        // drives the iOS card's authoritative unread boolean; without this a
+        // replay can populate SQLite while the card still shows old cursors.
+        let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
+        if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
+            tentacleLastSeq[sessionId] = batchHead
+        }
+        if batchHead > 0 {
+            appState.sessionStore.observeLastSeq(sessionId, seq: batchHead)
         }
 
         // Identify the exact turn-aligned request answered by this batch.

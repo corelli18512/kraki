@@ -3,6 +3,19 @@ import Foundation
 import Security
 import CryptoKit
 
+private enum NotificationBadgeStore {
+    static let appGroup = "group.chat.kraki.ios"
+    static let unreadSessionIDsKey = "kraki.notification.unreadSessionIDs"
+
+    static func addUnreadSession(_ sessionId: String, to content: UNMutableNotificationContent) {
+        let defaults = UserDefaults(suiteName: appGroup)
+        var ids = Set(defaults?.stringArray(forKey: unreadSessionIDsKey) ?? [])
+        ids.insert(sessionId)
+        defaults?.set(ids.sorted(), forKey: unreadSessionIDsKey)
+        content.badge = NSNumber(value: max(1, ids.count))
+    }
+}
+
 // MARK: - SecKey bridging
 
 /// Mirror of `bridgeToSecKey` in the main app target. Kept inline
@@ -41,12 +54,15 @@ class NotificationService: UNNotificationServiceExtension {
             contentHandler(request.content)
             return
         }
+        content.sound = .default
 
-        // Try to decrypt the push preview
+        // Try to decrypt the push preview.
         guard let kraki = request.content.userInfo["kraki"] as? [String: Any],
               let blob = kraki["blob"] as? String,
               let key = kraki["key"] as? String else {
-            // No encrypted preview — use default aps.alert
+            if let sessionId = request.content.userInfo["sessionId"] as? String {
+                applySessionPresentation(sessionId, to: content)
+            }
             contentHandler(content)
             return
         }
@@ -55,14 +71,18 @@ class NotificationService: UNNotificationServiceExtension {
             let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
             let preview = parsePreview(decrypted)
             content.title = preview.title
+            content.subtitle = preview.subtitle
             content.body = preview.body
             if let sessionId = preview.sessionId {
                 content.userInfo["sessionId"] = sessionId
+                applySessionPresentation(sessionId, to: content)
             }
         } catch {
-            // Decryption failed — show generic notification
+            // Decryption failed: retain a useful, private fallback. The raw APNs
+            // payload already carries the default sound and attention badge.
             content.title = "Kraki"
-            content.body = "Needs your attention"
+            content.subtitle = "New activity"
+            content.body = "Open Kraki to view the update."
         }
 
         contentHandler(content)
@@ -71,9 +91,19 @@ class NotificationService: UNNotificationServiceExtension {
     override func serviceExtensionTimeWillExpire() {
         if let contentHandler = contentHandler, let content = bestAttemptContent {
             content.title = "Kraki"
-            content.body = "Needs your attention"
+            content.subtitle = "New activity"
+            content.body = "Open Kraki to view the update."
+            content.sound = .default
             contentHandler(content)
         }
+    }
+
+    private func applySessionPresentation(
+        _ sessionId: String,
+        to content: UNMutableNotificationContent
+    ) {
+        content.threadIdentifier = sessionId
+        NotificationBadgeStore.addUnreadSession(sessionId, to: content)
     }
 
     // MARK: - Crypto
@@ -143,6 +173,7 @@ class NotificationService: UNNotificationServiceExtension {
 
     private struct Preview {
         let title: String
+        let subtitle: String
         let body: String
         let sessionId: String?
     }
@@ -150,36 +181,59 @@ class NotificationService: UNNotificationServiceExtension {
     private func parsePreview(_ json: String) -> Preview {
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return Preview(title: "Kraki", body: "New message", sessionId: nil)
+            return Preview(
+                title: "Kraki",
+                subtitle: "New activity",
+                body: "Open Kraki to view the update.",
+                sessionId: nil
+            )
         }
 
-        // Tentacle's pushPreview payload shape (see relay-client.ts):
-        //   { type: "permission" | "question" | "idle", summary, sessionId }
+        // Tentacle's encrypted preview payload. The app name is already shown by
+        // iOS, so use the Session title as the notification title and reserve the
+        // subtitle for the kind of attention required.
         let messageType = obj["type"] as? String
         let sessionId = obj["sessionId"] as? String
-        let summary = obj["summary"] as? String
+        let sessionTitle = normalized(obj["title"] as? String)
+        let summary = normalized(obj["summary"] as? String)
 
-        let body: String
+        let subtitle: String
+        let fallbackBody: String
         switch messageType {
         case "permission":
-            body = "🔐 " + (summary ?? "Tool approval needed")
+            subtitle = "Approval needed"
+            fallbackBody = "Review the requested tool action."
         case "question":
-            body = "❓ " + (summary ?? "Question from agent")
+            subtitle = "Question from agent"
+            fallbackBody = "Open the Session to respond."
         case "idle":
-            // Idle pushes carry the last agent message as `summary`
-            body = summary ?? "Agent finished"
+            subtitle = "Reply ready"
+            fallbackBody = "The agent finished responding."
         case "error":
-            body = "⚠️ " + (summary ?? "Error occurred")
+            subtitle = "Action failed"
+            fallbackBody = "Open the Session for details."
         case "session_ended":
-            body = "Session ended"
+            subtitle = "Session ended"
+            fallbackBody = "The Session is no longer running."
         default:
-            body = summary ?? "Needs your attention"
+            subtitle = "New activity"
+            fallbackBody = "Open Kraki to view the update."
         }
 
-        // The tentacle doesn't currently include a session title in the preview,
-        // so fall back to just the brand name.
-        let title = (obj["title"] as? String).map { "Kraki — \($0)" } ?? "Kraki"
+        return Preview(
+            title: sessionTitle ?? "Kraki",
+            subtitle: subtitle,
+            body: summary ?? fallbackBody,
+            sessionId: sessionId
+        )
+    }
 
-        return Preview(title: title, body: body, sessionId: sessionId)
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let text = value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return text.isEmpty ? nil : text
     }
 }

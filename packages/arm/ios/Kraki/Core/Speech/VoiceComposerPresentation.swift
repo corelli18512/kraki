@@ -234,10 +234,25 @@ struct IOSVoiceComposerSurface: View {
     let state: KrakiVoiceInputController.State
     let statusText: String
     let onFinish: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.08), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel voice input")
+            .accessibilityHint("Keeps the current draft and returns to the keyboard")
+
             IOSVoiceTranscriptText(pieces: pieces)
+                .layoutPriority(1)
+
             Button {
                 if state == .recording { onFinish() }
             } label: {
@@ -254,7 +269,7 @@ struct IOSVoiceComposerSurface: View {
                     : ""
             )
         }
-        .padding(.leading, 18)
+        .padding(.leading, 8)
         .padding(.trailing, 10)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
@@ -268,6 +283,8 @@ struct IOSVoiceTranscriptText: View {
         Text(attributed)
             .font(.system(size: 15))
             .lineLimit(2)
+            .truncationMode(.head)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

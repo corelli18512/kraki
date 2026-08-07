@@ -62,10 +62,14 @@ struct MacChatComposer: View {
 
     private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
     private static let inputBoxHeight: CGFloat = 42
-    private static let voiceStartSound = NSSound(
-        contentsOfFile: "/System/Library/Sounds/Tink.aiff",
-        byReference: true
-    )
+    private static let voiceStartSound: NSSound? = {
+        let sound = NSSound(
+            contentsOfFile: "/System/Library/Sounds/Hero.aiff",
+            byReference: false
+        )
+        sound?.volume = 1.0
+        return sound
+    }()
     private static let commitDistanceFraction: CGFloat = 0.4
     private static let momentumVelocity: CGFloat = 500
 
@@ -95,7 +99,15 @@ struct MacChatComposer: View {
         !voiceOwnsComposer && (isStructuredResponse ? hasText : (hasText || hasImage))
     }
     private var canShowVoice: Bool {
-        appState.voiceCapability != nil && !isStructuredResponse
+        VoiceComposerAccessPolicy.isVisible(
+            capabilityAvailable: appState.voiceCapability != nil
+        )
+    }
+    private var canStartVoice: Bool {
+        VoiceComposerAccessPolicy.canStart(
+            capabilityAvailable: appState.voiceCapability != nil,
+            voiceControllerBusy: voiceController.isBusy
+        )
     }
     private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
     private var isVoiceFailure: Bool {
@@ -144,13 +156,6 @@ struct MacChatComposer: View {
             }
             .onChange(of: appState.isFullyOnline) { _, online in
                 if !online { abortPending = false }
-            }
-            .onChange(of: voiceController.state) { oldState, newState in
-                guard oldState != .recording,
-                      newState == .recording,
-                      voiceController.activeSessionID == sessionId else { return }
-                Self.voiceStartSound?.stop()
-                Self.voiceStartSound?.play()
             }
             .task(id: sessionId) {
                 if let activeVoiceSession = voiceController.activeSessionID,
@@ -412,8 +417,8 @@ struct MacChatComposer: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.4)
+        .disabled(!canStartVoice)
+        .opacity(canStartVoice ? 1 : 0.4)
         .accessibilityLabel("Start voice input")
         .accessibilityHint("Click or press Option-Space to dictate into this draft")
     }
@@ -454,7 +459,8 @@ struct MacChatComposer: View {
             if voiceController.isRecording { voiceController.finish() }
             return
         }
-        guard isIdle, let session else { return }
+        guard canStartVoice, let session else { return }
+        Self.playVoiceStartCue()
         voiceController.clearFailure()
         let existingDraft = text
         voiceDraftPrefix = existingDraft
@@ -480,6 +486,18 @@ struct MacChatComposer: View {
                 }
             )
         }
+    }
+
+    private static func playVoiceStartCue() {
+        guard let sound = voiceStartSound else {
+            KLog.diag("🎙️ [voice] start cue unavailable; using system alert")
+            NSSound.beep()
+            return
+        }
+        sound.stop()
+        let played = sound.play()
+        KLog.diag("🎙️ [voice] start cue played=\(played)")
+        if !played { NSSound.beep() }
     }
 
     private var abortButton: some View {

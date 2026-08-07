@@ -326,8 +326,17 @@ final class WebSocketClient: NSObject {
     }
 
     private func listenForMessages() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
+        // Bind the receive loop to the exact task that created it. A cancelled
+        // task may still complete one queued receive callback after connect()
+        // has installed a replacement task; accepting that callback would
+        // inject stale frames into the new connection and recursively attach a
+        // second receive loop to the replacement socket.
+        guard let receivingTask = task else { return }
+        receivingTask.receive { [weak self, receivingTask] result in
+            guard let self, self.task === receivingTask else {
+                KLog.d("ℹ️ Ignoring stale WebSocket receive callback")
+                return
+            }
             switch result {
             case .success(let message):
                 switch message {
@@ -340,7 +349,7 @@ final class WebSocketClient: NSObject {
                 @unknown default:
                     break
                 }
-                // Continue listening for the next frame.
+                // Continue listening only on the same connection generation.
                 self.listenForMessages()
             case .failure:
                 // Connection lost — URLSessionDelegate methods handle reconnection.

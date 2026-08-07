@@ -469,6 +469,9 @@ final class AppState {
         relayVersion = nil
         voiceCapability = nil
         voiceInputController.cancel()
+        #if os(iOS)
+        pushManager?.syncApplicationBadge(unreadSessionIDs: [])
+        #endif
         lastError = nil
         reconnectAttempt = 0
         hasCompletedInitialConnect = false
@@ -486,6 +489,9 @@ final class AppState {
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate() {
         updateReadVisibility(appForeground: true, conversationVisible: true)
+        #if os(iOS)
+        Task { await pushManager?.handleForeground() }
+        #endif
         guard hasCompletedInitialConnect else { return }
         guard connectionStatus != .connected else { return }
         wsClient?.resetBackoffAndReconnect()
@@ -735,11 +741,16 @@ extension AppState: SessionSubscriptionHost {
             )
         }
 
-        switch digest.state {
-        case .compacting:
-            messageStore.setCompacting(sessionId, reason: nil)
-        case .idle, .active:
-            messageStore.clearRuntimeStatus(sessionId)
+        if digest.runtimeStatus?.status == "compacting" {
+            let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
+            messageStore.setCompacting(sessionId, reason: reason)
+        } else {
+            switch digest.state {
+            case .compacting:
+                messageStore.setCompacting(sessionId, reason: nil)
+            case .idle, .active:
+                messageStore.clearRuntimeStatus(sessionId)
+            }
         }
 
         let cardJSON = snapshot["card"] as? [String: Any] ?? [:]

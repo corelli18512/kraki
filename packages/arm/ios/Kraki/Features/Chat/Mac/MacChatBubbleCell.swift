@@ -3,7 +3,7 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// One TextKit-backed chat bubble. Layout constants and view hierarchy mirror
+/// One virtualized chat bubble. Layout constants and view hierarchy mirror
 /// iOS `TKBubbleCell`: no Mac-only avatar column, one bubble background, body,
 /// inline/lazy images, in-bubble action slot, and a floating Steps capsule.
 enum MacBubbleKind: Equatable { case agent, user, error, system }
@@ -71,6 +71,12 @@ final class MacCoreTextLayoutArtifact: NSObject {
         let frame: NSRect
     }
 
+    struct LineInfo {
+        let line: CTLine
+        let range: NSRange
+        let rect: NSRect
+    }
+
     private static let cache: NSCache<NSString, MacCoreTextLayoutArtifact> = {
         let cache = NSCache<NSString, MacCoreTextLayoutArtifact>()
         cache.countLimit = 256
@@ -85,6 +91,7 @@ final class MacCoreTextLayoutArtifact: NSObject {
     let links: [LinkRegion]
     let blocks: [BlockRegion]
     let tables: [TableRegion]
+    let lines: [LineInfo]
     let plainText: String
 
     static func removeCached(width: CGFloat, key: String) {
@@ -107,6 +114,114 @@ final class MacCoreTextLayoutArtifact: NSObject {
             cost: max(attributed.length * 32, Int(width * built.height / 4))
         )
         return built
+    }
+
+    func stringIndex(at point: NSPoint) -> Int? {
+        guard let first = lines.first, let last = lines.last else { return nil }
+        let info: LineInfo
+        if point.y <= first.rect.minY {
+            info = first
+        } else if point.y >= last.rect.maxY {
+            info = last
+        } else {
+            info = lines.min { lhs, rhs in
+                let lhsDistance = point.y < lhs.rect.minY
+                    ? lhs.rect.minY - point.y
+                    : max(0, point.y - lhs.rect.maxY)
+                let rhsDistance = point.y < rhs.rect.minY
+                    ? rhs.rect.minY - point.y
+                    : max(0, point.y - rhs.rect.maxY)
+                return lhsDistance < rhsDistance
+            } ?? first
+        }
+
+        if point.x <= info.rect.minX { return info.range.location }
+        if point.x >= info.rect.maxX {
+            return min(NSMaxRange(info.range), attributed.length)
+        }
+        let index = CTLineGetStringIndexForPosition(
+            info.line,
+            CGPoint(x: point.x - info.rect.minX, y: 0)
+        )
+        guard index != kCFNotFound else { return info.range.location }
+        return min(max(index, info.range.location), min(NSMaxRange(info.range), attributed.length))
+    }
+
+    func point(forStringIndex requestedIndex: Int) -> NSPoint? {
+        guard !lines.isEmpty else { return nil }
+        let index = min(max(requestedIndex, 0), attributed.length)
+        let info = lines.first { line in
+            index >= line.range.location && index <= NSMaxRange(line.range)
+        } ?? lines.last!
+        let offset = CTLineGetOffsetForStringIndex(info.line, index, nil)
+        return NSPoint(x: info.rect.minX + offset, y: info.rect.midY)
+    }
+
+    func selectionRects(for requestedRange: NSRange) -> [NSRect] {
+        guard requestedRange.location != NSNotFound else { return [] }
+        let lower = min(max(requestedRange.location, 0), attributed.length)
+        let upper = min(max(requestedRange.location + requestedRange.length, lower), attributed.length)
+        guard upper > lower else { return [] }
+        let range = NSRange(location: lower, length: upper - lower)
+        return lines.compactMap { info in
+            let intersection = NSIntersectionRange(range, info.range)
+            guard intersection.length > 0 else { return nil }
+            let start = CTLineGetOffsetForStringIndex(info.line, intersection.location, nil)
+            let end = CTLineGetOffsetForStringIndex(
+                info.line,
+                intersection.location + intersection.length,
+                nil
+            )
+            return NSRect(
+                x: info.rect.minX + min(start, end),
+                y: info.rect.minY,
+                width: max(abs(end - start), 2),
+                height: info.rect.height
+            )
+        }
+    }
+
+    func plainText(in requestedRange: NSRange) -> String? {
+        guard requestedRange.location != NSNotFound else { return nil }
+        let lower = min(max(requestedRange.location, 0), attributed.length)
+        let upper = min(max(requestedRange.location + requestedRange.length, lower), attributed.length)
+        guard upper > lower else { return nil }
+        let substring = attributed.attributedSubstring(
+            from: NSRange(location: lower, length: upper - lower)
+        )
+        return MacMarkdown.plainText(substring) ?? substring.string
+    }
+
+    func wordRange(containing requestedIndex: Int) -> NSRange {
+        let text = attributed.string as NSString
+        guard text.length > 0 else { return NSRange(location: 0, length: 0) }
+        let index = min(max(requestedIndex, 0), text.length - 1)
+        var range = text.rangeOfComposedCharacterSequence(at: index)
+        let wordCharacters = CharacterSet.alphanumerics
+            .union(.nonBaseCharacters)
+            .union(CharacterSet(charactersIn: "_"))
+        func isWord(_ candidate: NSRange) -> Bool {
+            text.substring(with: candidate).rangeOfCharacter(from: wordCharacters) != nil
+        }
+        guard isWord(range) else { return range }
+        while range.location > 0 {
+            let previous = text.rangeOfComposedCharacterSequence(at: range.location - 1)
+            guard isWord(previous) else { break }
+            range = NSUnionRange(range, previous)
+        }
+        while NSMaxRange(range) < text.length {
+            let next = text.rangeOfComposedCharacterSequence(at: NSMaxRange(range))
+            guard isWord(next) else { break }
+            range = NSUnionRange(range, next)
+        }
+        return range
+    }
+
+    func paragraphRange(containing requestedIndex: Int) -> NSRange {
+        let text = attributed.string as NSString
+        guard text.length > 0 else { return NSRange(location: 0, length: 0) }
+        let index = min(max(requestedIndex, 0), text.length - 1)
+        return text.paragraphRange(for: NSRange(location: index, length: 0))
     }
 
     private init(attributed source: NSAttributedString, width requestedWidth: CGFloat) {
@@ -168,7 +283,7 @@ final class MacCoreTextLayoutArtifact: NSObject {
         if !origins.isEmpty {
             CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
         }
-        var lineInfo: [(line: CTLine, range: NSRange, rect: NSRect)] = []
+        var lineInfo: [LineInfo] = []
         lineInfo.reserveCapacity(lineCount)
         for index in 0..<lineCount {
             let line = unsafeBitCast(
@@ -190,7 +305,7 @@ final class MacCoreTextLayoutArtifact: NSObject {
                 width: max(ceil(measuredWidth), 1),
                 height: max(ceil(ascent + descent + leading), 1)
             )
-            lineInfo.append((line, range, rect))
+            lineInfo.append(LineInfo(line: line, range: range, rect: rect))
         }
 
         var builtLinks: [LinkRegion] = []
@@ -278,19 +393,31 @@ final class MacCoreTextLayoutArtifact: NSObject {
         self.links = builtLinks
         self.blocks = builtBlocks
         self.tables = builtTables
+        self.lines = lineInfo
         self.plainText = MacMarkdown.plainText(source) ?? ""
         super.init()
     }
 }
 
 /// Lightweight layer-backed renderer for cached CoreText artifacts. It draws
-/// read-only Markdown directly and exposes native link hit targets without a
-/// per-cell NSTextStorage/NSLayoutManager/NSTextContainer stack.
+/// read-only Markdown and selection directly, and exposes native link hit
+/// targets without a per-cell NSTextStorage/NSLayoutManager/NSTextContainer stack.
 final class MacCoreTextBodyView: NSView {
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { false }
+    override var acceptsFirstResponder: Bool { artifact != nil }
 
     private(set) var artifact: MacCoreTextLayoutArtifact?
+    private var selectionRange: NSRange?
+    private var selectionAnchor: Int?
+    private var dragOrigin: NSPoint?
+    private var pendingLink: URL?
+    private var didDragSelection = false
+
+    var hasSelection: Bool { selectionRange?.length ?? 0 > 0 }
+    var selectedText: String? {
+        guard let artifact, let selectionRange else { return nil }
+        return artifact.plainText(in: selectionRange)
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -305,6 +432,7 @@ final class MacCoreTextBodyView: NSView {
     func configure(_ artifact: MacCoreTextLayoutArtifact?) {
         guard self.artifact !== artifact else { return }
         self.artifact = artifact
+        resetSelection()
         setAccessibilityLabel(artifact?.plainText ?? "")
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
@@ -314,6 +442,7 @@ final class MacCoreTextBodyView: NSView {
         guard let artifact,
               let context = NSGraphicsContext.current?.cgContext else { return }
         drawBlockBackgrounds(artifact.blocks, dirtyRect: dirtyRect)
+        drawSelection(in: artifact, dirtyRect: dirtyRect)
         context.saveGState()
         context.clip(to: dirtyRect)
         context.textMatrix = .identity
@@ -321,6 +450,21 @@ final class MacCoreTextBodyView: NSView {
         context.scaleBy(x: 1, y: -1)
         CTFrameDraw(artifact.frame, context)
         context.restoreGState()
+    }
+
+    private func drawSelection(
+        in artifact: MacCoreTextLayoutArtifact,
+        dirtyRect: NSRect
+    ) {
+        guard let selectionRange, selectionRange.length > 0 else { return }
+        let isActive = window?.isKeyWindow == true && window?.firstResponder === self
+        let color = isActive
+            ? NSColor.selectedTextBackgroundColor
+            : NSColor.unemphasizedSelectedTextBackgroundColor
+        color.setFill()
+        for rect in artifact.selectionRects(for: selectionRange) where rect.intersects(dirtyRect) {
+            rect.intersection(bounds).fill()
+        }
     }
 
     private func drawBlockBackgrounds(
@@ -371,21 +515,164 @@ final class MacCoreTextBodyView: NSView {
 
     override func resetCursorRects() {
         super.resetCursorRects()
+        guard artifact != nil else { return }
+        addCursorRect(bounds, cursor: .iBeam)
         for link in artifact?.links ?? [] {
             for rect in link.rects { addCursorRect(rect, cursor: .pointingHand) }
         }
     }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        event?.type == .leftMouseDown
+    }
+
     override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if let link = artifact?.links.first(where: { region in
-            region.rects.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) })
-        }) {
-            NSWorkspace.shared.open(link.url)
+        guard event.buttonNumber == 0,
+              let artifact,
+              let index = artifact.stringIndex(at: convert(event.locationInWindow, from: nil)) else {
+            super.mouseDown(with: event)
             return
         }
-        super.mouseDown(with: event)
+        window?.makeFirstResponder(self)
+        let point = convert(event.locationInWindow, from: nil)
+        dragOrigin = point
+        didDragSelection = false
+        pendingLink = artifact.links.first(where: { region in
+            region.rects.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) })
+        })?.url
+
+        if event.clickCount >= 3 {
+            pendingLink = nil
+            applySelection(artifact.paragraphRange(containing: index))
+            return
+        }
+        if event.clickCount == 2 {
+            pendingLink = nil
+            applySelection(artifact.wordRange(containing: index))
+            return
+        }
+
+        if event.modifierFlags.contains(.shift), let existing = selectionRange, existing.length > 0 {
+            let anchor = selectionAnchor
+                ?? (index < existing.location ? NSMaxRange(existing) : existing.location)
+            selectionAnchor = anchor
+            updateSelection(from: anchor, to: index)
+        } else {
+            selectionAnchor = index
+            selectionRange = nil
+            needsDisplay = true
+        }
     }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let artifact, let selectionAnchor else {
+            super.mouseDragged(with: event)
+            return
+        }
+        _ = autoscroll(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if let dragOrigin,
+           hypot(point.x - dragOrigin.x, point.y - dragOrigin.y) >= 2 {
+            didDragSelection = true
+            pendingLink = nil
+        }
+        guard let index = artifact.stringIndex(at: point) else { return }
+        if index != selectionAnchor { didDragSelection = true }
+        updateSelection(from: selectionAnchor, to: index)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if let pendingLink, !didDragSelection, !hasSelection {
+            NSWorkspace.shared.open(pendingLink)
+        }
+        self.pendingLink = nil
+        dragOrigin = nil
+        didDragSelection = false
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers == .command, hasSelection {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "c":
+                copySelection(nil)
+                return true
+            case "a":
+                selectAll(nil)
+                return true
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            resetSelection()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { needsDisplay = true }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { needsDisplay = true }
+        return resigned
+    }
+
+    @objc func copySelection(_ sender: Any?) {
+        guard let selectedText, !selectedText.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(selectedText, forType: .string)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        copySelection(sender)
+    }
+
+    @objc override func selectAll(_ sender: Any?) {
+        guard let artifact, artifact.attributed.length > 0 else { return }
+        applySelection(NSRange(location: 0, length: artifact.attributed.length))
+    }
+
+    private func updateSelection(from anchor: Int, to active: Int) {
+        let lower = min(anchor, active)
+        let upper = max(anchor, active)
+        selectionRange = upper > lower
+            ? NSRange(location: lower, length: upper - lower)
+            : nil
+        selectionAnchor = anchor
+        needsDisplay = true
+    }
+
+    private func applySelection(_ range: NSRange) {
+        selectionRange = range.length > 0 ? range : nil
+        selectionAnchor = range.location
+        needsDisplay = true
+    }
+
+    private func resetSelection() {
+        selectionRange = nil
+        selectionAnchor = nil
+        dragOrigin = nil
+        pendingLink = nil
+        didDragSelection = false
+        needsDisplay = true
+    }
+
+    #if DEBUG
+    func selectForRegression(_ range: NSRange) -> (text: String?, rectCount: Int) {
+        applySelection(range)
+        return (selectedText, artifact?.selectionRects(for: range).count ?? 0)
+    }
+    #endif
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -632,6 +919,67 @@ final class MacChatBubbleCell: NSView {
     var actionFrameForRegression: NSRect { actionHost.frame }
     var imageFrameForRegression: NSRect { imageHost.frame }
     var bubbleFrameForRegression: NSRect { bubbleBG.frame }
+
+    func selectBodyTextForRegression(_ range: NSRange) -> (text: String?, rectCount: Int) {
+        guard usesCoreTextBody else { return (nil, 0) }
+        return coreTextBodyView.selectForRegression(range)
+    }
+
+    func dragSelectBodyTextForRegression(
+        _ range: NSRange,
+        windowNumber: Int
+    ) -> (text: String?, rectCount: Int, hitTested: Bool) {
+        guard usesCoreTextBody,
+              let artifact = coreTextBodyView.artifact,
+              let start = artifact.point(forStringIndex: range.location),
+              let end = artifact.point(forStringIndex: NSMaxRange(range)) else {
+            return (nil, 0, false)
+        }
+        let startInCell = coreTextBodyView.convert(start, to: self)
+        let hit = hitTest(startInCell)
+        let hitTested = hit === coreTextBodyView || hit?.isDescendant(of: coreTextBodyView) == true
+        let startInWindow = coreTextBodyView.convert(start, to: nil)
+        let endInWindow = coreTextBodyView.convert(end, to: nil)
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let down = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: startInWindow,
+            modifierFlags: [],
+            timestamp: timestamp,
+            windowNumber: windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ), let drag = NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: endInWindow,
+            modifierFlags: [],
+            timestamp: timestamp + 0.01,
+            windowNumber: windowNumber,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 1,
+            pressure: 1
+        ), let up = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: endInWindow,
+            modifierFlags: [],
+            timestamp: timestamp + 0.02,
+            windowNumber: windowNumber,
+            context: nil,
+            eventNumber: 3,
+            clickCount: 1,
+            pressure: 0
+        ) else {
+            return (nil, 0, hitTested)
+        }
+        coreTextBodyView.mouseDown(with: down)
+        coreTextBodyView.mouseDragged(with: drag)
+        coreTextBodyView.mouseUp(with: up)
+        let rectCount = coreTextBodyView.artifact?.selectionRects(for: range).count ?? 0
+        return (coreTextBodyView.selectedText, rectCount, hitTested)
+    }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
     var contentClipIsFlippedForRegression: Bool { contentClipView.isFlipped }
 
@@ -1218,7 +1566,15 @@ final class MacChatBubbleCell: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let content else { return nil }
         let menu = NSMenu()
-        if let text = MacMarkdown.plainText(content.body), !text.isEmpty {
+        if coreTextBodyView.hasSelection {
+            let copy = NSMenuItem(
+                title: "Copy Selection",
+                action: #selector(MacCoreTextBodyView.copySelection(_:)),
+                keyEquivalent: ""
+            )
+            copy.target = coreTextBodyView
+            menu.addItem(copy)
+        } else if let text = MacMarkdown.plainText(content.body), !text.isEmpty {
             let copy = NSMenuItem(title: "Copy", action: #selector(copyMessage), keyEquivalent: "")
             copy.target = self
             menu.addItem(copy)

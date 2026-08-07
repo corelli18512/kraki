@@ -69,6 +69,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         } else if ProcessInfo.processInfo.environment["KRAKI_CORETEXT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runCoreTextBenchmark() }
+        } else if ProcessInfo.processInfo.environment["KRAKI_UNREAD_BENCH"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            DispatchQueue.main.async { [weak self] in self?.runUnreadProjectionRegression() }
         } else if ProcessInfo.processInfo.environment["KRAKI_CODE_HIGHLIGHT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runCodeHighlightBenchmark() }
@@ -1003,6 +1006,91 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         return "provisional=\(diagnostics["provisionalContentCount"] ?? -1),active=\(diagnostics["codeHighlightUpgradeActive"] ?? false),pending=\(diagnostics["codeHighlightUpgradePending"] ?? false),generation=\(diagnostics["observedCodeHighlightGeneration"] ?? -1)"
     }
 
+    private func runUnreadProjectionRegression() {
+        func session(_ id: String, lastSeq: Int, readSeq: Int) -> SessionInfo {
+            SessionInfo(
+                id: id,
+                deviceId: "dev-test",
+                deviceName: "Test Device",
+                agent: "pi",
+                title: "Unread regression",
+                state: .idle,
+                mode: .discuss,
+                lastSeq: lastSeq,
+                readSeq: readSeq,
+                messageCount: lastSeq,
+                createdAt: Date(),
+                pinned: false
+            )
+        }
+
+        let store = SessionStore(persistenceEnabled: false)
+        store.sessions["caught-up"] = session("caught-up", lastSeq: 10, readSeq: 10)
+        store.observeLastSeq("caught-up", seq: 11, advancesReadWhenCaughtUp: true)
+        let caughtUp = store.sessions["caught-up"]?.lastSeq == 11
+            && store.sessions["caught-up"]?.readSeq == 11
+            && !store.isUnread("caught-up")
+
+        store.sessions["existing"] = session("existing", lastSeq: 10, readSeq: 9)
+        store.observeLastSeq("existing", seq: 11, advancesReadWhenCaughtUp: true)
+        let existing = store.sessions["existing"]?.readSeq == 9 && store.isUnread("existing")
+
+        store.sessions["gap"] = session("gap", lastSeq: 20, readSeq: 20)
+        store.observeLastSeq("gap", seq: 22, advancesReadWhenCaughtUp: true)
+        let gap = store.sessions["gap"]?.readSeq == 20 && store.isUnread("gap")
+
+        store.sessions["attention"] = session("attention", lastSeq: 10, readSeq: 10)
+        store.observeLastSeq("attention", seq: 11)
+        let attention = store.sessions["attention"]?.readSeq == 10 && store.isUnread("attention")
+
+        var routerUser = false
+        var routerAgent = false
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-unread-regression-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+            let app = AppState(testDatabase: database)
+            app.sessionStore.sessions["user"] = session("user", lastSeq: 10, readSeq: 10)
+            app.sessionStore.sessions["agent"] = session("agent", lastSeq: 10, readSeq: 10)
+            let router = MessageRouter(appState: app)
+            func route(type: String, sessionId: String) throws {
+                let payload: [String: Any] = type == "user_message" ? ["content": "hello"] : ["content": "reply"]
+                let data = try JSONSerialization.data(withJSONObject: [
+                    "type": type,
+                    "sessionId": sessionId,
+                    "deviceId": "dev-test",
+                    "seq": 11,
+                    "timestamp": "2026-08-07T00:00:00Z",
+                    "payload": payload,
+                ])
+                router.handleDataMessage(data)
+            }
+            try route(type: "user_message", sessionId: "user")
+            try route(type: "agent_message", sessionId: "agent")
+            routerUser = app.sessionStore.sessions["user"]?.readSeq == 11
+                && !app.sessionStore.isUnread("user")
+            routerAgent = app.sessionStore.sessions["agent"]?.readSeq == 10
+                && app.sessionStore.isUnread("agent")
+        } catch {
+            NSLog("[unread-projection-regression] setup-error=%@", error.localizedDescription)
+        }
+
+        let passed = caughtUp && existing && gap && attention && routerUser && routerAgent
+        NSLog(
+            "[unread-projection-regression] caughtUp=%d existing=%d gap=%d attention=%d routerUser=%d routerAgent=%d passed=%d",
+            caughtUp ? 1 : 0,
+            existing ? 1 : 0,
+            gap ? 1 : 0,
+            attention ? 1 : 0,
+            routerUser ? 1 : 0,
+            routerAgent ? 1 : 0,
+            passed ? 1 : 0
+        )
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
     private func runCoreTextBenchmark() {
         let markdown = """
         # CoreText chat rendering
@@ -1091,6 +1179,23 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let height = cell.configuredHeight()
         cell.frame.size.height = height
         cell.layoutSubtreeIfNeeded()
+
+        let selectionNeedle = "Cached immutable layout artifact"
+        let selectionRange = (body.string as NSString).range(
+            of: selectionNeedle,
+            options: .caseInsensitive
+        )
+        let selectionProbe = cell.selectBodyTextForRegression(selectionRange)
+        let startPoint = first?.point(forStringIndex: selectionRange.location)
+        let endPoint = first?.point(forStringIndex: NSMaxRange(selectionRange))
+        let mappedStart = startPoint.flatMap { first?.stringIndex(at: $0) }
+        let mappedEnd = endPoint.flatMap { first?.stringIndex(at: $0) }
+        let selectionPassed = selectionRange.location != NSNotFound
+            && selectionProbe.text?.localizedCaseInsensitiveCompare(selectionNeedle) == .orderedSame
+            && selectionProbe.rectCount > 0
+            && mappedStart == selectionRange.location
+            && mappedEnd == NSMaxRange(selectionRange)
+
         let drawStart = CACurrentMediaTime()
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: cell.bounds.size),
@@ -1102,6 +1207,32 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         window.backgroundColor = .windowBackgroundColor
         window.contentView = cell
         cell.layoutSubtreeIfNeeded()
+
+        let dragStartNeedle = "Incremental render spine"
+        let dragEndNeedle = "Layer-backed read-only drawing"
+        let dragStartRange = (body.string as NSString).range(
+            of: dragStartNeedle,
+            options: .caseInsensitive
+        )
+        let dragEndRange = (body.string as NSString).range(
+            of: dragEndNeedle,
+            options: .caseInsensitive
+        )
+        let dragRange = dragStartRange.location != NSNotFound && dragEndRange.location != NSNotFound
+            ? NSRange(
+                location: dragStartRange.location,
+                length: NSMaxRange(dragEndRange) - dragStartRange.location
+            )
+            : NSRange(location: NSNotFound, length: 0)
+        let dragProbe = cell.dragSelectBodyTextForRegression(
+            dragRange,
+            windowNumber: window.windowNumber
+        )
+        let dragPassed = dragProbe.hitTested
+            && dragProbe.rectCount >= 3
+            && dragProbe.text?.localizedCaseInsensitiveContains(dragStartNeedle) == true
+            && dragProbe.text?.localizedCaseInsensitiveContains(dragEndNeedle) == true
+
         cell.displayIgnoringOpacity(cell.bounds)
         if let rep = cell.bitmapImageRepForCachingDisplay(in: cell.bounds) {
             cell.cacheDisplay(in: cell.bounds, to: rep)
@@ -1112,7 +1243,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = nil
         let drawMs = (CACurrentMediaTime() - drawStart) * 1_000
         NSLog(
-            "[coretext-bench] bytes=%d chars=%d blocks=%d bodyHeight=%.1f textKitHeight=%.1f heightDelta=%.1f totalHeight=%.1f firstMs=%.3f hits100Ms=%.3f hitMaxMs=%.3f configureMs=%.3f drawMs=%.3f coreText=%d",
+            "[coretext-bench] bytes=%d chars=%d blocks=%d bodyHeight=%.1f textKitHeight=%.1f heightDelta=%.1f totalHeight=%.1f firstMs=%.3f hits100Ms=%.3f hitMaxMs=%.3f configureMs=%.3f drawMs=%.3f coreText=%d selection=%d selectionRects=%d mappedStart=%d mappedEnd=%d dragSelection=%d dragRects=%d hitTest=%d",
             markdown.utf8.count,
             body.length,
             first?.blocks.count ?? 0,
@@ -1125,7 +1256,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             cacheHitMaxMs,
             configureMs,
             drawMs,
-            cell.usesCoreTextBodyFlag ? 1 : 0
+            cell.usesCoreTextBodyFlag ? 1 : 0,
+            selectionPassed ? 1 : 0,
+            selectionProbe.rectCount,
+            mappedStart ?? -1,
+            mappedEnd ?? -1,
+            dragPassed ? 1 : 0,
+            dragProbe.rectCount,
+            dragProbe.hitTested ? 1 : 0
         )
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }

@@ -196,6 +196,95 @@ final class ChatMessageTests: XCTestCase {
 
 // MARK: - ProducerMessageDecoder Tests
 
+@MainActor
+final class MessageProviderHeadTests: XCTestCase {
+    func testHistoryBatchAdvancesSessionHeadAndUnreadProjection() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: database)
+        app.sessionStore.sessions["sess-1"] = SessionInfo(
+            id: "sess-1",
+            deviceId: "dev-1",
+            deviceName: "Test Device",
+            agent: "pi",
+            model: "gpt-test",
+            title: "Test Session",
+            state: .idle,
+            mode: .discuss,
+            lastSeq: 10,
+            readSeq: 10,
+            messageCount: 10,
+            createdAt: Date(),
+            pinned: false
+        )
+
+        let message = ChatMessage(
+            type: "agent_message",
+            seq: 11,
+            sessionId: "sess-1",
+            deviceId: "dev-1",
+            timestamp: "2026-08-06T00:00:00Z",
+            payload: ["content": AnyCodable("reply")]
+        )
+        app.messageProvider?.handleBatch(
+            sessionId: "sess-1",
+            messages: [message],
+            lastSeq: 11,
+            totalLastSeq: 11,
+            containsHead: true
+        )
+
+        XCTAssertEqual(app.sessionStore.sessions["sess-1"]?.lastSeq, 11)
+        XCTAssertTrue(app.sessionStore.isUnread("sess-1"))
+        XCTAssertEqual(app.messageStore.dbLastSeq("sess-1"), 11)
+    }
+
+    func testRouterAdvancesOnlyPersistentSessionSequence() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-router-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: database)
+        app.sessionStore.sessions["sess-1"] = SessionInfo(
+            id: "sess-1",
+            deviceId: "dev-1",
+            deviceName: "Test Device",
+            agent: "pi",
+            title: "Test Session",
+            state: .idle,
+            mode: .discuss,
+            lastSeq: 10,
+            readSeq: 10,
+            messageCount: 10,
+            createdAt: Date(),
+            pinned: false
+        )
+        let router = MessageRouter(appState: app)
+
+        func route(type: String, seq: Int) throws {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "type": type,
+                "sessionId": "sess-1",
+                "deviceId": "dev-1",
+                "seq": seq,
+                "timestamp": "2026-08-06T00:00:00Z",
+                "payload": type == "user_message" ? ["content": "hello"] : [:],
+            ])
+            router.handleDataMessage(data)
+        }
+
+        try route(type: "user_message", seq: 11)
+        XCTAssertEqual(app.sessionStore.sessions["sess-1"]?.lastSeq, 11)
+        XCTAssertEqual(app.sessionStore.sessions["sess-1"]?.readSeq, 11)
+        XCTAssertFalse(app.sessionStore.isUnread("sess-1"))
+
+        try route(type: "active", seq: 100_000)
+        XCTAssertEqual(app.sessionStore.sessions["sess-1"]?.lastSeq, 11)
+    }
+}
+
 final class ProducerMessageDecoderTests: XCTestCase {
 
     func testDecodeAgentMessage() {

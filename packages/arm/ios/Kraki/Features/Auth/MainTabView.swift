@@ -22,14 +22,16 @@ struct MainTabView: View {
             NewSessionSheet()
                 .environment(appState)
         }
-        .onChange(of: appState.sessionStore.navigateToSession) { _, target in
-            guard let target else { return }
-            // Switch to Sessions tab and push the requested session detail.
-            selectedTab = 0
-            sessionPath = NavigationPath()
-            sessionPath.append(SessionNavID(id: target))
-            // Clear so it can fire again next time.
-            appState.sessionStore.navigateToSession = nil
+        .onChange(of: appState.sessionStore.navigateToSession) { _, _ in
+            consumePendingSessionNavigation()
+        }
+        .onAppear {
+            // A notification can launch the process before MainTabView exists.
+            // Consume the already-populated route as well as later changes.
+            consumePendingSessionNavigation()
+        }
+        .onChange(of: appState.sessionStore.unreadSessionIDs, initial: true) { _, ids in
+            appState.pushManager?.syncApplicationBadge(unreadSessionIDs: ids)
         }
         .onChange(of: appState.deviceStore.navigateToDeviceId) { _, target in
             guard let target else { return }
@@ -68,6 +70,14 @@ struct MainTabView: View {
             }
         }
         #endif
+    }
+
+    private func consumePendingSessionNavigation() {
+        guard let target = appState.sessionStore.navigateToSession else { return }
+        selectedTab = 0
+        sessionPath = NavigationPath()
+        sessionPath.append(SessionNavID(id: target))
+        appState.sessionStore.navigateToSession = nil
     }
 
     // MARK: - Sub-views (shared)
