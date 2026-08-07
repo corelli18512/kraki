@@ -148,6 +148,18 @@ test.describe.serial('real-stack session subscription + opaque multicast', () =>
     await expect(arm1.page.getByText(after, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
   });
 
+  test('same-device socket replacement reasserts without a device_left event', async () => {
+    await openSession(arm1.page, sessionC);
+    await expectSubscribed(arm1.deviceId, sessionC);
+
+    await control('/tentacle/replace');
+    await expectSubscribed(arm1.deviceId, sessionC);
+
+    const after = `after-tentacle-replace-${Date.now().toString(36)}`;
+    await control('/delta', { sid: sessionC, text: after });
+    await expect(arm1.page.getByText(after, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
+  });
+
   test('leaving the session page confirms null subscription', async () => {
     await arm1.page.goto(WEB_URL);
     await expectSubscribed(arm1.deviceId, null);

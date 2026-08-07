@@ -464,6 +464,27 @@ async function main(): Promise<void> {
         // ── tentacle link control ──
         case '/tentacle/disconnect': relay!.disconnect(); return json(200, { ok: true });
         case '/tentacle/connect': relay!.connect(); return json(200, { ok: true });
+        case '/tentacle/replace': {
+          // Authenticate a new socket with the SAME device id before the old
+          // socket closes. Head replaces the old connection without emitting
+          // device_left, so device_joined is the only Arm-visible epoch signal.
+          const previous = relay!;
+          const deviceId = previous.getAuthInfo()?.deviceId;
+          if (!deviceId) throw new Error('tentacle has no authenticated device id');
+          (previous as unknown as { intentionalDisconnect: boolean }).intentionalDisconnect = true;
+          const replacement = new RelayClient(adapter as unknown as AgentAdapter, sm, {
+            relayUrl: RELAY_URL,
+            device: { deviceId, name: 'RealStack Tentacle', role: 'tentacle', kind: 'desktop' },
+          }, keyManager, attachmentStore);
+          installAttachmentDropHook(replacement);
+          await new Promise<void>((resolve, reject) => {
+            replacement.onAuthenticated = () => resolve();
+            replacement.onFatalError = (m: string) => reject(new Error(`tentacle replacement auth failed: ${m}`));
+            replacement.connect();
+          });
+          relay = replacement;
+          return json(200, { ok: true, deviceId });
+        }
         case '/tentacle/restart': {
           // Faithful process-restart simulation: destroy the RelayClient and
           // rebuild it against the SAME SessionManager (disk state persists),
