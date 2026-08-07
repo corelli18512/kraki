@@ -52,6 +52,18 @@ describe('projectSpineMessages', () => {
     expect(projected[0].payload.draft).toBe('Frozen draft');
   });
 
+  it('preserves a scheduled wake as the turn anchor without projecting it as user speech', () => {
+    const projected = projectSpineMessages([
+      { type: 'scheduled_wake', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: {
+        triggerId: 'wake-1', scheduledFor: '2026-08-03T01:00:00Z', instruction: 'Check the permit site', label: 'Permit check',
+      } } as ChatMessage,
+      { type: 'agent_message', deviceId: 'd1', seq: 2, timestamp: '', sessionId: 's1', payload: { content: 'The permit site is not open yet.' } } as ChatMessage,
+      { type: 'idle', deviceId: 'd1', seq: 3, timestamp: '', sessionId: 's1', payload: {} } as ChatMessage,
+    ]);
+
+    expect(projected.map((message) => message.type)).toEqual(['scheduled_wake', 'agent_message', 'idle']);
+  });
+
   it('hides a non-terminal error from the top-level spine without dropping normal replies', () => {
     const projected = projectSpineMessages([
       { type: 'user_message', deviceId: 'd1', seq: 1, timestamp: '', sessionId: 's1', payload: { content: 'go' } } as ChatMessage,

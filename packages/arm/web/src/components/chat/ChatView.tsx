@@ -118,7 +118,7 @@ export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtif
     if (sessionIdle) {
       for (let i = spine.length - 1; i >= 0; i--) {
         const msg = spine[i];
-        if (msg.type === 'user_message' || msg.type === 'send_input') return i;
+        if (msg.type === 'user_message' || msg.type === 'scheduled_wake' || msg.type === 'send_input') return i;
       }
     }
     for (let i = spine.length - 1; i >= 0; i--) {

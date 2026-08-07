@@ -128,7 +128,7 @@ export interface MultiAgentAdapterOptions {
   /** Passed through to sub-adapters that need it. */
   attachmentStore?: import('../attachment-store.js').AttachmentStore;
   /** Kraki MCP server info (optional). */
-  krakiMcp?: { urlForSession: (sid: string) => string; bearerToken: string };
+  krakiMcp?: { credentialsForSession: (sid: string) => { url: string; bearerToken: string } };
 }
 
 // ── MultiAgentAdapter ───────────────────────────────────
@@ -179,9 +179,13 @@ export class MultiAgentAdapter extends AgentAdapter {
           const { PiAdapter } = await import('./pi.js');
           const piPath = resolveCliPath('pi');
           if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); continue; }
-          // pi has no MCP; it only needs the attachment store to externalize
-          // image bytes from its show_image tool (krakiMcp is not applicable).
-          adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
+          // Pi loads Kraki tools through an extension. The extension calls the
+          // same loopback MCP endpoint for daemon-owned capabilities.
+          adapter = new PiAdapter({
+            cliPath: piPath,
+            attachmentStore: this.opts.attachmentStore,
+            krakiMcp: this.opts.krakiMcp,
+          });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;

@@ -9,7 +9,8 @@ const isTrace = (t: string) =>
   t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
   t === 'permission' || t === 'question' || t === 'error';
 const isTurnStart = (message: ChatMessage) =>
-  message.type === 'user_message' && message.payload.delivery !== 'steer';
+  message.type === 'scheduled_wake' ||
+  (message.type === 'user_message' && message.payload.delivery !== 'steer');
 
 /**
  * Collect the TRACE steps (narration + tool chips) belonging to one turn,
@@ -32,7 +33,7 @@ export function collectTurnSteps(messages: ChatMessage[] | undefined, targetSeq:
   let start: number;
   let end: number;
   if (inProgress) {
-    start = targetIdx;            // steps live after the user_message
+    start = targetIdx;            // steps live after the turn anchor
     end = messages.length;        // …through the current tail
   } else {
     let turnStartIdx = -1;

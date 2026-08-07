@@ -519,7 +519,7 @@ export const useStore = create<Store>()(persist((set) => ({
       if (existing[bubbleIdx].type === 'agent_message') {
         for (let i = bubbleIdx + 1; i < existing.length; i++) {
           const next = existing[i];
-          if ((next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') break;
+          if (next.type === 'scheduled_wake' || (next.type === 'user_message' && next.payload.delivery !== 'steer') || next.type === 'send_input') break;
           if (next.type === 'turn_status' || next.type === 'interrupted_turn') return state;
         }
       }
@@ -532,8 +532,10 @@ export const useStore = create<Store>()(persist((set) => ({
       // The target bubble is either the concluding agent_message (a concluded
       // turn — steps go BEFORE it) or the leading user_message of an in-progress
       // turn (no conclusion yet — steps go AFTER it, at the tail).
-      const inProgress = existing[bubbleIdx].type === 'user_message'
-        && existing[bubbleIdx].payload.delivery !== 'steer';
+      const inProgress = existing[bubbleIdx].type === 'scheduled_wake' || (
+        existing[bubbleIdx].type === 'user_message'
+        && existing[bubbleIdx].payload.delivery !== 'steer'
+      );
 
       // Trace region (exclusive index bounds) whose live/previous entries are
       // dropped so a re-pull replaces rather than duplicates.
@@ -545,7 +547,7 @@ export const useStore = create<Store>()(persist((set) => ({
       } else {
         let turnStartIdx = -1;
         for (let i = bubbleIdx - 1; i >= 0; i--) {
-          if (existing[i].type === 'user_message' && existing[i].payload.delivery !== 'steer') {
+          if (existing[i].type === 'scheduled_wake' || (existing[i].type === 'user_message' && existing[i].payload.delivery !== 'steer')) {
             turnStartIdx = i;
             break;
           }

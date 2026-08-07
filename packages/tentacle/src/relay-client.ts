@@ -21,6 +21,7 @@ import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import type { SessionManager, SessionContext, PendingHumanAction } from './session-manager.js';
+import { WakeRejectedError, type WakeTrigger } from './wake-scheduler.js';
 import type { KeyManager } from './key-manager.js';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
@@ -119,6 +120,7 @@ export class RelayClient {
     'active',
     'idle',
     'user_message',
+    'scheduled_wake',
     'agent_message',
   ]);
 
@@ -136,6 +138,7 @@ export class RelayClient {
     'session_created',
     'agent_message',
     'user_message',
+    'scheduled_wake',
     'error',
     'system_message',
     'interrupted_turn',
@@ -765,6 +768,76 @@ export class RelayClient {
    */
   getAuthInfo(): AuthOkMessage | null {
     return this.authInfo;
+  }
+
+  /** Start a system-triggered turn in the same durable agent session. */
+  async triggerScheduledWake(trigger: WakeTrigger, scheduledFor: string): Promise<void> {
+    if (this.state !== 'connected') throw new Error('relay is not connected');
+    const meta = this.sessionManager.getMeta(trigger.sessionId);
+    if (!meta || meta.state === 'ended') throw new Error('target session is unavailable');
+
+    if (meta.state === 'active' || this.inputChains.has(trigger.sessionId)) {
+      throw new Error('target session is busy');
+    }
+
+    let resolveAccepted!: () => void;
+    let rejectAccepted!: (err: Error) => void;
+    let acceptedSettled = false;
+    const accepted = new Promise<void>((resolve, reject) => {
+      resolveAccepted = () => { acceptedSettled = true; resolve(); };
+      rejectAccepted = (err) => { acceptedSettled = true; reject(err); };
+    });
+
+    const deliver = async () => {
+      if (this.state !== 'connected') throw new Error('relay disconnected before wake delivery');
+      const resumed = await this.ensureSessionResumed(trigger.sessionId);
+      const resumedMeta = this.sessionManager.getMeta(trigger.sessionId);
+      if (resumedMeta?.state === 'disconnected' || (meta.state === 'disconnected' && !resumed)) {
+        throw new Error('target session could not be resumed');
+      }
+
+      const idle = this.waitForTurnIdle(trigger.sessionId);
+      this.send({
+        type: 'scheduled_wake',
+        sessionId: trigger.sessionId,
+        payload: {
+          triggerId: trigger.id,
+          scheduledFor,
+          instruction: trigger.instruction,
+          ...(trigger.label && { label: trigger.label }),
+        },
+      });
+      this.send({ type: 'active', sessionId: trigger.sessionId, payload: {} });
+      this.sessionManager.markActive(trigger.sessionId);
+      try {
+        await this.adapter.sendMessage(
+          trigger.sessionId,
+          `[Kraki scheduled wake]\nTrigger: ${trigger.id}\nScheduled for: ${scheduledFor}\n\n${trigger.instruction}`,
+        );
+        resolveAccepted();
+        await idle;
+      } catch (err) {
+        const message = `Scheduled wake was not accepted by the agent: ${(err as Error).message}`;
+        this.pendingTerminalErrors.set(trigger.sessionId, { message, source: 'adapter' });
+        this.recordTrace({ type: 'error', sessionId: trigger.sessionId, payload: { message } });
+        this.send({ type: 'error', sessionId: trigger.sessionId, payload: { message } });
+        this.settleAdapterIdle(trigger.sessionId);
+        throw new WakeRejectedError(
+          `Wake delivery became uncertain after the durable turn started: ${(err as Error).message}`,
+        );
+      }
+    };
+
+    const next = this.dispatchInput(trigger.sessionId, deliver)
+      .catch((err) => {
+        if (!acceptedSettled) rejectAccepted(err as Error);
+        logger.error({ err, sessionId: trigger.sessionId, triggerId: trigger.id }, 'scheduled wake failed');
+      })
+      .finally(() => {
+        if (this.inputChains.get(trigger.sessionId) === next) this.inputChains.delete(trigger.sessionId);
+      });
+    this.inputChains.set(trigger.sessionId, next);
+    await accepted;
   }
 
   // ── Message handling ────────────────────────────────
@@ -2682,7 +2755,7 @@ export class RelayClient {
     // recordTrace() (tool_start / agent_narration flow there, NOT through send());
     // stamp the running total onto agent_message / system_message bubbles here.
     if (sessionId) {
-      if (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer') {
+      if (type === 'scheduled_wake' || (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer')) {
         this.turnStepCounts.set(sessionId, 0);
       } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {
         const p = enriched.payload as Record<string, unknown> | undefined;

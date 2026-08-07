@@ -25,6 +25,7 @@ const PREVIEW_SCAN_MAX_LINES = 4096;
 const PREVIEW_BOUNDARY_TYPES = new Set([
   'agent_message',
   'user_message',
+  'scheduled_wake',
   'interrupted_turn',
   'turn_status',
   'system_message',
@@ -140,10 +141,9 @@ export interface SessionMeta {
   inlineImagesStripped?: boolean;
   /** Seq numbers of idle messages — used for turn-aligned pagination. */
   idleSeqs?: number[];
-  /** Spine seq of the user_message that began the current turn. Trace
-   *  entries (tool_start/tool_complete) are tagged with this so a turn's
-   *  steps can be pulled by its concluding bubble seq. Mid-turn spine
-   *  messages (permission/question) do NOT move it. */
+  /** Spine seq of the user_message or scheduled_wake that began the current
+   *  turn. Trace entries are tagged with this so a turn's steps can be pulled
+   *  by its concluding bubble seq. */
   currentTurnStartSeq?: number;
 }
 
@@ -789,16 +789,16 @@ export class SessionManager {
       meta.idleSeqs.push(seq);
     }
 
-    // A normal user_message begins a new turn — remember its seq so trace
-    // entries recorded until the next normal prompt can be tagged to this turn.
-    // A steer is a visible user interjection inside the current agent lifecycle
-    // and must not split its TRACE history.
-    if (type === 'user_message') {
+    // A normal user_message or durable scheduled wake begins a new turn.
+    // A steer is a visible user interjection inside the current lifecycle and
+    // must not split its TRACE history.
+    if (type === 'scheduled_wake') {
+      meta.currentTurnStartSeq = seq;
+    } else if (type === 'user_message') {
       try {
         const parsed = JSON.parse(payload) as { payload?: { delivery?: string } };
         if (parsed.payload?.delivery !== 'steer') meta.currentTurnStartSeq = seq;
       } catch {
-        // Legacy/corrupt payloads retain the historical boundary behavior.
         meta.currentTurnStartSeq = seq;
       }
     }
@@ -846,7 +846,9 @@ export class SessionManager {
         if (!meta.idleSeqs) meta.idleSeqs = [];
         meta.idleSeqs.push(seq - messages.length + i + 1);
       }
-      if (messages[i].type === 'user_message') {
+      if (messages[i].type === 'scheduled_wake') {
+        meta.currentTurnStartSeq = seq - messages.length + i + 1;
+      } else if (messages[i].type === 'user_message') {
         try {
           const parsed = JSON.parse(messages[i].payload) as { payload?: { delivery?: string } };
           if (parsed.payload?.delivery !== 'steer') {
@@ -931,10 +933,16 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
 
-    // Resolve the turn start: greatest non-steer user_message seq <= bubbleSeq.
+    // Resolve the turn start: greatest non-steer user message or scheduled
+    // wake seq at or before the concluding bubble.
     let turnStartSeq = 0;
     for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
-      if (m.type !== 'user_message' || m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
+      if (m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
+      if (m.type === 'scheduled_wake') {
+        turnStartSeq = m.seq;
+        continue;
+      }
+      if (m.type !== 'user_message') continue;
       try {
         const parsed = JSON.parse(m.payload) as { payload?: { delivery?: string } };
         if (parsed.payload?.delivery === 'steer') continue;
@@ -1188,6 +1196,12 @@ export class SessionManager {
               return { text: stripMarkdownForPreview(content), type: 'user', timestamp: entry.ts };
             }
             break;
+          }
+          case 'scheduled_wake': {
+            const label = typeof payload.label === 'string' && payload.label
+              ? payload.label
+              : 'Scheduled wake';
+            return { text: stripMarkdownForPreview(label), type: 'agent', timestamp: entry.ts };
           }
           case 'interrupted_turn': {
             const draft = payload.draft;

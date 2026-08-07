@@ -613,6 +613,7 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  private readonly krakiMcp?: { credentialsForSession: (sid: string) => { url: string; bearerToken: string } };
   private readonly promptWatchdog: PromptWatchdogOptions;
   private sessions = new Map<string, PiSession>();
   private compactingSessions = new Set<string>();
@@ -627,12 +628,14 @@ export class PiAdapter extends AgentAdapter {
   constructor(opts: {
     cliPath: string;
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
+    krakiMcp?: { credentialsForSession: (sid: string) => { url: string; bearerToken: string } };
     /** Test-only timing override; production uses conservative defaults. */
     promptWatchdog?: Partial<PromptWatchdogOptions>;
   }) {
     super();
     this.cliPath = opts.cliPath;
     this.attachmentStore = opts.attachmentStore;
+    this.krakiMcp = opts.krakiMcp;
     this.promptWatchdog = {
       ackGraceMs: opts.promptWatchdog?.ackGraceMs ?? PROMPT_ACK_GRACE_MS,
       intervalMs: opts.promptWatchdog?.intervalMs ?? PROMPT_WATCHDOG_INTERVAL_MS,
@@ -752,7 +755,15 @@ export class PiAdapter extends AgentAdapter {
     // live permission mode (the adapter, via persistMeta, is the source of truth).
     // The gate itself is loaded in every mode; the adapter decides silent-approve
     // vs card per shouldAutoApprove, so a mode change never respawns pi.
-    const env = { ...process.env, KRAKI_META_FILE: this.sidecarPath(sessionId) };
+    const credentials = this.krakiMcp?.credentialsForSession(sessionId);
+    const env = {
+      ...process.env,
+      KRAKI_META_FILE: this.sidecarPath(sessionId),
+      ...(credentials && {
+        KRAKI_MCP_URL: credentials.url,
+        KRAKI_MCP_TOKEN: credentials.bearerToken,
+      }),
+    };
     const proc = new PiRpcProcess({
       cliPath: this.cliPath,
       cwd,

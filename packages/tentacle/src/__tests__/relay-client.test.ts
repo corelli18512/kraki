@@ -373,6 +373,66 @@ describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
   });
 });
 
+describe('RelayClient scheduled wake delivery', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  it('closes the durable turn as failed when the adapter rejects before accepting the wake prompt', async () => {
+    const adapter = createAdapter();
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('prompt rejected'));
+    const sm = createSessionManager();
+    (sm.getMeta as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 'session-1', agent: 'pi', model: 'test/model', state: 'idle', mode: 'discuss',
+    });
+    const client = new RelayClient(
+      adapter,
+      sm,
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Test', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok',
+      deviceId: 'dev_1',
+      authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [],
+    })));
+    vi.clearAllMocks();
+
+    await expect(client.triggerScheduledWake({
+      id: 'wake-1',
+      sessionId: 'session-1',
+      instruction: 'Run the check',
+      schedule: { type: 'once', at: '2026-08-03T01:00:00.000Z' },
+      nextRunAt: '2026-08-03T01:00:00.000Z',
+      createdAt: '2026-08-03T00:00:00.000Z',
+      status: 'active',
+    }, '2026-08-03T01:00:00.000Z')).rejects.toThrow('prompt rejected');
+
+    const persistedTypes = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[1]);
+    expect(persistedTypes).toEqual(expect.arrayContaining([
+      'scheduled_wake', 'error', 'turn_status', 'idle',
+    ]));
+    expect(sm.appendTrace).toHaveBeenCalledWith(
+      'session-1',
+      'error',
+      expect.stringContaining('Scheduled wake was not accepted'),
+    );
+    expect(sm.markActive).toHaveBeenCalledWith('session-1');
+    expect(sm.markIdle).toHaveBeenCalledWith('session-1');
+  });
+});
+
 describe('RelayClient fork session confirmation', () => {
   beforeEach(() => {
     sockets.length = 0;

@@ -7,7 +7,7 @@ import { formatTime, agentInfo } from '../../lib/format';
 import { stringToHue } from '../../lib/color';
 import { ToolActivity } from './ToolActivity';
 import { AgentAvatar } from '../common/AgentAvatar';
-import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink } from 'lucide-react';
+import { Lock, Check, X, LockOpen, CircleStop, Copy, Info, ChevronLeft, ChevronRight, FileCode2, ExternalLink, AlarmClock } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { StepsButton } from './StepsModal';
@@ -60,6 +60,16 @@ export function MessageBubble({ message, agent, forceExpanded, turnImages, turnA
         </CopyableBubble>
       );
     }
+
+    case 'scheduled_wake':
+      return (
+        <div className="flex items-center justify-center py-1">
+          <span className="flex items-center gap-1.5 text-xs text-text-muted">
+            <AlarmClock className="size-3.5" />
+            {message.payload.label || 'Scheduled wake'}
+          </span>
+        </div>
+      );
 
     case 'agent_message':
       return (

@@ -56,6 +56,19 @@ describe('MessageBubble', () => {
     });
   });
 
+  describe('scheduled_wake', () => {
+    it('renders a neutral trigger divider rather than a user bubble', () => {
+      const { container } = renderMsg(makeMsg('scheduled_wake', {
+        triggerId: 'wake-1',
+        scheduledFor: '2026-08-03T01:00:00Z',
+        instruction: 'Check the permit site',
+        label: 'Permit check',
+      }));
+      expect(screen.getByText('Permit check')).toBeInTheDocument();
+      expect(container.querySelector('.bg-kraki-500')).toBeNull();
+    });
+  });
+
   describe('agent_message', () => {
     it('renders agent message content', () => {
       renderMsg(makeMsg('agent_message', { content: 'Here is my analysis' }));
