@@ -208,6 +208,11 @@ struct SessionUsage: Codable, Equatable, Sendable {
 }
 
 /// Compact session metadata sent in session_list for sync.
+struct SessionRuntimeStatusDigest: Codable, Equatable, Sendable {
+    let status: String
+    let reason: String?
+}
+
 struct SessionDigest: Codable, Identifiable, Sendable {
     let id: String
     let agent: String
@@ -215,6 +220,7 @@ struct SessionDigest: Codable, Identifiable, Sendable {
     var title: String? = nil
     var autoTitle: String? = nil
     var state: SessionState
+    var runtimeStatus: SessionRuntimeStatusDigest? = nil
     var mode: SessionMode
     var lastSeq: Int
     var readSeq: Int

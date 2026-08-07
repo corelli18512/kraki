@@ -2,9 +2,9 @@
 import SwiftUI
 
 /// Ambient connection-status indicator that lives next to the brand
-/// wordmark in `SessionListView`. Visible only while the WS is away
-/// from `.connected`, after a short grace period so transient sub-
-/// second hiccups don't flicker into view.
+/// wordmark in `SessionListView`. A reconnect appears after a short grace
+/// period so transient sub-second hiccups stay invisible; recovery then shows
+/// a brief green confirmation before the fixed slot clears again.
 ///
 /// Design pattern matches WhatsApp / Telegram: small inline chip,
 /// pulsing dot, never blocks any interaction. Replaces the older
@@ -12,57 +12,83 @@ import SwiftUI
 struct ConnectionStatusChip: View {
     @Environment(AppState.self) private var appState
 
-    /// Becomes true after a 1-second grace once the WS leaves
-    /// `.connected`. Resets immediately on reconnect so the indicator
-    /// disappears the instant we're back online.
-    @State private var visible = false
-    /// Drives the spinner rotation. Animated via a continuous linear
-    /// transform when the indicator is visible.
+    private enum IndicatorPhase {
+        case hidden
+        case reconnecting
+        case online
+    }
+
+    @State private var phase: IndicatorPhase = .hidden
+    @State private var transitionGeneration = 0
     @State private var spin: Double = 0
 
     var body: some View {
-        LucideIcon(.loader2, size: 14, strokeWidth: 2.4, color: .krakiPrimary)
-            .rotationEffect(.degrees(spin))
-            .opacity(visible ? 1 : 0)
-            .scaleEffect(visible ? 1 : 0.85)
-            .animation(.easeInOut(duration: 0.2), value: visible)
-            .accessibilityLabel(accessibilityLabel)
-            .onAppear {
-                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
-                    spin = 360
-                }
-                applyVisibility(immediate: true)
+        ZStack {
+            if phase == .reconnecting {
+                LucideIcon(.loader2, size: 14, strokeWidth: 2.4, color: .krakiPrimary)
+                    .rotationEffect(.degrees(spin))
+                    .transition(.opacity.combined(with: .scale))
+            } else if phase == .online {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.green)
+                    .transition(.opacity.combined(with: .scale))
             }
-            .onChange(of: appState.connectionStatus) { _, _ in
-                applyVisibility(immediate: false)
+        }
+        .frame(width: 14, height: 14)
+        .animation(.easeInOut(duration: 0.2), value: phase)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHidden(phase == .hidden)
+        .onAppear {
+            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                spin = 360
             }
+            applyConnectionState(immediate: true)
+        }
+        .onChange(of: appState.connectionStatus) { _, _ in
+            applyConnectionState(immediate: false)
+        }
     }
 
     /// Reads the current status for VoiceOver since the spinner alone
     /// has no descriptive label.
     private var accessibilityLabel: String {
-        switch appState.connectionStatus {
-        case .connecting:     return "Connecting"
-        case .authenticating: return "Signing in"
-        case .disconnected:   return "Reconnecting"
-        case .error:          return "Connection error"
-        default:              return ""
+        switch phase {
+        case .reconnecting: return "Reconnecting"
+        case .online: return "Back online"
+        case .hidden: return ""
         }
     }
 
-    /// Hide instantly on reconnect; show with a 1s grace on drop so we
-    /// don't flicker into view for sub-second hiccups.
-    private func applyVisibility(immediate: Bool) {
+    /// Suppress sub-second transport blips. A reconnect that became visible is
+    /// followed by a short green confirmation; the first app launch and an
+    /// invisible transient reconnect do not flash an unnecessary success icon.
+    private func applyConnectionState(immediate: Bool) {
+        transitionGeneration &+= 1
+        let generation = transitionGeneration
+
         if appState.isReconnecting {
             if immediate {
-                visible = true
+                phase = .reconnecting
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    if appState.isReconnecting { visible = true }
+                    guard transitionGeneration == generation,
+                          appState.isReconnecting else { return }
+                    phase = .reconnecting
                 }
             }
+            return
+        }
+
+        if appState.connectionStatus == .connected, phase == .reconnecting {
+            phase = .online
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                guard transitionGeneration == generation,
+                      appState.connectionStatus == .connected else { return }
+                phase = .hidden
+            }
         } else {
-            visible = false
+            phase = .hidden
         }
     }
 }

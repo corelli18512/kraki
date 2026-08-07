@@ -117,6 +117,16 @@ enum VoiceDraftMerger {
     }
 }
 
+enum VoiceComposerAccessPolicy {
+    static func isVisible(capabilityAvailable: Bool) -> Bool {
+        capabilityAvailable
+    }
+
+    static func canStart(capabilityAvailable: Bool, voiceControllerBusy: Bool) -> Bool {
+        capabilityAvailable && !voiceControllerBusy
+    }
+}
+
 @Observable
 final class KrakiVoiceInputController {
     enum State: Equatable {
@@ -157,6 +167,7 @@ final class KrakiVoiceInputController {
     private var session: VoiceInputSessionProtocol?
     private var generation = UUID()
     private var context: VoiceSessionContext?
+    private var recordingStartedHandler: (() -> Void)?
     private var finalHandler: ((String) -> Void)?
     private var leaseTimeoutTask: Task<Void, Never>?
     private var correctionDisplayTask: Task<Void, Never>?
@@ -182,6 +193,7 @@ final class KrakiVoiceInputController {
     func begin(
         sessionID: String,
         context: VoiceSessionContext,
+        onRecordingStarted: (() -> Void)? = nil,
         onFinal: @escaping (String) -> Void
     ) async {
         switch state {
@@ -204,6 +216,7 @@ final class KrakiVoiceInputController {
         generation = current
         activeSessionID = sessionID
         self.context = context
+        recordingStartedHandler = onRecordingStarted
         finalHandler = onFinal
         rawText = ""
         stableRawPrefix = ""
@@ -322,6 +335,11 @@ final class KrakiVoiceInputController {
                     guard let self, self.generation == current else { return }
                     let elapsed = self.metricStart.map { $0.duration(to: .now) }
                     KLog.d("🎙️ [voice] metric=\(metric.rawValue) elapsed=\(elapsed.map(String.init(describing:)) ?? "-")")
+                    if metric == .engineStarted,
+                       let handler = self.recordingStartedHandler {
+                        self.recordingStartedHandler = nil
+                        handler()
+                    }
                 }
             }
         )
@@ -504,6 +522,7 @@ final class KrakiVoiceInputController {
         levels = Array(repeating: 0, count: 8)
         activeSessionID = nil
         context = nil
+        recordingStartedHandler = nil
         finalHandler = nil
         metricStart = nil
     }

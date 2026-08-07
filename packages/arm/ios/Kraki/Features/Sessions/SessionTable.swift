@@ -181,7 +181,16 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         var nextFingerprints: [String: Int] = [:]
         nextFingerprints.reserveCapacity(filtered.count)
         for session in filtered {
-            let fp = Self.fingerprint(for: session, store: appState.sessionStore)
+            let fp = Self.fingerprint(
+                for: session,
+                store: appState.sessionStore,
+                device: appState.deviceStore.devices[session.deviceId],
+                isAwaitingGreeting: appState.deviceStore.pendingGreetingIds.contains(session.deviceId),
+                isCompacting: {
+                    if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
+                    return false
+                }()
+            )
             nextFingerprints[session.id] = fp
             if sessionFingerprints[session.id] != fp {
                 changedIds.append(session.id)
@@ -217,20 +226,46 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// renders. If two snapshots produce the same fingerprint, the
     /// cell content can't have visibly changed and there's no need
     /// to reconfigure.
-    private static func fingerprint(for session: SessionInfo, store: SessionStore) -> Int {
+    private static func fingerprint(
+        for session: SessionInfo,
+        store: SessionStore,
+        device: DeviceSummary?,
+        isAwaitingGreeting: Bool,
+        isCompacting: Bool
+    ) -> Int {
         var hasher = Hasher()
+        let projection = SessionCardProjection.make(
+            session: session,
+            device: device,
+            preview: store.sessionPreviews[session.id],
+            draft: store.drafts[session.id],
+            isCompacting: isCompacting
+        )
         hasher.combine(session.id)
         hasher.combine(session.pinned)
         hasher.combine(session.lastSeq)
         hasher.combine(session.readSeq)
         hasher.combine(session.displayTitle)
+        hasher.combine(session.agent)
+        hasher.combine(session.deviceId)
+        hasher.combine(session.deviceName)
+        hasher.combine(session.model ?? "")
         hasher.combine(session.state)
-        // Preview text + timestamp are the main "live" surface
-        // — include them so unread/reply previews re-render.
+        hasher.combine(projection.previewText ?? "")
+        hasher.combine(projection.timestamp)
+        hasher.combine(projection.status.accessibilityLabel ?? "idle")
+        hasher.combine(projection.isUnread)
+        hasher.combine(store.drafts[session.id] ?? "")
+        // Device liveness and the Preview type are card-visible but live in
+        // stores outside SessionInfo. Include both so a greeting, question,
+        // permission, or draft reconfigures the reused cell immediately.
         if let preview = store.sessionPreviews[session.id] {
-            hasher.combine(preview.text)
-            hasher.combine(preview.timestamp)
+            hasher.combine(preview.type)
         }
+        hasher.combine(device?.name ?? "")
+        hasher.combine(device?.online ?? false)
+        hasher.combine(device?.lastSeen ?? "")
+        hasher.combine(isAwaitingGreeting)
         return hasher.finalize()
     }
 

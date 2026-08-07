@@ -118,7 +118,8 @@ struct IOSClientAlignmentPreview: View {
                     rawText: rawText,
                     displayText: correctionText.isEmpty ? rawText : correctionText
                 ),
-                onFinish: {}
+                onFinish: {},
+                onCancel: {}
             )
             .background(.regularMaterial, in: Capsule())
         }

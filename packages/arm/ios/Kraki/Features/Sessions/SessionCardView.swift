@@ -1,9 +1,9 @@
 #if os(iOS)
-/// SessionCardView — shared Session Card semantics with an iOS-native row.
+/// SessionCardView — iOS-native three-row Session Card.
 ///
-/// Geometry is intentionally fixed to the same three information rows as the
-/// macOS Sidebar: title/time, device/model, and digest preview. UIKit owns list
-/// virtualization; this view owns only the row contents.
+/// The row keeps the same stable information slots as the other clients:
+/// title/time, device/model, and digest preview. UIKit owns list reuse;
+/// this view owns only the card contents.
 
 import SwiftUI
 
@@ -28,19 +28,35 @@ private struct SessionCardBody: View {
             session: session,
             device: appState.deviceStore.devices[session.deviceId],
             preview: appState.sessionStore.sessionPreviews[session.id],
-            draft: appState.sessionStore.drafts[session.id]
+            draft: appState.sessionStore.drafts[session.id],
+            isCompacting: {
+                if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
+                return false
+            }()
         )
     }
 
+    private var deviceStatusColor: Color {
+        guard projection.deviceOnline == true else { return .gray }
+        if appState.deviceStore.pendingGreetingIds.contains(session.deviceId) {
+            return Color(hex: 0xFBBF24)
+        }
+        return Color(hex: 0x34D399)
+    }
+
+    private var cardTitle: String {
+        session.title ?? session.autoTitle ?? AgentInfo.from(session.agent).label
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             AgentAvatar(
                 agent: session.agent,
                 model: session.model,
                 sessionId: session.id,
-                size: .md
+                size: .lg
             )
-            .padding(.top, 2)
+            .padding(.top, 3)
 
             VStack(alignment: .leading, spacing: 2) {
                 titleRow
@@ -52,17 +68,17 @@ private struct SessionCardBody: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 2)
         .contentShape(Rectangle())
     }
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Text(projection.title)
-                .font(.system(size: 16, weight: .semibold))
+            Text(cardTitle)
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Color.textTitle)
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             if projection.deviceOnline == false {
                 Text("offline")
@@ -81,17 +97,29 @@ private struct SessionCardBody: View {
 
             Spacer(minLength: 4)
 
+            if projection.isUnread {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                    .accessibilityLabel("Unread")
+            }
+
             if !projection.timeLabel.isEmpty {
                 Text(projection.timeLabel)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
         }
     }
 
     private var metadataRow: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             if let machineName = projection.machineName {
+                Circle()
+                    .fill(deviceStatusColor)
+                    .frame(width: 6, height: 6)
+
                 Text(machineName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -102,9 +130,9 @@ private struct SessionCardBody: View {
             if projection.machineName != nil,
                let model = projection.model,
                !model.isEmpty {
-                Circle()
+                Rectangle()
                     .fill(Color.borderPrimary)
-                    .frame(width: 3, height: 3)
+                    .frame(width: 1, height: 9)
             }
 
             if let model = projection.model, !model.isEmpty {
@@ -140,14 +168,8 @@ private struct SessionCardBody: View {
             }
 
             Spacer(minLength: 0)
-
-            if projection.isUnread {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 8, height: 8)
-                    .accessibilityLabel("Unread")
-            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif

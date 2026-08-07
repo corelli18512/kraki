@@ -197,10 +197,18 @@ struct MessageInputView: View {
         return nil
     }
 
-    /// Product voice input is advertised by authenticated Head capability and
-    /// stays hidden for structured permission/question responses.
+    /// Voice transcription is available anywhere this composer accepts text,
+    /// including active-turn steering and structured responses.
     private var canShowVoiceToggle: Bool {
-        appState.voiceCapability != nil && !isStructuredResponse
+        VoiceComposerAccessPolicy.isVisible(
+            capabilityAvailable: appState.voiceCapability != nil
+        )
+    }
+    private var canStartVoice: Bool {
+        VoiceComposerAccessPolicy.canStart(
+            capabilityAvailable: appState.voiceCapability != nil,
+            voiceControllerBusy: voiceController.isBusy
+        )
     }
 
     private var isVoiceFailure: Bool {
@@ -438,8 +446,8 @@ struct MessageInputView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.4)
+        .disabled(!canStartVoice)
+        .opacity(canStartVoice ? 1 : 0.4)
         .padding(.leading, 6)
         .accessibilityLabel("Start voice input")
         .accessibilityHint("Transcribes speech into the current draft")
@@ -450,7 +458,8 @@ struct MessageInputView: View {
             pieces: voiceTranscriptPieces,
             state: voiceController.state,
             statusText: voiceStatusText,
-            onFinish: { voiceController.finish() }
+            onFinish: { voiceController.finish() },
+            onCancel: cancelVoiceInput
         )
         .frame(minHeight: Self.inputBoxHeight)
     }
@@ -495,12 +504,18 @@ struct MessageInputView: View {
         )
     }
 
+    private func cancelVoiceInput() {
+        voiceController.cancel()
+        voiceDraftPrefix = ""
+        isFocused = true
+    }
+
     private func handleVoiceButton() {
         if voiceController.activeSessionID == sessionId {
             if voiceController.isRecording { voiceController.finish() }
             return
         }
-        guard isIdle, let session else { return }
+        guard canStartVoice, let session else { return }
         voiceController.clearFailure()
         let existingDraft = text
         voiceDraftPrefix = existingDraft

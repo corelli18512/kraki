@@ -20,7 +20,7 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import type { SessionManager, SessionContext, PendingHumanAction } from './session-manager.js';
+import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
@@ -2920,6 +2920,17 @@ export class RelayClient {
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);
     }
     if (!previewType || !previewSummary) return undefined;
+    const normalizedSummary = toWellFormedText(previewSummary)
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalizedSummary) return undefined;
+    const meta = this.sessionManager.getMeta(msg.sessionId as string);
+    const rawTitle = meta?.title ?? meta?.autoTitle;
+    const normalizedTitle = rawTitle ? toWellFormedText(rawTitle).replace(/\s+/g, ' ').trim() : undefined;
+    const title = normalizedTitle
+      ? Array.from(normalizedTitle).slice(0, 80).join('')
+      : undefined;
+
     // Encrypt to ALL consumerKeys (online + offline). The push preview is
     // specifically for offline delivery — online devices already got the real
     // message via the live pulse stream.
@@ -2934,7 +2945,12 @@ export class RelayClient {
     if (previewRecipients.length === 0) return undefined;
     traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: this.onlineConsumers.size, offlineCount: previewRecipients.length - this.onlineConsumers.size });
     try {
-      const preview = JSON.stringify({ type: previewType, summary: previewSummary.slice(0, 50), sessionId: msg.sessionId });
+      const preview = JSON.stringify({
+        type: previewType,
+        summary: Array.from(normalizedSummary).slice(0, 180).join(''),
+        sessionId: msg.sessionId,
+        ...(title ? { title } : {}),
+      });
       const previewBlob = encryptToBlob(preview, previewRecipients);
       return { blob: previewBlob.blob, keys: previewBlob.keys };
     } catch (err) {

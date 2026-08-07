@@ -1,6 +1,52 @@
 import XCTest
 @testable import Kraki
 
+@MainActor
+final class AppStateSessionSubscriptionSnapshotTests: XCTestCase {
+    func testRuntimeStatusFromDigestSurvivesCardSnapshotAndClearsAuthoritatively() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-subscription-snapshot-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: database)
+
+        func ack(runtimeStatus: [String: Any]?) -> SessionSubscriptionAck {
+            var digest: [String: Any] = [
+                "id": "sess-1",
+                "agent": "pi",
+                "state": "active",
+                "mode": "discuss",
+                "lastSeq": 0,
+                "readSeq": 0,
+                "messageCount": 0,
+                "createdAt": "2026-08-06T00:00:00Z",
+            ]
+            digest["runtimeStatus"] = runtimeStatus
+            return SessionSubscriptionAck(
+                tentacleId: "dev-1",
+                sessionId: "sess-1",
+                accepted: true,
+                snapshot: [
+                    "digest": digest,
+                    "card": ["draft": "summarizing"],
+                    "spineHeadSeq": 0,
+                ],
+                errorMessage: nil
+            )
+        }
+
+        app.applySessionSubscriptionSnapshot(
+            ack(runtimeStatus: ["status": "compacting", "reason": "threshold"])
+        )
+        XCTAssertEqual(app.messageStore.runtimeStatus("sess-1"), .compacting(reason: .threshold))
+
+        app.applySessionSubscriptionSnapshot(
+            ack(runtimeStatus: ["status": "idle"])
+        )
+        XCTAssertEqual(app.messageStore.runtimeStatus("sess-1"), .idle)
+    }
+}
+
 final class SessionSubscriptionControllerTests: XCTestCase {
     private final class Host: SessionSubscriptionHost {
         var subscriptionConnected = true

@@ -72,7 +72,8 @@ struct SessionCardProjection: Equatable {
         session: SessionInfo,
         device: DeviceSummary?,
         preview: SessionPreview?,
-        draft: String?
+        draft: String?,
+        isCompacting: Bool = false
     ) -> Self {
         let machineName = session.deviceName.isEmpty ? device?.name : session.deviceName
         let normalizedMachineName = machineName?.isEmpty == true ? nil : machineName
@@ -93,7 +94,7 @@ struct SessionCardProjection: Equatable {
             timestamp: timestamp,
             timeLabel: SessionTimeFormatter.format(timestamp),
             status: .resolve(
-                sessionState: session.state,
+                sessionState: isCompacting ? .compacting : session.state,
                 previewType: preview?.type,
                 deviceOnline: device?.online,
                 hasDraft: hasDraft

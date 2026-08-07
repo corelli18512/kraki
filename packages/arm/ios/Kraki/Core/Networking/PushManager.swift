@@ -30,6 +30,8 @@ final class PushManager: NSObject {
 
     private static let enabledKey = "kraki.pushNotificationsEnabled"
     private static let pendingUnregisterKey = "kraki.pushPendingUnregister"
+    private static let appGroup = "group.chat.kraki.ios"
+    private static let unreadSessionIDsKey = "kraki.notification.unreadSessionIDs"
 
     /// `true` once the user has explicitly turned on push in Settings. Persists
     /// across launches; we honour it to decide whether to re-register after auth.
@@ -81,6 +83,29 @@ final class PushManager: NSObject {
         permissionStatus = settings.authorizationStatus
     }
 
+    /// Reconcile iOS permission and registration after returning from Settings
+    /// or resuming the app. APNs may rotate the token at any time, so an enabled
+    /// client asks UIKit to refresh it on every foreground transition.
+    func handleForeground() async {
+        await refreshPermissionStatus()
+        if let unreadSessionIDs = appState?.sessionStore.unreadSessionIDs {
+            syncApplicationBadge(unreadSessionIDs: unreadSessionIDs)
+        }
+        guard userEnabled else { return }
+        switch permissionStatus {
+        case .authorized, .provisional, .ephemeral:
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        case .denied:
+            registered = false
+        case .notDetermined:
+            break
+        @unknown default:
+            break
+        }
+    }
+
     /// User toggled the Settings switch ON.
     /// - Requests permission if undetermined.
     /// - Triggers `registerForRemoteNotifications`; AppDelegate completes it.
@@ -93,7 +118,9 @@ final class PushManager: NSObject {
             userEnabled = false
             return false
         }
-        UIApplication.shared.registerForRemoteNotifications()
+        await MainActor.run {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
         return true
     }
 
@@ -145,7 +172,32 @@ final class PushManager: NSObject {
         if deviceToken != nil {
             sendRegisterIfReady()
         } else {
-            UIApplication.shared.registerForRemoteNotifications()
+            Task { @MainActor in
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+    }
+
+    /// Keep the Home Screen icon badge aligned with the same authoritative
+    /// Session-level unread set used by the Sessions tab. Persisting the IDs in
+    /// the App Group lets the Notification Service Extension union a newly
+    /// notified Session while the main app is suspended, without double-counting
+    /// repeated notifications for the same Session.
+    func syncApplicationBadge(unreadSessionIDs: Set<String>) {
+        let sortedIDs = unreadSessionIDs.sorted()
+        UserDefaults(suiteName: Self.appGroup)?.set(sortedIDs, forKey: Self.unreadSessionIDsKey)
+        applyApplicationBadge(sortedIDs.count)
+    }
+
+    private func applyApplicationBadge(_ count: Int) {
+        let normalized = max(0, count)
+        // The Notification Service Extension can update the badge while this
+        // process is suspended, so do not deduplicate against process-local
+        // state. Foreground reconciliation must always reassert authority.
+        UNUserNotificationCenter.current().setBadgeCount(normalized) { error in
+            if let error {
+                KLog.d("⚠️ Failed to update app badge: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -305,12 +357,14 @@ extension PushManager: UNUserNotificationCenterDelegate {
         let userInfo = notification.request.content.userInfo
         let sessionId = userInfo["sessionId"] as? String
 
-        let activeId = appState?.sessionStore.activeSessionId
-        if let sessionId, activeId == sessionId {
-            // User is already in this session — suppress
+        if let sessionId,
+           appState?.isActivelyViewingSession(sessionId) == true {
+            // The conversation is genuinely visible and foregrounded. Its live
+            // Spine path will acknowledge Read, so a duplicate banner/sound and
+            // icon badge would be misleading.
             completionHandler([])
         } else {
-            completionHandler([.banner, .sound, .list])
+            completionHandler([.banner, .sound, .badge, .list])
         }
     }
 

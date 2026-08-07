@@ -31,7 +31,7 @@ const PREVIEW_BOUNDARY_TYPES = new Set([
 ]);
 
 /** Replace lone UTF-16 surrogates before serializing text for strict JSON consumers. */
-function toWellFormedText(text: string): string {
+export function toWellFormedText(text: string): string {
   let result = '';
   for (let i = 0; i < text.length; i++) {
     const unit = text.charCodeAt(i);

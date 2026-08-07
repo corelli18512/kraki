@@ -485,8 +485,16 @@ final class SessionStore {
         }
     }
 
+    /// Authoritative unread Session identities. The app icon, tab badge, and
+    /// notification extension all project this same boolean-per-Session set.
+    var unreadSessionIDs: Set<String> {
+        Set(sessions.values.compactMap { session in
+            session.readSeq < session.lastSeq ? session.id : nil
+        })
+    }
+
     var totalUnread: Int {
-        sessions.keys.reduce(0) { $0 + unreadCount($1) }
+        unreadSessionIDs.count
     }
 
     // MARK: - Session CRUD
@@ -705,11 +713,24 @@ final class SessionStore {
         scheduleSave()
     }
 
-    /// Track the live Spine head without inferring unread locally. Tentacle's
-    /// closing session_list snapshot owns the matching readSeq decision.
-    func observeLastSeq(_ id: String, seq: Int) {
+    /// Track the live Spine head. A contiguous ordinary user_message mirrors
+    /// Tentacle's implicit cursor rule: when the Session was fully read before
+    /// the append, that human message advances both cursors and must not create
+    /// an unread badge. A gap never infers Read because a missed attention
+    /// boundary may exist inside it; session_list remains final authority.
+    func observeLastSeq(
+        _ id: String,
+        seq: Int,
+        advancesReadWhenCaughtUp: Bool = false
+    ) {
         guard var session = sessions[id], seq > session.lastSeq else { return }
+        let previousLastSeq = session.lastSeq
+        let wasCaughtUp = session.readSeq >= previousLastSeq
+        let isContiguous = seq == previousLastSeq + 1
         session.lastSeq = seq
+        if advancesReadWhenCaughtUp && wasCaughtUp && isContiguous {
+            session.readSeq = seq
+        }
         sessions[id] = session
         scheduleSave()
     }

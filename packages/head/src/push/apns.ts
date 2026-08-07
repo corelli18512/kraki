@@ -19,6 +19,18 @@ export function isConnectionError(error: string | undefined): boolean {
   return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|GOAWAY|socket hang up/i.test(error);
 }
 
+export function buildApnsPayload(payload?: PushPayload): string {
+  return JSON.stringify({
+    aps: {
+      alert: { title: 'Kraki', body: 'Open Kraki to view the update.' },
+      sound: 'default',
+      badge: 1,
+      ...(payload ? { 'mutable-content': 1 } : {}),
+    },
+    ...(payload ? { kraki: { blob: payload.blob, key: payload.key } } : {}),
+  });
+}
+
 export interface ApnsConfig {
   /** Path to the .p8 private key file */
   keyPath: string;
@@ -61,26 +73,13 @@ export class ApnsProvider implements PushProvider {
     const bundleId = opts?.bundleId ?? this.defaultBundleId;
     const host = env === 'sandbox' ? APNS_HOST_SANDBOX : APNS_HOST_PRODUCTION;
 
-    const apnsPayload = JSON.stringify({
-      aps: {
-        alert: { title: 'Kraki', body: 'Needs your attention' },
-        'mutable-content': 1,
-      },
-      kraki: {
-        blob: payload.blob,
-        key: payload.key,
-      },
-    });
+    const apnsPayload = buildApnsPayload(payload);
 
     // Check 4KB APNs limit
     if (Buffer.byteLength(apnsPayload) > 4096) {
       logger.warn('APNs payload exceeds 4KB, sending without preview', { tokenSuffix: token.slice(-8) });
       // Fall back to opaque notification without preview data
-      const fallback = JSON.stringify({
-        aps: {
-          alert: { title: 'Kraki', body: 'Needs your attention' },
-        },
-      });
+      const fallback = buildApnsPayload();
       return this.sendRaw(host, token, bundleId, fallback);
     }
 
