@@ -59,6 +59,23 @@ export class SessionSubscriptionController {
     this.blockedDesired = null;
   }
 
+  /** A tentacle connection epoch ended or was replaced while the Arm stayed
+   *  connected. Tentacle rebuilds its in-memory subscription authority as null
+   *  after every auth, so revoke any old local confirmation. The next post-auth
+   *  session_list re-establishes the barrier and drives a fresh request. */
+  onTentacleAuthorityReset(tentacleId: string): void {
+    this.barriers.delete(tentacleId);
+    if (this.confirmedTentacleId === tentacleId) {
+      this.confirmedSessionId = null;
+      this.confirmedTentacleId = null;
+    }
+    if (this.inFlight?.tentacleId === tentacleId) this.inFlight = null;
+    if (this.desiredSessionId && this.host.resolveTentacle(this.desiredSessionId) === tentacleId) {
+      this.blockedDesired = null;
+    }
+    this.drive();
+  }
+
   /** Current post-auth session_list from this tentacle is the inbound barrier. */
   onSessionList(tentacleId: string): void {
     this.barriers.add(tentacleId);

@@ -93,7 +93,33 @@ describe('SessionSubscriptionController', () => {
     expect(controller.liveReady).toBe(true);
   });
 
-  it('retains desired across reconnect but requires a new barrier and ACK', async () => {
+  it('reassures after the tentacle reconnects while the Arm stays connected', async () => {
+    const { controller, sends } = setup();
+    controller.onSessionList('T1'); controller.setDesired('A'); await Promise.resolve(); controller.onAck(ack('T1', 'A'));
+    expect(controller.acceptsLive('A')).toBe(true);
+
+    controller.onTentacleAuthorityReset('T1');
+    expect(controller.acceptsLive('A')).toBe(false);
+    controller.onSessionList('T1');
+    await Promise.resolve();
+
+    expect(sends).toEqual([['T1', 'A'], ['T1', 'A']]);
+  });
+
+  it('continues a cross-tentacle handoff when the old tentacle disconnects before its null ACK', async () => {
+    const { controller, sends } = setup({ A: 'T1', B: 'T2' });
+    controller.onSessionList('T1'); controller.onSessionList('T2');
+    controller.setDesired('A'); await Promise.resolve(); controller.onAck(ack('T1', 'A'));
+
+    controller.setDesired('B'); await Promise.resolve();
+    expect(sends.at(-1)).toEqual(['T1', null]);
+    controller.onTentacleAuthorityReset('T1');
+    await Promise.resolve();
+
+    expect(sends.at(-1)).toEqual(['T2', 'B']);
+  });
+
+  it('retains desired across a full Arm reconnect but requires a new barrier and ACK', async () => {
     const { controller, sends, disconnect } = setup();
     controller.onSessionList('T1'); controller.setDesired('A'); await Promise.resolve(); controller.onAck(ack('T1', 'A'));
     disconnect();

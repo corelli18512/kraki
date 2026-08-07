@@ -530,7 +530,7 @@ currentSessionByArm[arm] = B
 device_left -> currentSessionByArm.delete(deviceId)
 ```
 
-Tentacle restart 后 map 为空。Arm 在 reconnect/session page assure 中重新发送当前 desired session。
+Tentacle restart 或同 device ID 的 socket replacement 后 map 为空。即使 Arm 自己的 WebSocket 没断，Head 也会提供连接 epoch 信号：普通断线为 `device_left`，无离线窗口的原子替换为新的 `device_joined`。Arm 收到任一信号后必须撤销该 Tentacle 的旧 confirmed/in-flight authority 并删除旧 barrier；随后由新连接的 `session_list` barrier 重新发送当前 desired session。
 
 ---
 

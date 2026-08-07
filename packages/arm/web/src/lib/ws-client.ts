@@ -840,6 +840,12 @@ export class KrakiWSClient {
       case 'device_joined': {
         const joined = msg as DeviceJoinedMessage;
         if (joined.device) {
+          // Head emits device_joined for every authenticated connection epoch,
+          // including same-device socket replacement where no device_left is
+          // broadcast. Tentacle rebuilds currentSessionByArm during that auth.
+          if (joined.device.role === 'tentacle') {
+            this.subscription.onTentacleAuthorityReset(joined.device.id);
+          }
           getStore().upsertDevice(joined.device);
         }
         break;
@@ -848,6 +854,7 @@ export class KrakiWSClient {
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
         if (left.deviceId) {
+          this.subscription.onTentacleAuthorityReset(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);
           getStore().setDeviceOnline(left.deviceId, false);
         }
