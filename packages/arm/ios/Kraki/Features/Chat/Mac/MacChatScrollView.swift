@@ -1245,6 +1245,20 @@ final class MacChatDocumentView: NSView {
         ]
     }
 
+    func questionChoiceHitTarget(
+        atWindowPoint point: NSPoint
+    ) -> MacQuestionChoiceHitTarget? {
+        for (_, cell) in visibleCells.sorted(by: { $0.key > $1.key })
+        where !cell.isHidden && !cell.isPlaceholderFlag {
+            if let target = cell.questionChoiceHitTarget(
+                atWindowPoint: point
+            ) {
+                return target
+            }
+        }
+        return nil
+    }
+
     @discardableResult
     func openVisibleHTMLArtifact(id: String? = nil) -> Bool {
         let viewport = enclosingScrollView?.contentView.bounds ?? bounds
@@ -1718,6 +1732,12 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var initialTailTrimRequested = false
     private(set) var representedSessionId: String?
     private var geometryAnchorLock: (key: String, delta: CGFloat)?
+    private var questionChoiceMouseMonitor: Any?
+    private var pendingQuestionChoiceClick: (
+        target: MacQuestionChoiceHitTarget,
+        start: NSPoint,
+        cancelled: Bool
+    )?
 
     private let jumpMaterial = NSVisualEffectView()
     private let jumpButton = NSButton()
@@ -1829,17 +1849,71 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButton.isHidden = true
         jumpButton.setAccessibilityLabel("Jump to latest")
         addSubview(jumpButton)
+
+        questionChoiceMouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            self?.interceptQuestionChoiceMouseEvent(event) ?? event
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
         chatDocumentView.tearDown()
+        if let questionChoiceMouseMonitor {
+            NSEvent.removeMonitor(questionChoiceMouseMonitor)
+        }
         if let liveScrollObserver {
             NotificationCenter.default.removeObserver(liveScrollObserver)
         }
         if let liveScrollEndObserver {
             NotificationCenter.default.removeObserver(liveScrollEndObserver)
+        }
+    }
+
+    private func interceptQuestionChoiceMouseEvent(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window,
+              !isHidden,
+              alphaValue > 0.01 else { return event }
+        let windowPoint = event.locationInWindow
+        let localPoint = convert(windowPoint, from: nil)
+        guard bounds.contains(localPoint) else { return event }
+
+        switch event.type {
+        case .leftMouseDown:
+            guard let target = chatDocumentView.questionChoiceHitTarget(
+                atWindowPoint: windowPoint
+            ) else {
+                pendingQuestionChoiceClick = nil
+                return event
+            }
+            pendingQuestionChoiceClick = (target, windowPoint, false)
+            return nil
+
+        case .leftMouseDragged:
+            guard var pending = pendingQuestionChoiceClick else { return event }
+            if hypot(windowPoint.x - pending.start.x, windowPoint.y - pending.start.y) > 5 {
+                pending.cancelled = true
+                pendingQuestionChoiceClick = pending
+            }
+            return nil
+
+        case .leftMouseUp:
+            guard let pending = pendingQuestionChoiceClick else { return event }
+            pendingQuestionChoiceClick = nil
+            guard !pending.cancelled,
+                  chatDocumentView.questionChoiceHitTarget(
+                    atWindowPoint: windowPoint
+                  ) == pending.target else { return nil }
+            let callback = chatDocumentView.onAnswerQuestion
+            DispatchQueue.main.async {
+                callback?(pending.target.questionId, pending.target.answer)
+            }
+            return nil
+
+        default:
+            return event
         }
     }
 

@@ -876,6 +876,11 @@ private final class MacFlippedContentClipView: NSView {
     override var isFlipped: Bool { true }
 }
 
+struct MacQuestionChoiceHitTarget: Equatable {
+    let questionId: String
+    let answer: String
+}
+
 final class MacChatBubbleCell: NSView {
     override var isFlipped: Bool { true }
     private let contentClipView = MacFlippedContentClipView()
@@ -911,6 +916,7 @@ final class MacChatBubbleCell: NSView {
     private var measuredBodyHeight: CGFloat = 0
     private var measuredActionHeight: CGFloat = 0
     private var usesCoreTextBody = false
+    private var questionChoiceFrames: [MacQuestionChoiceFrame] = []
 
     #if DEBUG
     var bodyFrameForRegression: NSRect {
@@ -1008,6 +1014,28 @@ final class MacChatBubbleCell: NSView {
     }
     #endif
 
+    func questionChoiceHitTarget(
+        atWindowPoint point: NSPoint
+    ) -> MacQuestionChoiceHitTarget? {
+        guard let action = content?.action,
+              action.type == "question",
+              !action.cancelled,
+              action.answer == nil,
+              let questionId = action.questionId,
+              !questionChoiceFrames.isEmpty,
+              !actionHost.isHidden else { return nil }
+
+        let local = actionHost.convert(point, from: nil)
+        let topLeadingPoint = NSPoint(
+            x: local.x,
+            y: actionHost.isFlipped ? local.y : actionHost.bounds.height - local.y
+        )
+        guard let frame = questionChoiceFrames.last(where: {
+            $0.rect.contains(topLeadingPoint)
+        }) else { return nil }
+        return MacQuestionChoiceHitTarget(questionId: questionId, answer: frame.answer)
+    }
+
     var htmlArtifactCount: Int { content?.htmlArtifacts.count ?? 0 }
     var hasProvisionalCodeHighlight: Bool {
         guard let body = content?.body else { return false }
@@ -1099,6 +1127,7 @@ final class MacChatBubbleCell: NSView {
         usesCoreTextBody = false
         measuredBodyHeight = 0
         measuredActionHeight = 0
+        questionChoiceFrames.removeAll(keepingCapacity: true)
         coreTextBodyView.configure(nil)
         coreTextBodyView.isHidden = true
         bodyView.textStorage?.setAttributedString(NSAttributedString())
@@ -1132,6 +1161,7 @@ final class MacChatBubbleCell: NSView {
         measuredBodyHeight = 0
         measuredActionHeight = 0
         usesCoreTextBody = false
+        questionChoiceFrames.removeAll(keepingCapacity: true)
         coreTextBodyView.configure(nil)
         coreTextBodyView.isHidden = true
         bodyView.isHidden = true
@@ -1259,6 +1289,7 @@ final class MacChatBubbleCell: NSView {
             self?.onOpenHTMLArtifact?(artifact)
         }
 
+        questionChoiceFrames.removeAll(keepingCapacity: true)
         actionHost.rootView = content.action.map { action in
             MacBubbleActionSlot(
                 action: action,
@@ -1268,6 +1299,10 @@ final class MacChatBubbleCell: NSView {
                 },
                 onAnswerQuestion: { [weak self] id, answer in
                     self?.onAnswerQuestion?(id, answer)
+                },
+                onQuestionChoiceFramesChanged: { [weak self] frames in
+                    guard self?.content?.action?.questionId == action.questionId else { return }
+                    self?.questionChoiceFrames = frames
                 }
             )
         }

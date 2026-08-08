@@ -1,32 +1,56 @@
 #if os(macOS)
 import SwiftUI
 
+struct MacQuestionChoiceFrame: Equatable {
+    let answer: String
+    let rect: CGRect
+}
+
+private struct MacQuestionChoiceFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [MacQuestionChoiceFrame] = []
+
+    static func reduce(
+        value: inout [MacQuestionChoiceFrame],
+        nextValue: () -> [MacQuestionChoiceFrame]
+    ) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
 /// The action slot rendered INSIDE a Mac chat bubble for a streaming or frozen
 /// turn. This intentionally mirrors iOS `BubbleActionSlot`: tool activity,
 /// permission/question prompts, and terminal outcomes all remain part of the
 /// live bubble rather than being duplicated in the composer.
 struct MacBubbleActionSlot: View {
+    private static let questionChoiceCoordinateSpace = "mac-question-choice-space"
     let action: ChatMessage
     var sessionMode: SessionMode = .discuss
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
+    var onQuestionChoiceFramesChanged: ([MacQuestionChoiceFrame]) -> Void = { _ in }
 
     var body: some View {
-        switch action.type {
-        case "tool_start": toolChip(action, running: true)
-        case "tool_complete": toolChip(action, running: false)
-        case "tool_batch":
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.mini)
-                Text("\(action.payload["running"]?.intValue ?? 0) 个工具并行运行中…")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.textSecondary)
+        Group {
+            switch action.type {
+            case "tool_start": toolChip(action, running: true)
+            case "tool_complete": toolChip(action, running: false)
+            case "tool_batch":
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text("\(action.payload["running"]?.intValue ?? 0) 个工具并行运行中…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.textSecondary)
+                }
+            case "permission": permissionInput(action)
+            case "question": questionInput(action)
+            case "user_abort": terminalOutcome(action, failed: false)
+            case "failed": terminalOutcome(action, failed: true)
+            default: EmptyView()
             }
-        case "permission": permissionInput(action)
-        case "question": questionInput(action)
-        case "user_abort": terminalOutcome(action, failed: false)
-        case "failed": terminalOutcome(action, failed: true)
-        default: EmptyView()
+        }
+        .coordinateSpace(name: Self.questionChoiceCoordinateSpace)
+        .onPreferenceChange(MacQuestionChoiceFramePreferenceKey.self) { frames in
+            onQuestionChoiceFramesChanged(frames)
         }
     }
 
@@ -177,6 +201,19 @@ struct MacBubbleActionSlot: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Answer: \(choice)")
+                        .background {
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: MacQuestionChoiceFramePreferenceKey.self,
+                                    value: [MacQuestionChoiceFrame(
+                                        answer: choice,
+                                        rect: proxy.frame(
+                                            in: .named(Self.questionChoiceCoordinateSpace)
+                                        )
+                                    )]
+                                )
+                            }
+                        }
                     }
                 }
             }

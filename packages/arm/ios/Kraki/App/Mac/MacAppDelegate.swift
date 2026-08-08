@@ -38,6 +38,19 @@ private final class FlippedContainerView: NSView {
     }
 }
 
+#if DEBUG
+private struct MacQuestionHitProbeHost: NSViewRepresentable {
+    let cell: MacChatBubbleCell
+
+    func makeNSView(context: Context) -> MacChatBubbleCell { cell }
+
+    func updateNSView(_ nsView: MacChatBubbleCell, context: Context) {
+        nsView.needsLayout = true
+    }
+}
+
+#endif
+
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
@@ -72,6 +85,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         } else if ProcessInfo.processInfo.environment["KRAKI_UNREAD_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runUnreadProjectionRegression() }
+        } else if ProcessInfo.processInfo.environment["KRAKI_QUESTION_HIT_BENCH"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            DispatchQueue.main.async { [weak self] in self?.runQuestionHitRegression() }
         } else if ProcessInfo.processInfo.environment["KRAKI_CODE_HIGHLIGHT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runCodeHighlightBenchmark() }
@@ -1004,6 +1020,225 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             viewport: scrollView.contentView.bounds
         )
         return "provisional=\(diagnostics["provisionalContentCount"] ?? -1),active=\(diagnostics["codeHighlightUpgradeActive"] ?? false),pending=\(diagnostics["codeHighlightUpgradePending"] ?? false),generation=\(diagnostics["observedCodeHighlightGeneration"] ?? -1)"
+    }
+
+    private func runQuestionHitRegression() {
+        let question = ChatMessage(
+            type: "question",
+            seq: 2,
+            sessionId: "question-hit-regression",
+            deviceId: "tentacle-test",
+            timestamp: nil,
+            payload: [
+                "id": AnyCodable("question-hit"),
+                "question": AnyCodable("Which button did the pointer actually reach?"),
+                "choices": AnyCodable(["First visual choice", "Second visual choice"]),
+            ]
+        )
+        let content = MacChatBubbleContentBuilder.live(
+            card: MessageStore.SessionCard(
+                text: "Choose one option below. The native event bands must match the rendered rows.",
+                action: question
+            ),
+            sessionId: "question-hit-regression",
+            agent: "pi",
+            documentWidth: 640,
+            traceSeq: 2,
+            steps: 0
+        )
+
+        func makeCell(onAnswer: @escaping (String) -> Void) -> MacChatBubbleCell {
+            let cell = MacChatBubbleCell(frame: NSRect(x: 0, y: 0, width: 640, height: 1))
+            cell.configure(
+                content: content,
+                renderKey: "question-hit-regression",
+                documentWidth: 640,
+                sessionMode: .discuss,
+                onTapSteps: { _ in },
+                onResolvePermission: { _, _, _ in },
+                onAnswerQuestion: { _, value in onAnswer(value) },
+                onOpenImage: { _ in },
+                onOpenHTMLArtifact: { _ in },
+                onHeightInvalidated: {}
+            )
+            let height = cell.configuredHeight()
+            cell.frame = NSRect(x: 0, y: 0, width: 640, height: height)
+            return cell
+        }
+
+        func sendClick(to window: NSWindow, point: NSPoint, eventNumber: Int) {
+            let timestamp = ProcessInfo.processInfo.systemUptime + Double(eventNumber) * 0.001
+            guard let down = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: point,
+                modifierFlags: [],
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber,
+                clickCount: 1,
+                pressure: 1
+            ), let up = NSEvent.mouseEvent(
+                with: .leftMouseUp,
+                location: point,
+                modifierFlags: [],
+                timestamp: timestamp + 0.0005,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: eventNumber + 1,
+                clickCount: 1,
+                pressure: 0
+            ) else { return }
+            NSApp.sendEvent(down)
+            NSApp.sendEvent(up)
+        }
+
+        func capture(_ view: NSView, to path: String) -> Bool {
+            guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [.compressionFactor: 1]) else {
+                return false
+            }
+            return (try? png.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil
+        }
+
+        func range(_ values: [CGFloat]) -> String {
+            guard let first = values.first, let last = values.last else { return "none" }
+            return String(format: "%.1f...%.1f", first, last)
+        }
+
+        var directAnswer = ""
+        let directCell = makeCell { directAnswer = $0 }
+        let directWindow = NSWindow(
+            contentRect: directCell.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        directWindow.isReleasedWhenClosed = false
+        directWindow.contentView = directCell
+        directWindow.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        directWindow.makeKeyAndOrderFront(nil)
+        directCell.layoutSubtreeIfNeeded()
+        directCell.display()
+        let directPath = "/tmp/kraki-question-hit-regression.png"
+        let directCaptured = capture(directCell, to: directPath)
+        let actionFrame = directCell.actionFrameForRegression
+        var directFirst: [CGFloat] = []
+        var directSecond: [CGFloat] = []
+        var eventNumber = 1
+        for y in stride(
+            from: floor(actionFrame.minY),
+            through: ceil(actionFrame.maxY),
+            by: 1
+        ) {
+            directAnswer = ""
+            let windowPoint = directCell.convert(
+                NSPoint(x: actionFrame.midX, y: y),
+                to: nil
+            )
+            sendClick(to: directWindow, point: windowPoint, eventNumber: eventNumber)
+            if directAnswer == "First visual choice" { directFirst.append(y) }
+            if directAnswer == "Second visual choice" { directSecond.append(y) }
+            eventNumber += 2
+        }
+        directWindow.close()
+
+        let zoom: CGFloat = 1.2
+        var zoomAnswer = ""
+        let zoomCell = makeCell { zoomAnswer = $0 }
+        let zoomSize = NSSize(
+            width: zoomCell.frame.width * zoom,
+            height: zoomCell.frame.height * zoom
+        )
+        let zoomRoot = GeometryReader { geometry in
+            MacQuestionHitProbeHost(cell: zoomCell)
+                .frame(
+                    width: max(1, geometry.size.width / zoom),
+                    height: max(1, geometry.size.height / zoom)
+                )
+                .scaleEffect(zoom, anchor: .topLeading)
+        }
+        let zoomHost = NSHostingController(rootView: zoomRoot)
+        zoomHost.view.frame = NSRect(origin: .zero, size: zoomSize)
+        let zoomWindow = NSWindow(
+            contentRect: zoomHost.view.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        zoomWindow.isReleasedWhenClosed = false
+        zoomWindow.contentViewController = zoomHost
+        zoomWindow.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        zoomWindow.makeKeyAndOrderFront(nil)
+        zoomHost.view.layoutSubtreeIfNeeded()
+        zoomCell.layoutSubtreeIfNeeded()
+        zoomHost.view.display()
+        let zoomPath = "/tmp/kraki-question-hit-zoom-regression.png"
+        let zoomCaptured = capture(zoomHost.view, to: zoomPath)
+        var correctedFirst: [CGFloat] = []
+        var correctedSecond: [CGFloat] = []
+        for visualTopY in stride(from: CGFloat(0), through: zoomSize.height, by: 1) {
+            let windowPoint = NSPoint(
+                x: actionFrame.midX * zoom,
+                y: zoomSize.height - visualTopY
+            )
+            let target = zoomCell.questionChoiceHitTarget(
+                atWindowPoint: windowPoint
+            )
+            if target?.answer == "First visual choice" { correctedFirst.append(visualTopY) }
+            if target?.answer == "Second visual choice" { correctedSecond.append(visualTopY) }
+        }
+        var zoomFirst: [CGFloat] = []
+        var zoomSecond: [CGFloat] = []
+        let visualX = actionFrame.midX * zoom
+        for topY in stride(from: CGFloat(0), through: zoomSize.height, by: 1) {
+            zoomAnswer = ""
+            sendClick(
+                to: zoomWindow,
+                point: NSPoint(x: visualX, y: zoomSize.height - topY),
+                eventNumber: eventNumber
+            )
+            if zoomAnswer == "First visual choice" { zoomFirst.append(topY) }
+            if zoomAnswer == "Second visual choice" { zoomSecond.append(topY) }
+            eventNumber += 2
+        }
+
+        zoomWindow.close()
+
+        func bandMatches(_ zoomed: [CGFloat], _ direct: [CGFloat]) -> Bool {
+            guard let zoomedFirst = zoomed.first,
+                  let zoomedLast = zoomed.last,
+                  let directFirst = direct.first,
+                  let directLast = direct.last else { return false }
+            return abs(zoomedFirst - directFirst * zoom) <= 2
+                && abs(zoomedLast - directLast * zoom) <= 2
+        }
+        let directPassed = !directFirst.isEmpty
+            && !directSecond.isEmpty
+            && (directFirst.last ?? 0) < (directSecond.first ?? 0)
+        let zoomPassed = bandMatches(zoomFirst, directFirst)
+            && bandMatches(zoomSecond, directSecond)
+        let correctedPassed = bandMatches(correctedFirst, directFirst)
+            && bandMatches(correctedSecond, directSecond)
+        let passed = directPassed && correctedPassed && directCaptured && zoomCaptured
+        NSLog(
+            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
+            range(directFirst),
+            range(directSecond),
+            range(zoomFirst),
+            range(zoomSecond),
+            range(correctedFirst),
+            range(correctedSecond),
+            zoomPassed ? 1 : 0,
+            correctedPassed ? 1 : 0,
+            directCaptured ? 1 : 0,
+            zoomCaptured ? 1 : 0,
+            passed ? 1 : 0,
+            directPath,
+            zoomPath
+        )
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 
     private func runUnreadProjectionRegression() {
