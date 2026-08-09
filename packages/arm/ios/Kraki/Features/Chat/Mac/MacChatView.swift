@@ -597,6 +597,8 @@ private struct MacSessionInfoSheet: View {
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @State private var showDeleteConfirmation = false
+    @State private var sessionIDCopied = false
+    @State private var sessionIDCopyFeedbackTask: Task<Void, Never>?
     @FocusState private var titleFocused: Bool
 
     private var currentMode: SessionMode {
@@ -647,6 +649,10 @@ private struct MacSessionInfoSheet: View {
         }
         .frame(width: 440, height: 580)
         .background(Color.surfacePrimary)
+        .onDisappear {
+            sessionIDCopyFeedbackTask?.cancel()
+            sessionIDCopyFeedbackTask = nil
+        }
         .confirmationDialog(
             "Delete Session",
             isPresented: $showDeleteConfirmation,
@@ -704,6 +710,7 @@ private struct MacSessionInfoSheet: View {
                     .buttonStyle(.plain)
                 }
             }
+            sessionIDRow
             infoRow("Agent", session.agent)
             infoRow(label: "Model") {
                 if availableModels.isEmpty {
@@ -720,6 +727,56 @@ private struct MacSessionInfoSheet: View {
                 }
             }
             infoRow("Created", session.createdAt.formatted(date: .abbreviated, time: .shortened))
+        }
+    }
+
+    private var sessionIDRow: some View {
+        infoRow(label: "Session ID") {
+            HStack(spacing: 7) {
+                Text(session.id)
+                    .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .help(session.id)
+                    .accessibilityLabel("Session ID \(session.id)")
+
+                Button(action: copySessionID) {
+                    HStack(spacing: 4) {
+                        Image(systemName: sessionIDCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                        if sessionIDCopied {
+                            Text("Copied")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    .foregroundStyle(sessionIDCopied ? Color.green : Color.textSecondary)
+                    .frame(width: 64, height: 24, alignment: .trailing)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(sessionIDCopied ? "Session ID copied" : "Copy Session ID")
+                .accessibilityLabel(sessionIDCopied ? "Session ID copied" : "Copy Session ID")
+                .accessibilityHint("Copies the complete Session ID to the clipboard")
+            }
+            .frame(maxWidth: 285, alignment: .trailing)
+        }
+    }
+
+    private func copySessionID() {
+        KrakiPasteboard.setString(session.id)
+        sessionIDCopyFeedbackTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            sessionIDCopied = true
+        }
+        sessionIDCopyFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.15)) {
+                sessionIDCopied = false
+            }
+            sessionIDCopyFeedbackTask = nil
         }
     }
 
