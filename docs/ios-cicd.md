@@ -26,10 +26,10 @@ the repository has a monotonically increasing build number. The selected
 version and build number are applied to both the main app and
 `KrakiNotification` extension at archive time.
 
-The release job uses automatic provisioning through `xcodebuild` and an App
-Store Connect API key. A locally exported Apple Distribution certificate gives
-the runner the signing private key; Xcode downloads or creates the matching App
-Store provisioning profiles for these bundle identifiers:
+The release job uses deterministic manual App Store signing. A locally exported
+Apple Distribution certificate gives the runner the signing private key, and the
+matching App Store provisioning profiles are installed from protected GitHub
+environment secrets for these bundle identifiers:
 
 - `chat.kraki.ios`
 - `chat.kraki.ios.notification`
@@ -52,6 +52,8 @@ Configure these environment secrets:
 | `APP_STORE_CONNECT_PRIVATE_KEY_BASE64` | Base64 of `AuthKey_<KEY_ID>.p8` |
 | `IOS_DISTRIBUTION_CERTIFICATE_BASE64` | Base64 of an exported Apple Distribution `.p12` |
 | `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password used when exporting the `.p12` |
+| `IOS_APP_STORE_PROFILE_BASE64` | Base64 of the `chat.kraki.ios` App Store profile |
+| `IOS_NOTIFICATION_APP_STORE_PROFILE_BASE64` | Base64 of the notification extension App Store profile |
 
 Encode files without line wrapping on macOS:
 
@@ -61,8 +63,9 @@ base64 -i Kraki-Apple-Distribution.p12 | pbcopy
 ```
 
 The workflow writes the API key into the standard
-`~/.appstoreconnect/private_keys` location and creates an ephemeral keychain for
-the distribution certificate. Secrets and private keys are never committed.
+`~/.appstoreconnect/private_keys` location, creates an ephemeral keychain for
+the distribution certificate, and installs both profiles into the runner's
+provisioning-profile directory. Secrets and private keys are never committed.
 
 ## First release checklist
 
