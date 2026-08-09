@@ -24,7 +24,7 @@ struct MacImagePreviewSelection: Identifiable {
 
 enum MacImageGalleryLayout {
     static let multiCardHeight: CGFloat = 184
-    static let multiStackOffset: CGFloat = 16
+    static let multiStackOffset: CGFloat = 8
     static let maximumStackDepth = 3
 
     static func height(inlineImages: [NSImage], refs: [ContentRef], maxWidth: CGFloat) -> CGFloat {
@@ -163,14 +163,17 @@ struct MacBubbleImageGrid: View {
 
     private var stackedGallery: some View {
         let visible = Array(entries.prefix(MacImageGalleryLayout.maximumStackDepth))
-        let cardWidth = max(120, min(maxWidth - 16, 360))
+        let offsets = CGFloat(max(0, visible.count - 1)) * MacImageGalleryLayout.multiStackOffset
+        let cardWidth = max(120, min(maxWidth - offsets, 360))
         return ZStack(alignment: .topLeading) {
             ForEach(Array(visible.indices.reversed()), id: \.self) { index in
                 let entry = visible[index]
                 stackedCard(entry, cardWidth: cardWidth)
                     .offset(
                         x: CGFloat(index) * MacImageGalleryLayout.multiStackOffset,
-                        y: CGFloat(index) * MacImageGalleryLayout.multiStackOffset
+                        // Keep the primary image in front at the lower-left;
+                        // background cards fan toward the upper-right.
+                        y: CGFloat(visible.count - 1 - index) * MacImageGalleryLayout.multiStackOffset
                     )
                     .zIndex(Double(visible.count - index))
             }
@@ -181,14 +184,13 @@ struct MacBubbleImageGrid: View {
                 .frame(height: 24)
                 .background(.black.opacity(0.72), in: Capsule())
                 .padding(9)
-                .offset(x: cardWidth - 46)
+                .offset(x: cardWidth - 46, y: offsets)
                 .zIndex(Double(visible.count + 1))
                 .allowsHitTesting(false)
         }
         .frame(
-            width: cardWidth + CGFloat(visible.count - 1) * MacImageGalleryLayout.multiStackOffset,
-            height: MacImageGalleryLayout.multiCardHeight
-                + CGFloat(visible.count - 1) * MacImageGalleryLayout.multiStackOffset,
+            width: cardWidth + offsets,
+            height: MacImageGalleryLayout.multiCardHeight + offsets,
             alignment: .topLeading
         )
         .accessibilityElement(children: .contain)
@@ -201,7 +203,7 @@ struct MacBubbleImageGrid: View {
         case .image(let entryID, let item):
             previewButton(item: item, selectionIndex: resolvedIndex(for: entryID), cornerRadius: 12)
                 .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
-                .background(Color.surfaceSecondary)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(cardBorder)
         case .ref(let ref):
             switch attachmentStore?.state(for: ref.id) {
@@ -213,7 +215,7 @@ struct MacBubbleImageGrid: View {
                     )
                     previewButton(item: item, selectionIndex: resolvedIndex(for: ref.id), cornerRadius: 12)
                         .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
-                        .background(Color.surfaceSecondary)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(cardBorder)
                 } else {
                     stackedErrorCard(ref, label: "Invalid image", width: cardWidth)

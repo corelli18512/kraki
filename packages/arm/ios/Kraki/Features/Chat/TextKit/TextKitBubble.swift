@@ -951,20 +951,74 @@ final class TKBubbleContent {
     }
 
     func bubbleWidth(cellWidth: CGFloat) -> CGFloat {
+        let maximum = maximumBubbleWidth(cellWidth: cellWidth)
+        switch kind {
+        case .agent, .user:
+            // Match Web's max-width flex bubble: short body/action content hugs
+            // its natural width while long content wraps at the established
+            // maximum. Attachments remain an independent sibling.
+            guard htmlArtifacts.isEmpty else { return maximum }
+            let bodyNatural = body.map(TKMeasure.naturalWidth) ?? 0
+            let natural = max(bodyNatural, naturalActionWidth())
+            let fitted = ceil(natural) + TKMetrics.msgPadH * 2
+            return min(maximum, max(fitted, TKMetrics.msgPadH * 2 + 1))
+        case .error, .system:
+            return maximum
+        }
+    }
+
+    func attachmentWidth(cellWidth: CGFloat) -> CGFloat {
+        maximumBubbleWidth(cellWidth: cellWidth)
+    }
+
+    private func naturalActionWidth() -> CGFloat {
+        guard let action else { return 0 }
+        func textWidth(_ text: String, font: UIFont) -> CGFloat {
+            guard !text.isEmpty else { return 0 }
+            return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        }
+        switch action.type {
+        case "tool_batch":
+            let running = action.payload["running"]?.intValue ?? 0
+            let label = running == 1
+                ? "1 tool running in parallel…"
+                : "\(running) tools running in parallel…"
+            return textWidth(label, font: .systemFont(ofSize: 13)) + 24
+        case "tool_start", "tool_complete":
+            let label = [action.toolName, action.headline]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "  ")
+            return textWidth(label, font: .monospacedSystemFont(ofSize: 12, weight: .regular)) + 30
+        case "permission":
+            let description = action.toolDescription ?? "Run \(action.toolName ?? "tool")"
+            let descriptionWidth = textWidth(description, font: .systemFont(ofSize: 14)) + 24
+            let argsWidth = action.args?.values.compactMap(\.stringValue).map {
+                textWidth($0, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
+            }.max() ?? 0
+            return max(380, max(descriptionWidth, argsWidth))
+        case "question":
+            let questionWidth = textWidth(action.question ?? "", font: .systemFont(ofSize: 14)) + 24
+            let choicesWidth = action.choices?.map {
+                textWidth($0, font: .systemFont(ofSize: 13)) + 24
+            }.max() ?? 0
+            return max(280, max(questionWidth, choicesWidth))
+        case "failed", "user_abort":
+            let label = action.type == "failed" ? "Turn failed" : "User aborted"
+            let detail = action.payload["message"]?.stringValue ?? ""
+            return textWidth("\(label)  \(detail)", font: .systemFont(ofSize: 13)) + 24
+        default:
+            return 0
+        }
+    }
+
+    private func maximumBubbleWidth(cellWidth: CGFloat) -> CGFloat {
         let usable = cellWidth - TKMetrics.outerH * 2
         switch kind {
         case .agent:
             return usable - cellWidth * TKMetrics.trailingGapFraction
         case .user:
-            let maximum = usable - cellWidth * TKMetrics.userLeadingGapFraction
-            // User bubbles hug short content like Messages/Web instead of
-            // occupying a fixed 82%-wide slab. Images keep the established
-            // maximum so their layout remains stable; long text clamps and
-            // wraps at that same maximum.
-            guard images.isEmpty, imageRefs.isEmpty, action == nil else { return maximum }
-            let naturalBody = body.map(TKMeasure.naturalWidth) ?? 0
-            let fitted = ceil(naturalBody) + TKMetrics.msgPadH * 2
-            return min(maximum, max(fitted, TKMetrics.msgPadH * 2 + 1))
+            return usable - cellWidth * TKMetrics.userLeadingGapFraction
         case .error, .system:
             return usable - cellWidth * 0.10
         }
@@ -1003,7 +1057,7 @@ final class TKBubbleContent {
         IOSImageGalleryLayout.height(
             images: images,
             refs: imageRefs,
-            maxWidth: bubbleWidth(cellWidth: cellWidth)
+            maxWidth: attachmentWidth(cellWidth: cellWidth)
         )
     }
 
@@ -1708,7 +1762,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             images: content.images,
             refs: content.imageRefs,
             sessionId: sessionId,
-            maxWidth: content.bubbleWidth(cellWidth: cellWidth),
+            maxWidth: content.attachmentWidth(cellWidth: cellWidth),
             alignment: galleryAlignment,
             attachmentStore: attachmentStore,
             onOpenImage: { [weak self] selection in
@@ -1879,12 +1933,27 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             bubbleBG.frame = .zero
         }
 
+        let attachmentWidth = content.attachmentWidth(cellWidth: cellWidth)
         let imageHeight = content.imagesHeight(cellWidth: cellWidth)
         if imageHeight > 0 {
             let imageY = content.hasBubbleContent
                 ? y + bubbleHeight + TKMetrics.attachmentSpacing
                 : y
-            imageHost.frame = CGRect(x: x, y: imageY, width: bubbleWidth, height: imageHeight)
+            let imageX: CGFloat
+            switch content.kind {
+            case .agent:
+                imageX = TKMetrics.outerH
+            case .user:
+                imageX = cellWidth - TKMetrics.outerH - attachmentWidth
+            case .error, .system:
+                imageX = (cellWidth - attachmentWidth) / 2
+            }
+            imageHost.frame = CGRect(
+                x: imageX,
+                y: imageY,
+                width: attachmentWidth,
+                height: imageHeight
+            )
             imageHost.setNeedsLayout()
         } else {
             imageHost.frame = .zero

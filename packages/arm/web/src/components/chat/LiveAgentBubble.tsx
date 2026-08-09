@@ -171,7 +171,7 @@ export function LiveAgentBubble({ sessionId, agent, card, frozen }: LiveAgentBub
             {batchRunning > 0 && (
               <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-surface-primary/40 px-3 py-2 text-xs text-text-secondary">
                 <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-ocean-500" />
-                <span>{batchRunning} 个工具并行运行中…</span>
+                <span>{batchRunning} {batchRunning === 1 ? 'tool' : 'tools'} running in parallel…</span>
               </div>
             )}
 

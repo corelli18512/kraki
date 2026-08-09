@@ -881,6 +881,17 @@ struct MacQuestionChoiceHitTarget: Equatable {
     let answer: String
 }
 
+struct MacPermissionButtonHitTarget: Equatable {
+    let permissionId: String
+    let toolName: String?
+    let decision: String
+}
+
+enum MacBubbleActionHitTarget: Equatable {
+    case question(MacQuestionChoiceHitTarget)
+    case permission(MacPermissionButtonHitTarget)
+}
+
 final class MacChatBubbleCell: NSView {
     override var isFlipped: Bool { true }
     private let contentClipView = MacFlippedContentClipView()
@@ -917,6 +928,7 @@ final class MacChatBubbleCell: NSView {
     private var measuredActionHeight: CGFloat = 0
     private var usesCoreTextBody = false
     private var questionChoiceFrames: [MacQuestionChoiceFrame] = []
+    private var permissionButtonFrames: [MacPermissionButtonFrame] = []
 
     #if DEBUG
     var bodyFrameForRegression: NSRect {
@@ -1014,6 +1026,16 @@ final class MacChatBubbleCell: NSView {
     }
     #endif
 
+    func actionHitTarget(atWindowPoint point: NSPoint) -> MacBubbleActionHitTarget? {
+        if let question = questionChoiceHitTarget(atWindowPoint: point) {
+            return .question(question)
+        }
+        if let permission = permissionButtonHitTarget(atWindowPoint: point) {
+            return .permission(permission)
+        }
+        return nil
+    }
+
     func questionChoiceHitTarget(
         atWindowPoint point: NSPoint
     ) -> MacQuestionChoiceHitTarget? {
@@ -1023,17 +1045,42 @@ final class MacChatBubbleCell: NSView {
               action.answer == nil,
               let questionId = action.questionId,
               !questionChoiceFrames.isEmpty,
-              !actionHost.isHidden else { return nil }
+              !actionHost.isHidden,
+              let frame = actionFrame(containingWindowPoint: point, in: questionChoiceFrames.map {
+                  (rect: $0.rect, value: $0)
+              }) else { return nil }
+        return MacQuestionChoiceHitTarget(questionId: questionId, answer: frame.answer)
+    }
 
+    func permissionButtonHitTarget(
+        atWindowPoint point: NSPoint
+    ) -> MacPermissionButtonHitTarget? {
+        guard let action = content?.action,
+              action.type == "permission",
+              action.payload["decision"]?.stringValue == nil,
+              let permissionId = action.permissionId,
+              !permissionButtonFrames.isEmpty,
+              !actionHost.isHidden,
+              let frame = actionFrame(containingWindowPoint: point, in: permissionButtonFrames.map {
+                  (rect: $0.rect, value: $0)
+              }) else { return nil }
+        return MacPermissionButtonHitTarget(
+            permissionId: permissionId,
+            toolName: action.toolName,
+            decision: frame.decision
+        )
+    }
+
+    private func actionFrame<Value>(
+        containingWindowPoint point: NSPoint,
+        in frames: [(rect: CGRect, value: Value)]
+    ) -> Value? {
         let local = actionHost.convert(point, from: nil)
         let topLeadingPoint = NSPoint(
             x: local.x,
             y: actionHost.isFlipped ? local.y : actionHost.bounds.height - local.y
         )
-        guard let frame = questionChoiceFrames.last(where: {
-            $0.rect.contains(topLeadingPoint)
-        }) else { return nil }
-        return MacQuestionChoiceHitTarget(questionId: questionId, answer: frame.answer)
+        return frames.last(where: { $0.rect.contains(topLeadingPoint) })?.value
     }
 
     var htmlArtifactCount: Int { content?.htmlArtifacts.count ?? 0 }
@@ -1128,6 +1175,7 @@ final class MacChatBubbleCell: NSView {
         measuredBodyHeight = 0
         measuredActionHeight = 0
         questionChoiceFrames.removeAll(keepingCapacity: true)
+        permissionButtonFrames.removeAll(keepingCapacity: true)
         coreTextBodyView.configure(nil)
         coreTextBodyView.isHidden = true
         bodyView.textStorage?.setAttributedString(NSAttributedString())
@@ -1162,6 +1210,7 @@ final class MacChatBubbleCell: NSView {
         measuredActionHeight = 0
         usesCoreTextBody = false
         questionChoiceFrames.removeAll(keepingCapacity: true)
+        permissionButtonFrames.removeAll(keepingCapacity: true)
         coreTextBodyView.configure(nil)
         coreTextBodyView.isHidden = true
         bodyView.isHidden = true
@@ -1279,7 +1328,7 @@ final class MacChatBubbleCell: NSView {
                 inlineImages: content.inlineImages,
                 refs: content.imageRefs,
                 sessionId: content.sessionId,
-                maxWidth: content.bubbleWidth,
+                maxWidth: content.attachmentWidth,
                 alignment: content.kind == .user ? .trailing : .leading,
                 attachmentStore: attachmentStore,
                 onOpenImage: { [weak self] selection in self?.onOpenImage?(selection) }
@@ -1290,6 +1339,7 @@ final class MacChatBubbleCell: NSView {
         }
 
         questionChoiceFrames.removeAll(keepingCapacity: true)
+        permissionButtonFrames.removeAll(keepingCapacity: true)
         actionHost.rootView = content.action.map { action in
             MacBubbleActionSlot(
                 action: action,
@@ -1303,6 +1353,10 @@ final class MacChatBubbleCell: NSView {
                 onQuestionChoiceFramesChanged: { [weak self] frames in
                     guard self?.content?.action?.questionId == action.questionId else { return }
                     self?.questionChoiceFrames = frames
+                },
+                onPermissionButtonFramesChanged: { [weak self] frames in
+                    guard self?.content?.action?.permissionId == action.permissionId else { return }
+                    self?.permissionButtonFrames = frames
                 }
             )
         }
@@ -1346,7 +1400,7 @@ final class MacChatBubbleCell: NSView {
         let bubbleCellHeight = hasBubbleContent
             ? bubbleInnerHeight + MacChatBubbleLayout.msgPadV * 2 + MacChatBubbleLayout.outerV * 2
             : 0
-        let imageHeight = Self.imagesHeight(content: content, width: content.bubbleWidth)
+        let imageHeight = Self.imagesHeight(content: content, width: content.attachmentWidth)
         guard imageHeight > 0 else { return max(bubbleCellHeight, 1) }
         if hasBubbleContent {
             return bubbleCellHeight + MacChatBubbleLayout.attachmentSpacing + imageHeight
@@ -1450,12 +1504,27 @@ final class MacChatBubbleCell: NSView {
             bubbleBG.frame = .zero
         }
 
-        let imageHeight = Self.imagesHeight(content: content, width: bubbleWidth)
+        let attachmentWidth = content.attachmentWidth
+        let imageHeight = Self.imagesHeight(content: content, width: attachmentWidth)
         if imageHeight > 0 {
             let imageY = hasBubbleContent
                 ? y + bubbleHeight + MacChatBubbleLayout.attachmentSpacing
                 : y
-            imageHost.frame = NSRect(x: x, y: imageY, width: bubbleWidth, height: imageHeight)
+            let imageX: CGFloat
+            switch content.kind {
+            case .agent:
+                imageX = MacChatBubbleLayout.outerH
+            case .user:
+                imageX = cellWidth - MacChatBubbleLayout.outerH - attachmentWidth
+            case .error, .system:
+                imageX = (cellWidth - attachmentWidth) / 2
+            }
+            imageHost.frame = NSRect(
+                x: imageX,
+                y: imageY,
+                width: attachmentWidth,
+                height: imageHeight
+            )
         } else {
             imageHost.frame = .zero
         }
@@ -1534,7 +1603,7 @@ final class MacChatBubbleCell: NSView {
         let bubbleCellHeight = hasBubbleContent
             ? bubbleInnerHeight + MacChatBubbleLayout.msgPadV * 2 + MacChatBubbleLayout.outerV * 2
             : 0
-        let imageHeight = imagesHeight(content: content, width: content.bubbleWidth)
+        let imageHeight = imagesHeight(content: content, width: content.attachmentWidth)
         guard imageHeight > 0 else { return max(bubbleCellHeight, 1) }
         if hasBubbleContent {
             return bubbleCellHeight + MacChatBubbleLayout.attachmentSpacing + imageHeight

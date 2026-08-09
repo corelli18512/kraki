@@ -18,7 +18,12 @@ struct MacChatBubbleContent {
     let bubbleColor: NSColor
     /// (topLeading, topTrailing, bottomLeading, bottomTrailing)
     let cornerRadii: (CGFloat, CGFloat, CGFloat, CGFloat)
+    /// Width of the colored text/action bubble. Text-only agent messages hug
+    /// their natural CoreText width and clamp here at the conversation maximum.
     let bubbleWidth: CGFloat
+    /// Attachments are siblings of the colored bubble and keep independent,
+    /// stable geometry when a short text bubble hugs its content.
+    let attachmentWidth: CGFloat
 
     var bodyTextWidth: CGFloat { bubbleWidth - MacChatBubbleLayout.msgPadH * 2 }
 }
@@ -68,12 +73,12 @@ enum MacChatBubbleContentBuilder {
         let contentRefs = uniqueRefs(message.contentRefAttachments)
         let imageRefs = contentRefs.filter { $0.mimeType.hasPrefix("image/") }
         let htmlArtifacts = contentRefs.filter { $0.mimeType == "text/html" }
+        let attachmentWidth = maximumBubbleWidth(kind: kind, documentWidth: documentWidth)
         let width = bubbleWidth(
             kind: kind,
             body: body,
-            hasImages: !images.isEmpty || !imageRefs.isEmpty,
             hasArtifacts: !htmlArtifacts.isEmpty,
-            hasAction: false,
+            action: nil,
             documentWidth: documentWidth
         )
         return MacChatBubbleContent(
@@ -89,7 +94,8 @@ enum MacChatBubbleContentBuilder {
             canShowSteps: (kind == .agent || kind == .system) && (message.steps ?? 0) > 0,
             bubbleColor: palette(for: kind, hueSeed: sessionId.isEmpty ? agent : sessionId),
             cornerRadii: cornerRadii(for: kind),
-            bubbleWidth: width
+            bubbleWidth: width,
+            attachmentWidth: attachmentWidth
         )
     }
 
@@ -117,12 +123,12 @@ enum MacChatBubbleContentBuilder {
         let attachments = uniqueRefs(attachments)
         let imageRefs = attachments.filter { $0.mimeType.hasPrefix("image/") }
         let htmlArtifacts = attachments.filter { $0.mimeType == "text/html" }
+        let attachmentWidth = maximumBubbleWidth(kind: .agent, documentWidth: documentWidth)
         let width = bubbleWidth(
             kind: .agent,
             body: body,
-            hasImages: !imageRefs.isEmpty,
             hasArtifacts: !htmlArtifacts.isEmpty,
-            hasAction: card.action != nil,
+            action: card.action,
             documentWidth: documentWidth
         )
         return MacChatBubbleContent(
@@ -138,16 +144,78 @@ enum MacChatBubbleContentBuilder {
             canShowSteps: steps > 0,
             bubbleColor: palette(for: .agent, hueSeed: sessionId.isEmpty ? agent : sessionId),
             cornerRadii: cornerRadii(for: .agent),
-            bubbleWidth: width
+            bubbleWidth: width,
+            attachmentWidth: attachmentWidth
         )
     }
 
     private static func bubbleWidth(
         kind: MacBubbleKind,
         body: NSAttributedString?,
-        hasImages: Bool,
         hasArtifacts: Bool,
-        hasAction: Bool,
+        action: ChatMessage?,
+        documentWidth: CGFloat
+    ) -> CGFloat {
+        let maximum = maximumBubbleWidth(kind: kind, documentWidth: documentWidth)
+        switch kind {
+        case .agent, .user:
+            // Match Web's max-width flex item: body and action content both
+            // contribute a natural width, then clamp at the conversation max.
+            // HTML report cards intentionally retain the roomy maximum.
+            guard !hasArtifacts else { return maximum }
+            let bodyNatural = body.map(MacTextMeasure.naturalWidth) ?? 0
+            let natural = max(bodyNatural, naturalActionWidth(action))
+            let fitted = ceil(natural) + MacChatBubbleLayout.msgPadH * 2
+            return min(maximum, max(fitted, MacChatBubbleLayout.msgPadH * 2 + 1))
+        case .error, .system:
+            return maximum
+        }
+    }
+
+    private static func naturalActionWidth(_ action: ChatMessage?) -> CGFloat {
+        guard let action else { return 0 }
+        func textWidth(_ text: String, font: NSFont) -> CGFloat {
+            guard !text.isEmpty else { return 0 }
+            return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        }
+        switch action.type {
+        case "tool_batch":
+            let running = action.payload["running"]?.intValue ?? 0
+            let label = running == 1
+                ? "1 tool running in parallel…"
+                : "\(running) tools running in parallel…"
+            return textWidth(label, font: .systemFont(ofSize: 13)) + 24
+        case "tool_start", "tool_complete":
+            let label = [action.toolName, action.headline]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "  ")
+            return textWidth(label, font: .monospacedSystemFont(ofSize: 12, weight: .regular)) + 30
+        case "permission":
+            let description = action.toolDescription ?? "Run \(action.toolName ?? "tool")"
+            let descriptionWidth = textWidth(description, font: .systemFont(ofSize: 14)) + 24
+            let argsWidth = action.args?.values.compactMap(\.stringValue).map {
+                textWidth($0, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
+            }.max() ?? 0
+            // Three equal Web-aligned buttons, including “Switch to Execute”.
+            return max(380, max(descriptionWidth, argsWidth))
+        case "question":
+            let questionWidth = textWidth(action.question ?? "", font: .systemFont(ofSize: 14)) + 24
+            let choicesWidth = action.choices?.map {
+                textWidth($0, font: .systemFont(ofSize: 13)) + 24
+            }.max() ?? 0
+            return max(280, max(questionWidth, choicesWidth))
+        case "failed", "user_abort":
+            let label = action.type == "failed" ? "Turn failed" : "User aborted"
+            let detail = action.payload["message"]?.stringValue ?? ""
+            return textWidth("\(label)  \(detail)", font: .systemFont(ofSize: 13)) + 24
+        default:
+            return 0
+        }
+    }
+
+    private static func maximumBubbleWidth(
+        kind: MacBubbleKind,
         documentWidth: CGFloat
     ) -> CGFloat {
         let usable = documentWidth - MacChatBubbleLayout.outerH * 2
@@ -155,11 +223,7 @@ enum MacChatBubbleContentBuilder {
         case .agent:
             return usable - documentWidth * MacChatBubbleLayout.trailingGapFraction
         case .user:
-            let maximum = usable - documentWidth * MacChatBubbleLayout.userLeadingGapFraction
-            guard !hasImages, !hasArtifacts, !hasAction else { return maximum }
-            let natural = body.map(MacTextMeasure.naturalWidth) ?? 0
-            let fitted = ceil(natural) + MacChatBubbleLayout.msgPadH * 2
-            return min(maximum, max(fitted, MacChatBubbleLayout.msgPadH * 2 + 1))
+            return usable - documentWidth * MacChatBubbleLayout.userLeadingGapFraction
         case .error, .system:
             return usable - documentWidth * 0.10
         }

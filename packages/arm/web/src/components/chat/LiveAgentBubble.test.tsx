@@ -90,7 +90,7 @@ describe('LiveAgentBubble action section', () => {
 
   it('renders a tool_batch as a parallel-running count, without a "Working…" header', () => {
     renderLive({ text: '', action: { type: 'tool_batch', payload: { running: 3 } } });
-    expect(screen.getByText(/3 个工具并行运行中/)).toBeInTheDocument();
+    expect(screen.getByText(/3 tools running in parallel/)).toBeInTheDocument();
     expect(screen.queryByText('Working…')).not.toBeInTheDocument();
   });
 
