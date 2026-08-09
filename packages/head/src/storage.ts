@@ -96,7 +96,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 export class Storage {
   private db: Database.Database;
@@ -315,6 +315,25 @@ export class Storage {
         SET activation_id = 'legacy:' || jti,
             activated_at = issued_at
         WHERE activation_id IS NULL AND activated_at IS NULL
+      `);
+    }
+
+    if (currentVersion < 11) {
+      // Warm voice connections reuse one lease for many sequential recordings.
+      // Keep the broker's exact cumulative audio value so reconnects resume
+      // without rounding drift; `used_seconds` remains the rounded daily/audit
+      // projection. Existing one-shot settlements seed the cumulative value.
+      const columns = new Set(
+        (this.db.prepare('PRAGMA table_info(voice_leases)').all() as Array<{ name: string }>)
+          .map((column) => column.name)
+      );
+      if (!columns.has('reported_audio_seconds')) {
+        this.db.exec('ALTER TABLE voice_leases ADD COLUMN reported_audio_seconds REAL NOT NULL DEFAULT 0');
+      }
+      this.db.exec(`
+        UPDATE voice_leases
+        SET reported_audio_seconds = COALESCE(used_seconds, 0)
+        WHERE reported_audio_seconds = 0 AND used_seconds IS NOT NULL
       `);
     }
 
@@ -693,19 +712,18 @@ export class Storage {
   }
 
   /**
-   * Daily reserved/consumed voice seconds for a user. Unsettled leases reserve
-   * their full signed quota so concurrent sessions cannot bypass the cap.
-   * Settled leases count only trusted broker-reported audio seconds.
+   * Daily reserved/consumed voice seconds for a user. Every unexpired lease
+   * reserves its full signed quota even after usage checkpoints, because the
+   * same warm authorization can still consume the remainder. One minute after
+   * expiry the reservation collapses to trusted broker-reported actual usage.
    */
   sumVoiceLeaseQuotaIssuedToday(userId: string, nowUnixSec: number): number {
     const day = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
     const row = this.db.prepare(`
       SELECT COALESCE(SUM(
         CASE
-          WHEN settled_at IS NOT NULL THEN COALESCE(used_seconds, quota_seconds)
-          WHEN activated_at IS NOT NULL THEN quota_seconds
           WHEN unixepoch(expires_at) + 60 > ? THEN quota_seconds
-          ELSE 0
+          ELSE COALESCE(used_seconds, 0)
         END
       ), 0) AS total
       FROM voice_leases
@@ -715,20 +733,26 @@ export class Storage {
   }
 
   /**
-   * Activate a signed lease exactly once before the broker accepts audio.
-   * Retries carrying the same activation id are idempotent; a different id is
-   * a replay attempt and conflicts.
+   * Activate a warm lease connection before the broker accepts recordings.
+   * The same activation id is an idempotent retry. A different activation id
+   * replaces the previous owner (last-writer-wins reconnect) and makes stale
+   * checkpoints fail closed. The exact cumulative usage is returned so a new
+   * broker connection can resume quota accounting without rounding drift.
    */
   activateVoiceLease(input: {
     jti: string;
     activationId: string;
     activatedAtUnixSec?: number;
-  }): { status: 'activated' | 'unchanged' | 'conflict' | 'expired' | 'wrong_day' | 'revoked' | 'not_found' } {
+  }): {
+    status: 'activated' | 'unchanged' | 'replaced' | 'expired' | 'wrong_day' | 'revoked' | 'not_found';
+    reportedAudioSeconds?: number;
+  } {
     const nowUnixSec = input.activatedAtUnixSec ?? Math.floor(Date.now() / 1000);
     const activationDay = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
     const lease = this.db.prepare(`
       SELECT activation_id, activated_at, issued_at,
-             unixepoch(expires_at) AS expires_at_unix, revoked_at
+             unixepoch(expires_at) AS expires_at_unix, revoked_at,
+             COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
       activation_id: string | null;
@@ -736,46 +760,35 @@ export class Storage {
       issued_at: string;
       expires_at_unix: number;
       revoked_at: string | null;
+      reported_audio_seconds: number;
     } | undefined;
     if (!lease) return { status: 'not_found' };
     if (lease.revoked_at !== null) return { status: 'revoked' };
-    if (lease.activated_at !== null) {
-      return { status: lease.activation_id === input.activationId ? 'unchanged' : 'conflict' };
-    }
     if (lease.expires_at_unix <= nowUnixSec) return { status: 'expired' };
     if (lease.issued_at.slice(0, 10) !== activationDay) return { status: 'wrong_day' };
+
+    const reportedAudioSeconds = Number(lease.reported_audio_seconds) || 0;
+    if (lease.activated_at !== null && lease.activation_id === input.activationId) {
+      return { status: 'unchanged', reportedAudioSeconds };
+    }
+
     const activatedAt = new Date(nowUnixSec * 1000).toISOString();
-    const result = this.db.prepare(`
+    this.db.prepare(`
       UPDATE voice_leases SET activation_id = ?, activated_at = ?
-      WHERE jti = ? AND activated_at IS NULL AND revoked_at IS NULL
+      WHERE jti = ? AND revoked_at IS NULL
         AND unixepoch(expires_at) > ? AND substr(issued_at, 1, 10) = ?
     `).run(input.activationId, activatedAt, input.jti, nowUnixSec, activationDay);
-    if (result.changes === 1) return { status: 'activated' };
-    const current = this.db.prepare(`
-      SELECT activation_id, activated_at, issued_at,
-             unixepoch(expires_at) AS expires_at_unix, revoked_at
-      FROM voice_leases WHERE jti = ?
-    `).get(input.jti) as {
-      activation_id: string | null;
-      activated_at: string | null;
-      issued_at: string;
-      expires_at_unix: number;
-      revoked_at: string | null;
-    } | undefined;
-    if (!current) return { status: 'not_found' };
-    if (current.revoked_at !== null) return { status: 'revoked' };
-    if (current.activated_at !== null) {
-      return { status: current.activation_id === input.activationId ? 'unchanged' : 'conflict' };
-    }
-    if (current.expires_at_unix <= nowUnixSec) return { status: 'expired' };
-    if (current.issued_at.slice(0, 10) !== activationDay) return { status: 'wrong_day' };
-    return { status: 'conflict' };
+    return {
+      status: lease.activated_at === null ? 'activated' : 'replaced',
+      reportedAudioSeconds,
+    };
   }
 
   /**
-   * Idempotently settle one lease to actual broker-observed audio seconds.
-   * First write wins; retries with the same value are accepted, while a
-   * conflicting replay is rejected instead of silently changing accounting.
+   * Store a monotonic cumulative usage checkpoint for one warm lease. Equal
+   * values are idempotent; lower out-of-order retries are stale but harmless;
+   * higher values advance both the exact cumulative value and rounded audit
+   * seconds. Checkpoints from a replaced activation are rejected.
    */
   settleVoiceLease(input: {
     jti: string;
@@ -783,47 +796,66 @@ export class Storage {
     audioSeconds: number;
     reason?: string;
     settledAtUnixSec?: number;
-  }): { status: 'settled' | 'unchanged' | 'conflict' | 'not_found' | 'not_activated'; usedSeconds?: number } {
+  }): {
+    status: 'updated' | 'unchanged' | 'stale' | 'conflict' | 'not_found' | 'not_activated';
+    usedSeconds?: number;
+    reportedAudioSeconds?: number;
+  } {
     const lease = this.db.prepare(`
-      SELECT quota_seconds, used_seconds, settled_at, activation_id, activated_at
+      SELECT quota_seconds, used_seconds, activation_id, activated_at,
+             COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
       quota_seconds: number;
       used_seconds: number | null;
-      settled_at: string | null;
       activation_id: string | null;
       activated_at: string | null;
+      reported_audio_seconds: number;
     } | undefined;
     if (!lease) return { status: 'not_found' };
     if (lease.activated_at === null) return { status: 'not_activated' };
     if (lease.activation_id !== input.activationId) return { status: 'conflict' };
 
-    const usedSeconds = Math.min(
+    const reportedAudioSeconds = Math.min(
       lease.quota_seconds,
-      Math.max(0, Math.ceil(input.audioSeconds))
+      Math.max(0, input.audioSeconds)
     );
-    if (lease.settled_at !== null) {
-      return lease.used_seconds === usedSeconds
-        ? { status: 'unchanged', usedSeconds }
-        : { status: 'conflict', usedSeconds: lease.used_seconds ?? undefined };
+    const currentReported = Number(lease.reported_audio_seconds) || 0;
+    const currentUsed = lease.used_seconds ?? Math.ceil(currentReported);
+    if (reportedAudioSeconds < currentReported) {
+      return {
+        status: 'stale',
+        usedSeconds: currentUsed,
+        reportedAudioSeconds: currentReported,
+      };
+    }
+    if (reportedAudioSeconds === currentReported) {
+      return {
+        status: 'unchanged',
+        usedSeconds: currentUsed,
+        reportedAudioSeconds: currentReported,
+      };
     }
 
+    const usedSeconds = Math.ceil(reportedAudioSeconds);
     const settledAt = new Date(
       (input.settledAtUnixSec ?? Math.floor(Date.now() / 1000)) * 1000
     ).toISOString();
-    const result = this.db.prepare(`
+    this.db.prepare(`
       UPDATE voice_leases
-      SET used_seconds = ?, settled_at = ?, settlement_reason = ?
-      WHERE jti = ? AND settled_at IS NULL
-    `).run(usedSeconds, settledAt, input.reason?.slice(0, 64) ?? null, input.jti);
-    if (result.changes === 1) return { status: 'settled', usedSeconds };
-
-    const current = this.db.prepare(`
-      SELECT used_seconds FROM voice_leases WHERE jti = ?
-    `).get(input.jti) as { used_seconds: number | null } | undefined;
-    return current?.used_seconds === usedSeconds
-      ? { status: 'unchanged', usedSeconds }
-      : { status: 'conflict', usedSeconds: current?.used_seconds ?? undefined };
+      SET reported_audio_seconds = ?, used_seconds = ?, settled_at = ?, settlement_reason = ?
+      WHERE jti = ? AND activation_id = ?
+        AND COALESCE(reported_audio_seconds, 0) < ?
+    `).run(
+      reportedAudioSeconds,
+      usedSeconds,
+      settledAt,
+      input.reason?.slice(0, 64) ?? null,
+      input.jti,
+      input.activationId,
+      reportedAudioSeconds,
+    );
+    return { status: 'updated', usedSeconds, reportedAudioSeconds };
   }
 
   /** Fetch a single lease by jti (audit / debug). Returns undefined if unknown. */
@@ -839,19 +871,21 @@ export class Storage {
     usedSeconds: number | null;
     settledAt: string | null;
     settlementReason: string | null;
+    reportedAudioSeconds: number;
     activationId: string | null;
     activatedAt: string | null;
   } | undefined {
     const row = this.db.prepare(`
       SELECT jti, user_id, device_id, resource, quota_seconds, issued_at,
              expires_at, revoked_at, used_seconds, settled_at, settlement_reason,
+             COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds,
              activation_id, activated_at
       FROM voice_leases WHERE jti = ?
     `).get(jti) as {
       jti: string; user_id: string; device_id: string; resource: string;
       quota_seconds: number; issued_at: string; expires_at: string; revoked_at: string | null;
       used_seconds: number | null; settled_at: string | null; settlement_reason: string | null;
-      activation_id: string | null; activated_at: string | null;
+      reported_audio_seconds: number; activation_id: string | null; activated_at: string | null;
     } | undefined;
     if (!row) return undefined;
     return {
@@ -866,6 +900,7 @@ export class Storage {
       usedSeconds: row.used_seconds,
       settledAt: row.settled_at,
       settlementReason: row.settlement_reason,
+      reportedAudioSeconds: Number(row.reported_audio_seconds) || 0,
       activationId: row.activation_id,
       activatedAt: row.activated_at,
     };

@@ -20,10 +20,10 @@ This package currently delivers:
 
 - ✅ Doubao binary wire protocol, client, mock server and standalone broker
 - ✅ Offline RSA verification of Head-issued, user/device/resource-bound leases
-- ✅ Per-session audio limits from signed `quota_seconds`
+- ✅ One signed lease authorizes a warm WebSocket with many sequential recordings
+- ✅ Cumulative `quota_seconds` enforcement and reconnect-safe Head checkpoints
 - ✅ Production Coinfra adapter with correction deltas and authoritative final
-- ✅ Migration-safe legacy API-key compatibility for non-Kraki clients; a frame
-  carrying a bad lease is never allowed to downgrade to the legacy key path
+- ✅ Legacy API-key compatibility for non-Kraki clients on a separate start path
 - ✅ File probe and browser microphone test page
 
 ---
@@ -77,22 +77,26 @@ KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS=2000
 VOICE_API_KEY=<legacy server-only migration key>
 ```
 
-Start frames containing `lease` are verified exclusively as Kraki leases:
-signature, algorithm, issuer, user, device, resource, time window, and quota
-must all match. Frames without `lease` may use the legacy key while older
-VoiceType clients migrate. Never ship `VOICE_API_KEY` in Kraki arm builds.
+Kraki clients send the signed lease once in a connection-level `authorize`
+frame. Signature, algorithm, issuer, user, device, resource, time window, and
+cumulative quota must all match. After `authorized`, the same WebSocket accepts
+many sequential `start` / audio / `finish` cycles. Legacy VoiceType clients use
+the separate per-start API-key authorizer. Never ship `VOICE_API_KEY` in Kraki
+arm builds.
 
-The gateway first activates each `jti` with a random `activationId`; Head accepts
-that pair exactly once, preventing lease replay. It then reports trusted
-`audioSeconds` exactly once per Kraki session with the same pair. Head reserves
-the full lease budget while an activated session is unsettled, then atomically
-replaces that reservation with rounded-up actual audio seconds. An expired
-never-activated lease releases its reservation; an activated lease whose final
-report is lost remains conservatively reserved. Settlement retries are
-idempotent and conflicting replays are rejected. Each Head request has a
-bounded timeout (2 seconds by default) plus bounded retries, so activation
-fails closed and graceful shutdown cannot hang forever when Head is unhealthy.
-Legacy-key VoiceType sessions have no `jti` and are not reported.
+The gateway activates the lease while the app is warming the connection, before
+the microphone path. A reconnect installs a new random `activationId` as the
+last-writer-wins owner and restores Head's exact cumulative audio checkpoint.
+A same-process takeover also transfers any audio not yet checkpointed before it
+closes the stale socket. The Broker reports monotonic cumulative `audioSeconds`
+during long recordings and after each final transcript. Head reserves the full signed quota while the
+lease remains valid, then collapses it to rounded-up actual usage after expiry
+plus a one-minute grace period. Lower/out-of-order checkpoints are harmless;
+checkpoints from replaced owners are rejected. Authorized sockets use standard
+WebSocket ping/pong with a 25-second ping cadence and 10-second pong timeout;
+there is no application-level keepalive frame. Each Head request has a bounded
+timeout (2 seconds by default) plus bounded retries, so authorization fails
+closed and graceful shutdown cannot hang forever when Head is unhealthy.
 
 Validate the deployment adapter with:
 
@@ -104,13 +108,16 @@ pnpm --filter @kraki/voice-broker test:deploy
 
 ## Coordinated release requirement
 
-Head settlement and the Broker activation adapter are one rollout unit. Do not
-release only one side while the public voice endpoint remains available: an old
-Broker does not activate sessions, and a new Broker cannot settle against an old
+Publish the `@coinfra/voice` minor release containing `authorizeConnection`
+first, then rebuild the Broker's `deploy/coinfra/` distribution from that exact
+version. Head settlement, the rebuilt Broker adapter, and the Apple clients are
+one protocol rollout unit. Do not release only one side while the public voice
+endpoint remains available: an old Broker does not activate sessions, and a new
+Broker cannot settle against an old
 Head. For production rollout, first stop accepting new voice connections, then
 upgrade both components and configure the matching settlement secret. Start
 Head, start the Broker, verify one activation/settlement probe, and only then
-restore the public voice route. Database backup and schema-v10 verification are
+restore the public voice route. Database backup and schema-v11 verification are
 required before reopening traffic.
 
 ## Going live
@@ -158,11 +165,14 @@ JSON control + binary audio over a single WebSocket. Path: `/voice`.
 
 ```
 arm → broker
-  { "type": "start", "uid": "u-1234", "config": { ... overrides ... } }
+  { "type": "authorize", "uid": "u-1234", "deviceId": "d-1", "authorization": { ...signed lease... } }
+  { "type": "start", "uid": "u-1234", "context": { ... } }
   <binary>   16 kHz mono int16 little-endian PCM, ~200ms per chunk
   { "type": "finish" }
+  # after sessionFinal, repeat start/audio/finish on the same WebSocket
 
 broker → arm
+  { "type": "authorized" }
   { "type": "ready" }
   { "type": "transcript", "text": "...", "finalSegment": false, "sessionFinal": false, "raw": {...} }
   { "type": "transcript", "text": "...", "finalSegment": true,  "sessionFinal": true,  "raw": {...} }
@@ -183,8 +193,8 @@ word-level breakdowns.
   process and trust boundary**. Not merged into head (would enlarge blast
   radius and couple bursty audio load to the latency-critical relay).
 - **Audio plane never touches core.** arm → nearest regional broker → Doubao,
-  all in-region. Control plane (lease minting) is the only thing that hits
-  core — and only once per session.
+  all in-region. Control-plane lease minting and activation happen once per
+  warm connection; cumulative usage checkpoints are asynchronous.
 - MVP cuts all auth/IAP/multi-region. Phase 0-3 prove the vertical slice;
   4-6 layer on after.
 

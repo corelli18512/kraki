@@ -468,7 +468,7 @@ final class AppState {
         githubClientId = nil
         relayVersion = nil
         voiceCapability = nil
-        voiceInputController.cancel()
+        voiceInputController.suspendWarmConnection()
         #if os(iOS)
         pushManager?.syncApplicationBadge(unreadSessionIDs: [])
         #endif
@@ -492,6 +492,7 @@ final class AppState {
         #if os(iOS)
         Task { await pushManager?.handleForeground() }
         #endif
+        voiceInputController.resumeWarmConnection()
         guard hasCompletedInitialConnect else { return }
         guard connectionStatus != .connected else { return }
         wsClient?.resetBackoffAndReconnect()
@@ -518,6 +519,7 @@ final class AppState {
 
     func handleBackground() {
         updateReadVisibility(appForeground: false, conversationVisible: false)
+        voiceInputController.suspendWarmConnection()
         sessionStore.flushCache()
         deviceStore.flushCache()
         wsClient?.disconnect()
@@ -589,6 +591,7 @@ final class AppState {
         #if os(iOS)
         pushManager?.onAuthenticated()
         #endif
+        voiceInputController.prepare()
     }
 
     func onAuthFailed(error: String) {
@@ -807,10 +810,9 @@ extension AppState: KrakiVoiceInputHost {
             KLog.d("🎙️ Voice lease request blocked: transport unavailable")
             return false
         }
-        // The deployed Head's raw authenticated control path supports voice
-        // leases. Its @head Pulse self-channel historically omitted
-        // request_voice_lease from the whitelist, so use this non-retryable
-        // one-shot control frame; a new gesture always acquires a fresh lease.
+        // Voice authorization is connection-scoped. The controller requests a
+        // lease during foreground warm-up and reuses it across sequential
+        // recordings until expiry or reconnect replacement.
         wsClient.sendRaw(string)
         KLog.d("🎙️ Voice lease request sent resource=\(resource)")
         return true

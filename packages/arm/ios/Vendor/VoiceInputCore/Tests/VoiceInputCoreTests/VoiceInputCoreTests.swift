@@ -32,18 +32,17 @@ final class VoiceInputCoreTests: XCTestCase {
         XCTAssertEqual(product["paid"] as? Bool, true)
     }
 
-    func testGatewayStartMessagePreservesNestedHostFieldsAndProtectsCoreKeys() throws {
+    func testGatewayAuthorizationKeepsLeaseOffPerRecordingStart() throws {
         let configuration = VoiceInputConfiguration(
             gatewayURL: try XCTUnwrap(URL(string: "wss://voice.example.test/voice")),
             userID: "kraki:user-42",
             correctionEnabled: true,
             context: ["product": .string("kraki")],
-            startFields: [
+            authorizationFields: [
                 "type": .string("host-must-not-win"),
                 "uid": .string("wrong-user"),
                 "deviceId": .string("device-1"),
-                "sampleRate": .number(16_000),
-                "lease": .object([
+                "authorization": .object([
                     "payload": .object([
                         "did": .string("device-1"),
                         "quota_seconds": .number(600),
@@ -51,19 +50,28 @@ final class VoiceInputCoreTests: XCTestCase {
                     "signature": .string("sig"),
                     "alg": .string("RSA-SHA256"),
                 ]),
+            ],
+            startFields: [
+                "deviceId": .string("device-1"),
+                "sampleRate": .number(16_000),
             ]
         )
 
-        let message = configuration.gatewayStartMessage()
-        XCTAssertEqual(message["type"] as? String, "start")
-        XCTAssertEqual(message["uid"] as? String, "kraki:user-42")
-        XCTAssertEqual(message["deviceId"] as? String, "device-1")
-        XCTAssertEqual(message["sampleRate"] as? Double, 16_000)
-        let lease = try XCTUnwrap(message["lease"] as? [String: Any])
+        let authorize = configuration.gatewayAuthorizeMessage()
+        XCTAssertEqual(authorize["type"] as? String, "authorize")
+        XCTAssertEqual(authorize["uid"] as? String, "kraki:user-42")
+        XCTAssertEqual(authorize["deviceId"] as? String, "device-1")
+        let lease = try XCTUnwrap(authorize["authorization"] as? [String: Any])
         XCTAssertEqual(lease["signature"] as? String, "sig")
         let payload = try XCTUnwrap(lease["payload"] as? [String: Any])
         XCTAssertEqual(payload["did"] as? String, "device-1")
         XCTAssertEqual(payload["quota_seconds"] as? Double, 600)
+
+        let start = configuration.gatewayStartMessage()
+        XCTAssertEqual(start["type"] as? String, "start")
+        XCTAssertEqual(start["deviceId"] as? String, "device-1")
+        XCTAssertEqual(start["sampleRate"] as? Double, 16_000)
+        XCTAssertNil(start["authorization"])
     }
 
     func testGatewayStartMessageOmitsEmptyApiKey() throws {

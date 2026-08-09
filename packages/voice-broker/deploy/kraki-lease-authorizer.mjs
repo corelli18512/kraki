@@ -24,51 +24,68 @@ function validLeaseShape(value) {
     typeof payload.jti === 'string' && payload.jti.length > 0;
 }
 
-export function createKrakiLeaseAuthorizer(publicKeyPem, options = {}) {
+function verifyKrakiLease(lease, publicKeyPem, now, clockSkewSec) {
+  if (!validLeaseShape(lease)) {
+    return { ok: false, reason: 'malformed_lease', detail: 'missing or malformed Kraki lease' };
+  }
+  const current = now();
+  if (lease.payload.iat > current + clockSkewSec) {
+    return { ok: false, reason: 'not_yet_valid', detail: 'lease is not active yet' };
+  }
+  if (lease.payload.exp <= current) {
+    return { ok: false, reason: 'expired', detail: 'lease expired' };
+  }
+  try {
+    const verifier = createVerify('SHA256');
+    verifier.update(canonicalLeasePayload(lease.payload));
+    if (!verifier.verify(publicKeyPem, lease.signature, 'base64')) {
+      return { ok: false, reason: 'bad_signature', detail: 'lease signature invalid' };
+    }
+  } catch {
+    return { ok: false, reason: 'bad_signature', detail: 'lease signature invalid' };
+  }
+  return { ok: true, lease };
+}
+
+/**
+ * Warm-connection authorizer. The signed lease is verified offline, then Head
+ * installs this WebSocket as the latest activation owner and returns the exact
+ * cumulative usage checkpoint needed to resume quota accounting.
+ */
+export function createKrakiConnectionAuthorizer(publicKeyPem, options = {}) {
   if (!publicKeyPem?.trim()) throw new Error('Kraki lease public key must not be empty');
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const clockSkewSec = options.clockSkewSec ?? 30;
   const activate = options.activate;
-  return ({ start }) => {
-    const lease = start?.lease;
-    if (!validLeaseShape(lease)) {
-      return { ok: false, reason: 'malformed_lease', detail: 'missing or malformed Kraki lease' };
-    }
-    if (typeof start.deviceId !== 'string' || start.deviceId !== lease.payload.did) {
-      return { ok: false, reason: 'wrong_device', detail: 'lease does not match device' };
-    }
-    if (typeof start.uid !== 'string' || start.uid !== lease.payload.sub) {
+  return ({ authorize }) => {
+    const lease = authorize?.authorization;
+    const verified = verifyKrakiLease(lease, publicKeyPem, now, clockSkewSec);
+    if (!verified.ok) return verified;
+    if (authorize.uid !== undefined && authorize.uid !== lease.payload.sub) {
       return { ok: false, reason: 'wrong_user', detail: 'lease does not match user' };
     }
-    const current = now();
-    if (lease.payload.iat > current + clockSkewSec) {
-      return { ok: false, reason: 'not_yet_valid', detail: 'lease is not active yet' };
+    if (authorize.deviceId !== undefined && authorize.deviceId !== lease.payload.did) {
+      return { ok: false, reason: 'wrong_device', detail: 'lease does not match device' };
     }
-    if (lease.payload.exp <= current) {
-      return { ok: false, reason: 'expired', detail: 'lease expired' };
-    }
-    try {
-      const verifier = createVerify('SHA256');
-      verifier.update(canonicalLeasePayload(lease.payload));
-      if (!verifier.verify(publicKeyPem, lease.signature, 'base64')) {
-        return { ok: false, reason: 'bad_signature', detail: 'lease signature invalid' };
-      }
-    } catch {
-      return { ok: false, reason: 'bad_signature', detail: 'lease signature invalid' };
-    }
+
     const activationId = randomUUID();
-    const success = () => ({
+    const success = (reportedAudioSeconds = 0) => ({
       ok: true,
       quotaSeconds: lease.payload.quota_seconds,
+      usedSeconds: reportedAudioSeconds,
+      expiresAtUnixSec: lease.payload.exp,
+      connectionKey: lease.payload.jti,
       usageContext: { jti: lease.payload.jti, activationId },
     });
-    if (activate) {
-      return Promise.resolve(activate({ jti: lease.payload.jti, activationId }))
-        .then((activated) => activated.ok
-          ? success()
-          : { ok: false, reason: activated.reason ?? 'activation_failed', detail: activated.detail });
-    }
-    return success();
+    if (!activate) return success();
+    return Promise.resolve(activate({ jti: lease.payload.jti, activationId }))
+      .then((activated) => activated.ok
+        ? success(activated.reportedAudioSeconds ?? 0)
+        : {
+            ok: false,
+            reason: activated.reason ?? 'activation_failed',
+            detail: activated.detail,
+          });
   };
 }
 
@@ -94,10 +111,15 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(timeoutMs),
         });
-        if (response.ok) return { ok: true };
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, ...body };
         lastError = new Error(`settlement returned ${response.status}`);
         if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-          return { ok: false, reason: 'settlement_rejected', detail: lastError.message };
+          return {
+            ok: false,
+            reason: typeof body?.error === 'string' ? body.error : 'settlement_rejected',
+            detail: lastError.message,
+          };
         }
       } catch (error) {
         lastError = error;
@@ -107,12 +129,19 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
     throw lastError ?? new Error('voice settlement failed');
   };
   return {
-    activate: ({ jti, activationId }) => post({ action: 'activate', jti, activationId }),
+    async activate({ jti, activationId }) {
+      const result = await post({ action: 'activate', jti, activationId });
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        reportedAudioSeconds: Number(result.reportedAudioSeconds) || 0,
+      };
+    },
     async onUsage(input) {
       const jti = input?.authorization?.usageContext?.jti;
       const activationId = input?.authorization?.usageContext?.activationId;
-      if (typeof jti !== 'string' || jti.length === 0
-          || typeof activationId !== 'string' || activationId.length === 0) return;
+      if (typeof jti !== 'string' || jti.length === 0 ||
+          typeof activationId !== 'string' || activationId.length === 0) return;
       const result = await post({
         action: 'settle',
         jti,
@@ -136,16 +165,9 @@ function safeEqualSecret(actual, expected) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-/**
- * Migration authorizer: Kraki lease frames never fall back to the legacy key;
- * frames without a lease may still serve existing VoiceType clients.
- */
-export function createKrakiOrLegacyAuthorizer(publicKeyPem, legacyApiKey, options = {}) {
-  const authorizeLease = createKrakiLeaseAuthorizer(publicKeyPem, options);
-  return (input) => {
-    if (input?.start?.lease !== undefined) return authorizeLease(input);
-    return safeEqualSecret(input?.start?.apiKey, legacyApiKey)
-      ? { ok: true }
-      : { ok: false, reason: 'missing_authorization', detail: 'missing Kraki lease or legacy API key' };
-  };
+/** Legacy static-key authorizer for non-Kraki clients during migration. */
+export function createLegacyApiKeyAuthorizer(legacyApiKey) {
+  return ({ start }) => safeEqualSecret(start?.apiKey, legacyApiKey)
+    ? { ok: true }
+    : { ok: false, reason: 'missing_authorization', detail: 'missing legacy API key' };
 }

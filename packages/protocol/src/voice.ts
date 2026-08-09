@@ -20,7 +20,7 @@ export type VoiceLeaseDeniedReason =
   | 'not_entitled'
   | 'invalid_request';
 
-/** lease 的签名 payload。一个 lease = 一份 payload + 一段签名。 */
+/** lease 的签名 payload。一张 lease 授权一个短期 warm voice connection。 */
 export interface VoiceLeasePayload {
   /** Schema version. */
   ver: VoiceLeaseVersion;
@@ -34,7 +34,7 @@ export interface VoiceLeasePayload {
   iat: number;
   /** Expires-at, unix seconds. */
   exp: number;
-  /** 本 lease 允许的音频秒数。broker 按 session 扣。 */
+  /** 本 lease 生命周期内所有顺序录音共享的累计音频秒数上限。 */
   quota_seconds: number;
   /** 授权访问的后端服务。 */
   resource: VoiceResource;
@@ -112,18 +112,31 @@ export interface VoiceLeaseDeniedMessage {
 }
 
 // ============================================================
-// arm ↔ voice-broker — start 消息扩展
+// arm ↔ voice-broker — warm connection + sequential recordings
 // ============================================================
 
-/** broker 入口握手。BROKER_DEV_NO_AUTH=1 时 lease 可省；否则必传。 */
+/** WebSocket 建立后先完成一次连接级授权，成功后可重复 start/finish。 */
+export interface VoiceAuthorizeMessage {
+  type: 'authorize';
+  /** User/device fields are checked against the signed lease for diagnostics. */
+  uid?: string;
+  deviceId?: string;
+  /** Product authorization remains opaque to the generic voice gateway. */
+  authorization: VoiceLease;
+}
+
+/** broker 对连接级授权的确认。 */
+export interface VoiceAuthorizedMessage {
+  type: 'authorized';
+}
+
+/** 单段录音开始；lease 已由同一 WebSocket 上的 authorize 验证。 */
 export interface VoiceStartMessage {
   type: 'start';
-  /** User id (informational; 真相来自 lease.sub)。 */
+  /** User id (informational; truth comes from the authorized lease). */
   uid?: string;
-  /** Arm 的设备 id (必须等于 lease.did)。 */
+  /** Arm device id (informational; truth comes from the authorized lease). */
   deviceId?: string;
   /** PCM 流采样率。默认 16000。 */
   sampleRate?: number;
-  /** 已签 lease — 非 dev-no-auth 模式下必传。 */
-  lease?: VoiceLease;
 }
