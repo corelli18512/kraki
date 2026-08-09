@@ -945,11 +945,9 @@
 					};
 					8CF158A689FF2418C7E20679 = {
 						DevelopmentTeam = 3A83X5JZ3S;
-						ProvisioningStyle = Automatic;
 					};
 					EC0ED9322F6D2A73F356C1FC = {
 						DevelopmentTeam = 3A83X5JZ3S;
-						ProvisioningStyle = Automatic;
 					};
 				};
 			};
@@ -1424,8 +1422,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.Release.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1445,6 +1443,7 @@
 				);
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios;
+				PROVISIONING_PROFILE_SPECIFIER = "Kraki App Store CI";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1527,7 +1526,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				INFOPLIST_FILE = KrakiNotification/Info.plist;
@@ -1538,6 +1538,7 @@
 				);
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.notification;
+				PROVISIONING_PROFILE_SPECIFIER = "Kraki Notification App Store CI";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

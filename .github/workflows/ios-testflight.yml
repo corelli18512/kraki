@@ -71,13 +71,17 @@ jobs:
           echo "$API_KEY_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8"
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8"
 
-      - name: Import Apple Distribution certificate
+      - name: Install App Store signing assets
         env:
           CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          APP_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
+          NOTIFICATION_PROFILE_BASE64: ${{ secrets.IOS_NOTIFICATION_APP_STORE_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           test -n "$CERTIFICATE_BASE64"
+          test -n "$APP_PROFILE_BASE64"
+          test -n "$NOTIFICATION_PROFILE_BASE64"
           KEYCHAIN_PATH="$RUNNER_TEMP/ios-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
           echo "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/ios-distribution.p12"
@@ -91,12 +95,16 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$APP_PROFILE_BASE64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/Kraki-App-Store-CI.mobileprovision"
+          echo "$NOTIFICATION_PROFILE_BASE64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/Kraki-Notification-App-Store-CI.mobileprovision"
+
       - name: Archive Kraki for App Store Connect
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build }}
-          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           cd packages/arm/ios
@@ -107,12 +115,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Kraki.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData-iOS" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8" \
-            -authenticationKeyID "$API_KEY_ID" \
-            -authenticationKeyIssuerID "$API_ISSUER_ID" \
             DEVELOPMENT_TEAM=3A83X5JZ3S \
-            CODE_SIGN_STYLE=Automatic \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive
@@ -131,20 +134,13 @@ jobs:
           codesign --verify --strict --verbose=2 "$APP/PlugIns/KrakiNotification.appex"
 
       - name: Export IPA
-        env:
-          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -euo pipefail
           xcodebuild \
             -exportArchive \
             -archivePath "$RUNNER_TEMP/Kraki.xcarchive" \
             -exportPath "$RUNNER_TEMP/ios-export" \
-            -exportOptionsPlist packages/arm/ios/ExportOptions-AppStore.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8" \
-            -authenticationKeyID "$API_KEY_ID" \
-            -authenticationKeyIssuerID "$API_ISSUER_ID"
+            -exportOptionsPlist packages/arm/ios/ExportOptions-AppStore.plist
           test -f "$RUNNER_TEMP/ios-export/Kraki.ipa"
 
       - name: Upload IPA to TestFlight
