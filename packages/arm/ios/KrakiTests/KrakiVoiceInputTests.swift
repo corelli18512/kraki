@@ -103,10 +103,12 @@ private final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
 private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission = .undetermined
     private(set) var activationCount = 0
+    private(set) var requestStarted = false
     private var continuation: CheckedContinuation<Bool, Never>?
 
     func requestPermission() async -> Bool {
-        await withCheckedContinuation { continuation = $0 }
+        requestStarted = true
+        return await withCheckedContinuation { continuation = $0 }
     }
 
     func resolvePermission(granted: Bool) {
@@ -239,7 +241,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         let beginTask = Task {
             await controller.begin(sessionID: "session-1", context: context()) { _ in }
         }
-        await Task.yield()
+        while !audio.requestStarted { await Task.yield() }
         XCTAssertEqual(controller.state, .requestingPermission)
 
         controller.cancel()
