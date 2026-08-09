@@ -616,7 +616,7 @@ private final class MacChatScenarioHarness {
     ) {
         guard let scenario = scenarios.first(where: { $0.id == scenarioID }),
               scenario.phases.indices.contains(index) else { return }
-        var phase = scenario.phases[index]
+        let phase = scenario.phases[index]
         phaseIndices[scenarioID] = index
         currentStates[scenarioID] = phase
 
