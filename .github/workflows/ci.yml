@@ -41,6 +41,69 @@ jobs:
       - name: Run validation
         run: pnpm validate
 
+  test-ios:
+    name: Test iOS (Kraki)
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/arm/ios/.build
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          key: ios-ci-spm-${{ hashFiles('packages/arm/ios/Kraki.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: ios-ci-spm-
+
+      - name: Select iOS Simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          preferred = ("iPhone 17 Pro", "iPhone 16 Pro", "iPhone 16")
+          devices = [d for runtime in data["devices"].values() for d in runtime if d.get("isAvailable")]
+          for name in preferred:
+              for device in devices:
+                  if device.get("name") == name:
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No supported iPhone Simulator is available")
+          ')"
+          echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
+          echo "Using Simulator $DEVICE_ID"
+
+      - name: Build and test iOS
+        run: |
+          set -euo pipefail
+          cd packages/arm/ios
+          xcodebuild \
+            -project Kraki.xcodeproj \
+            -scheme Kraki \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
+            -derivedDataPath build/DerivedData-iOS \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
+
+      - name: Upload iOS test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-test-results
+          path: packages/arm/ios/build/DerivedData-iOS/Logs/Test/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
   build-mac-gui:
     name: Build macOS GUI (KrakiMac)
     runs-on: macos-26
