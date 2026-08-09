@@ -93,7 +93,7 @@ describe('Storage voice_leases', () => {
   });
   afterEach(() => storage.close());
 
-  it('migrates v8 leases conservatively and prevents legacy replay', () => {
+  it('migrates v8 leases into resumable cumulative warm-connection accounting', () => {
     const dir = mkTmpLeaseDir();
     const dbPath = join(dir, 'legacy.db');
     const legacy = new Database(dbPath);
@@ -120,19 +120,20 @@ describe('Storage voice_leases', () => {
 
     const migrated = new Storage(dbPath);
     try {
-      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(10);
+      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(11);
       expect(migrated.getVoiceLease('legacy-lease')).toMatchObject({
         activationId: 'legacy:legacy-lease',
         activatedAt: '2026-06-15T10:00:00.000Z',
         usedSeconds: null,
+        reportedAudioSeconds: 0,
       });
       expect(migrated.sumVoiceLeaseQuotaIssuedToday(
         'u1', Math.floor(new Date('2026-06-15T23:00:00Z').getTime() / 1000)
-      )).toBe(300);
+      )).toBe(0);
       expect(migrated.activateVoiceLease({
         jti: 'legacy-lease', activationId: 'activation-replay',
         activatedAtUnixSec: Math.floor(new Date('2026-06-15T10:01:00Z').getTime() / 1000),
-      })).toEqual({ status: 'conflict' });
+      })).toEqual({ status: 'replaced', reportedAudioSeconds: 0 });
     } finally {
       migrated.close();
       rm(dir);
@@ -166,7 +167,7 @@ describe('Storage voice_leases', () => {
     })).toThrow();
   });
 
-  it('releases expired unsettled reservations but retains settled usage', () => {
+  it('reserves full quota through expiry grace, then retains cumulative actual usage', () => {
     storage.upsertUser('u1', 'a');
     const issued = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
     storage.recordVoiceLease({
@@ -187,11 +188,11 @@ describe('Storage voice_leases', () => {
     storage.activateVoiceLease({ jti: 'used-expired', activationId: 'activation-used', activatedAtUnixSec: issued + 2 });
     storage.settleVoiceLease({ jti: 'used-expired', activationId: 'activation-used', audioSeconds: 4.1, settledAtUnixSec: issued + 10 });
 
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 100)).toBe(605);
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 500)).toBe(305);
+    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 100)).toBe(900);
+    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 500)).toBe(5);
   });
 
-  it('rejects activation after expiry and preserves one-time activation', () => {
+  it('rejects activation after expiry and replaces stale warm-connection owners', () => {
     storage.upsertUser('u1', 'a');
     const now = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
     storage.recordVoiceLease({
@@ -208,13 +209,13 @@ describe('Storage voice_leases', () => {
     });
     expect(storage.activateVoiceLease({
       jti: 'single-use', activationId: 'activation-first', activatedAtUnixSec: now + 1,
-    })).toEqual({ status: 'activated' });
+    })).toEqual({ status: 'activated', reportedAudioSeconds: 0 });
     expect(storage.activateVoiceLease({
       jti: 'single-use', activationId: 'activation-first', activatedAtUnixSec: now + 2,
-    })).toEqual({ status: 'unchanged' });
+    })).toEqual({ status: 'unchanged', reportedAudioSeconds: 0 });
     expect(storage.activateVoiceLease({
       jti: 'single-use', activationId: 'activation-replay', activatedAtUnixSec: now + 2,
-    })).toEqual({ status: 'conflict' });
+    })).toEqual({ status: 'replaced', reportedAudioSeconds: 0 });
 
     const beforeMidnight = Math.floor(new Date('2026-06-15T23:59:30Z').getTime() / 1000);
     const afterMidnight = Math.floor(new Date('2026-06-16T00:00:10Z').getTime() / 1000);
@@ -227,7 +228,7 @@ describe('Storage voice_leases', () => {
     })).toEqual({ status: 'wrong_day' });
   });
 
-  it('settles reservations to actual audio seconds and preserves idempotency', () => {
+  it('stores monotonic cumulative checkpoints and preserves full quota until expiry', () => {
     storage.upsertUser('u1', 'a');
     const now = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
     storage.recordVoiceLease({
@@ -242,12 +243,15 @@ describe('Storage voice_leases', () => {
 
     storage.activateVoiceLease({ jti: 'actual', activationId: 'activation-actual', activatedAtUnixSec: now + 2 });
     expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 5.01, settledAtUnixSec: now + 10 }))
-      .toEqual({ status: 'settled', usedSeconds: 6 });
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now)).toBe(306);
+      .toEqual({ status: 'updated', usedSeconds: 6, reportedAudioSeconds: 5.01 });
+    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now)).toBe(600);
     expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 5.01, settledAtUnixSec: now + 20 }))
-      .toEqual({ status: 'unchanged', usedSeconds: 6 });
-    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 7, settledAtUnixSec: now + 20 }).status)
-      .toBe('conflict');
+      .toEqual({ status: 'unchanged', usedSeconds: 6, reportedAudioSeconds: 5.01 });
+    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 7, settledAtUnixSec: now + 20 }))
+      .toEqual({ status: 'updated', usedSeconds: 7, reportedAudioSeconds: 7 });
+    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 6, settledAtUnixSec: now + 21 }))
+      .toEqual({ status: 'stale', usedSeconds: 7, reportedAudioSeconds: 7 });
+    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now + 4000)).toBe(7);
   });
 
   it('clamps settled usage to the signed lease quota', () => {
@@ -259,7 +263,7 @@ describe('Storage voice_leases', () => {
     });
     storage.activateVoiceLease({ jti: 'clamp', activationId: 'activation-clamp' });
     expect(storage.settleVoiceLease({ jti: 'clamp', activationId: 'activation-clamp', audioSeconds: 999 }))
-      .toEqual({ status: 'settled', usedSeconds: 300 });
+      .toEqual({ status: 'updated', usedSeconds: 300, reportedAudioSeconds: 300 });
     expect(storage.settleVoiceLease({ jti: 'missing', activationId: 'activation-missing', audioSeconds: 1 }))
       .toEqual({ status: 'not_found' });
   });
@@ -323,7 +327,7 @@ describe('Voice settlement endpoint contract', () => {
       authorization: 'Bearer secret', body: activation,
     })).toEqual({
       status: 200,
-      body: { ok: true, activationStatus: 'activated' },
+      body: { ok: true, activationStatus: 'activated', reportedAudioSeconds: 0 },
     });
     expect(handleVoiceSettlement(storage, 'secret', {
       authorization: 'Bearer secret', body: activation,
@@ -333,7 +337,7 @@ describe('Voice settlement endpoint contract', () => {
       body: JSON.stringify({
         action: 'activate', jti: 'lease-12345678', activationId: 'different-activation',
       }),
-    }).status).toBe(409);
+    }).body.activationStatus).toBe('replaced');
 
     storage.recordVoiceLease({
       jti: 'expired-12345678', userId: 'u1', deviceId: 'd1',
@@ -348,20 +352,37 @@ describe('Voice settlement endpoint contract', () => {
     });
     expect(expired).toEqual({ status: 409, body: { error: 'lease_expired' } });
 
-    const first = handleVoiceSettlement(storage, 'secret', { authorization: 'Bearer secret', body });
+    // The replacement activation above owns the lease now, so stale usage from
+    // the original connection is rejected.
+    expect(handleVoiceSettlement(storage, 'secret', { authorization: 'Bearer secret', body }).status).toBe(409);
+
+    const replacementBody = JSON.stringify({
+      action: 'settle', jti: 'lease-12345678', activationId: 'different-activation',
+      audioSeconds: 5.2, reason: 'done',
+    });
+    const first = handleVoiceSettlement(storage, 'secret', {
+      authorization: 'Bearer secret', body: replacementBody,
+    });
     expect(first).toEqual({
       status: 200,
-      body: { ok: true, usedSeconds: 6, settlementStatus: 'settled' },
+      body: {
+        ok: true,
+        usedSeconds: 6,
+        reportedAudioSeconds: 5.2,
+        settlementStatus: 'updated',
+      },
     });
-    const retry = handleVoiceSettlement(storage, 'secret', { authorization: 'Bearer secret', body });
+    const retry = handleVoiceSettlement(storage, 'secret', {
+      authorization: 'Bearer secret', body: replacementBody,
+    });
     expect(retry.body.settlementStatus).toBe('unchanged');
-    const conflict = handleVoiceSettlement(storage, 'secret', {
+    const advanced = handleVoiceSettlement(storage, 'secret', {
       authorization: 'Bearer secret',
       body: JSON.stringify({
-        action: 'settle', jti: 'lease-12345678', activationId: 'activation-12345678', audioSeconds: 8,
+        action: 'settle', jti: 'lease-12345678', activationId: 'different-activation', audioSeconds: 8,
       }),
     });
-    expect(conflict.status).toBe(409);
+    expect(advanced.body.settlementStatus).toBe('updated');
   });
 });
 

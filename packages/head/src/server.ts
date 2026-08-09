@@ -72,11 +72,11 @@ export interface HeadServerOptions {
   region?: string;
   /** Voice-broker lease signer. If absent, request_voice_lease is rejected with 'not_entitled'. */
   leaseIssuer?: LeaseIssuer;
-  /** Authorization-start window in seconds. Default 600 (10m). */
+  /** Warm-connection authorization lifetime in seconds. Default 600 (10m). */
   voiceLeaseTtlSec?: number;
-  /** Per-recording audio budget in seconds. Default 300 (5m). */
+  /** Cumulative audio budget per warm lease. Default 300 (5m). */
   voiceLeaseQuotaSec?: number;
-  /** Per-user-per-day cap on reserved/settled seconds. Default 7200 (2h). */
+  /** Per-user-per-day cap on reserved/actual seconds. Default 7200 (2h). */
   voiceDailyQuotaSec?: number;
   /**
    * Public WSS URL of the voice broker for this region (e.g.

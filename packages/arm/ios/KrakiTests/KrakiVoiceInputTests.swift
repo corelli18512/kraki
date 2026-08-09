@@ -28,6 +28,7 @@ private final class FakeVoiceSession: VoiceInputSessionProtocol {
     private let onMetric: (VoiceInputMetric) -> Void
     private(set) var stopCount = 0
     private(set) var closeCount = 0
+    private(set) var starts: [([String: VoiceInputJSONValue], [String])] = []
 
     init(
         correctionEnabled: Bool,
@@ -39,6 +40,12 @@ private final class FakeVoiceSession: VoiceInputSessionProtocol {
         self.onMetric = onMetric
     }
 
+    func startCapture(
+        context: [String: VoiceInputJSONValue],
+        vocabulary: [String]
+    ) {
+        starts.append((context, vocabulary))
+    }
     func stopCapture() { stopCount += 1 }
     func close() { closeCount += 1 }
     func emit(_ event: VoiceInputEvent) { onEvent(event) }
@@ -90,6 +97,30 @@ private final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
         return activationSucceeds
     }
     func deactivate() { deactivationCount += 1 }
+}
+
+@MainActor
+private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
+    var permission: VoiceMicrophonePermission = .undetermined
+    private(set) var activationCount = 0
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func requestPermission() async -> Bool {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resolvePermission(granted: Bool) {
+        permission = granted ? .granted : .denied
+        continuation?.resume(returning: granted)
+        continuation = nil
+    }
+
+    func activate() -> Bool {
+        activationCount += 1
+        return true
+    }
+
+    func deactivate() {}
 }
 
 @MainActor
@@ -187,8 +218,38 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertTrue(factory.sessions.isEmpty)
 
         controller.receiveLease(lease())
-        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(controller.state, .obtainingLease)
         XCTAssertEqual(factory.sessions.count, 1)
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[0].starts.count, 1)
+    }
+
+    func testCancelWhilePermissionPromptIsOpenDoesNotResumeRecordingSetup() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let audio = SuspendedVoiceAudioPolicy()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: audio
+        )
+
+        let beginTask = Task {
+            await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        }
+        await Task.yield()
+        XCTAssertEqual(controller.state, .requestingPermission)
+
+        controller.cancel()
+        audio.resolvePermission(granted: true)
+        await beginTask.value
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(audio.activationCount, 0)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+        XCTAssertTrue(factory.sessions.isEmpty)
     }
 
     func testRecordingStartedCallbackFiresOnceForAudioEngineStart() async {
@@ -210,6 +271,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(recordingStartedCount, 0)
 
         controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
         XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(recordingStartedCount, 0)
 
@@ -239,16 +302,20 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(host.requestedResources, ["voice/doubao"])
 
         controller.receiveLease(lease())
-        XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(factory.sessions.count, 1)
-        let start = try XCTUnwrap(factory.configurations.first?.gatewayStartMessage())
-        XCTAssertEqual(start["deviceId"] as? String, "device-1")
-        XCTAssertEqual(start["sampleRate"] as? Double, 16_000)
-        let nested = try XCTUnwrap(start["lease"] as? [String: Any])
+        let authorize = try XCTUnwrap(factory.configurations.first?.gatewayAuthorizeMessage())
+        XCTAssertEqual(authorize["deviceId"] as? String, "device-1")
+        let nested = try XCTUnwrap(authorize["authorization"] as? [String: Any])
         XCTAssertEqual(nested["alg"] as? String, "RSA-SHA256")
         let payload = try XCTUnwrap(nested["payload"] as? [String: Any])
         XCTAssertEqual(payload["did"] as? String, "device-1")
         XCTAssertEqual(payload["resource"] as? String, "voice/doubao")
+
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[0].starts.count, 1)
+        XCTAssertEqual(factory.sessions[0].starts[0].1, ["Kraki"])
     }
 
     func testPartialAndCorrectionNeverCommitButFinalCommitsExactlyOnce() async {
@@ -262,6 +329,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         var finals: [String] = []
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
         controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
         let session = factory.sessions[0]
 
         session.emit(.partial("raw Cracky Voice input controller tail"))
@@ -301,6 +370,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         )
         await controller.begin(sessionID: "session-1", context: context()) { _ in }
         controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
         let session = factory.sessions[0]
 
         session.emit(.partial("This is the first completed spoken sentence"))
@@ -331,6 +402,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         var finals: [String] = []
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
         controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
         let session = factory.sessions[0]
 
         session.emit(.partial("The first spoken segment is complete and should remain"))
@@ -369,16 +442,52 @@ final class KrakiVoiceInputTests: XCTestCase {
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
         controller.cancel()
         controller.receiveLease(lease())
-        XCTAssertTrue(factory.sessions.isEmpty)
+        XCTAssertEqual(factory.sessions.count, 1)
         XCTAssertEqual(controller.state, .idle)
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertTrue(controller.isConnectionWarm)
 
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
-        controller.receiveLease(lease())
         let old = factory.sessions[0]
         controller.cancel()
         old.emit(.final("late", rawText: nil))
         await Task.yield()
         XCTAssertTrue(finals.isEmpty)
+    }
+
+    func testForegroundWarmConnectionIsReusedAcrossRecordings() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        controller.prepare()
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
+        controller.receiveLease(lease())
+        XCTAssertEqual(factory.sessions.count, 1)
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertTrue(controller.isConnectionWarm)
+        XCTAssertEqual(controller.state, .idle)
+
+        var finals: [String] = []
+        await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
+        XCTAssertEqual(factory.sessions[0].starts.count, 1)
+        factory.sessions[0].emit(.final("first", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(finals, ["first"])
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(factory.sessions[0].closeCount, 0)
+
+        await controller.begin(sessionID: "session-2", context: context()) { finals.append($0) }
+        XCTAssertEqual(factory.sessions.count, 1)
+        XCTAssertEqual(factory.sessions[0].starts.count, 2)
+        factory.sessions[0].emit(.final("second", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(finals, ["first", "second"])
     }
 
     func testLeaseDenialsRemainDistinct() async {

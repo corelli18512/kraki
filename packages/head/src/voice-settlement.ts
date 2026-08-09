@@ -51,8 +51,14 @@ export function handleVoiceSettlement(
     if (result.status === 'expired') return { status: 409, body: { error: 'lease_expired' } };
     if (result.status === 'wrong_day') return { status: 409, body: { error: 'lease_wrong_day' } };
     if (result.status === 'revoked') return { status: 409, body: { error: 'lease_revoked' } };
-    if (result.status === 'conflict') return { status: 409, body: { error: 'activation_conflict' } };
-    return { status: 200, body: { ok: true, activationStatus: result.status } };
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        activationStatus: result.status,
+        reportedAudioSeconds: result.reportedAudioSeconds ?? 0,
+      },
+    };
   }
 
   if (typeof input.audioSeconds !== 'number' || !Number.isFinite(input.audioSeconds)
@@ -77,6 +83,11 @@ export function handleVoiceSettlement(
   }
   return {
     status: 200,
-    body: { ok: true, usedSeconds: result.usedSeconds, settlementStatus: result.status },
+    body: {
+      ok: true,
+      usedSeconds: result.usedSeconds,
+      reportedAudioSeconds: result.reportedAudioSeconds,
+      settlementStatus: result.status,
+    },
   };
 }

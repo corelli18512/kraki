@@ -12,6 +12,7 @@
 /// daemon's status and exposes start/stop/connect actions to the UI.
 
 #if os(macOS)
+import AppKit
 import SwiftUI
 
 @main
@@ -92,6 +93,25 @@ struct MacApp: App {
                 // window, while the zoom divides the true window size.
                 .windowZoom()
                 .frame(minWidth: 800, idealWidth: 1100, minHeight: 600, idealHeight: 720)
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification
+                )) { _ in
+                    // macOS keeps the broker connection optimistically warm;
+                    // activation bypasses any stale reconnect backoff.
+                    appState.handleForegroundRehydrate()
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSWindow.didBecomeKeyNotification
+                )) { _ in
+                    // Re-focus should recover immediately even if the app never
+                    // transitioned through an inactive scene phase.
+                    appState.handleForegroundRehydrate()
+                }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(
+                    for: NSWorkspace.didWakeNotification
+                )) { _ in
+                    appState.handleForegroundRehydrate()
+                }
                 .task {
                     #if DEBUG
                     MacAutomationDriver.shared.start(appState: appState)

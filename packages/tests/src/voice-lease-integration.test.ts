@@ -94,19 +94,27 @@ describe('voice lease: real head issuer ↔ real broker verifier', () => {
     });
     ws.on('close', (code) => { closeCode = code; });
 
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({
+      type: 'authorize', uid: 'u1', deviceId: 'dev_arm_1', authorization: lease,
+    }));
 
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline) {
-      if (events.some((e) => e.type === 'ready')) break;
+    const authorizationDeadline = Date.now() + 3000;
+    while (Date.now() < authorizationDeadline) {
+      if (events.some((e) => e.type === 'authorized')) break;
       if (events.some((e) => e.type === 'session_denied')) break;
       if (closeCode !== undefined) break;
       await new Promise((r) => setTimeout(r, 25));
     }
-
     const denied = events.find((e) => e.type === 'session_denied');
     if (denied) {
       throw new Error(`broker rejected head-issued lease: ${JSON.stringify(denied)}`);
+    }
+    expect(events.find((e) => e.type === 'authorized')).toBeDefined();
+
+    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1' }));
+    const readyDeadline = Date.now() + 3000;
+    while (Date.now() < readyDeadline && !events.some((e) => e.type === 'ready')) {
+      await new Promise((r) => setTimeout(r, 25));
     }
     expect(events.find((e) => e.type === 'ready')).toBeDefined();
 
@@ -130,7 +138,9 @@ describe('voice lease: real head issuer ↔ real broker verifier', () => {
     });
     ws.on('close', (code) => { closeCode = code; });
 
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_2', lease }));
+    ws.send(JSON.stringify({
+      type: 'authorize', deviceId: 'dev_arm_2', authorization: lease,
+    }));
 
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline && closeCode === undefined) {

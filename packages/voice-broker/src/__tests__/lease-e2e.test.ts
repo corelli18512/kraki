@@ -131,7 +131,11 @@ describe('broker — lease enforcement', () => {
     const rec = attach(ws);
 
     const lease = mintLease(keys.priv, { did: 'dev_arm_1' });
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({
+      type: 'authorize', deviceId: 'dev_arm_1', uid: 'u1', authorization: lease,
+    }));
+    await waitFor(() => rec.events.some((e) => e.type === 'authorized'), 3000, 'authorized');
+    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1' }));
 
     await waitFor(() => rec.events.some((e) => e.type === 'ready'), 3000, 'ready');
 
@@ -148,10 +152,68 @@ describe('broker — lease enforcement', () => {
     ws.close();
   });
 
-  it('refuses connection with no lease in start (1008)', async () => {
+  it('reuses one authorized connection for multiple recordings', async () => {
     const ws = await open(broker.url);
     const rec = attach(ws);
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1' }));
+    const lease = mintLease(keys.priv, { did: 'dev_arm_1' });
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
+    await waitFor(() => rec.events.some((e) => e.type === 'authorized'), 3000, 'authorized');
+
+    for (let recording = 0; recording < 2; recording += 1) {
+      const finalsBefore = rec.events.filter(
+        (e) => e.type === 'transcript' && e.sessionFinal === true,
+      ).length;
+      ws.send(JSON.stringify({ type: 'start', uid: `recording-${recording}` }));
+      await waitFor(
+        () => rec.events.filter((e) => e.type === 'ready').length > recording,
+        3000,
+        `ready ${recording}`,
+      );
+      ws.send(Buffer.alloc(6400, 0));
+      ws.send(JSON.stringify({ type: 'finish' }));
+      await waitFor(
+        () => rec.events.filter(
+          (e) => e.type === 'transcript' && e.sessionFinal === true,
+        ).length > finalsBefore,
+        4000,
+        `final ${recording}`,
+      );
+    }
+
+    expect(rec.events.filter((e) => e.type === 'transcript' && e.sessionFinal === true)).toHaveLength(2);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
+  it('transfers unfinalized usage when a duplicate lease connection replaces the owner', async () => {
+    const lease = mintLease(keys.priv, { did: 'dev_arm_1', quota: 0.3 });
+    const first = await open(broker.url);
+    const firstRec = attach(first);
+    first.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
+    await waitFor(() => firstRec.events.some((e) => e.type === 'authorized'), 3000, 'first authorized');
+    first.send(JSON.stringify({ type: 'start' }));
+    await waitFor(() => firstRec.events.some((e) => e.type === 'ready'), 3000, 'first ready');
+    first.send(Buffer.alloc(6400, 0)); // 0.2s, not finalized.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const second = await open(broker.url);
+    const secondRec = attach(second);
+    second.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
+    await waitFor(() => secondRec.events.some((e) => e.type === 'authorized'), 3000, 'second authorized');
+    await waitFor(() => firstRec.closeCode === 4001, 3000, 'first replaced');
+
+    second.send(JSON.stringify({ type: 'start' }));
+    await waitFor(() => secondRec.events.some((e) => e.type === 'ready'), 3000, 'second ready');
+    second.send(Buffer.alloc(6400, 0));
+    await waitFor(() => secondRec.closeCode !== undefined, 3000, 'quota close');
+    expect(secondRec.closeCode).toBe(1008);
+    expect(secondRec.events.find((e) => e.type === 'session_denied')?.reason).toBe('quota_exhausted');
+  });
+
+  it('refuses connection with no lease in authorize (1008)', async () => {
+    const ws = await open(broker.url);
+    const rec = attach(ws);
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1' }));
 
     await waitFor(() => rec.closeCode !== undefined, 2000, 'close');
     expect(rec.closeCode).toBe(1008);
@@ -162,7 +224,7 @@ describe('broker — lease enforcement', () => {
     const ws = await open(broker.url);
     const rec = attach(ws);
     const lease = mintLease(keys.priv, { did: 'dev_other' });
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
 
     await waitFor(() => rec.closeCode !== undefined, 2000, 'close');
     expect(rec.closeCode).toBe(1008);
@@ -184,7 +246,7 @@ describe('broker — lease enforcement', () => {
       signature: signChallenge(canonicalJson(payload as unknown as Record<string, unknown>), keys.priv),
       alg: 'RSA-SHA256',
     };
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
 
     await waitFor(() => rec.closeCode !== undefined, 2000, 'close');
     expect(rec.closeCode).toBe(1008);
@@ -196,7 +258,7 @@ describe('broker — lease enforcement', () => {
     const rec = attach(ws);
     const other = genKeys();
     const lease = mintLease(other.priv, { did: 'dev_arm_1' });
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
 
     await waitFor(() => rec.closeCode !== undefined, 2000, 'close');
     expect(rec.closeCode).toBe(1008);
@@ -209,7 +271,9 @@ describe('broker — lease enforcement', () => {
     // 1 second of audio at 16kHz mono int16 = 32_000 bytes. Set quota = 1s
     // and stream 2s worth (64_000 bytes).
     const lease = mintLease(keys.priv, { did: 'dev_arm_1', quota: 1 });
-    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1', lease }));
+    ws.send(JSON.stringify({ type: 'authorize', deviceId: 'dev_arm_1', authorization: lease }));
+    await waitFor(() => rec.events.some((e) => e.type === 'authorized'), 3000, 'authorized');
+    ws.send(JSON.stringify({ type: 'start', deviceId: 'dev_arm_1' }));
     await waitFor(() => rec.events.some((e) => e.type === 'ready'), 3000, 'ready');
 
     // Stream 2 seconds of audio in 200ms chunks → should hit quota after ~1s.

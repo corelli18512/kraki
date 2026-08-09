@@ -95,11 +95,11 @@ if (args.includes('--help') || args.includes('-h')) {
     VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
     VOICE_LEASE_DIR                Directory for the lease signing keypair
                                    (default: $HOME/.kraki-head).
-    VOICE_LEASE_TTL_SEC            Authorization-start window in seconds
+    VOICE_LEASE_TTL_SEC            Warm-connection authorization lifetime
                                    (default: 600 = 10 min).
-    VOICE_LEASE_QUOTA_SEC          Per-recording audio budget in seconds
+    VOICE_LEASE_QUOTA_SEC          Cumulative audio budget per warm lease
                                    (default: 300 = 5 min).
-    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on reserved/settled seconds
+    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on reserved/actual seconds
                                    (default: 7200 = 2h).
     VOICE_SETTLEMENT_KEY           Shared secret for broker usage settlement.
                                    Required when voice leases are enabled.

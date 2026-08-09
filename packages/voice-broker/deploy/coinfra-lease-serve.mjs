@@ -8,7 +8,11 @@
  * migration; Kraki lease frames never downgrade to that path.
  */
 import { readFileSync } from 'node:fs';
-import { createKrakiOrLegacyAuthorizer, createKrakiSettlementClient } from './kraki-lease-authorizer.mjs';
+import {
+  createKrakiConnectionAuthorizer,
+  createKrakiSettlementClient,
+  createLegacyApiKeyAuthorizer,
+} from './kraki-lease-authorizer.mjs';
 import {
   createDoubaoAsrProvider,
   createLogger,
@@ -68,18 +72,17 @@ async function main() {
     asr,
     corrector,
     correctOn: correctionEnabled ? 'final' : 'never',
-    authorize: createKrakiOrLegacyAuthorizer(
-      publicKey,
-      required('VOICE_API_KEY'),
-      { activate: settlement.activate },
-    ),
+    authorizeConnection: createKrakiConnectionAuthorizer(publicKey, {
+      activate: settlement.activate,
+    }),
+    authorize: createLegacyApiKeyAuthorizer(required('VOICE_API_KEY')),
     onUsage: settlement.onUsage,
   });
   log.info('Kraki lease gateway ready', {
     url: gateway.url,
     correction: correctionEnabled,
-    authorization: 'kraki-signed-lease+legacy-api-key',
-    settlement: 'actual-audio-seconds',
+    authorization: 'warm-kraki-lease+legacy-api-key',
+    settlement: 'cumulative-audio-checkpoints',
   });
 
   let closing = false;
