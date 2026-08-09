@@ -70,7 +70,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["KRAKI_HTML_ARTIFACT_BENCH"] == "1" {
+        if ProcessInfo.processInfo.environment["KRAKI_RELEASE_POLISH_BENCH"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            DispatchQueue.main.async { [weak self] in self?.runReleasePolishRegression() }
+        } else if ProcessInfo.processInfo.environment["KRAKI_HTML_ARTIFACT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runHTMLArtifactRegression() }
         } else if ProcessInfo.processInfo.environment["KRAKI_IMAGE_PREVIEW_BENCH"] == "1" {
@@ -188,6 +191,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             ensureMainWindowLaidOutOffscreen()
         } else {
             let automatedWindowMode = nativeAutomation || [
+                "KRAKI_RELEASE_POLISH_BENCH",
                 "KRAKI_HTML_ARTIFACT_BENCH",
                 "KRAKI_IMAGE_PREVIEW_BENCH",
                 "KRAKI_CORETEXT_SCROLL_BENCH",
@@ -224,6 +228,104 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     #if DEBUG
+    private func runReleasePolishRegression() {
+        MacComposerPasteFocusRegression.run { composerResult in
+            let placeholderHidden = composerResult["placeholderHiddenForNativeText"] as? Bool == true
+            let placeholderRestored = composerResult["placeholderRestoredAfterClear"] as? Bool == true
+
+            let artifact = ContentRef(
+                type: "content_ref",
+                id: "release-polish-html",
+                mimeType: "text/html",
+                size: 1_024,
+                caption: "Release polish report",
+                name: "release-polish.html",
+                width: nil,
+                height: nil
+            )
+            var artifactCache = MacHTMLArtifactSessionCache()
+            artifactCache.open(sessionId: "session-a", ref: artifact)
+            artifactCache.toggleExpanded(for: "session-a")
+            let otherSessionStayedClosed = artifactCache.presentation(for: "session-b") == nil
+            let restoredArtifact = artifactCache.presentation(for: "session-a")
+            let artifactRestored = restoredArtifact?.selection.ref.id == artifact.id
+            let artifactModeRestored = restoredArtifact?.expanded == true
+
+            var liveCardCached = false
+            var liveCardReplaced = false
+            var durableConclusionCleared = false
+            var storeError: String?
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kraki-release-polish-\(UUID().uuidString)", isDirectory: true)
+            do {
+                let database = try MessageDatabase(
+                    databaseURL: root.appendingPathComponent("messages.sqlite")
+                )
+                let store = MessageStore(db: database)
+                let sessionID = "cached-live-card"
+                let user = ChatMessage(
+                    type: "user_message",
+                    seq: 1,
+                    sessionId: sessionID,
+                    deviceId: nil,
+                    timestamp: nil,
+                    payload: ["content": AnyCodable("go")]
+                )
+                let final = ChatMessage(
+                    type: "agent_message",
+                    seq: 2,
+                    sessionId: sessionID,
+                    deviceId: nil,
+                    timestamp: nil,
+                    payload: ["content": AnyCodable("done")]
+                )
+
+                store.beginCardTurn(sessionID)
+                store.applyCardMessage(sessionID, "cached first frame", reset: true)
+                store.restoreCardTurnGate(sessionID, from: [user])
+                liveCardCached = store.cards[sessionID]?.text == "cached first frame"
+
+                store.replaceCardFromSubscription(
+                    sessionID,
+                    draft: "authoritative live frame",
+                    action: nil,
+                    state: .active
+                )
+                liveCardReplaced = store.cards[sessionID]?.text == "authoritative live frame"
+
+                store.restoreCardTurnGate(sessionID, from: [user, final])
+                durableConclusionCleared = store.cards[sessionID] == nil
+            } catch {
+                storeError = error.localizedDescription
+            }
+            try? FileManager.default.removeItem(at: root)
+
+            let passed = placeholderHidden
+                && placeholderRestored
+                && otherSessionStayedClosed
+                && artifactRestored
+                && artifactModeRestored
+                && liveCardCached
+                && liveCardReplaced
+                && durableConclusionCleared
+                && storeError == nil
+            NSLog(
+                "[release-polish-regression] placeholderHidden=%d placeholderRestored=%d artifactIsolated=%d artifactRestored=%d artifactMode=%d liveCached=%d liveReplaced=%d conclusionCleared=%d storeError=%@ passed=%d",
+                placeholderHidden ? 1 : 0,
+                placeholderRestored ? 1 : 0,
+                otherSessionStayedClosed ? 1 : 0,
+                artifactRestored ? 1 : 0,
+                artifactModeRestored ? 1 : 0,
+                liveCardCached ? 1 : 0,
+                liveCardReplaced ? 1 : 0,
+                durableConclusionCleared ? 1 : 0,
+                storeError ?? "none",
+                passed ? 1 : 0
+            )
+            NSApp.terminate(nil)
+        }
+    }
+
     private func runImagePreviewRegression() {
         func makeImage(
             size: NSSize,
@@ -714,12 +816,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         )
         MacComposerPasteFocusRegression.run { result in
             NSLog(
-                "[composer-paste-focus-regression] passed=%d teardown=%d replacement=%d binding=%d firstResponder=%d imeDraft=%d imeRequested=%d imeFocus=%d externalCleared=%d",
+                "[composer-paste-focus-regression] passed=%d teardown=%d replacement=%d binding=%d firstResponder=%d placeholderHidden=%d placeholderRestored=%d imeDraft=%d imeRequested=%d imeFocus=%d externalCleared=%d",
                 result["passed"] as? Bool == true ? 1 : 0,
                 result["teardownPreserved"] as? Bool == true ? 1 : 0,
                 result["replacementPreserved"] as? Bool == true ? 1 : 0,
                 result["pasteRestoredBinding"] as? Bool == true ? 1 : 0,
                 result["replacementBecameFirstResponder"] as? Bool == true ? 1 : 0,
+                result["placeholderHiddenForNativeText"] as? Bool == true ? 1 : 0,
+                result["placeholderRestoredAfterClear"] as? Bool == true ? 1 : 0,
                 result["imeDraftCommitted"] as? Bool == true ? 1 : 0,
                 result["imeRequestedFocus"] as? Bool == true ? 1 : 0,
                 result["imeRetainedFirstResponder"] as? Bool == true ? 1 : 0,
