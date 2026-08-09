@@ -20,6 +20,12 @@ final class AppState {
     private(set) var messageRouter: MessageRouter?
     private(set) var commandSender: CommandSender?
     private(set) var messageProvider: MessageProvider?
+    #if DEBUG
+    /// Isolated native-page harness hook. When installed, real CommandSender
+    /// commands are handed to the harness instead of encryption/Relay I/O.
+    /// Ordinary Debug and all Release builds leave this nil.
+    @ObservationIgnored var testOutboundMessageHandler: (([String: Any], String?, Bool) -> Bool)?
+    #endif
     /// Test-only injection point (headless e2e self-test seeds a provider
     /// without going through the full network setup).
     @MainActor func setMessageProviderForTesting(_ provider: MessageProvider) {
@@ -610,6 +616,11 @@ final class AppState {
         routingTarget: String? = nil,
         connectionScoped: Bool = false
     ) -> Bool {
+        #if DEBUG
+        if let testOutboundMessageHandler {
+            return testOutboundMessageHandler(message, routingTarget, connectionScoped)
+        }
+        #endif
         guard deviceId != nil else {
             KLog.d("⚠️ sendEncrypted: no deviceId")
             return false

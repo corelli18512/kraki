@@ -664,6 +664,12 @@ final class MessageRouter {
                     appState.messageStore.clearRuntimeStatus(digest.id)
                 }
             }
+            if digest.state == .idle {
+                // session_list is reconnect authority. An idle digest proves no
+                // live card exists, including for an inactive Session whose
+                // concluding push may have been missed while disconnected.
+                appState.messageStore.endCardTurn(digest.id)
+            }
 
             // Sync mode
             appState.sessionStore.setMode(digest.id, digest.mode)

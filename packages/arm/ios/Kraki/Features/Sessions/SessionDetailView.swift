@@ -47,10 +47,11 @@ struct SessionDetailView: View {
         .onAppear {
             KLog.chat("👆 [2/history TAP] session=\(sessionId.prefix(12)) — entering ChatView")
             appState.beginViewingSession(sessionId)
-            // A cached live card is never authoritative across page entry. The
-            // matching subscription ACK will replace it before live frames are
-            // accepted; persistent spine remains independently visible/loading.
-            appState.messageStore.clearCard(sessionId)
+            // Keep the last authoritative live card mounted during page entry.
+            // openSession restores its gate from durable history (clearing a
+            // card when a conclusion already landed), and the subscription ACK
+            // atomically replaces it before new subscriber-only frames arrive.
+            // Clearing here made an active card collapse for one network RTT.
             appState.sessionSubscriptionController.setDesired(sessionId)
             // Bootstrap the in-memory window from the DB so ChatView
             // has something to render before the (possibly delayed)

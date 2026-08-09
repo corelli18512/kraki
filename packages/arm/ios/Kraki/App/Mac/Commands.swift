@@ -13,6 +13,7 @@ struct MacCommands: Commands {
     let tentacleCLI: TentacleCLIManager
 
     @AppStorage("mac.inspectorShown") private var inspectorShown: Bool = false
+    @Environment(\.openWindow) private var openWindow
 
     /// True when a session is currently selected in the main window.
     private var hasActiveSession: Bool {
@@ -158,6 +159,15 @@ struct MacCommands: Commands {
             .keyboardShortcut(.delete, modifiers: .command)
             .disabled(!hasActiveSession)
         }
+
+        #if DEBUG
+        CommandMenu("Debug") {
+            Button("Chat Scenario Test Page") {
+                openWindow(id: "chat-scenarios")
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+        }
+        #endif
 
         // Tentacle menu.
         CommandMenu("Tentacle") {

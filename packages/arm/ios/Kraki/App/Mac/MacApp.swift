@@ -42,6 +42,7 @@ struct MacApp: App {
         let state = AppState()
         #if DEBUG
         let snapshotTest = ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+            || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
         if snapshotTest {
             state.hasStoredCredentials = true
             state.hasCompletedInitialConnect = true
@@ -71,7 +72,9 @@ struct MacApp: App {
         WindowGroup("Kraki", id: "main") {
             Group {
                 #if DEBUG
-                if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1" {
+                if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1" {
+                    MacChatScenarioTestView()
+                } else if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1" {
                     MacChatPerfTestView()
                 } else {
                     MainWindowView()
@@ -118,6 +121,7 @@ struct MacApp: App {
                     #endif
                     let snapshotTest = ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
                         || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+                        || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
                     if snapshotTest {
                         // The snapshot harness runs the production UI and local
                         // data stack unchanged against an isolated KRAKI_DATA_DIR.
@@ -168,6 +172,19 @@ struct MacApp: App {
         }
         .keyboardShortcut("l", modifiers: .command)
         .defaultPosition(.center)
+
+        #if DEBUG
+        Window("Chat Scenario Test Page", id: "chat-scenarios") {
+            MacChatScenarioTestView(selectionScope: "chat-scenarios")
+                .preferredColorScheme(colorScheme.scheme)
+                .windowZoom()
+                .frame(minWidth: 1120, idealWidth: 1480, minHeight: 700, idealHeight: 920)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1480, height: 920)
+        #endif
 
         MenuBarExtra {
             MenuBarExtraView()
