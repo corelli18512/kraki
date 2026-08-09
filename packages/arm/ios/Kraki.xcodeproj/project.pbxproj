@@ -1427,6 +1427,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
@@ -1502,6 +1503,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
