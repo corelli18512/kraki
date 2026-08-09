@@ -11,6 +11,12 @@ private enum MacComposerIntent: Equatable {
     case denyPermission
 }
 
+enum MacComposerPlaceholderPolicy {
+    static func isVisible(committedText: String, nativeEditorHasText: Bool) -> Bool {
+        committedText.isEmpty && !nativeEditorHasText
+    }
+}
+
 /// macOS counterpart of the production iOS `MessageInputView`.
 ///
 /// The view intentionally keeps the same hierarchy and constants: a floating
@@ -34,6 +40,7 @@ struct MacChatComposer: View {
     @State private var voiceDraftPrefix = ""
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
+    @State private var nativeEditorHasText = false
 
     // Mode swipe state — mirrors iOS MessageInputView.
     @State private var rawDragX: CGFloat = 0
@@ -334,7 +341,10 @@ struct MacChatComposer: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.tertiary)
                 .padding(.leading, 18)
-                .opacity(text.isEmpty ? 1 : 0)
+                .opacity(MacComposerPlaceholderPolicy.isVisible(
+                    committedText: text,
+                    nativeEditorHasText: nativeEditorHasText
+                ) ? 1 : 0)
                 .allowsHitTesting(false)
             MacComposerScrollableTextInput(
                 text: Binding(
@@ -345,6 +355,7 @@ struct MacChatComposer: View {
                     get: { isFocused },
                     set: { isFocused = $0 }
                 ),
+                nativeEditorHasText: $nativeEditorHasText,
                 enabled: !voiceOwnsComposer,
                 focusRequest: composerFocusRequest,
                 onRequestFocus: requestComposerFocus,
@@ -857,6 +868,7 @@ private final class MacComposerTextView: NSTextView {
 private struct MacComposerScrollableTextInput: NSViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
+    @Binding var nativeEditorHasText: Bool
     let enabled: Bool
     let focusRequest: Int
     let onRequestFocus: () -> Void
@@ -878,9 +890,33 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             self.parent = parent
         }
 
+        func reportVisualTextPresence(
+            of textView: MacComposerTextView,
+            deferred: Bool = false
+        ) {
+            let apply = { [weak self, weak textView] in
+                guard let self,
+                      let textView,
+                      self.textView === textView else { return }
+                let hasText = !textView.string.isEmpty
+                if self.parent.nativeEditorHasText != hasText {
+                    self.parent.nativeEditorHasText = hasText
+                }
+            }
+            if deferred {
+                DispatchQueue.main.async(execute: apply)
+            } else {
+                apply()
+            }
+        }
+
         func textDidChange(_ notification: Notification) {
-            guard !isApplying,
-                  let textView = notification.object as? MacComposerTextView else { return }
+            guard let textView = notification.object as? MacComposerTextView else { return }
+            // Marked IME text intentionally does not round-trip through the
+            // persisted draft, but it is still visible native text and must
+            // hide the SwiftUI placeholder immediately.
+            reportVisualTextPresence(of: textView)
+            guard !isApplying else { return }
             textView.scrollRangeToVisible(textView.selectedRange())
             // Do not round-trip marked IME text through SwiftUI. Replacing the
             // backing string while a Chinese/Japanese composition is active
@@ -1005,6 +1041,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
         scrollView.documentView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.textView = textView
+        context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         return scrollView
     }
 
@@ -1024,6 +1061,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: min(selection.location, textView.string.utf16.count), length: 0))
             context.coordinator.isApplying = false
         }
+        context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         let layoutText = textView.hasMarkedText() ? textView.string : text
         let measuredHeight = Self.measuredHeight(layoutText, width: max(1, scrollView.contentSize.width))
         textView.frame = NSRect(
@@ -1523,6 +1561,7 @@ private struct MacModeChangeToast: View {
 private final class MacComposerFocusRegressionState {
     var text = ""
     var focused = true
+    var nativeEditorHasText = false
     var focusRequest = 0
 }
 
@@ -1537,6 +1576,10 @@ enum MacComposerPasteFocusRegression {
         let input = MacComposerScrollableTextInput(
             text: Binding(get: { state.text }, set: { state.text = $0 }),
             focused: Binding(get: { state.focused }, set: { state.focused = $0 }),
+            nativeEditorHasText: Binding(
+                get: { state.nativeEditorHasText },
+                set: { state.nativeEditorHasText = $0 }
+            ),
             enabled: true,
             focusRequest: state.focusRequest,
             onRequestFocus: {
@@ -1599,6 +1642,34 @@ enum MacComposerPasteFocusRegression {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                     let replacementBecameFirstResponder = window.firstResponder === replacement
 
+                    // Simulate visible native IME text before it commits. The
+                    // persisted draft remains empty, but the placeholder must
+                    // already be hidden because the NSTextView is not empty.
+                    state.text = ""
+                    coordinator.isApplying = true
+                    replacement.string = "zhong"
+                    coordinator.textDidChange(
+                        Notification(name: NSText.didChangeNotification, object: replacement)
+                    )
+                    coordinator.isApplying = false
+                    let placeholderHiddenForNativeText = state.nativeEditorHasText
+                        && !MacComposerPlaceholderPolicy.isVisible(
+                            committedText: state.text,
+                            nativeEditorHasText: state.nativeEditorHasText
+                        )
+
+                    replacement.string = ""
+                    coordinator.isApplying = true
+                    coordinator.textDidChange(
+                        Notification(name: NSText.didChangeNotification, object: replacement)
+                    )
+                    coordinator.isApplying = false
+                    let placeholderRestoredAfterClear = !state.nativeEditorHasText
+                        && MacComposerPlaceholderPolicy.isVisible(
+                            committedText: state.text,
+                            nativeEditorHasText: state.nativeEditorHasText
+                        )
+
                     // Simulate an IME composition committing Chinese text. The
                     // committed draft must publish while retaining the live
                     // native text view as first responder.
@@ -1626,6 +1697,8 @@ enum MacComposerPasteFocusRegression {
                                 && replacementPreserved
                                 && pasteRestoredBinding
                                 && replacementBecameFirstResponder
+                                && placeholderHiddenForNativeText
+                                && placeholderRestoredAfterClear
                                 && imeDraftCommitted
                                 && imeRequestedFocus
                                 && imeRetainedFirstResponder
@@ -1637,6 +1710,8 @@ enum MacComposerPasteFocusRegression {
                                 "replacementPreserved": replacementPreserved,
                                 "pasteRestoredBinding": pasteRestoredBinding,
                                 "replacementBecameFirstResponder": replacementBecameFirstResponder,
+                                "placeholderHiddenForNativeText": placeholderHiddenForNativeText,
+                                "placeholderRestoredAfterClear": placeholderRestoredAfterClear,
                                 "imeDraftCommitted": imeDraftCommitted,
                                 "imeRequestedFocus": imeRequestedFocus,
                                 "imeRetainedFirstResponder": imeRetainedFirstResponder,

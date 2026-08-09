@@ -179,13 +179,31 @@ final class MessageStoreTests: XCTestCase {
         let final = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: nil,
                                 timestamp: nil, payload: ["content": AnyCodable("done")])
 
+        store.beginCardTurn(sid)
+        store.applyCardMessage(sid, "previous authoritative card", reset: true)
         store.restoreCardTurnGate(sid, from: [user, final])
+        XCTAssertNil(store.cards[sid], "a durable conclusion clears a stale retained card on entry")
         store.applyCardMessage(sid, "stale snapshot", reset: true)
         XCTAssertNil(store.cards[sid])
 
         store.restoreCardTurnGate(sid, from: [user])
         store.applyCardMessage(sid, "live snapshot", reset: true)
         XCTAssertEqual(store.cards[sid]?.text, "live snapshot")
+    }
+
+    func testRestoreCardGateKeepsLiveCardUntilSubscriptionReplacement() {
+        let sid = "retained-live-card"
+        let user = ChatMessage(type: "user_message", seq: 1, sessionId: sid, deviceId: nil,
+                               timestamp: nil, payload: ["content": AnyCodable("go")])
+        store.beginCardTurn(sid)
+        store.applyCardMessage(sid, "locally authoritative", reset: true)
+
+        store.restoreCardTurnGate(sid, from: [user])
+        XCTAssertEqual(store.cards[sid]?.text, "locally authoritative")
+
+        store.replaceCardFromSubscription(
+            sid, draft: "subscription authority", action: nil, state: .active)
+        XCTAssertEqual(store.cards[sid]?.text, "subscription authority")
     }
 
     // MARK: - Trace (per-turn steps, in-memory)

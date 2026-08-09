@@ -217,6 +217,36 @@ private struct MacReadVisibilityObserver: NSViewRepresentable {
     }
 }
 
+struct MacHTMLArtifactSessionPresentation: Equatable {
+    let selection: MacSelectedHTMLArtifact
+    var expanded: Bool
+}
+
+struct MacHTMLArtifactSessionCache: Equatable {
+    private var presentations: [String: MacHTMLArtifactSessionPresentation] = [:]
+
+    func presentation(for sessionId: String) -> MacHTMLArtifactSessionPresentation? {
+        presentations[sessionId]
+    }
+
+    mutating func open(sessionId: String, ref: ContentRef) {
+        presentations[sessionId] = MacHTMLArtifactSessionPresentation(
+            selection: MacSelectedHTMLArtifact(sessionId: sessionId, ref: ref),
+            expanded: false
+        )
+    }
+
+    mutating func toggleExpanded(for sessionId: String) {
+        guard var presentation = presentations[sessionId] else { return }
+        presentation.expanded.toggle()
+        presentations[sessionId] = presentation
+    }
+
+    mutating func close(sessionId: String) {
+        presentations.removeValue(forKey: sessionId)
+    }
+}
+
 struct MainWindowView: View {
     private struct ChatPresentation {
         let sessionId: String
@@ -249,8 +279,7 @@ struct MainWindowView: View {
     @State private var sidebarSearchText = ""
     @State private var chatPresentation: ChatPresentation?
     @State private var selectedImagePreview: MacImagePreviewSelection?
-    @State private var selectedHTMLArtifact: MacSelectedHTMLArtifact?
-    @State private var htmlArtifactExpanded = false
+    @State private var htmlArtifactSessions = MacHTMLArtifactSessionCache()
 
     private let sidebarWidth: CGFloat = 280
     private let inspectorWidth: CGFloat = 320
@@ -378,8 +407,9 @@ struct MainWindowView: View {
                 guard let sessionId = note.userInfo?["sessionId"] as? String else { return }
                 selectedSessionId = sessionId
             case "closeHTMLArtifact":
-                selectedHTMLArtifact = nil
-                htmlArtifactExpanded = false
+                if let selectedSessionId {
+                    htmlArtifactSessions.close(sessionId: selectedSessionId)
+                }
             default:
                 break
             }
@@ -396,6 +426,7 @@ struct MainWindowView: View {
             Button("Delete Session", role: .destructive) {
                 if let id = pendingDeleteSessionId {
                     appState.commandSender?.deleteSession(sessionId: id)
+                    htmlArtifactSessions.close(sessionId: id)
                     if selectedSessionId == id { selectedSessionId = nil }
                 }
                 pendingDeleteSessionId = nil
@@ -407,8 +438,6 @@ struct MainWindowView: View {
                 appState.endViewingSession(oldValue)
             }
             selectedImagePreview = nil
-            selectedHTMLArtifact = nil
-            htmlArtifactExpanded = false
             if let newValue {
                 prepareSelectedSession(newValue)
             } else {
@@ -505,7 +534,9 @@ struct MainWindowView: View {
             chatPresentation = nil
             return
         }
-        appState.messageStore.clearCard(id)
+        // Keep the previous per-Session live card mounted while the local
+        // history gate is restored. A persisted conclusion clears it; otherwise
+        // the subscription ACK atomically replaces this cached first frame.
         // One presentation owner, one reanchor, one model snapshot. The Chat
         // view consumes this prepared transaction and never opens the Session a
         // second time with stale @State from the previous selection.
@@ -552,7 +583,11 @@ struct MainWindowView: View {
         } else if let presentation = chatPresentation {
             GeometryReader { geometry in
                 let compactArtifactPresentation = geometry.size.width < 780
-                let showArtifactFullWidth = htmlArtifactExpanded || compactArtifactPresentation
+                let artifactPresentation = htmlArtifactSessions.presentation(
+                    for: presentation.sessionId
+                )
+                let showArtifactFullWidth = (artifactPresentation?.expanded ?? false)
+                    || compactArtifactPresentation
                 ZStack(alignment: .trailing) {
                     HStack(spacing: 0) {
                         MacChatView(
@@ -563,11 +598,10 @@ struct MainWindowView: View {
                                 selectedImagePreview = selection
                             },
                             onOpenHTMLArtifact: { ref in
-                                selectedHTMLArtifact = MacSelectedHTMLArtifact(
+                                htmlArtifactSessions.open(
                                     sessionId: presentation.sessionId,
                                     ref: ref
                                 )
-                                htmlArtifactExpanded = false
                             }
                         )
                         // The breadcrumb and Chat live in separate SwiftUI
@@ -578,12 +612,12 @@ struct MainWindowView: View {
                         .id(presentation.generation)
                         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
 
-                        if let selectedHTMLArtifact, !showArtifactFullWidth {
+                        if let artifactPresentation, !showArtifactFullWidth {
                             Rectangle()
                                 .fill(Color.borderPrimary.opacity(0.7))
                                 .frame(width: 1)
                             htmlArtifactPanel(
-                                selectedHTMLArtifact,
+                                artifactPresentation.selection,
                                 width: min(680, max(380, geometry.size.width * 0.46)),
                                 expanded: false,
                                 canToggleExpanded: true
@@ -591,9 +625,9 @@ struct MainWindowView: View {
                         }
                     }
 
-                    if let selectedHTMLArtifact, showArtifactFullWidth {
+                    if let artifactPresentation, showArtifactFullWidth {
                         htmlArtifactPanel(
-                            selectedHTMLArtifact,
+                            artifactPresentation.selection,
                             width: geometry.size.width,
                             expanded: true,
                             canToggleExpanded: !compactArtifactPresentation
@@ -629,11 +663,10 @@ struct MainWindowView: View {
             canToggleExpanded: canToggleExpanded,
             onToggleExpanded: {
                 guard canToggleExpanded else { return }
-                htmlArtifactExpanded.toggle()
+                htmlArtifactSessions.toggleExpanded(for: selection.sessionId)
             },
             onClose: {
-                selectedHTMLArtifact = nil
-                htmlArtifactExpanded = false
+                htmlArtifactSessions.close(sessionId: selection.sessionId)
             }
         )
         .frame(width: width)
