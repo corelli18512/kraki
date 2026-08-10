@@ -1655,9 +1655,29 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         imageHost.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(imageHost)
         renderClipView.addSubview(artifactCardsView)
+
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (cell: TKBubbleCell, _: UITraitCollection) in
+            cell.refreshBubbleAppearance()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // A representable can configure cells before it inherits the window's
+        // final forced color scheme. Re-resolve the bubble on attachment so an
+        // entering Session never paints one light/dark frame before settling.
+        refreshBubbleAppearance()
+    }
+
+    private func refreshBubbleAppearance() {
+        guard let content else { return }
+        let dark = traitCollection.userInterfaceStyle == .dark
+        bubbleBG.fillColor = content.bubbleColor(dark: dark)
+        bubbleBG.setNeedsDisplay()
+    }
 
     override func prepareForReuse() {
         super.prepareForReuse()
@@ -1688,6 +1708,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         tableViews.removeAll(keepingCapacity: true)
         tableAttachmentIDs.removeAll(keepingCapacity: true)
         moreButton.isHidden = true
+        bubbleBG.fillColor = .clear
         bubbleBG.frame = .zero
     }
 
@@ -1734,7 +1755,6 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             $0.isOpaque = false
             $0.backgroundColor = .clear
         }
-        let dark = traitCollection.userInterfaceStyle == .dark
         bodyView.attributedText = content.body
         if !bodyHasLinks {
             // UITextView may restore its previous selected range while a reused
@@ -1745,7 +1765,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         }
         bodyView.setNeedsDisplay()
         bodyView.isHidden = content.body == nil
-        bubbleBG.fillColor = content.bubbleColor(dark: dark)
+        refreshBubbleAppearance()
         switch content.kind {
         case .agent: bubbleBG.radii = (4, 16, 16, 16)
         case .user: bubbleBG.radii = (16, 4, 16, 16)
