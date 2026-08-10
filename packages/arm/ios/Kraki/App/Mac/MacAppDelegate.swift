@@ -206,6 +206,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 "KRAKI_E2E_SELFTEST",
                 "KRAKI_MAC_CHAT_SNAPSHOT_TEST",
                 "KRAKI_MAC_CHAT_PERF_PAGE",
+                "KRAKI_MAC_CHAT_SCENARIO_PAGE",
             ].contains { environment[$0] == "1" }
             if !automatedWindowMode {
                 // Any ordinary foreground Debug launch may start with the
@@ -389,7 +390,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             canShowSteps: false,
             bubbleColor: .controlBackgroundColor,
             cornerRadii: (4, 16, 16, 16),
-            bubbleWidth: 580
+            bubbleWidth: 580,
+            attachmentWidth: 580
         )
         var openedCount = 0
         var openedFirstSize = NSSize.zero
@@ -424,7 +426,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             canShowSteps: false,
             bubbleColor: .controlBackgroundColor,
             cornerRadii: (4, 16, 16, 16),
-            bubbleWidth: 580
+            bubbleWidth: 580,
+            attachmentWidth: 580
         )
         let pureImageCell = MacChatBubbleCell(frame: NSRect(x: 0, y: 0, width: width, height: 1))
         pureImageCell.configure(
@@ -1310,6 +1313,132 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
         zoomWindow.close()
 
+        // Permission buttons use the same rendered-frame interception as
+        // Question choices. Their layout is horizontal, so compare each full
+        // hit rectangle before/after the production 1.2× root zoom.
+        let permission = ChatMessage(
+            type: "permission",
+            seq: 2,
+            sessionId: "permission-hit-regression",
+            deviceId: "tentacle-test",
+            timestamp: nil,
+            payload: [
+                "id": AnyCodable("permission-hit"),
+                "toolName": AnyCodable("write_file"),
+                "description": AnyCodable("MacChatView.swift"),
+                "args": AnyCodable(["path": "MacChatView.swift"]),
+            ]
+        )
+        let permissionContent = MacChatBubbleContentBuilder.live(
+            card: MessageStore.SessionCard(
+                text: "Approve this production-aligned write request.",
+                action: permission
+            ),
+            sessionId: "permission-hit-regression",
+            agent: "pi",
+            documentWidth: 640,
+            traceSeq: 2,
+            steps: 0
+        )
+        func makePermissionCell() -> MacChatBubbleCell {
+            let cell = MacChatBubbleCell(frame: NSRect(x: 0, y: 0, width: 640, height: 1))
+            cell.configure(
+                content: permissionContent,
+                renderKey: "permission-hit-regression",
+                documentWidth: 640,
+                sessionMode: .discuss,
+                onTapSteps: { _ in },
+                onResolvePermission: { _, _, _ in },
+                onAnswerQuestion: { _, _ in },
+                onOpenImage: { _ in },
+                onOpenHTMLArtifact: { _ in },
+                onHeightInvalidated: {}
+            )
+            cell.frame.size.height = cell.configuredHeight()
+            return cell
+        }
+        func permissionHitRects(
+            cell: MacChatBubbleCell,
+            visualSize: NSSize
+        ) -> [String: NSRect] {
+            var points: [String: [NSPoint]] = [:]
+            for x in stride(from: CGFloat(0), through: visualSize.width, by: 2) {
+                for topY in stride(from: CGFloat(0), through: visualSize.height, by: 2) {
+                    let point = NSPoint(x: x, y: visualSize.height - topY)
+                    if let target = cell.permissionButtonHitTarget(atWindowPoint: point) {
+                        points[target.decision, default: []].append(NSPoint(x: x, y: topY))
+                    }
+                }
+            }
+            return points.reduce(into: [:]) { result, entry in
+                guard let minX = entry.value.map(\.x).min(),
+                      let maxX = entry.value.map(\.x).max(),
+                      let minY = entry.value.map(\.y).min(),
+                      let maxY = entry.value.map(\.y).max() else { return }
+                result[entry.key] = NSRect(
+                    x: minX,
+                    y: minY,
+                    width: maxX - minX,
+                    height: maxY - minY
+                )
+            }
+        }
+
+        let directPermissionCell = makePermissionCell()
+        let directPermissionWindow = NSWindow(
+            contentRect: directPermissionCell.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        directPermissionWindow.isReleasedWhenClosed = false
+        directPermissionWindow.contentView = directPermissionCell
+        directPermissionWindow.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        directPermissionWindow.makeKeyAndOrderFront(nil)
+        directPermissionCell.layoutSubtreeIfNeeded()
+        directPermissionCell.display()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        let directPermissionRects = permissionHitRects(
+            cell: directPermissionCell,
+            visualSize: directPermissionCell.frame.size
+        )
+        directPermissionWindow.close()
+
+        let zoomPermissionCell = makePermissionCell()
+        let zoomPermissionSize = NSSize(
+            width: zoomPermissionCell.frame.width * zoom,
+            height: zoomPermissionCell.frame.height * zoom
+        )
+        let zoomPermissionRoot = GeometryReader { geometry in
+            MacQuestionHitProbeHost(cell: zoomPermissionCell)
+                .frame(
+                    width: max(1, geometry.size.width / zoom),
+                    height: max(1, geometry.size.height / zoom)
+                )
+                .scaleEffect(zoom, anchor: .topLeading)
+        }
+        let zoomPermissionHost = NSHostingController(rootView: zoomPermissionRoot)
+        zoomPermissionHost.view.frame = NSRect(origin: .zero, size: zoomPermissionSize)
+        let zoomPermissionWindow = NSWindow(
+            contentRect: zoomPermissionHost.view.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        zoomPermissionWindow.isReleasedWhenClosed = false
+        zoomPermissionWindow.contentViewController = zoomPermissionHost
+        zoomPermissionWindow.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        zoomPermissionWindow.makeKeyAndOrderFront(nil)
+        zoomPermissionHost.view.layoutSubtreeIfNeeded()
+        zoomPermissionCell.layoutSubtreeIfNeeded()
+        zoomPermissionHost.view.display()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        let zoomPermissionRects = permissionHitRects(
+            cell: zoomPermissionCell,
+            visualSize: zoomPermissionSize
+        )
+        zoomPermissionWindow.close()
+
         func bandMatches(_ zoomed: [CGFloat], _ direct: [CGFloat]) -> Bool {
             guard let zoomedFirst = zoomed.first,
                   let zoomedLast = zoomed.last,
@@ -1318,6 +1447,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             return abs(zoomedFirst - directFirst * zoom) <= 2
                 && abs(zoomedLast - directLast * zoom) <= 2
         }
+        func rectMatches(_ zoomed: NSRect?, _ direct: NSRect?) -> Bool {
+            guard let zoomed, let direct else { return false }
+            return abs(zoomed.minX - direct.minX * zoom) <= 4
+                && abs(zoomed.maxX - direct.maxX * zoom) <= 4
+                && abs(zoomed.minY - direct.minY * zoom) <= 4
+                && abs(zoomed.maxY - direct.maxY * zoom) <= 4
+        }
         let directPassed = !directFirst.isEmpty
             && !directSecond.isEmpty
             && (directFirst.last ?? 0) < (directSecond.first ?? 0)
@@ -1325,9 +1461,19 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             && bandMatches(zoomSecond, directSecond)
         let correctedPassed = bandMatches(correctedFirst, directFirst)
             && bandMatches(correctedSecond, directSecond)
-        let passed = directPassed && correctedPassed && directCaptured && zoomCaptured
+        let permissionDecisions = ["approve", "execute", "deny"]
+        let permissionPassed = Set(directPermissionRects.keys) == Set(permissionDecisions)
+            && Set(zoomPermissionRects.keys) == Set(permissionDecisions)
+            && permissionDecisions.allSatisfy {
+                rectMatches(zoomPermissionRects[$0], directPermissionRects[$0])
+            }
+        let passed = directPassed
+            && correctedPassed
+            && permissionPassed
+            && directCaptured
+            && zoomCaptured
         NSLog(
-            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
+            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d permissionDirect=%@ permissionZoom=%@ permissionAligned=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
             range(directFirst),
             range(directSecond),
             range(zoomFirst),
@@ -1336,6 +1482,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             range(correctedSecond),
             zoomPassed ? 1 : 0,
             correctedPassed ? 1 : 0,
+            String(describing: directPermissionRects),
+            String(describing: zoomPermissionRects),
+            permissionPassed ? 1 : 0,
             directCaptured ? 1 : 0,
             zoomCaptured ? 1 : 0,
             passed ? 1 : 0,

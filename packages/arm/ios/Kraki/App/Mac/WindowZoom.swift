@@ -89,6 +89,7 @@ final class MacLocalConfigStore {
         "KRAKI_E2E_SELFTEST",
         "KRAKI_MAC_CHAT_SNAPSHOT_TEST",
         "KRAKI_MAC_CHAT_PERF_PAGE",
+        "KRAKI_MAC_CHAT_SCENARIO_PAGE",
         "KRAKI_MAC_MOCK",
     ]
 

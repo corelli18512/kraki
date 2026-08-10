@@ -265,9 +265,14 @@ struct MainWindowView: View {
     private var selectedSessionId: String?
 
     private let initialSelectedSessionId: String?
+    private let selectionNotificationScope: String?
 
-    init(initialSelectedSessionId: String? = nil) {
+    init(
+        initialSelectedSessionId: String? = nil,
+        selectionNotificationScope: String? = nil
+    ) {
         self.initialSelectedSessionId = initialSelectedSessionId
+        self.selectionNotificationScope = selectionNotificationScope
     }
 
     @AppStorage("mac.inspectorShown")
@@ -369,6 +374,8 @@ struct MainWindowView: View {
             newSessionPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
+            let scope = note.userInfo?["scope"] as? String
+            guard scope == selectionNotificationScope else { return }
             if let sid = note.userInfo?["sessionId"] as? String {
                 selectedSessionId = sid
             }
@@ -534,9 +541,10 @@ struct MainWindowView: View {
             chatPresentation = nil
             return
         }
-        // Keep the previous per-Session live card mounted while the local
-        // history gate is restored. A persisted conclusion clears it; otherwise
-        // the subscription ACK atomically replaces this cached first frame.
+        // Keep the previous authoritative per-Session live card mounted while
+        // the local history gate is restored. A persisted conclusion clears it;
+        // otherwise the subscription ACK atomically replaces this cached first
+        // frame without a one-RTT collapse during Session switching.
         // One presentation owner, one reanchor, one model snapshot. The Chat
         // view consumes this prepared transaction and never opens the Session a
         // second time with stale @State from the previous selection.

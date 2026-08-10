@@ -1245,14 +1245,12 @@ final class MacChatDocumentView: NSView {
         ]
     }
 
-    func questionChoiceHitTarget(
+    func actionHitTarget(
         atWindowPoint point: NSPoint
-    ) -> MacQuestionChoiceHitTarget? {
+    ) -> MacBubbleActionHitTarget? {
         for (_, cell) in visibleCells.sorted(by: { $0.key > $1.key })
         where !cell.isHidden && !cell.isPlaceholderFlag {
-            if let target = cell.questionChoiceHitTarget(
-                atWindowPoint: point
-            ) {
+            if let target = cell.actionHitTarget(atWindowPoint: point) {
                 return target
             }
         }
@@ -1732,9 +1730,9 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var initialTailTrimRequested = false
     private(set) var representedSessionId: String?
     private var geometryAnchorLock: (key: String, delta: CGFloat)?
-    private var questionChoiceMouseMonitor: Any?
-    private var pendingQuestionChoiceClick: (
-        target: MacQuestionChoiceHitTarget,
+    private var bubbleActionMouseMonitor: Any?
+    private var pendingBubbleActionClick: (
+        target: MacBubbleActionHitTarget,
         start: NSPoint,
         cancelled: Bool
     )?
@@ -1850,10 +1848,10 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButton.setAccessibilityLabel("Jump to latest")
         addSubview(jumpButton)
 
-        questionChoiceMouseMonitor = NSEvent.addLocalMonitorForEvents(
+        bubbleActionMouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
-            self?.interceptQuestionChoiceMouseEvent(event) ?? event
+            self?.interceptBubbleActionMouseEvent(event) ?? event
         }
     }
 
@@ -1861,8 +1859,8 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     deinit {
         chatDocumentView.tearDown()
-        if let questionChoiceMouseMonitor {
-            NSEvent.removeMonitor(questionChoiceMouseMonitor)
+        if let bubbleActionMouseMonitor {
+            NSEvent.removeMonitor(bubbleActionMouseMonitor)
         }
         if let liveScrollObserver {
             NotificationCenter.default.removeObserver(liveScrollObserver)
@@ -1872,7 +1870,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
-    private func interceptQuestionChoiceMouseEvent(_ event: NSEvent) -> NSEvent? {
+    private func interceptBubbleActionMouseEvent(_ event: NSEvent) -> NSEvent? {
         guard event.window === window,
               !isHidden,
               alphaValue > 0.01 else { return event }
@@ -1882,33 +1880,39 @@ final class MacChatScrollView: MacSmoothScrollView {
 
         switch event.type {
         case .leftMouseDown:
-            guard let target = chatDocumentView.questionChoiceHitTarget(
+            guard let target = chatDocumentView.actionHitTarget(
                 atWindowPoint: windowPoint
             ) else {
-                pendingQuestionChoiceClick = nil
+                pendingBubbleActionClick = nil
                 return event
             }
-            pendingQuestionChoiceClick = (target, windowPoint, false)
+            pendingBubbleActionClick = (target, windowPoint, false)
             return nil
 
         case .leftMouseDragged:
-            guard var pending = pendingQuestionChoiceClick else { return event }
+            guard var pending = pendingBubbleActionClick else { return event }
             if hypot(windowPoint.x - pending.start.x, windowPoint.y - pending.start.y) > 5 {
                 pending.cancelled = true
-                pendingQuestionChoiceClick = pending
+                pendingBubbleActionClick = pending
             }
             return nil
 
         case .leftMouseUp:
-            guard let pending = pendingQuestionChoiceClick else { return event }
-            pendingQuestionChoiceClick = nil
+            guard let pending = pendingBubbleActionClick else { return event }
+            pendingBubbleActionClick = nil
             guard !pending.cancelled,
-                  chatDocumentView.questionChoiceHitTarget(
+                  chatDocumentView.actionHitTarget(
                     atWindowPoint: windowPoint
                   ) == pending.target else { return nil }
-            let callback = chatDocumentView.onAnswerQuestion
+            let answerCallback = chatDocumentView.onAnswerQuestion
+            let permissionCallback = chatDocumentView.onResolvePermission
             DispatchQueue.main.async {
-                callback?(pending.target.questionId, pending.target.answer)
+                switch pending.target {
+                case .question(let target):
+                    answerCallback?(target.questionId, target.answer)
+                case .permission(let target):
+                    permissionCallback?(target.permissionId, target.toolName, target.decision)
+                }
             }
             return nil
 
@@ -1930,6 +1934,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         deferredEdgePaging = false
         thumbViewportGeneration += 1
         thumbViewportUpdateScheduled = false
+        pendingBubbleActionClick = nil
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
         olderEdgeArmed = true
@@ -2611,9 +2616,13 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 sessionMode: sessionMode
             )
             scrollView.setBottomContentInset(bottomContentInset)
+            let hasPageableContent = !builtItems.isEmpty
             scrollView.setLoading(
-                older: !atOldest,
-                newer: !atNewest,
+                // An empty Session has no edge rows to paginate. Until now its
+                // unknown edge flags mounted both the older and newer spinners
+                // underneath the intentional empty-state message.
+                older: hasPageableContent && !atOldest,
+                newer: hasPageableContent && !atNewest,
                 fetchingOlder: isLoadingOlder,
                 fetchingNewer: isLoadingNewer
             )

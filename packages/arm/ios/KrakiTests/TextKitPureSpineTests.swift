@@ -90,6 +90,45 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertGreaterThan(long.cellHeight(cellWidth: cellWidth), short.cellHeight(cellWidth: cellWidth))
     }
 
+    func testAgentBubbleWidthHugsShortContentAndClampsLongContent() {
+        let cellWidth: CGFloat = 402
+        let short = content("agent_message", seq: 104, body: "Done")
+        let long = content(
+            "agent_message",
+            seq: 105,
+            body: String(repeating: "This is a long agent response that should wrap. ", count: 20)
+        )
+
+        let maximum = cellWidth - 24 - cellWidth * 0.05
+        XCTAssertLessThan(short.bubbleWidth(cellWidth: cellWidth), maximum * 0.5)
+        XCTAssertEqual(long.bubbleWidth(cellWidth: cellWidth), maximum, accuracy: 0.5)
+        XCTAssertGreaterThan(long.cellHeight(cellWidth: cellWidth), short.cellHeight(cellWidth: cellWidth))
+    }
+
+    func testAgentActionBubbleAlsoHugsShortContent() {
+        let action = ChatMessage(
+            type: "tool_batch",
+            seq: 1,
+            sessionId: "agent-action-width",
+            deviceId: "device",
+            timestamp: nil,
+            payload: ["running": AnyCodable(3)]
+        )
+        let live = TKBubbleContent.live(
+            card: MessageStore.SessionCard(
+                text: "Running independent checks.",
+                action: action
+            ),
+            agent: "pi",
+            sessionId: "agent-action-width",
+            steps: 0
+        )
+        let cellWidth: CGFloat = 402
+        let maximum = cellWidth - 24 - cellWidth * 0.05
+        XCTAssertLessThan(live.bubbleWidth(cellWidth: cellWidth), maximum)
+        XCTAssertGreaterThan(live.bubbleWidth(cellWidth: cellWidth), 180)
+    }
+
     func testErrorAndSystemHaveDedicatedSemantics() {
         let error = content("error", seq: 201, body: "Request failed")
         let system = content("system_message", seq: 202, body: "No reply")
@@ -750,6 +789,11 @@ final class TextKitPureSpineTests: XCTestCase {
             images: [image]
         )
 
+        XCTAssertLessThan(
+            textAndImage.bubbleWidth(cellWidth: width),
+            textAndImage.attachmentWidth(cellWidth: width),
+            "short text hugs content without shrinking the sibling image gallery"
+        )
         XCTAssertEqual(
             textAndImage.cellHeight(cellWidth: width),
             textOnly.cellHeight(cellWidth: width)
@@ -837,6 +881,8 @@ final class TextKitPureSpineTests: XCTestCase {
 
     func testDiscussWritePermissionUsesExecuteAction() {
         XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "write_file"))
+        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "create_file"))
+        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "edit_file"))
         XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "edit"))
         XCTAssertFalse(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "bash"))
         XCTAssertFalse(BubbleActionSlot.switchesToExecute(mode: .safe, toolName: "write_file"))

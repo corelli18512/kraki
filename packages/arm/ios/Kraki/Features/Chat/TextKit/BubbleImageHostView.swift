@@ -21,7 +21,7 @@ struct IOSImagePreviewSelection: Identifiable {
 
 enum IOSImageGalleryLayout {
     static let multiCardHeight: CGFloat = 184
-    static let multiStackOffset: CGFloat = 16
+    static let multiStackOffset: CGFloat = 8
     static let attachmentSpacing: CGFloat = 12
     static let outerVerticalPadding: CGFloat = 12
     static let maximumStackDepth = 3
@@ -176,7 +176,7 @@ struct BubbleImageGallery: View {
                 stackedCard(visible[index], width: cardWidth)
                     .offset(
                         x: CGFloat(index) * IOSImageGalleryLayout.multiStackOffset,
-                        y: CGFloat(index) * IOSImageGalleryLayout.multiStackOffset
+                        y: CGFloat(visible.count - 1 - index) * IOSImageGalleryLayout.multiStackOffset
                     )
                     .zIndex(Double(visible.count - index))
             }
@@ -187,7 +187,7 @@ struct BubbleImageGallery: View {
                 .frame(height: 24)
                 .background(.black.opacity(0.72), in: Capsule())
                 .padding(9)
-                .offset(x: cardWidth - 46)
+                .offset(x: cardWidth - 46, y: offsets)
                 .zIndex(Double(visible.count + 1))
                 .allowsHitTesting(false)
         }

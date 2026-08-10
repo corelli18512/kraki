@@ -24,11 +24,14 @@ struct BubbleActionSlot: View {
         case "tool_start": toolChip(action, running: true)
         case "tool_complete": toolChip(action, running: false)
         case "tool_batch":
+            let running = action.payload["running"]?.intValue ?? 0
             HStack(spacing: 8) {
                 ProgressView().controlSize(.mini)
-                Text("\(action.payload["running"]?.intValue ?? 0) 个工具并行运行中…")
+                Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
                     .font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case "permission": permissionInput(action)
         case "question": questionInput(action)
         case "user_abort": terminalOutcome(action, failed: false)
@@ -71,44 +74,102 @@ struct BubbleActionSlot: View {
         }
     }
 
-    private func permissionInput(_ m: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                Image(systemName: "lock.fill").font(.system(size: 12)).foregroundStyle(.orange)
-                (Text("Permission · ").font(.system(size: 12, weight: .medium))
-                    + Text(m.toolName ?? "").font(.system(size: 12, weight: .medium, design: .monospaced)))
+    private func permissionInput(_ message: ChatMessage) -> some View {
+        let writeInDiscuss = Self.switchesToExecute(mode: sessionMode, toolName: message.toolName)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 13))
                     .foregroundStyle(.orange)
-            }
-            Text(m.toolDescription ?? m.toolName ?? "")
-                .font(.system(size: 14, design: .monospaced)).foregroundStyle(Color.textPrimary)
-            if let decision = m.payload["decision"]?.stringValue {
-                Text(decision == "deny" ? "Denied" : decision == "always_allow" ? "Allowed for session" : "Approved")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(decision == "deny" ? .red : .green)
-            } else {
-                HStack(spacing: 8) {
-                    permButton("Approve", m, "approve", .green)
-                    if Self.switchesToExecute(mode: sessionMode, toolName: m.toolName) {
-                        permButton("Execute", m, "execute", .orange)
-                    } else {
-                        permButton("Always", m, "always_allow", Color.krakiPrimary)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    if message.payload["decision"]?.stringValue == nil {
+                        Text(writeInDiscuss ? "Write Approval — Discuss Mode" : "Permission Required")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.orange)
                     }
-                    permButton("Deny", m, "deny", .red)
+                    Text(message.toolDescription ?? "Run \(message.toolName ?? "tool")")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let summary = permissionArgsSummary(message),
+                       summary != message.toolDescription {
+                        Text(summary)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.textSecondary)
+                            .lineLimit(3)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.surfaceTertiary, in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    if let decision = message.payload["decision"]?.stringValue {
+                        let denied = decision == "deny"
+                        Text("\(denied ? "✗" : "✓") \(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(denied ? .red : .green)
+                            .padding(.top, 2)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if message.payload["decision"]?.stringValue == nil {
+                HStack(spacing: 8) {
+                    permissionButton("Approve", message, decision: "approve", foreground: .white, fill: .green, border: .clear)
+                    if writeInDiscuss {
+                        permissionButton("Switch to Execute", message, decision: "execute", foreground: .orange, fill: .orange.opacity(0.12), border: .orange.opacity(0.35))
+                    } else {
+                        permissionButton("Allow in Session", message, decision: "always_allow", foreground: .green, fill: .green.opacity(0.12), border: .green.opacity(0.35))
+                    }
+                    permissionButton("Deny", message, decision: "deny", foreground: .red, fill: .red.opacity(0.10), border: .red.opacity(0.35))
+                }
+                .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func permButton(_ label: String, _ message: ChatMessage, _ decision: String, _ tint: Color) -> some View {
+    private func permissionButton(
+        _ label: String,
+        _ message: ChatMessage,
+        decision: String,
+        foreground: Color,
+        fill: Color,
+        border: Color
+    ) -> some View {
         Button {
             guard let permissionId = message.permissionId else { return }
             onResolvePermission(permissionId, message.toolName, decision)
         } label: {
-            Text(label).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                .padding(.horizontal, 12).padding(.vertical, 6).background(tint, in: Capsule())
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(foreground)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .background(fill, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(border, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
         .accessibilityLabel("\(label) permission")
+    }
+
+    private func permissionArgsSummary(_ message: ChatMessage) -> String? {
+        guard let args = message.args else { return nil }
+        let tool = (message.toolName ?? "").lowercased()
+        switch tool {
+        case "shell", "bash":
+            return args["command"]?.stringValue
+        case "write_file", "edit_file", "create_file", "read_file", "view":
+            return args["path"]?.stringValue
+        case "fetch_url":
+            return args["url"]?.stringValue
+        default:
+            return args.values.compactMap(\.stringValue).first { !$0.isEmpty && $0.count < 200 }
+        }
     }
 
     private func questionInput(_ m: ChatMessage) -> some View {
@@ -175,7 +236,7 @@ struct BubbleActionSlot: View {
 
     static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
         guard mode == .discuss, let toolName else { return false }
-        return ["write", "write_file", "create", "edit"].contains(toolName)
+        return ["write", "write_file", "create", "create_file", "edit", "edit_file"].contains(toolName)
     }
 }
 
