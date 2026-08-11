@@ -897,6 +897,11 @@ enum MacBubbleActionCapture: Equatable {
     case permission(String)
 }
 
+struct MacBubbleActionCaptureContext {
+    let capture: MacBubbleActionCapture
+    let actionPoint: NSPoint
+}
+
 final class MacChatBubbleCell: NSView {
     override var isFlipped: Bool { true }
     private let contentClipView = MacFlippedContentClipView()
@@ -1011,6 +1016,10 @@ final class MacChatBubbleCell: NSView {
         permissionButtonFrames.removeAll(keepingCapacity: true)
     }
 
+    func offsetActionHostForRegression(y: CGFloat) {
+        actionHost.frame.origin.y += y
+    }
+
     func openFirstImageForRegression() -> (found: Bool, hitTested: Bool) {
         imageHost.layoutSubtreeIfNeeded()
         func collectButtons(in view: NSView, into result: inout [NSButton]) {
@@ -1037,19 +1046,83 @@ final class MacChatBubbleCell: NSView {
     #endif
 
     func actionHitTarget(atWindowPoint point: NSPoint) -> MacBubbleActionHitTarget? {
-        if let question = questionChoiceHitTarget(atWindowPoint: point) {
-            return .question(question)
-        }
-        if let permission = permissionButtonHitTarget(atWindowPoint: point) {
-            return .permission(permission)
-        }
-        return nil
+        guard let context = actionCaptureContext(atWindowPoint: point) else { return nil }
+        return actionHitTarget(
+            for: context.capture,
+            atActionPoint: context.actionPoint
+        )
     }
 
     func actionCapture(atWindowPoint point: NSPoint) -> MacBubbleActionCapture? {
-        guard let action = content?.action,
-              !actionHost.isHidden,
-              actionHost.bounds.contains(actionHost.convert(point, from: nil)) else { return nil }
+        actionCaptureContext(atWindowPoint: point)?.capture
+    }
+
+    func actionCaptureContext(
+        atWindowPoint point: NSPoint
+    ) -> MacBubbleActionCaptureContext? {
+        guard let capture = actionCaptureIdentity,
+              !actionHost.isHidden else { return nil }
+        let local = actionHost.convert(point, from: nil)
+        guard actionHost.bounds.contains(local) else { return nil }
+        return MacBubbleActionCaptureContext(
+            capture: capture,
+            actionPoint: NSPoint(
+                x: local.x,
+                y: actionHost.isFlipped ? local.y : actionHost.bounds.height - local.y
+            )
+        )
+    }
+
+    func actionHitTarget(
+        for capture: MacBubbleActionCapture,
+        atActionPoint point: NSPoint
+    ) -> MacBubbleActionHitTarget? {
+        guard capture == actionCaptureIdentity,
+              let action = content?.action else { return nil }
+        switch capture {
+        case .question(let questionId):
+            guard action.type == "question",
+                  !action.cancelled,
+                  action.answer == nil,
+                  action.questionId == questionId,
+                  let frame = questionChoiceFrames.last(where: { $0.rect.contains(point) }) else {
+                return nil
+            }
+            return .question(MacQuestionChoiceHitTarget(
+                questionId: questionId,
+                answer: frame.answer
+            ))
+        case .permission(let permissionId):
+            guard action.type == "permission",
+                  action.payload["decision"]?.stringValue == nil,
+                  action.permissionId == permissionId,
+                  let frame = permissionButtonFrames.last(where: { $0.rect.contains(point) }) else {
+                return nil
+            }
+            return .permission(MacPermissionButtonHitTarget(
+                permissionId: permissionId,
+                toolName: action.toolName,
+                decision: frame.decision
+            ))
+        }
+    }
+
+    func questionChoiceHitTarget(
+        atWindowPoint point: NSPoint
+    ) -> MacQuestionChoiceHitTarget? {
+        guard case .question(let target)? = actionHitTarget(atWindowPoint: point) else { return nil }
+        return target
+    }
+
+    func permissionButtonHitTarget(
+        atWindowPoint point: NSPoint
+    ) -> MacPermissionButtonHitTarget? {
+        guard case .permission(let target)? = actionHitTarget(atWindowPoint: point) else { return nil }
+        return target
+    }
+
+    private var actionCaptureIdentity: MacBubbleActionCapture? {
+        guard let action = content?.action else { return nil }
         switch action.type {
         case "question":
             guard !action.cancelled,
@@ -1064,53 +1137,6 @@ final class MacChatBubbleCell: NSView {
         default:
             return nil
         }
-    }
-
-    func questionChoiceHitTarget(
-        atWindowPoint point: NSPoint
-    ) -> MacQuestionChoiceHitTarget? {
-        guard let action = content?.action,
-              action.type == "question",
-              !action.cancelled,
-              action.answer == nil,
-              let questionId = action.questionId,
-              !questionChoiceFrames.isEmpty,
-              !actionHost.isHidden,
-              let frame = actionFrame(containingWindowPoint: point, in: questionChoiceFrames.map {
-                  (rect: $0.rect, value: $0)
-              }) else { return nil }
-        return MacQuestionChoiceHitTarget(questionId: questionId, answer: frame.answer)
-    }
-
-    func permissionButtonHitTarget(
-        atWindowPoint point: NSPoint
-    ) -> MacPermissionButtonHitTarget? {
-        guard let action = content?.action,
-              action.type == "permission",
-              action.payload["decision"]?.stringValue == nil,
-              let permissionId = action.permissionId,
-              !permissionButtonFrames.isEmpty,
-              !actionHost.isHidden,
-              let frame = actionFrame(containingWindowPoint: point, in: permissionButtonFrames.map {
-                  (rect: $0.rect, value: $0)
-              }) else { return nil }
-        return MacPermissionButtonHitTarget(
-            permissionId: permissionId,
-            toolName: action.toolName,
-            decision: frame.decision
-        )
-    }
-
-    private func actionFrame<Value>(
-        containingWindowPoint point: NSPoint,
-        in frames: [(rect: CGRect, value: Value)]
-    ) -> Value? {
-        let local = actionHost.convert(point, from: nil)
-        let topLeadingPoint = NSPoint(
-            x: local.x,
-            y: actionHost.isFlipped ? local.y : actionHost.bounds.height - local.y
-        )
-        return frames.last(where: { $0.rect.contains(topLeadingPoint) })?.value
     }
 
     var htmlArtifactCount: Int { content?.htmlArtifacts.count ?? 0 }
