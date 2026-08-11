@@ -1316,9 +1316,36 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             x: visualX,
             y: zoomSize.height - fallbackProbeTopY
         )
-        let fallbackCaptureBefore = zoomCell.actionCapture(
+        let fallbackContext = zoomCell.actionCaptureContext(
             atWindowPoint: fallbackProbePoint
-        ) == .question("question-hit")
+        )
+        let fallbackCaptureBefore = fallbackContext?.capture == .question("question-hit")
+        let stableTargetBeforeMove = fallbackContext.flatMap {
+            zoomCell.actionHitTarget(
+                for: $0.capture,
+                atActionPoint: $0.actionPoint
+            )
+        } == .question(MacQuestionChoiceHitTarget(
+            questionId: "question-hit",
+            answer: "First visual choice"
+        ))
+        zoomCell.offsetActionHostForRegression(y: 40)
+        let movedWindowTarget = zoomCell.questionChoiceHitTarget(
+            atWindowPoint: fallbackProbePoint
+        )
+        let stableTargetAfterMove = fallbackContext.flatMap {
+            zoomCell.actionHitTarget(
+                for: $0.capture,
+                atActionPoint: $0.actionPoint
+            )
+        } == .question(MacQuestionChoiceHitTarget(
+            questionId: "question-hit",
+            answer: "First visual choice"
+        ))
+        let movingCardPassed = stableTargetBeforeMove
+            && movedWindowTarget?.answer != "First visual choice"
+            && stableTargetAfterMove
+        zoomCell.offsetActionHostForRegression(y: -40)
         zoomCell.clearActionHitFramesForRegression()
         let fallbackTargetMissing = zoomCell.questionChoiceHitTarget(
             atWindowPoint: fallbackProbePoint
@@ -1490,10 +1517,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             && correctedPassed
             && permissionPassed
             && fallbackCapturePassed
+            && movingCardPassed
             && directCaptured
             && zoomCaptured
         NSLog(
-            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d permissionDirect=%@ permissionZoom=%@ permissionAligned=%d fallbackCapture=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
+            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d permissionDirect=%@ permissionZoom=%@ permissionAligned=%d fallbackCapture=%d movingCard=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
             range(directFirst),
             range(directSecond),
             range(zoomFirst),
@@ -1506,6 +1534,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             String(describing: zoomPermissionRects),
             permissionPassed ? 1 : 0,
             fallbackCapturePassed ? 1 : 0,
+            movingCardPassed ? 1 : 0,
             directCaptured ? 1 : 0,
             zoomCaptured ? 1 : 0,
             passed ? 1 : 0,
