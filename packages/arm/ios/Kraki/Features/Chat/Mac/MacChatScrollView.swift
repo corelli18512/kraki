@@ -1257,6 +1257,16 @@ final class MacChatDocumentView: NSView {
         return nil
     }
 
+    func actionCapture(atWindowPoint point: NSPoint) -> MacBubbleActionCapture? {
+        for (_, cell) in visibleCells.sorted(by: { $0.key > $1.key })
+        where !cell.isHidden && !cell.isPlaceholderFlag {
+            if let capture = cell.actionCapture(atWindowPoint: point) {
+                return capture
+            }
+        }
+        return nil
+    }
+
     @discardableResult
     func openVisibleHTMLArtifact(id: String? = nil) -> Bool {
         let viewport = enclosingScrollView?.contentView.bounds ?? bounds
@@ -1732,7 +1742,8 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var geometryAnchorLock: (key: String, delta: CGFloat)?
     private var bubbleActionMouseMonitor: Any?
     private var pendingBubbleActionClick: (
-        target: MacBubbleActionHitTarget,
+        target: MacBubbleActionHitTarget?,
+        capture: MacBubbleActionCapture,
         start: NSPoint,
         cancelled: Bool
     )?
@@ -1880,13 +1891,15 @@ final class MacChatScrollView: MacSmoothScrollView {
 
         switch event.type {
         case .leftMouseDown:
-            guard let target = chatDocumentView.actionHitTarget(
-                atWindowPoint: windowPoint
-            ) else {
+            guard let capture = chatDocumentView.actionCapture(atWindowPoint: windowPoint) else {
                 pendingBubbleActionClick = nil
                 return event
             }
-            pendingBubbleActionClick = (target, windowPoint, false)
+            let target = chatDocumentView.actionHitTarget(atWindowPoint: windowPoint)
+            // SwiftUI propagates rendered choice frames asynchronously. Capture
+            // the whole interactive action region while that cache is empty so
+            // a zoomed click never falls through to SwiftUI's shifted hit test.
+            pendingBubbleActionClick = (target, capture, windowPoint, false)
             return nil
 
         case .leftMouseDragged:
@@ -1901,23 +1914,57 @@ final class MacChatScrollView: MacSmoothScrollView {
             guard let pending = pendingBubbleActionClick else { return event }
             pendingBubbleActionClick = nil
             guard !pending.cancelled,
-                  chatDocumentView.actionHitTarget(
-                    atWindowPoint: windowPoint
-                  ) == pending.target else { return nil }
-            let answerCallback = chatDocumentView.onAnswerQuestion
-            let permissionCallback = chatDocumentView.onResolvePermission
-            DispatchQueue.main.async {
-                switch pending.target {
-                case .question(let target):
-                    answerCallback?(target.questionId, target.answer)
-                case .permission(let target):
-                    permissionCallback?(target.permissionId, target.toolName, target.decision)
+                  chatDocumentView.actionCapture(atWindowPoint: windowPoint) == pending.capture else {
+                return nil
+            }
+            if let expectedTarget = pending.target {
+                guard chatDocumentView.actionHitTarget(atWindowPoint: windowPoint) == expectedTarget else {
+                    return nil
                 }
+                dispatchBubbleAction(expectedTarget)
+            } else {
+                dispatchBubbleActionWhenReady(
+                    atWindowPoint: windowPoint,
+                    expectedCapture: pending.capture
+                )
             }
             return nil
 
         default:
             return event
+        }
+    }
+
+    private func dispatchBubbleAction(_ target: MacBubbleActionHitTarget) {
+        let answerCallback = chatDocumentView.onAnswerQuestion
+        let permissionCallback = chatDocumentView.onResolvePermission
+        DispatchQueue.main.async {
+            switch target {
+            case .question(let target):
+                answerCallback?(target.questionId, target.answer)
+            case .permission(let target):
+                permissionCallback?(target.permissionId, target.toolName, target.decision)
+            }
+        }
+    }
+
+    private func dispatchBubbleActionWhenReady(
+        atWindowPoint point: NSPoint,
+        expectedCapture: MacBubbleActionCapture,
+        attemptsRemaining: Int = 8
+    ) {
+        guard chatDocumentView.actionCapture(atWindowPoint: point) == expectedCapture else { return }
+        if let target = chatDocumentView.actionHitTarget(atWindowPoint: point) {
+            dispatchBubbleAction(target)
+            return
+        }
+        guard attemptsRemaining > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 120.0) { [weak self] in
+            self?.dispatchBubbleActionWhenReady(
+                atWindowPoint: point,
+                expectedCapture: expectedCapture,
+                attemptsRemaining: attemptsRemaining - 1
+            )
         }
     }
 
