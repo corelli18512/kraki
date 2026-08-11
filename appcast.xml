@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.7</title>
+            <pubDate>Tue, 11 Aug 2026 14:02:17 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.7</sparkle:fullReleaseNotesLink>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(ios): prevent bubble color flash on Session entry by @corelli18512 in https://github.com/corelli18512/kraki/pull/244
+* fix(ios): align Markdown code rendering with Mac by @corelli18512 in https://github.com/corelli18512/kraki/pull/245
+* fix(mac): refresh exhausted voice lease by @corelli18512 in https://github.com/corelli18512/kraki/pull/246
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.6...mac-v0.2.7
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.7/Kraki.app.zip" length="7985769" type="application/octet-stream" sparkle:edSignature="o7VUJa6Ec1ZlzhqEyNCoIub60l1LsfVyvv/hLLMV91BK6UQ83kD5IHdMS0J8FIbeRqYgrIoF6p23oWwO9yf/AQ=="/>
+        </item>
+        <item>
             <title>0.2.6</title>
             <pubDate>Mon, 10 Aug 2026 01:36:43 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -43,25 +61,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.5/Kraki.app.zip" length="7956870" type="application/octet-stream" sparkle:edSignature="0xABMeXgOavkoTnDb+Zidd+C6ss1DEAGk81ZyzgD6dpd3wpAKQjiPoge/UYoo5ERU/LoLk4HQ/pjoR8mlPVNBQ=="/>
         </item>
-        <item>
-            <title>0.2.4</title>
-            <pubDate>Sun, 09 Aug 2026 15:27:48 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.4</sparkle:fullReleaseNotesLink>
-            <sparkle:version>6</sparkle:version>
-            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): preserve composer and session transient state by @corelli18512 in https://github.com/corelli18512/kraki/pull/235
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.31.16...mac-v0.2.4
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.4/Kraki.app.zip" length="7913734" type="application/octet-stream" sparkle:edSignature="T4r/atMvCsTAh+zX0/MB7ambKjpjcJkKmBL8hmljGKND6fzRbh6Cmjdj4CfXW2+I3vdVYW0Pg36Fi5tvYXysDQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Bpx9jYQIAZNkNhs+YSZO2rPHC8kRyDIWI0gBaT46clylFNUiS3e/QBy2IMSUs2MYuhE9XrPLp55XM4YcxD2jAw==
-length: 4382
+edSignature: Ty/+pff0Q0DxULvVqifePFGRbQLWBjT2/CAvGdzBEcnYbCW1MkVDS7nZUhjFCrXE51hJdmiKHogAhNsBvg+MBg==
+length: 4609
 -->
