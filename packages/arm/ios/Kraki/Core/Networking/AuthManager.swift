@@ -129,7 +129,12 @@ final class AuthManager {
     /// (gh CLI) first, then the saved device-flow token at ~/.kraki/github-token.
     /// The Mac app is not sandboxed, so `~/.kraki` is readable and `gh` spawnable.
     static func loadCLICredentials() async -> (relay: String, token: String)? {
+        #if DEBUG
+        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
+            ?? (NSHomeDirectory() + "/.kraki")
+        #else
         let krakiHome = NSHomeDirectory() + "/.kraki"
+        #endif
         guard let configData = try? Data(contentsOf: URL(fileURLWithPath: krakiHome + "/config.json")),
               let config = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
               let relay = config["relay"] as? String,
@@ -178,7 +183,11 @@ final class AuthManager {
         }
 
         return await Task.detached(priority: .userInitiated) {
+            // CLI discovery is part of the Mac launch gate. A broken shell/gh
+            // installation must not hold the entire window indefinitely.
+            let deadline = Date().addingTimeInterval(0.5)
             for executable in executables {
+                guard Date() < deadline else { break }
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: executable)
                 process.arguments = ["auth", "token"]
@@ -188,7 +197,12 @@ final class AuthManager {
                 process.standardError = FileHandle.nullDevice
                 do {
                     try process.run()
-                    process.waitUntilExit()
+                    _ = waitForProcessExit(process, until: deadline)
+                    if process.isRunning {
+                        KLog.diag("Mac CLI login timed out while executing gh")
+                        process.terminate()
+                        break
+                    }
                     guard process.terminationStatus == 0 else { continue }
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     let token = String(data: data, encoding: .utf8)?
@@ -204,6 +218,16 @@ final class AuthManager {
             KLog.diag("Mac CLI login could not execute gh (candidates=\(executables.count))")
             return nil
         }.value
+    }
+
+    /// Synchronous process polling intentionally runs only inside the detached
+    /// CLI worker above. Keeping it out of the async closure avoids blocking an
+    /// executor thread with an async-unavailable `Thread.sleep` call.
+    private static func waitForProcessExit(_ process: Process, until deadline: Date) -> Bool {
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return !process.isRunning
     }
     #endif
 

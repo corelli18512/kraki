@@ -261,18 +261,21 @@ struct MainWindowView: View {
     @SceneStorage("mac.sidebarVisible")
     private var sidebarVisible: Bool = true
 
-    @SceneStorage("mac.selectedSessionId")
-    private var selectedSessionId: String?
+    @State private var selectedSessionId: String?
 
     private let initialSelectedSessionId: String?
     private let selectionNotificationScope: String?
+    private let onSelectedSessionChanged: (String?) -> Void
 
     init(
         initialSelectedSessionId: String? = nil,
-        selectionNotificationScope: String? = nil
+        selectionNotificationScope: String? = nil,
+        onSelectedSessionChanged: @escaping (String?) -> Void = { _ in }
     ) {
         self.initialSelectedSessionId = initialSelectedSessionId
         self.selectionNotificationScope = selectionNotificationScope
+        self.onSelectedSessionChanged = onSelectedSessionChanged
+        _selectedSessionId = State(initialValue: initialSelectedSessionId)
     }
 
     @AppStorage("mac.inspectorShown")
@@ -291,16 +294,10 @@ struct MainWindowView: View {
     private let desktopRailHeight: CGFloat = 40
 
     var body: some View {
-        // Gate: render the authenticated root when we have stored
-        // credentials (normal/mock path) OR when dev-local mode is
-        // active (KRAKI_DEV_LOCAL=1) — in that mode credentials only
-        // materialise after the open-auth handshake, so we skip
-        // LoginView up front to avoid a flash.
-        if appState.hasStoredCredentials || appState.devLocalActive {
-            authenticatedRoot
-        } else {
-            LoginView()
-        }
+        // Authentication and cold-launch routing live above this view in
+        // MacApp. MainWindowView is the authenticated application surface only,
+        // so Chat is never mounted behind Launch or Signed Out entry gates.
+        authenticatedRoot
     }
 
     private var authenticatedRoot: some View {
@@ -441,6 +438,7 @@ struct MainWindowView: View {
             Button("Cancel", role: .cancel) { pendingDeleteSessionId = nil }
         }
         .onChange(of: selectedSessionId) { oldValue, newValue in
+            onSelectedSessionChanged(newValue)
             if let oldValue, oldValue != newValue {
                 appState.endViewingSession(oldValue)
             }
@@ -465,6 +463,14 @@ struct MainWindowView: View {
             appState.sessionStore.navigateToSession = nil
         }
         .onChange(of: appState.sessionStore.sessions) { _, sessions in
+            // A deep link can cross the launch gate before the authoritative
+            // session_list has arrived. Keep its semantic selection and mount
+            // Chat as soon as that Session becomes known.
+            if let selectedSessionId,
+               chatPresentation?.sessionId != selectedSessionId,
+               sessions[selectedSessionId] != nil {
+                prepareSelectedSession(selectedSessionId)
+            }
             #if DEBUG
             if let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
                selectedSessionId != target,
