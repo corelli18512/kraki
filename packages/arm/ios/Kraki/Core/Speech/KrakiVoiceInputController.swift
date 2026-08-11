@@ -452,13 +452,14 @@ final class KrakiVoiceInputController {
 
     private func handleConnectionFailure(_ reason: String) {
         KLog.d("🎙️ [voice] stage=connection-failed reason=\(reason)")
-        closeConnection(keepLease: true)
+        let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
+        closeConnection(keepLease: !quotaExhausted)
         if isBusy {
             let message = Self.userFacingGatewayError(reason)
             recordingCleanup(clearHandlers: true)
             state = .failed(message)
         }
-        if warmConnectionDesired { scheduleReconnect() }
+        if warmConnectionDesired { scheduleReconnect(immediate: quotaExhausted) }
     }
 
     private func scheduleLeaseTimeout() {

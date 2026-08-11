@@ -127,7 +127,7 @@ private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
 
 @MainActor
 final class KrakiVoiceInputTests: XCTestCase {
-    private func lease(expiryOffset: Int = 600) -> VoiceLease {
+    private func lease(expiryOffset: Int = 600, jti: String = "lease-1") -> VoiceLease {
         VoiceLease(
             payload: VoiceLeasePayload(
                 ver: 1,
@@ -138,7 +138,7 @@ final class KrakiVoiceInputTests: XCTestCase {
                 exp: Int(Date().timeIntervalSince1970) + expiryOffset,
                 quotaSeconds: 600,
                 resource: "voice/doubao",
-                jti: "lease-1"
+                jti: jti
             ),
             signature: "signature",
             alg: "RSA-SHA256"
@@ -490,6 +490,39 @@ final class KrakiVoiceInputTests: XCTestCase {
         factory.sessions[0].emit(.final("second", rawText: nil))
         await Task.yield()
         XCTAssertEqual(finals, ["first", "second"])
+    }
+
+    func testQuotaExhaustedConnectionDiscardsLeaseAndRequestsReplacement() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        controller.prepare()
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertEqual(controller.state, .recording)
+        factory.sessions[0].emit(.failed("denied: quota_exhausted"))
+        for _ in 0..<20 where host.requestedResources.count < 2 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(controller.state, .failed("The voice-input quota was exhausted."))
+        XCTAssertEqual(host.requestedResources, ["voice/doubao", "voice/doubao"])
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        guard factory.sessions.count == 1 else { return }
+
+        controller.receiveLease(lease(jti: "lease-2"))
+        XCTAssertEqual(factory.sessions.count, 2)
+        guard factory.sessions.count == 2 else { return }
+        factory.sessions[1].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertTrue(controller.isConnectionWarm)
     }
 
     func testLeaseDenialsRemainDistinct() async {
