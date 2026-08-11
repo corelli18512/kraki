@@ -255,10 +255,16 @@ enum MarkdownCodeSyntax {
         "html": "xml", "htm": "xml",
         "js": "javascript", "jsx": "javascript",
         "ts": "typescript", "tsx": "typescript",
-        "py": "python", "rb": "ruby", "rs": "rust",
+        "py": "python", "rb": "ruby", "rs": "rust", "golang": "go",
         "kt": "kotlin", "kts": "kotlin",
         "sh": "bash", "shell": "bash", "zsh": "bash",
-        "yml": "yaml", "objc": "objectivec", "objective-c": "objectivec",
+        "shell-session": "shell", "console": "shell", "terminal": "shell",
+        "yml": "yaml", "jsonc": "json", "json5": "json",
+        "md": "markdown", "mdown": "markdown", "mkdown": "markdown",
+        "docker": "dockerfile", "ps": "powershell", "ps1": "powershell", "pwsh": "powershell",
+        "gql": "graphql", "postgres": "pgsql", "postgresql": "pgsql",
+        "make": "makefile", "patch": "diff", "objc": "objectivec",
+        "objective-c": "objectivec", "objc++": "objectivec", "objective-c++": "objectivec", "mm": "objectivec",
     ]
     private static let intentionallyPlainLanguages: Set<String> = [
         "text", "txt", "plaintext", "plain", "none",
