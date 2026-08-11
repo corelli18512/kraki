@@ -1311,6 +1311,25 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             eventNumber += 2
         }
 
+        let fallbackProbeTopY = ((correctedFirst.first ?? 0) + (correctedFirst.last ?? 0)) / 2
+        let fallbackProbePoint = NSPoint(
+            x: visualX,
+            y: zoomSize.height - fallbackProbeTopY
+        )
+        let fallbackCaptureBefore = zoomCell.actionCapture(
+            atWindowPoint: fallbackProbePoint
+        ) == .question("question-hit")
+        zoomCell.clearActionHitFramesForRegression()
+        let fallbackTargetMissing = zoomCell.questionChoiceHitTarget(
+            atWindowPoint: fallbackProbePoint
+        ) == nil
+        let fallbackCaptureAfter = zoomCell.actionCapture(
+            atWindowPoint: fallbackProbePoint
+        ) == .question("question-hit")
+        let fallbackCapturePassed = fallbackCaptureBefore
+            && fallbackTargetMissing
+            && fallbackCaptureAfter
+
         zoomWindow.close()
 
         // Permission buttons use the same rendered-frame interception as
@@ -1470,10 +1489,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let passed = directPassed
             && correctedPassed
             && permissionPassed
+            && fallbackCapturePassed
             && directCaptured
             && zoomCaptured
         NSLog(
-            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d permissionDirect=%@ permissionZoom=%@ permissionAligned=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
+            "[question-hit-regression] directFirst=%@ directSecond=%@ rawZoomFirst=%@ rawZoomSecond=%@ correctedFirst=%@ correctedSecond=%@ rawAligned=%d correctedAligned=%d permissionDirect=%@ permissionZoom=%@ permissionAligned=%d fallbackCapture=%d directCapture=%d zoomCapture=%d passed=%d paths=%@,%@",
             range(directFirst),
             range(directSecond),
             range(zoomFirst),
@@ -1485,6 +1505,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             String(describing: directPermissionRects),
             String(describing: zoomPermissionRects),
             permissionPassed ? 1 : 0,
+            fallbackCapturePassed ? 1 : 0,
             directCaptured ? 1 : 0,
             zoomCaptured ? 1 : 0,
             passed ? 1 : 0,

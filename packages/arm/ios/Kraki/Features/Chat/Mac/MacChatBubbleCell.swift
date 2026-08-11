@@ -892,6 +892,11 @@ enum MacBubbleActionHitTarget: Equatable {
     case permission(MacPermissionButtonHitTarget)
 }
 
+enum MacBubbleActionCapture: Equatable {
+    case question(String)
+    case permission(String)
+}
+
 final class MacChatBubbleCell: NSView {
     override var isFlipped: Bool { true }
     private let contentClipView = MacFlippedContentClipView()
@@ -1001,6 +1006,11 @@ final class MacChatBubbleCell: NSView {
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
     var contentClipIsFlippedForRegression: Bool { contentClipView.isFlipped }
 
+    func clearActionHitFramesForRegression() {
+        questionChoiceFrames.removeAll(keepingCapacity: true)
+        permissionButtonFrames.removeAll(keepingCapacity: true)
+    }
+
     func openFirstImageForRegression() -> (found: Bool, hitTested: Bool) {
         imageHost.layoutSubtreeIfNeeded()
         func collectButtons(in view: NSView, into result: inout [NSButton]) {
@@ -1034,6 +1044,26 @@ final class MacChatBubbleCell: NSView {
             return .permission(permission)
         }
         return nil
+    }
+
+    func actionCapture(atWindowPoint point: NSPoint) -> MacBubbleActionCapture? {
+        guard let action = content?.action,
+              !actionHost.isHidden,
+              actionHost.bounds.contains(actionHost.convert(point, from: nil)) else { return nil }
+        switch action.type {
+        case "question":
+            guard !action.cancelled,
+                  action.answer == nil,
+                  !(action.choices?.isEmpty ?? true),
+                  let questionId = action.questionId else { return nil }
+            return .question(questionId)
+        case "permission":
+            guard action.payload["decision"]?.stringValue == nil,
+                  let permissionId = action.permissionId else { return nil }
+            return .permission(permissionId)
+        default:
+            return nil
+        }
     }
 
     func questionChoiceHitTarget(
