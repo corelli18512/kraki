@@ -307,6 +307,10 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(normalizeMarkdownQuoteWhitespace("\nStart\n\n\nEnd\n"), "Start\n\nEnd")
         XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("TSX"), "typescript")
         XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("c++"), "cpp")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("jsonc"), "json")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("shell-session"), "shell")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("objective-c++"), "objectivec")
+        XCTAssertEqual(MarkdownCodeSyntax.normalizedLanguage("postgresql"), "pgsql")
         XCTAssertTrue(MarkdownCodeSyntax.isIntentionallyPlain("text"))
         XCTAssertFalse(MarkdownCodeSyntax.isIntentionallyPlain("swift"))
     }
@@ -477,6 +481,52 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertGreaterThan(colors.count, 1)
         XCTAssertEqual(TKMarkdown.plainText(rendered), "struct Bubble { let state: String }")
         XCTAssertFalse(TKMarkdown.plainText(rendered)?.contains("\u{200B}") ?? true)
+    }
+
+    func testCodeForegroundAlwaysMeetsMacEditorContrastContract() {
+        let samples = [
+            ("text", "plain output with no syntax tokens"),
+            ("swift", "let value: String = \"hello\""),
+            ("not-a-real-language", "const value = 42 // fallback"),
+        ]
+        let background = UIColor(red: 0x18/255, green: 0x18/255, blue: 0x1B/255, alpha: 1)
+
+        func luminance(_ color: UIColor) -> CGFloat {
+            let resolved = color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return 0 }
+            func linear(_ value: CGFloat) -> CGFloat {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+        let backgroundLuminance = luminance(background)
+
+        for (language, code) in samples {
+            TKMarkdown.prepareFinalHighlightForTesting(code: code, language: language)
+            let rendered = TKMarkdown.attributed(
+                "```\(language)\n\(code)\n```",
+                cacheKey: "contrast-\(language)"
+            )
+            var checkedGlyphs = 0
+            rendered.enumerateAttributes(
+                in: NSRange(location: 0, length: rendered.length)
+            ) { attributes, range, _ in
+                guard attributes[.tkDecorativeSpacer] == nil else { return }
+                let fragment = (rendered.string as NSString).substring(with: range)
+                guard fragment.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil else { return }
+                guard let color = attributes[.foregroundColor] as? UIColor else {
+                    return XCTFail("\(language) code glyphs must have an explicit foreground")
+                }
+                let foregroundLuminance = luminance(color)
+                let ratio = (max(foregroundLuminance, backgroundLuminance) + 0.05)
+                    / (min(foregroundLuminance, backgroundLuminance) + 0.05)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(language) emitted unreadable code text")
+                checkedGlyphs += range.length
+            }
+            XCTAssertGreaterThan(checkedGlyphs, 0)
+            XCTAssertEqual(TKMarkdown.plainText(rendered), code)
+        }
     }
 
     func testCodeHighlightAliasesAndLexicalFallbackMatchMacBehavior() {
