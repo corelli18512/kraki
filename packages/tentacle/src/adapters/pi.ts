@@ -356,6 +356,13 @@ interface PiSession {
    *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
    *  NOT produce a real answer → no finalize round, just idle. */
   lastStopReason: string | undefined;
+  /** Backend error held until agent_end says whether Pi will retry. */
+  pendingError: string | undefined;
+  /** Monotonic logical turn identity. Active-turn steer keeps this identity;
+   * post-settlement steer opens a new one. */
+  logicalTurn: number;
+  /** The logical turn whose terminal callbacks have been emitted, if any. */
+  settledTurn: number | undefined;
   /** The most recent narration segment whose TRACE mirror is still DEFERRED —
    *  not yet emitted as an `agent_narration` step because it might still
    *  graduate verbatim into the concluding bubble (skip-finalize / finalize
@@ -371,6 +378,9 @@ interface PiSession {
    *  finalize prompt and the following agent_end). During it, ordinary narration
    *  is suppressed so the draft stays frozen at `lastNarration`. */
   finalizing: boolean;
+  /** Monotonic identity for finalize prompt attempts. A late rejection from an
+   *  older request must not clear a newer finalize round. */
+  finalizeAttempt: number;
   /** True once finalize_reply was called in the finalize round (so agent_end
    *  doesn't fall back to a generated reply). */
   finalizeResolved: boolean;
@@ -765,7 +775,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => {
       // Process gone (crash/kill) → no agent_end will arrive. Permissions cannot
@@ -775,7 +785,7 @@ export class PiAdapter extends AgentAdapter {
       sess.exitObserved = true;
       this.clearPendingPerms(sessionId);
       this.pendingModeSignals.delete(sessionId);
-      this.onIdle?.(sessionId);
+      this.emitIdleOnce(sessionId, sess);
       this.onSessionEvicted?.(sessionId);
     };
     proc.start();
@@ -842,11 +852,20 @@ export class PiAdapter extends AgentAdapter {
     return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
   }
 
+  private emitIdleOnce(sessionId: string, s: PiSession): void {
+    if (s.settledTurn === s.logicalTurn) return;
+    s.settledTurn = s.logicalTurn;
+    this.onIdle?.(sessionId);
+  }
+
   private resetTurnTracking(s: PiSession): void {
+    s.logicalTurn += 1;
+    s.settledTurn = undefined;
     s.narrationSegments = 0;
     s.toolSinceLastNarration = false;
     s.lastNarration = '';
     s.lastStopReason = undefined;
+    s.pendingError = undefined;
     s.pendingNarration = '';
     s.aborting = false;
     s.finalizing = false;
@@ -990,13 +1009,16 @@ export class PiAdapter extends AgentAdapter {
           const s = this.sessions.get(sessionId);
           // A backend failure (bad model, 400, quota, rate-limit) surfaces here
           // as stopReason:'error' with an empty content[] and an errorMessage.
-          // Without this the session would just go idle with no response — the
-          // exact silent-failure bug we guard against. agent_end still fires
-          // afterwards, so idle clears normally.
-          if (m.stopReason === 'error' && m.errorMessage) {
-            this.onError?.(sessionId, { message: m.errorMessage });
+          // Hold it until agent_end says whether Pi will retry; a later successful
+          // message_end supersedes this provisional failure.
+          if (s) {
+            s.lastStopReason = m.stopReason;
+            if (m.stopReason === 'error') {
+              s.pendingError = m.errorMessage;
+            } else {
+              s.pendingError = undefined;
+            }
           }
-          if (s) s.lastStopReason = m.stopReason;
           const prose = (m.content ?? [])
             .filter((c) => c.type === 'text' && typeof c.text === 'string')
             .map((c) => c.text as string)
@@ -1160,16 +1182,36 @@ export class PiAdapter extends AgentAdapter {
         // into a single turn. Idle is only the run boundary (agent_end).
         void this.refreshUsage(sessionId);
         break;
-      case 'agent_end': {
+      case 'agent_end':
         void this.refreshUsage(sessionId);
-        // pi fires agent_end again after an auto-retry/compaction continuation;
-        // willRetry === true means "not actually done" — skip the premature idle.
-        if (e.willRetry === true) break;
+        logger.info({
+          sessionId,
+          turnId: this.sessions.get(sessionId)?.logicalTurn,
+          phase: 'agent_end',
+          attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
+          willRetry: e.willRetry === true,
+        }, 'pi agent lifecycle');
+        // agent_end only closes one low-level provider run. Pi may still perform
+        // retry, compaction recovery, or queued continuation work. Terminal
+        // Kraki callbacks are handled exclusively by agent_settled below.
+        break;
+      case 'agent_settled': {
+        void this.refreshUsage(sessionId);
+        logger.info({
+          sessionId,
+          turnId: this.sessions.get(sessionId)?.logicalTurn,
+          phase: 'agent_settled',
+          attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
+          willRetry: false,
+        }, 'pi agent lifecycle');
         const s = this.sessions.get(sessionId);
         if (!s) {
           this.onIdle?.(sessionId);
           break;
         }
+        // A duplicate settled callback must not crystallize the same logical turn
+        // twice. The identity is reset only when a new prompt is accepted.
+        if (s.settledTurn === s.logicalTurn) break;
         if (s.aborting) {
           // abortSession owns the terminal idle(reason=aborted) notification.
           // Pi emits agent_end before acknowledging the abort RPC; do not turn
@@ -1204,15 +1246,18 @@ export class PiAdapter extends AgentAdapter {
             }
           }
           s.finalizing = false;
-          this.onIdle?.(sessionId);
+          this.emitIdleOnce(sessionId, s);
           break;
         }
-        // A backend failure / cancellation already surfaced via onError at
-        // message_end. Don't synthesize a closing reply and don't start a
-        // finalize round that re-runs the model on a dead/broken turn.
+        // Resolve a provisional backend failure only at this authoritative run
+        // boundary. Recoverable attempts were suppressed by willRetry above.
         if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
           s.pendingNarration = '';
-          this.onIdle?.(sessionId);
+          if (s.lastStopReason === 'error' && s.pendingError) {
+            this.onError?.(sessionId, { message: s.pendingError });
+            s.pendingError = undefined;
+          }
+          this.emitIdleOnce(sessionId, s);
           break;
         }
         // The run produced a natural closing answer: the last narration was not
@@ -1230,17 +1275,37 @@ export class PiAdapter extends AgentAdapter {
           // the deferred trace so it isn't ALSO shown as the last Step.
           s.pendingNarration = '';
           this.onMessage?.(sessionId, { content: s.lastNarration.trim() });
-          this.onIdle?.(sessionId);
+          this.emitIdleOnce(sessionId, s);
           break;
         }
         if (s.proc.alive) {
           s.finalizing = true;
+          const finalizeAttempt = ++s.finalizeAttempt;
           s.finalizeResolved = false;
           s.finalizeNarration = '';
           s.finalizeStreamId = undefined;
           s.finalizeStreamLen = 0;
           logger.debug({ sessionId, segments: s.narrationSegments }, 'injecting finalize round');
-          s.proc.send('prompt', { message: finalizePrompt(s.lastNarration) });
+          void s.proc.request(
+            'prompt',
+            { message: finalizePrompt(s.lastNarration) },
+            { timeoutMs: null },
+          ).catch((err: unknown) => {
+            // Ignore a stale rejection after this finalize round ended or a newer
+            // attempt took ownership of the session.
+            if (!s.finalizing || s.finalizeAttempt !== finalizeAttempt || s.exitObserved) return;
+            s.finalizing = false;
+            s.finalizeResolved = false;
+            s.finalizeNarration = '';
+            s.finalizeStreamId = undefined;
+            s.finalizeStreamLen = 0;
+            s.pendingNarration = '';
+            const fallback = s.lastNarration.trim();
+            if (fallback) this.onMessage?.(sessionId, { content: fallback });
+            else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+            logger.warn({ sessionId, err: (err as Error).message }, 'pi finalize prompt rejected');
+            this.emitIdleOnce(sessionId, s);
+          });
           break;
         }
         // Process gone before we could finalize — best-effort crystallize the
@@ -1248,7 +1313,7 @@ export class PiAdapter extends AgentAdapter {
         s.pendingNarration = '';
         const fallback = s.lastNarration.trim();
         if (fallback) this.onMessage?.(sessionId, { content: fallback });
-        this.onIdle?.(sessionId);
+        this.emitIdleOnce(sessionId, s);
         break;
       }
       case 'session_shutdown':
@@ -1421,12 +1486,17 @@ export class PiAdapter extends AgentAdapter {
     const promptPayload: Record<string, unknown> = { message: text, ...(images.length > 0 && { images }) };
 
     if (options?.delivery === 'steer') {
-      // `prompt + streamingBehavior: steer` is race-safe: while active it queues
-      // before the next LLM call; if Pi became idle between the app's state read
-      // and delivery, it starts a normal prompt instead of rejecting the input.
-      // It remains part of the current Kraki lifecycle, so do not reset/finalize
-      // local turn tracking or synthesize another idle.
-      await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+      // A steer is only an interjection while this logical turn is active. Once
+      // Pi has settled it, explicitly convert the late steer into a fresh prompt
+      // so it cannot inherit the previous turn's narration/finalization state.
+      if (s.settledTurn === s.logicalTurn) {
+        this.resetTurnTracking(s);
+        await s.proc.request('prompt', promptPayload, { timeoutMs: null });
+      } else {
+        // While active, Pi queues the interjection before the next LLM call and
+        // it remains part of the current logical turn.
+        await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+      }
       return;
     }
 

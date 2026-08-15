@@ -167,6 +167,21 @@ export interface PendingHumanAction {
   createdAt: string;
 }
 
+/** Restart-safe identity record for an Arm send_input request. Never stores
+ * message body; the hash is only used to detect clientId reuse with different input. */
+export interface InputLedgerEntry {
+  version: 1;
+  clientId: string;
+  status: 'pending' | 'persisted' | 'delivered' | 'settled' | 'rejected';
+  requestedDelivery: 'prompt' | 'steer';
+  delivery: 'prompt' | 'steer' | 'follow_up';
+  turnId: string;
+  contentLength: number;
+  contentHash: string;
+  userSeq?: number;
+  updatedAt: string;
+}
+
 // ── Session Manager ─────────────────────────────────────
 
 export class SessionManager {
@@ -764,6 +779,74 @@ export class SessionManager {
 
   clearPendingHumanAction(sessionId: string): void {
     rmSync(this.pendingActionPath(sessionId), { force: true });
+  }
+
+  // ── Durable input identity state ───────────────────────
+
+  private inputLedgerPath(sessionId: string): string {
+    return join(this.sessionDir(sessionId), 'input-ledger.json');
+  }
+
+  getInputLedger(sessionId: string): InputLedgerEntry[] {
+    const path = this.inputLedgerPath(sessionId);
+    if (!existsSync(path)) return [];
+    try {
+      const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (!Array.isArray(value)) return [];
+      return value.filter((entry): entry is InputLedgerEntry =>
+        !!entry && typeof entry === 'object'
+        && (entry as InputLedgerEntry).version === 1
+        && typeof (entry as InputLedgerEntry).clientId === 'string'
+        && typeof (entry as InputLedgerEntry).contentHash === 'string',
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  getInputLedgerEntry(sessionId: string, clientId: string): InputLedgerEntry | null {
+    return this.getInputLedger(sessionId).find((entry) => entry.clientId === clientId) ?? null;
+  }
+
+  recordInputLedger(sessionId: string, entry: InputLedgerEntry): void {
+    const path = this.inputLedgerPath(sessionId);
+    const entries = this.getInputLedger(sessionId).filter((item) => item.clientId !== entry.clientId);
+    entries.push(entry);
+    atomicWrite(path, JSON.stringify(entries, null, 2));
+  }
+
+  findUserMessageSeqByClientId(sessionId: string, clientId: string): number | null {
+    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
+    if (!existsSync(logPath)) return null;
+    try {
+      for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          const entry = JSON.parse(line) as LoggedMessage;
+          if (entry.type !== 'user_message') continue;
+          const payload = JSON.parse(entry.payload) as { payload?: { clientId?: string } };
+          if (payload.payload?.clientId === clientId) return entry.seq;
+        } catch {
+          // Ignore an unrelated malformed line while recovering the ledger.
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  markInputLedgerSettled(sessionId: string, turnId: string): void {
+    const entries = this.getInputLedger(sessionId);
+    let changed = false;
+    const now = new Date().toISOString();
+    for (const entry of entries) {
+      if (entry.turnId !== turnId || (entry.status !== 'persisted' && entry.status !== 'delivered')) continue;
+      entry.status = 'settled';
+      entry.updatedAt = now;
+      changed = true;
+    }
+    if (changed) atomicWrite(this.inputLedgerPath(sessionId), JSON.stringify(entries, null, 2));
   }
 
   // ── Message log ────────────────────────────────────────

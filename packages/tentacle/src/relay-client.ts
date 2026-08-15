@@ -8,6 +8,7 @@
 
 import { WebSocket } from 'ws';
 import { appendFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type {
@@ -20,7 +21,7 @@ import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction } from './session-manager.js';
+import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction, type InputLedgerEntry } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
@@ -42,6 +43,28 @@ const traceLog = {
     ? (obj: Record<string, unknown>) => traceLogger.info(obj)
     : (_obj: Record<string, unknown>) => { /* no-op */ },
 };
+
+const GENERIC_TERMINAL_ERROR = 'Agent request failed';
+
+function normalizeTerminalErrorMessage(
+  value: unknown,
+): { message: string; quality: number } {
+  if (typeof value !== 'string') {
+    return { message: GENERIC_TERMINAL_ERROR, quality: 0 };
+  }
+  const message = value.trim();
+  if (
+    !message ||
+    /^(success|unknown|error_during_execution)$/i.test(message)
+  ) {
+    return { message: GENERIC_TERMINAL_ERROR, quality: 0 };
+  }
+  const concrete =
+    /\b(?:HTTP\s*)?[45]\d\d\b|status code|request id|provider|API error/i.test(
+      message,
+    );
+  return { message, quality: concrete ? 2 : 1 };
+}
 
 export interface RelayClientOptions {
   /** Relay WebSocket URL (e.g., wss://relay.kraki.chat) */
@@ -199,6 +222,118 @@ export class RelayClient {
   /** Adapter errors become terminal only when the same logical turn reaches
    *  idle. Keeping them pending avoids freezing recoverable tool failures. */
   private pendingTerminalErrors = new Map<string, { message: string; code?: string; source: 'adapter' | 'backend' | 'process' }>();
+  /** Last adapter idle boundary per logical turn. The old implementation used
+   *  one Session-wide boolean, which let a late callback cross a turn boundary. */
+  private settledAdapterTurnIds = new Map<string, string>();
+
+  private activeInputTurnIds = new Map<string, string>();
+  private nextInputTurnAnchors = new Map<string, number>();
+
+  private beginAdapterTurn(sessionId: string, turnId?: string): void {
+    const resolvedTurnId = turnId ?? `${sessionId}:${(this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1}`;
+    if (!turnId) this.nextInputTurnAnchors.set(sessionId, (this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
+    this.activeInputTurnIds.set(sessionId, resolvedTurnId);
+  }
+
+  private inputFingerprint(
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+  ): { contentLength: number; contentHash: string } {
+    const attachmentShape = (attachments ?? []).map((attachment) => ({
+      type: attachment.type,
+      mimeType: 'mimeType' in attachment ? attachment.mimeType : undefined,
+      id: 'id' in attachment ? attachment.id : undefined,
+      size: 'size' in attachment ? attachment.size : undefined,
+      data: 'data' in attachment ? attachment.data : undefined,
+    }));
+    const content = JSON.stringify({ text, attachments: attachmentShape });
+    return {
+      contentLength: text.length,
+      contentHash: createHash('sha256').update(content).digest('hex'),
+    };
+  }
+
+  private reserveInput(
+    sessionId: string,
+    clientId: string | undefined,
+    requestedDelivery: 'prompt' | 'steer',
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+  ): { duplicate: boolean; conflict: boolean; effectiveDelivery: 'prompt' | 'steer'; turnId: string; entry?: InputLedgerEntry } {
+    const meta = this.sessionManager.getMeta(sessionId);
+    const staleSteer = requestedDelivery === 'steer'
+      && (meta?.state === 'idle' || meta?.state === 'disconnected');
+    const effectiveDelivery = staleSteer ? 'prompt' : requestedDelivery;
+    const proposedAnchor = effectiveDelivery === 'steer'
+      ? (meta?.currentTurnStartSeq ?? meta?.lastSeq ?? 0)
+      : (meta?.lastSeq ?? 0) + 1;
+    const turnAnchor = effectiveDelivery === 'steer'
+      ? proposedAnchor
+      : Math.max(proposedAnchor, (this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
+    if (effectiveDelivery === 'prompt') this.nextInputTurnAnchors.set(sessionId, turnAnchor);
+    const turnId = `${sessionId}:${turnAnchor}`;
+    if (!clientId) return { duplicate: false, conflict: false, effectiveDelivery, turnId };
+
+    const fingerprint = this.inputFingerprint(text, attachments);
+    const existing = this.sessionManager.getInputLedgerEntry(sessionId, clientId);
+    if (existing) {
+      if (existing.contentHash !== fingerprint.contentHash) {
+        return { duplicate: true, conflict: true, effectiveDelivery, turnId };
+      }
+      if (existing.status !== 'pending' || this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId) !== null) {
+        return { duplicate: true, conflict: false, effectiveDelivery, turnId, entry: existing };
+      }
+    } else {
+      const recoveredSeq = this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
+      if (recoveredSeq !== null) {
+        const recovered: InputLedgerEntry = {
+          version: 1,
+          clientId,
+          status: 'persisted',
+          requestedDelivery,
+          delivery: effectiveDelivery,
+          turnId,
+          contentLength: fingerprint.contentLength,
+          contentHash: fingerprint.contentHash,
+          userSeq: recoveredSeq,
+          updatedAt: new Date().toISOString(),
+        };
+        this.sessionManager.recordInputLedger(sessionId, recovered);
+        return { duplicate: true, conflict: false, effectiveDelivery, turnId, entry: recovered };
+      }
+    }
+
+    const entry: InputLedgerEntry = {
+      version: 1,
+      clientId,
+      status: 'pending',
+      requestedDelivery,
+      delivery: effectiveDelivery,
+      turnId,
+      contentLength: fingerprint.contentLength,
+      contentHash: fingerprint.contentHash,
+      updatedAt: new Date().toISOString(),
+    };
+    this.sessionManager.recordInputLedger(sessionId, entry);
+    return { duplicate: false, conflict: false, effectiveDelivery, turnId, entry };
+  }
+
+  private updateInputLedger(
+    sessionId: string,
+    clientId: string | undefined,
+    status: InputLedgerEntry['status'],
+    userSeq?: number,
+  ): void {
+    if (!clientId) return;
+    const existing = this.sessionManager.getInputLedgerEntry(sessionId, clientId);
+    if (!existing) return;
+    this.sessionManager.recordInputLedger(sessionId, {
+      ...existing,
+      status,
+      ...(userSeq !== undefined && { userSeq }),
+      updatedAt: new Date().toISOString(),
+    });
+  }
 
   private waitForTurnIdle(sessionId: string): Promise<void> {
     const existing = this.turnIdleWaiters.get(sessionId);
@@ -235,11 +370,26 @@ export class RelayClient {
   }
 
   private settleAdapterIdle(sessionId: string): void {
-    // Idle carries no run/turn identity. Never let a late idle callback erase
-    // a newer card. Permanent bubble boundaries retire settled card state;
-    // explicit abort owns its own freeze+clear path; pending questions stay.
+    // Adapter idle callbacks do not carry a turn id. Use the relay's accepted
+    // input turn as a fence and suppress only a repeat for that same identity.
+    // Pi additionally suppresses duplicate agent_settled callbacks at the source.
+    const turnId = this.activeInputTurnIds.get(sessionId);
+    const idleTurnId = turnId ?? '__unidentified__';
+    if (this.settledAdapterTurnIds.get(sessionId) === idleTurnId) return;
     const terminalError = this.pendingTerminalErrors.get(sessionId);
     if (this.soleOpenQuestion(sessionId) && !terminalError) return;
+    this.settledAdapterTurnIds.set(sessionId, idleTurnId);
+    if (turnId) {
+      this.sessionManager.markInputLedgerSettled(sessionId, turnId);
+      traceLog.info({
+        ns: process.hrtime.bigint().toString(),
+        comp: 'tentacle',
+        evt: 'INPUT-SETTLED',
+        sessionId,
+        turnId,
+        willRetry: false,
+      });
+    }
     if (terminalError) {
       this.pendingTerminalErrors.delete(sessionId);
       this.finishTurnWithStatus(sessionId, {
@@ -523,6 +673,7 @@ export class RelayClient {
         'Continue the previous task using this answer. Do not ask the same question again unless the answer is genuinely insufficient.',
       ].join('\n');
       this.send({ type: 'active', sessionId, payload: {} });
+      this.beginAdapterTurn(sessionId);
       this.sessionManager.markActive(sessionId);
       await this.adapter.sendMessage(sessionId, recoveryPrompt, answer.attachments);
     }
@@ -1034,15 +1185,35 @@ export class RelayClient {
       switch (msg.type) {
         case 'send_input': {
           const clientId = msg.payload.clientId as string | undefined;
+          const requestedDelivery = msg.payload.delivery === 'steer' ? 'steer' as const : 'prompt' as const;
+          const reservation = this.reserveInput(
+            sessionId,
+            clientId,
+            requestedDelivery,
+            msg.payload.text,
+            msg.payload.attachments,
+          );
           traceLog.info({
             ns: process.hrtime.bigint().toString(),
             comp: 'tentacle',
-            evt: 'APP-SEND-INPUT',
+            evt: reservation.conflict ? 'INPUT-REJECTED' : reservation.duplicate ? 'INPUT-DUPLICATE' : 'APP-SEND-INPUT',
             sessionId,
             clientId,
             textLen: (msg.payload.text || '').length,
             hasAttachments: !!msg.payload.attachments?.length,
+            requestedDelivery,
+            delivery: reservation.effectiveDelivery,
+            turnId: reservation.turnId,
+            contentHash: reservation.entry?.contentHash,
           });
+          if (reservation.conflict) {
+            this.send({ type: 'error', sessionId, payload: { message: 'Input clientId was already used for different content.' } });
+            break;
+          }
+          if (reservation.duplicate) break;
+
+          const inputEntry = reservation.entry;
+          const effectiveDelivery = reservation.effectiveDelivery;
           this.send({
             type: 'user_message',
             sessionId,
@@ -1050,8 +1221,23 @@ export class RelayClient {
               content: msg.payload.text,
               ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
               ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
-              ...(msg.payload.delivery === 'steer' && { delivery: 'steer' as const }),
+              ...(effectiveDelivery === 'steer' && { delivery: 'steer' as const }),
             },
+          });
+          const persistedSeq = clientId
+            ? this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId)
+            : null;
+          this.updateInputLedger(sessionId, clientId, 'persisted', persistedSeq ?? undefined);
+          traceLog.info({
+            ns: process.hrtime.bigint().toString(),
+            comp: 'tentacle',
+            evt: 'INPUT-PERSISTED',
+            sessionId,
+            clientId,
+            seq: persistedSeq ?? undefined,
+            turnId: reservation.turnId,
+            textLen: msg.payload.text.length,
+            contentHash: inputEntry?.contentHash,
           });
 
           const pendingAtArrival = this.soleOpenQuestion(sessionId);
@@ -1059,27 +1245,42 @@ export class RelayClient {
             void this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
               text: msg.payload.text === '[image]' ? '' : msg.payload.text,
               attachments: msg.payload.attachments,
-            }, true).catch((err) => {
+            }, true).then(() => {
+              this.updateInputLedger(sessionId, clientId, 'delivered');
+            }).catch((err) => {
+              this.updateInputLedger(sessionId, clientId, 'rejected');
               logger.error({ err, sessionId }, 'question answer from composer failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
             });
             break;
           }
           if ((this.openQuestions.get(sessionId)?.size ?? 0) > 1) {
+            this.updateInputLedger(sessionId, clientId, 'rejected');
             this.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question card directly.' } });
             break;
           }
 
-          if (msg.payload.delivery === 'steer') {
+          if (effectiveDelivery === 'steer') {
             void this.dispatchInput(sessionId, async () => {
               this.beginSteerAcceptance(sessionId);
               await this.ensureSessionResumed(sessionId);
               // Reassert active after resume so an idle/send race cannot leave a
               // successfully accepted interjection running behind an idle UI.
               this.send({ type: 'active', sessionId, payload: {} });
+              this.beginAdapterTurn(sessionId, reservation.turnId);
               this.sessionManager.markActive(sessionId);
-              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId });
+              traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
               await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
+              this.updateInputLedger(sessionId, clientId, 'delivered');
+              traceLog.info({
+                ns: process.hrtime.bigint().toString(),
+                comp: 'tentacle',
+                evt: 'INPUT-DELIVERED',
+                sessionId,
+                clientId,
+                turnId: reservation.turnId,
+                delivery: 'steer',
+              });
               // The adapter ACK is the ownership boundary for the interjection.
               // Reassert active so an idle from the pre-steer work that raced the
               // ACK cannot become the final visible state. A later provider idle
@@ -1088,6 +1289,7 @@ export class RelayClient {
               this.send({ type: 'active', sessionId, payload: {} });
               this.sessionManager.markActive(sessionId);
             }).catch((err) => {
+              this.updateInputLedger(sessionId, clientId, 'rejected');
               this.finishSteerAcceptance(sessionId, false);
               logger.error({ err, sessionId }, 'steer input failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to steer agent: ${(err as Error).message}` } });
@@ -1105,14 +1307,25 @@ export class RelayClient {
                 const queueBehindMaintenance = this.sessionManager.getMeta(sessionId)?.state === 'idle'
                   && (compactionReason === 'threshold' || compactionReason === 'manual');
                 this.send({ type: 'active', sessionId, payload: {} });
-                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance });
+                this.beginAdapterTurn(sessionId, reservation.turnId);
+                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
                 this.sessionManager.markActive(sessionId);
                 if (queueBehindMaintenance) {
                   await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' });
                 } else {
                   await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
                 }
-                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId });
+                this.updateInputLedger(sessionId, clientId, 'delivered');
+                traceLog.info({
+                  ns: process.hrtime.bigint().toString(),
+                  comp: 'tentacle',
+                  evt: 'INPUT-DELIVERED',
+                  sessionId,
+                  clientId,
+                  turnId: reservation.turnId,
+                  delivery: queueBehindMaintenance ? 'follow_up' : 'prompt',
+                });
+                traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId, turnId: reservation.turnId });
               });
               await idle;
             } catch (err) {
@@ -1122,6 +1335,7 @@ export class RelayClient {
           };
           const next = (previous ? previous.catch(() => {}).then(deliver) : deliver())
             .catch((err) => {
+              this.updateInputLedger(sessionId, clientId, 'rejected');
               logger.error({ err, sessionId }, 'send input failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
             })
@@ -1210,6 +1424,9 @@ export class RelayClient {
                 this.card.clear(sessionId);
               }
               this.pendingTerminalErrors.delete(sessionId);
+              const turnId = this.activeInputTurnIds.get(sessionId);
+              this.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
+              if (turnId) this.sessionManager.markInputLedgerSettled(sessionId, turnId);
               this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.clearCompacting(sessionId);
@@ -1231,6 +1448,10 @@ export class RelayClient {
           this.sessionManager.removeLinkByKrakiId(sessionId);
           this.sessionManager.deleteSession(sessionId);
           this.lastAgentContent.delete(sessionId);
+          this.pendingTerminalErrors.delete(sessionId);
+          this.settledAdapterTurnIds.delete(sessionId);
+          this.activeInputTurnIds.delete(sessionId);
+          this.nextInputTurnAnchors.delete(sessionId);
           this.purgeSessionToolState(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
           this.eventsWatcher?.unwatch(sessionId);
@@ -1353,6 +1574,7 @@ export class RelayClient {
       // Otherwise mark idle — the SDK only fires session.idle after a turn
       // completes, so without a prompt the session would stay 'active' forever.
       if (prompt && result.sessionId) {
+        this.beginAdapterTurn(result.sessionId);
         await this.adapter.sendMessage(result.sessionId, prompt);
       } else if (result.sessionId) {
         this.sessionManager.markIdle(result.sessionId);
@@ -1674,6 +1896,9 @@ export class RelayClient {
     };
 
     this.adapter.onMessage = (sessionId, event) => {
+      // A genuine final reply is authoritative for the turn. Any provider error
+      // broadcast before recovery must not be frozen as the outcome at idle.
+      this.pendingTerminalErrors.delete(sessionId);
       // Clear the server-side draft state FIRST so a reconnect snapshot doesn't
       // re-seed a stale draft; arms clear the live draft in the SAME store update
       // that lands this permanent bubble (no double-render flash). onBubble does
@@ -1907,23 +2132,34 @@ export class RelayClient {
     };
 
     this.adapter.onError = (sessionId, event) => {
+      // A settled idle owns terminalization for this turn. Ignore late duplicate
+      // adapter errors until a different accepted turn identity is active.
+      const activeTurnId = this.activeInputTurnIds.get(sessionId) ?? '__unidentified__';
+      if (this.settledAdapterTurnIds.get(sessionId) === activeTurnId) return;
+
       // Stage as the terminal outcome so idle freezes it as a `failed` card,
       // AND broadcast the error immediately so apps surface it without waiting
-      // for the turn to settle. A recoverable error that never reaches idle just
-      // shows the transient notice — no frozen card.
-      this.pendingTerminalErrors.set(sessionId, {
-        message: event.message,
-        source: 'backend',
-      });
+      // for the turn to settle. Keep the best available text: concrete provider
+      // failures outrank generic enum values, and invalid values use a safe
+      // fallback rather than surfacing `success` or `unknown` as an error.
+      const candidate = normalizeTerminalErrorMessage(event.message);
+      const current = this.pendingTerminalErrors.get(sessionId);
+      const currentQuality = current
+        ? normalizeTerminalErrorMessage(current.message).quality
+        : -1;
+      const selected = !current || candidate.quality > currentQuality
+        ? { message: candidate.message, source: 'backend' as const }
+        : current;
+      this.pendingTerminalErrors.set(sessionId, selected);
       this.recordTrace({
         type: 'error',
         sessionId,
-        payload: { message: event.message },
+        payload: { message: selected.message },
       });
       this.send({
         type: 'error',
         sessionId,
-        payload: { message: event.message },
+        payload: { message: selected.message },
       });
     };
 
@@ -1945,6 +2181,10 @@ export class RelayClient {
       this.turnStepCounts.delete(sessionId);
       this.titleGenerationInFlight.delete(sessionId);
       this.lastAgentContent.delete(sessionId);
+      this.pendingTerminalErrors.delete(sessionId);
+      this.settledAdapterTurnIds.delete(sessionId);
+      this.activeInputTurnIds.delete(sessionId);
+      this.nextInputTurnAnchors.delete(sessionId);
       this.purgeSessionToolState(sessionId);
       this.steerAcceptanceInFlight.delete(sessionId);
       this.idleDuringSteerAcceptance.delete(sessionId);

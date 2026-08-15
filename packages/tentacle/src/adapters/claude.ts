@@ -131,6 +131,13 @@ interface InputChannel {
   end(): void;
 }
 
+interface NormalizedClaudeError {
+  message: string;
+  status?: number;
+  requestId?: string;
+  quality: number;
+}
+
 /** Everything we track per session. */
 interface SessionEntry {
   query: Query | null;
@@ -150,6 +157,8 @@ interface SessionEntry {
    * the single conclusion bubble (onMessage) when the turn ends.
    */
   pendingText?: string;
+  pendingError?: NormalizedClaudeError;
+  turnFinalized?: boolean;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -161,6 +170,52 @@ function makeId(prefix: string): string {
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function meaningfulClaudeErrorText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || /^(success|unknown|error_during_execution)$/i.test(text)) return undefined;
+  return text;
+}
+
+function assistantText(message: unknown): string | undefined {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((block): block is { type: string; text: string } =>
+      !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string')
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+  return meaningfulClaudeErrorText(text);
+}
+
+export function normalizeClaudeSDKError(value: Record<string, unknown>): NormalizedClaudeError {
+  const errors = Array.isArray(value.errors)
+    ? value.errors.map(meaningfulClaudeErrorText).filter((item): item is string => !!item)
+    : [];
+  const text = errors.join('; ')
+    || assistantText(value.message)
+    || meaningfulClaudeErrorText(value.result)
+    || meaningfulClaudeErrorText(value.error_message);
+  const statusCandidate = value.api_error_status ?? value.apiErrorStatus ?? value.status ?? value.statusCode;
+  const status = typeof statusCandidate === 'number' ? statusCandidate : undefined;
+  const requestIdCandidate = value.request_id ?? value.requestId;
+  const requestId = typeof requestIdCandidate === 'string' ? requestIdCandidate : undefined;
+  const category = meaningfulClaudeErrorText(value.error);
+  const fallback = status ? `Claude API error (HTTP ${status})` : category ? `Claude API error: ${category}` : 'Claude API request failed';
+  const message = text ?? fallback;
+  const quality = text ? (status ? 4 : 3) : status ? 2 : category ? 1 : 0;
+  return { message, ...(status ? { status } : {}), ...(requestId ? { requestId } : {}), quality };
+}
+
+function preferClaudeError(
+  current: NormalizedClaudeError | undefined,
+  candidate: NormalizedClaudeError,
+): NormalizedClaudeError {
+  return !current || candidate.quality > current.quality ? candidate : current;
 }
 
 /**
@@ -718,9 +773,14 @@ export class ClaudeAdapter extends AgentAdapter {
     }
 
     // Streaming input accepts another user message while the query is running.
-    // Keep the active draft for an interjection; only a normal prompt opens a
-    // fresh turn and resets the draft-bubble prose buffer.
-    if (options?.delivery !== 'steer') entry.pendingText = '';
+    // Keep the active draft for an interjection. A steer arriving after the
+    // authoritative result belongs to a new logical turn and must re-arm the
+    // terminal callback guard before it enters the SDK input channel.
+    if (options?.delivery !== 'steer' || entry.turnFinalized) {
+      entry.pendingText = '';
+      entry.pendingError = undefined;
+      entry.turnFinalized = false;
+    }
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -1079,9 +1139,15 @@ export class ClaudeAdapter extends AgentAdapter {
         }
       }
 
-      // Query completed normally
-      this.flushConclusion(sessionId);
-      this.onIdle?.(sessionId);
+      // Query completed normally. A result event is the authoritative turn
+      // boundary; only fall back here when the SDK ended without one.
+      const entry = this.sessions.get(sessionId);
+      if (!entry?.turnFinalized) {
+        if (entry?.pendingError) this.onError?.(sessionId, { message: entry.pendingError.message });
+        else this.flushConclusion(sessionId);
+        if (entry) entry.turnFinalized = true;
+        this.onIdle?.(sessionId);
+      }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.debug({ sessionId }, 'Session query aborted');
@@ -1152,9 +1218,9 @@ export class ClaudeAdapter extends AgentAdapter {
       case 'assistant': {
         const assistantMsg = msg as SDKAssistantMessage;
         if (assistantMsg.error) {
-          this.onError?.(sessionId, {
-            message: `Claude API error: ${typeof assistantMsg.error === 'string' ? assistantMsg.error : JSON.stringify(assistantMsg.error)}`,
-          });
+          const entry = this.sessions.get(sessionId);
+          const normalized = normalizeClaudeSDKError(assistantMsg as unknown as Record<string, unknown>);
+          if (entry) entry.pendingError = preferClaudeError(entry.pendingError, normalized);
           break;
         }
 
@@ -1221,11 +1287,20 @@ export class ClaudeAdapter extends AgentAdapter {
       case 'result': {
         const result = msg as SDKResultMessage;
         const resultAny = result as unknown as Record<string, unknown>;
+        const entry = this.sessions.get(sessionId);
+        if (entry?.turnFinalized) break;
 
         if (resultAny.is_error) {
-          const errors = resultAny.errors as string[] | undefined;
-          const errorMsg = errors?.join('; ') || (resultAny.subtype as string) || 'Unknown error';
-          this.onError?.(sessionId, { message: errorMsg });
+          const normalized = normalizeClaudeSDKError(resultAny);
+          const error = preferClaudeError(entry?.pendingError, normalized);
+          if (entry) {
+            entry.pendingError = error;
+            entry.pendingText = '';
+          }
+          this.onError?.(sessionId, { message: error.message });
+        } else {
+          if (entry) entry.pendingError = undefined;
+          this.flushConclusion(sessionId);
         }
 
         // Update final usage
@@ -1248,9 +1323,8 @@ export class ClaudeAdapter extends AgentAdapter {
           this.onUsageUpdate?.(sessionId, updated);
         }
 
-        // Flush any buffered prose as the turn's single conclusion bubble
-        // before going idle (draft-bubble model).
-        this.flushConclusion(sessionId);
+        // The result is the authoritative turn boundary.
+        if (entry) entry.turnFinalized = true;
         this.onIdle?.(sessionId);
 
         // Poll for SDK-native title changes (the SDK auto-generates titles

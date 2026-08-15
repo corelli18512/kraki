@@ -59,6 +59,36 @@ describe('SessionManager', () => {
     });
   });
 
+  describe('durable input identity', () => {
+    it('recovers a clientId ledger and message sequence after a new manager loads the same directory', () => {
+      const { sessionId } = sm.createSession('pi');
+      const userPayload = JSON.stringify({ payload: { content: 'one', clientId: 'cid-1' } });
+      const userSeq = sm.appendMessage(sessionId, 'user_message', userPayload);
+      sm.recordInputLedger(sessionId, {
+        version: 1,
+        clientId: 'cid-1',
+        status: 'delivered',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: `${sessionId}:${userSeq}`,
+        contentLength: 3,
+        contentHash: 'hash-1',
+        userSeq,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const restarted = new SessionManager(dir);
+      expect(restarted.findUserMessageSeqByClientId(sessionId, 'cid-1')).toBe(userSeq);
+      expect(restarted.getInputLedgerEntry(sessionId, 'cid-1')).toMatchObject({
+        status: 'delivered',
+        userSeq,
+      });
+
+      restarted.markInputLedgerSettled(sessionId, `${sessionId}:${userSeq}`);
+      expect(restarted.getInputLedgerEntry(sessionId, 'cid-1')?.status).toBe('settled');
+    });
+  });
+
   describe('durable pending human action', () => {
     it('round-trips and clears a pending question sidecar', () => {
       const { sessionId } = sm.createSession('pi');

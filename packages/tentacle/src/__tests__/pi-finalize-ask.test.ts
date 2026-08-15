@@ -4,7 +4,7 @@
  *  - ordinary assistant prose (message_end) → NARRATION: streams to the draft
  *    bubble (onMessageDelta) and is mirrored to the TRACE axis (onNarration).
  *  - the LAST narration is the kept draft; the agent's reply IS its prose.
- *  - at agent_end the adapter applies the SKIP-FINALIZE rule: exactly ONE
+ *  - at agent_settled the adapter applies the SKIP-FINALIZE rule: exactly ONE
  *    narration segment with no tool after it is already a clean trailing reply →
  *    crystallize it directly (onMessage) with NO finalize round. Any other shape
  *    (multi-segment, ends-on-tool, zero narration) injects a finalize round: a
@@ -62,8 +62,12 @@ function makeAdapter(promptWatchdog?: {
     lastNarration: '',
     pendingNarration: '',
     lastStopReason: undefined,
+    pendingError: undefined,
+    logicalTurn: 1,
+    settledTurn: undefined,
     aborting: false,
     finalizing: false,
+    finalizeAttempt: 0,
     finalizeResolved: false,
     finalizeNarration: '',
     finalizeStreamLen: 0,
@@ -118,7 +122,7 @@ describe('pi narration → draft + TRACE', () => {
     expect(session.narrationSegments).toBe(0);
   });
 
-  it('message_end stopReason error surfaces onError and does NOT narrate', () => {
+  it('message_end stopReason error stays provisional and does NOT narrate', () => {
     const { adapter, session, emit } = makeAdapter();
     const onNarration = vi.fn();
     const onError = vi.fn();
@@ -126,7 +130,8 @@ describe('pi narration → draft + TRACE', () => {
     adapter.onError = onError;
     emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }], stopReason: 'error', errorMessage: 'boom' } });
     expect(onNarration).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith('s1', { message: 'boom' });
+    expect(onError).not.toHaveBeenCalled();
+    expect(session.pendingError).toBe('boom');
     expect(session.narrationSegments).toBe(0);
   });
 
@@ -497,7 +502,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
     (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, {
       proc, cwd: '/tmp', model: 'm', mode: 'execute', usage: {}, lastActivity: Date.now(),
       pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0,
-      toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingNarration: '', aborting: false, finalizing: false,
+      toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 1, settledTurn: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0,
       finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0,
     });
     const emit = async (e: Record<string, unknown>) =>
@@ -652,7 +657,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     adapter.onNarrationTrace = onNarrationTrace;
 
     narrate('Here is your answer.');
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Here is your answer.' });
     // The trailing narration graduated INTO the bubble — it must NOT also be
@@ -672,7 +677,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'git status' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'clean', toolCallId: 't1', isError: false });
     narrate('Your tree is clean.'); // one narration AFTER the tool → trailing reply
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Your tree is clean.' });
     // The explanation is the reply (bubble), not a Step.
@@ -695,7 +700,7 @@ describe('pi Steps dedup — trailing narration never traced as its own bubble',
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
     expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First I will look around.' });
 
-    emit({ type: 'agent_end' }); // 2 segments, last is trailing → graduate directly, no finalize round
+    emit({ type: 'agent_settled' }); // 2 segments, last is trailing → graduate directly, no finalize round
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
     // The concluding narration graduated into the bubble → still exactly ONE trace step.
@@ -715,7 +720,7 @@ describe('pi Steps dedup — trailing narration never traced as its own bubble',
     // A real tool follows → the narration is now an intermediate step, traced now.
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_end' }); // ended on a tool, no trailing reply → finalize round
+    emit({ type: 'agent_settled' }); // ended on a tool, no trailing reply → finalize round
     emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'A tidy summary.' }, toolCallId: 'f1' });
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'A tidy summary.' });
@@ -734,7 +739,7 @@ describe('pi finalize round (only when no trailing reply)', () => {
 
     narrate('First I will look around.');
     narrate('Now here is the conclusion.');
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
 
     expect(session.finalizing).toBe(false);
     expect(onIdle).toHaveBeenCalledTimes(1);
@@ -748,9 +753,13 @@ describe('pi finalize round (only when no trailing reply)', () => {
     narrate('Let me run this.');
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(session.finalizing).toBe(true);
-    expect(proc.send).toHaveBeenCalledWith('prompt', expect.objectContaining({ message: expect.stringContaining('finalize_reply') }));
+    expect(proc.request).toHaveBeenCalledWith(
+      'prompt',
+      expect.objectContaining({ message: expect.stringContaining('finalize_reply') }),
+      { timeoutMs: null },
+    );
   });
 
   it('zero narration (tool only) → finalize round', () => {
@@ -758,12 +767,41 @@ describe('pi finalize round (only when no trailing reply)', () => {
     adapter.onIdle = vi.fn();
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(session.finalizing).toBe(true);
-    expect(proc.send).toHaveBeenCalledWith('prompt', expect.objectContaining({ message: expect.stringContaining('finalize_reply') }));
+    expect(proc.request).toHaveBeenCalledWith(
+      'prompt',
+      expect.objectContaining({ message: expect.stringContaining('finalize_reply') }),
+      { timeoutMs: null },
+    );
   });
 
-  it('backend error stopReason → no finalize round, no reply, just idle (error already surfaced)', () => {
+  it('rejected finalize prompt clears finalizing and idles exactly once', async () => {
+    const { adapter, proc, session, emit, narrate } = makeAdapter();
+    const onIdle = vi.fn();
+    const onMessage = vi.fn();
+    adapter.onIdle = onIdle;
+    adapter.onMessage = onMessage;
+    proc.request.mockImplementation((command: string) =>
+      command === 'prompt'
+        ? Promise.reject(new Error('not accepted'))
+        : Promise.resolve({}),
+    );
+    narrate('draft before tool');
+    emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
+    emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
+    emit({ type: 'agent_settled' });
+    await vi.waitFor(() => expect(session.finalizing).toBe(false));
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'draft before tool' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    const promptCalls = proc.request.mock.calls.filter(call => call[0] === 'prompt').length;
+    emit({ type: 'agent_settled' });
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(promptCalls);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('backend error stopReason → emits one error and one idle at terminal agent_settled', () => {
     const { adapter, proc, session, emit } = makeAdapter();
     const onIdle = vi.fn();
     const onMessage = vi.fn();
@@ -772,11 +810,14 @@ describe('pi finalize round (only when no trailing reply)', () => {
     adapter.onMessage = onMessage;
     adapter.onError = onError;
     emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'quota exceeded' } });
-    emit({ type: 'agent_end' });
+    expect(onError).not.toHaveBeenCalled();
+    emit({ type: 'agent_settled' });
+    emit({ type: 'agent_settled' });
     expect(session.finalizing).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith('s1', { message: 'quota exceeded' });
     expect(onMessage).not.toHaveBeenCalled();
-    expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
+    expect(proc.request).not.toHaveBeenCalledWith('prompt', expect.anything(), expect.anything());
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -787,7 +828,7 @@ describe('pi finalize round (only when no trailing reply)', () => {
     adapter.onIdle = onIdle;
     adapter.onMessage = onMessage;
     emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted', errorMessage: 'Request was aborted' } });
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(session.finalizing).toBe(false);
     expect(onMessage).not.toHaveBeenCalled();
     expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
@@ -882,13 +923,13 @@ describe('pi finalize_reply crystallization', () => {
     expect(onToolComplete).not.toHaveBeenCalled();
   });
 
-  it('agent_end after the finalize round clears finalizing and idles', () => {
+  it('agent_settled after the finalize round clears finalizing and idles', () => {
     const { adapter, session, emit } = inFinalize();
     const onIdle = vi.fn();
     adapter.onMessage = vi.fn();
     adapter.onIdle = onIdle;
     emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 't1' });
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(session.finalizing).toBe(false);
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
@@ -900,7 +941,7 @@ describe('pi finalize_reply crystallization', () => {
     adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
     session.finalizeNarration = 'model wrote this instead';
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'model wrote this instead' });
     expect(session.finalizing).toBe(false);
     expect(onIdle).toHaveBeenCalledTimes(1);
@@ -911,7 +952,7 @@ describe('pi finalize_reply crystallization', () => {
     const onMessage = vi.fn();
     adapter.onMessage = onMessage;
     adapter.onIdle = vi.fn();
-    emit({ type: 'agent_end' });
+    emit({ type: 'agent_settled' });
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'drafted closing line' });
   });
 });
@@ -1107,13 +1148,68 @@ describe('pi ask_user → question card', () => {
   });
 });
 
-describe('pi agent_end guards', () => {
-  it('does not idle prematurely on a willRetry agent_end', () => {
-    const { adapter, emit } = makeAdapter();
+describe('pi agent lifecycle boundaries', () => {
+  it('converts a post-settlement steer into a fresh prompt and settles its reply', async () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onMessage = vi.fn();
     const onIdle = vi.fn();
+    adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
-    emit({ type: 'agent_end', willRetry: true });
+    session.settledTurn = session.logicalTurn;
+
+    await adapter.sendMessage('s1', 'steer text', undefined, { delivery: 'steer' });
+    expect(proc.request).toHaveBeenCalledWith(
+      'prompt',
+      { message: 'steer text' },
+      { timeoutMs: null },
+    );
+    expect(session.logicalTurn).toBe(2);
+    expect(session.settledTurn).toBeUndefined();
+
+    await emit({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'steered reply' }], stopReason: 'stop' },
+    });
+    await emit({ type: 'agent_end' });
+    expect(onMessage).not.toHaveBeenCalled();
     expect(onIdle).not.toHaveBeenCalled();
+
+    await emit({ type: 'agent_settled' });
+
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'steered reply' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    expect(session.settledTurn).toBe(session.logicalTurn);
+  });
+
+  it('does not terminalize a provisional error when agent_end will retry', () => {
+    const { adapter, session, emit } = makeAdapter();
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'temporary failure' } });
+    emit({ type: 'agent_end', willRetry: true });
+    expect(session.pendingError).toBe('temporary failure');
+    expect(onError).not.toHaveBeenCalled();
+    expect(onIdle).not.toHaveBeenCalled();
+  });
+
+  it('successful retry clears the stale provisional error', () => {
+    const { adapter, session, emit } = makeAdapter();
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    const onMessage = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    adapter.onMessage = onMessage;
+    emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'temporary failure' } });
+    emit({ type: 'agent_end', willRetry: true });
+    emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop' } });
+    expect(session.pendingError).toBeUndefined();
+    emit({ type: 'agent_settled' });
+    expect(onError).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'recovered' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
   });
 });
 
