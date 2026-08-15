@@ -99,9 +99,9 @@ final class AppState {
     /// It uses the real stores/provider/command/subscription objects but omits
     /// Keychain, auth, WebSocket and Pulse setup, so production UI can run
     /// unchanged against a static temporary database without side effects.
-    init(testDatabase: MessageDatabase) {
-        self.sessionStore = SessionStore(persistenceEnabled: false)
-        self.deviceStore = DeviceStore(persistenceEnabled: false)
+    init(testDatabase: MessageDatabase, loadPersistedState: Bool = false) {
+        self.sessionStore = SessionStore(persistenceEnabled: loadPersistedState)
+        self.deviceStore = DeviceStore(persistenceEnabled: loadPersistedState)
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = KrakiVoiceInputController()

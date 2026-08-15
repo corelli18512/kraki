@@ -60,6 +60,22 @@ def parser() -> argparse.ArgumentParser:
 
     sub.add_parser("ping")
     sub.add_parser("snapshot")
+    sub.add_parser("chat-state")
+    sub.add_parser("chat-layout")
+
+    page_older = sub.add_parser("page-older")
+    page_older.add_argument("--session-id")
+
+    page_newer = sub.add_parser("page-newer")
+    page_newer.add_argument("--session-id")
+
+    scroll_to_bubble = sub.add_parser("scroll-to-bubble")
+    scroll_to_bubble.add_argument("seq", type=int)
+    scroll_to_bubble.add_argument("--screen-y", type=float, default=96)
+
+    scroll_chat = sub.add_parser("scroll-chat")
+    scroll_chat.add_argument("direction", choices=["up", "down"])
+    scroll_chat.add_argument("--ticks", type=int, default=1)
 
     create = sub.add_parser("create-session")
     create.add_argument("--device", required=True)
@@ -130,6 +146,18 @@ def main() -> None:
         method, params = "ping", {}
     elif command == "snapshot":
         method, params = "snapshot", {}
+    elif command == "chat-state":
+        method, params = "chatState", {}
+    elif command == "chat-layout":
+        method, params = "chatLayout", {}
+    elif command == "page-older":
+        method, params = "pageOlder", compact({"sessionId": args.session_id})
+    elif command == "page-newer":
+        method, params = "pageNewer", compact({"sessionId": args.session_id})
+    elif command == "scroll-to-bubble":
+        method, params = "scrollToBubble", {"seq": args.seq, "screenY": args.screen_y}
+    elif command == "scroll-chat":
+        method, params = "scrollChat", {"direction": args.direction, "ticks": args.ticks}
     elif command == "create-session":
         method = "createSession"
         params = compact({

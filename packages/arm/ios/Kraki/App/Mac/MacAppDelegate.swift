@@ -138,8 +138,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #if DEBUG
-        let nativeAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
-        if !nativeAutomation {
+        let environmentAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
+        let argumentAutomation = CommandLine.arguments.contains("--kraki-native-automation")
+        let nativeAutomation = environmentAutomation || argumentAutomation
+        if !environmentAutomation {
+            // LaunchServices command-line automation keeps a normal app
+            // policy so WindowGroup creates its real layout, while `open -g`
+            // still prevents activation and focus theft.
             NSApp.setActivationPolicy(.regular)
         }
         #else

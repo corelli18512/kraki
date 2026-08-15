@@ -184,14 +184,30 @@ struct MacApp: App {
         //   • default — seed mock content so we can iterate on layout
         //     without any backend. Remove once the live path is the
         //     only path.
-        let state = AppState()
         #if DEBUG
-        let snapshotTest = ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
-            || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
-        if snapshotTest {
-            state.hasStoredCredentials = true
-            state.hasCompletedInitialConnect = true
-            state.connectionStatus = .disconnected
+        let environment = ProcessInfo.processInfo.environment
+        let isolatedChatTest = environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+            || environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+            || environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
+        let state: AppState
+        if isolatedChatTest {
+            // These pages must never construct the production graph first:
+            // AppState() initializes the real device identity and Keychain
+            // before the page can opt out of networking. Open only the
+            // explicitly isolated database used by the fixture harness.
+            do {
+                let databaseURL = KrakiDataPaths.persistentDirectory()
+                    .appendingPathComponent("messages.sqlite", isDirectory: false)
+                let loadPersistedState = environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+                    || environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+                state = AppState(
+                    testDatabase: try MessageDatabase(databaseURL: databaseURL),
+                    loadPersistedState: loadPersistedState
+                )
+            } catch {
+                fatalError("Failed to open isolated chat test database: \(error)")
+            }
+
             // Seed the authoritative per-Session heads before MainWindowView
             // mounts. Production receives these from session_list before/while
             // entering Chat; without this seed an offline snapshot would issue
@@ -204,11 +220,16 @@ struct MacApp: App {
                     deviceId: session.deviceId
                 )
             }
-        } else if ProcessInfo.processInfo.environment["KRAKI_DEV_LOCAL"] == "1" {
-            state.devLocalActive = true
-        } else if ProcessInfo.processInfo.environment["KRAKI_MAC_MOCK"] == "1" {
-            MacMockData.install(into: state)
+        } else {
+            state = AppState()
+            if environment["KRAKI_DEV_LOCAL"] == "1" {
+                state.devLocalActive = true
+            } else if environment["KRAKI_MAC_MOCK"] == "1" {
+                MacMockData.install(into: state)
+            }
         }
+        #else
+        let state = AppState()
         #endif
         _appState = State(initialValue: state)
     }
