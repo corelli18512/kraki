@@ -124,8 +124,9 @@ private final class SpinnerReusableView: UICollectionReusableView {
 /// is the whole point of phase 2: we pay the real cost, then hide it behind
 /// measure-ahead (the scheduler pre-warms the cache off the critical frame).
 /// Because the flow layout uses `estimatedItemSize = .zero`, the height we
-/// return is the cell's DEFINITIVE height — the layout and the anchor offset
-/// correction both read this one source of truth.
+/// return is definitive once the row is warm. Cold rows use a lightweight
+/// estimate during entry, then the same cache is upgraded by the scheduler;
+/// layout and anchor correction read that single source of truth thereafter.
 ///
 /// `container` must be installed in the view hierarchy by the VC so traits
 /// (Dynamic Type, interface style) resolve identically to the live list.
@@ -137,6 +138,9 @@ private final class RealCellSizer {
     /// TextKit config the live cell uses. Set by the VC right after init.
     var sessionId: String = "perf"
     var agent: String = "claude"
+    /// Builds the same geometry description used by a visible cell.
+    var contentBuilder: ((ChatMessage) -> TKBubbleContent)?
+    var onHeightReady: ((String) -> Void)?
 
     /// Container whose safe-area insets are forced to zero — a real list
     /// cell self-sizes with none, but an offscreen view pinned into the VC
@@ -180,6 +184,58 @@ private final class RealCellSizer {
 
     func cached(_ id: String) -> CGFloat? { cache[id] }
 
+    func prepare(width: CGFloat) {
+        guard width > 0 else { return }
+        resetIfWidthChanged(width)
+    }
+
+    /// Cheap first-pass geometry for rows that have not been measured yet.
+    /// This path must stay free of Markdown, TextKit, image decoding, and
+    /// SwiftUI host measurement because UICollectionView asks for every row
+    /// during the initial layout.
+    func estimatedHeight(for t: ChatMessage, width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 44 }
+        let isUser = t.type == "user_message" || t.type == "send_input" || t.type == "pending_input"
+        let usable = max(120, width - 24)
+        let bubbleWidth = isUser
+            ? usable - width * 0.18
+            : usable - width * 0.05
+        let bodyWidth = max(80, bubbleWidth - 28)
+        let text = t.content ?? t.result ?? t.interruptedDraft ?? ""
+        // Bound the estimator itself for unusually large historical replies;
+        // the exact scheduler will measure the complete text after entry.
+        let sample = String(text.prefix(8_000))
+        let bodyHeight: CGFloat
+        if sample.isEmpty || sample == "[image]" {
+            bodyHeight = 0
+        } else {
+            let font = UIFont.preferredFont(forTextStyle: .subheadline)
+            let rect = (sample as NSString).boundingRect(
+                with: CGSize(width: bodyWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font],
+                context: nil
+            )
+            let codeBlocks = sample.components(separatedBy: "```").count / 2
+            bodyHeight = ceil(rect.height) + CGFloat(codeBlocks) * 16
+        }
+
+        var height = bodyHeight > 0 ? bodyHeight + 32 : 1
+        let attachmentCount = t.contentRefAttachments.count
+            + (t.attachments?.filter { $0.type == "image" }.count ?? 0)
+        if attachmentCount > 0 {
+            let imageWidth = max(80, min(bodyWidth, 280))
+            let imageHeight = min(240, imageWidth * 0.66)
+            height += bodyHeight > 0 ? 6 : 16
+            height += imageHeight * CGFloat(min(attachmentCount, 3))
+            height += CGFloat(max(0, min(attachmentCount, 3) - 1)) * 6
+        }
+        if t.type == "turn_status" || t.type == "interrupted_turn" {
+            height += 44
+        }
+        return min(max(ceil(height), 1), 1_600)
+    }
+
     /// Cache-or-measure. A miss measures SYNCHRONOUSLY on the calling
     /// thread — when that caller is `sizeForItemAt` during a scroll, the
     /// cost lands on the scroll frame, so we log it as the key jank signal.
@@ -204,6 +260,7 @@ private final class RealCellSizer {
         if cache[t.id] != nil { return }
         let t0 = CFAbsoluteTimeGetCurrent()
         cache[t.id] = measure(t, width: width)
+        onHeightReady?(t.id)
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         if ms > 8 {
             chatPerfLog.log("[prime] slow id=\(t.id) ms=\(String(format: "%.1f", ms))")
@@ -213,7 +270,7 @@ private final class RealCellSizer {
     /// The real self-size: configure the offscreen cell exactly like the
     /// live one and ask UIKit for its fitting height.
     private func measure(_ t: ChatMessage, width: CGFloat) -> CGFloat {
-        TKBubbleContent.make(message: t, sessionId: sessionId, agent: agent)
+        (contentBuilder?(t) ?? TKBubbleContent.make(message: t, sessionId: sessionId, agent: agent))
             .cellHeight(cellWidth: width)
     }
 }
@@ -332,6 +389,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         super.init(nibName: nil, bundle: nil)
         sizer.sessionId = sessionId
         sizer.agent = agent
+        sizer.contentBuilder = { [weak self] message in
+            guard let self else {
+                return TKBubbleContent.make(message: message, sessionId: sessionId, agent: agent)
+            }
+            return self.bubbleContent(for: message)
+        }
+        sizer.onHeightReady = { [weak self] id in
+            self?.scheduleHeightRefresh(for: id)
+        }
         // PX window cap: feed the store the rendered height of each turn (keyed
         // by end seq) so `expandWindow` trims the far edge by SCREEN HEIGHT, not
         // message count. Reads the live sizer cache via `seqToTurnId` (built in
@@ -688,6 +754,23 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         return MessageStore.SessionCard(text: text, action: action)
     }
 
+    /// Build the same content description used by a visible cell and by the
+    /// offscreen warm sizer. Frozen terminal messages use the live-card path.
+    private func bubbleContent(for message: ChatMessage) -> TKBubbleContent {
+        if message.type == "turn_status" || message.type == "interrupted_turn" {
+            return TKBubbleContent.live(
+                card: frozenCard(from: message),
+                agent: agentName,
+                sessionId: sessionId,
+                steps: message.steps ?? 0,
+                isFrozen: true,
+                frozenTimestamp: message.finishedAt ?? message.timestamp,
+                attachments: message.contentRefAttachments
+            )
+        }
+        return TKBubbleContent.make(message: message, sessionId: sessionId, agent: agentName)
+    }
+
     /// Toggle body text selection/links on visible TextKit cells. Off during
     /// scroll (the UITextInteraction is the only per-cell fling cost), on at rest.
     private func setVisibleBodiesInteractive(_ on: Bool) {
@@ -824,18 +907,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                                                 sessionId: sessionId, steps: vm.lastUserStepsHint)
             return CGSize(width: w, height: content.cellHeight(cellWidth: w))
         }
-        if let message = frozenCardMessage(indexPath.item) {
-            let content = TKBubbleContent.live(card: frozenCard(from: message), agent: agentName,
-                                                sessionId: sessionId, steps: message.steps ?? 0,
-                                                isFrozen: true,
-                                                frozenTimestamp: message.finishedAt ?? message.timestamp,
-                                                attachments: message.contentRefAttachments)
-            return CGSize(width: w, height: content.cellHeight(cellWidth: w))
-        }
         guard indexPath.item < items.count, let message = message(items[indexPath.item]) else {
             return CGSize(width: w, height: 44)
         }
-        return CGSize(width: w, height: sizer.height(for: message, width: w))
+        sizer.prepare(width: w)
+        // Cold rows use a cheap estimate. Exact TextKit geometry is upgraded
+        // by warmWindow() in display-link budget slices and invalidated in a
+        // coalesced layout pass, so initial reloadData never measures all 200
+        // rows synchronously on the main thread.
+        let height = sizer.cached(message.id)
+            ?? sizer.estimatedHeight(for: message, width: w)
+        return CGSize(width: w, height: height)
     }
 
     private func presentLiveSteps() {
@@ -1171,16 +1253,61 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// brings them in. Paused while the finger or momentum is moving.
     private var warmEnqueued = Set<String>()
     private var lastWarmWidth: CGFloat = 0
+    private var pendingHeightRefreshIDs = Set<String>()
+    private var heightRefreshScheduled = false
+
+    /// Coalesce exact-height upgrades into one layout pass. When the user is
+    /// following the newest tail, repin after the pass; otherwise preserve the
+    /// first visible item's screen position while rows above it change height.
+    private func scheduleHeightRefresh(for id: String) {
+        guard collectionView != nil else { return }
+        pendingHeightRefreshIDs.insert(id)
+        guard !heightRefreshScheduled else { return }
+        heightRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.heightRefreshScheduled = false
+            let ids = self.pendingHeightRefreshIDs
+            self.pendingHeightRefreshIDs.removeAll(keepingCapacity: true)
+            guard !ids.isEmpty, self.collectionView != nil else { return }
+
+            let top = self.collectionView.contentOffset.y + self.collectionView.adjustedContentInset.top
+            let anchor = self.collectionView.indexPathsForVisibleItems
+                .sorted()
+                .compactMap { indexPath -> (IndexPath, CGFloat)? in
+                    guard let frame = self.collectionView.layoutAttributesForItem(at: indexPath)?.frame,
+                          frame.maxY > top + 1 else { return nil }
+                    return (indexPath, frame.minY)
+                }
+                .first
+            let context = UICollectionViewFlowLayoutInvalidationContext()
+            let paths = ids.compactMap { id in
+                self.items.firstIndex(of: id).map { IndexPath(item: $0, section: 0) }
+            }
+            context.invalidateItems(at: paths)
+            self.collectionView.collectionViewLayout.invalidateLayout(with: context)
+            self.collectionView.layoutIfNeeded()
+
+            if self.followingBottom {
+                self.pinToBottom(reason: "height-warm")
+            } else if let anchor,
+                      let newFrame = self.collectionView.layoutAttributesForItem(at: anchor.0)?.frame {
+                self.collectionView.contentOffset.y += newFrame.minY - anchor.1
+            }
+        }
+    }
 
     private func warmWindow() {
         let width = collectionView.bounds.width
         guard width > 0 else { return }
-        // Width changed (rotation / split): the sizer dropped its cache, so the
-        // "already enqueued" set is stale — clear it and re-warm from scratch.
+        // Width changed (rotation / split): cancel jobs measured for the old
+        // geometry before clearing the cache and restarting the warm pass.
         if width != lastWarmWidth {
             lastWarmWidth = width
+            warmer.cancelAll()
             warmEnqueued.removeAll(keepingCapacity: true)
         }
+        sizer.prepare(width: width)
         var jobs: [() -> Void] = []
         func enqueueIfCold(_ t: ChatMessage) {
             guard sizer.cached(t.id) == nil, !warmEnqueued.contains(t.id) else { return }
