@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.11</title>
+            <pubDate>Sat, 15 Aug 2026 10:54:25 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.11</sparkle:fullReleaseNotesLink>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* feat(mac): add shared launch and signed-out gate by @corelli18512 in https://github.com/corelli18512/kraki/pull/248
+* chore(mac): prepare 0.2.11 release by @corelli18512 in https://github.com/corelli18512/kraki/pull/251
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.10...mac-v0.2.11
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.11/Kraki.app.zip" length="8047833" type="application/octet-stream" sparkle:edSignature="vXOB3lsHQPNpJAkCioamTGR6x4QqLQvcXvBeVlzcAhDpCC1rpagsBDFEbHA5gTpwdSi5MaB+0x+H478wu3zHDw=="/>
+        </item>
+        <item>
             <title>0.2.10</title>
             <pubDate>Sat, 15 Aug 2026 07:58:41 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,25 +54,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.9/Kraki.app.zip" length="7989081" type="application/octet-stream" sparkle:edSignature="rXYTmZcBDaJWdv+atNI0xePMn7qq9YANONQIyxMj1y9h65XLtYpERvTj1muQQeqsSJvQhHIb/+JSG03Q1GejBw=="/>
         </item>
-        <item>
-            <title>0.2.8</title>
-            <pubDate>Tue, 11 Aug 2026 15:10:23 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.8</sparkle:fullReleaseNotesLink>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): capture question clicks before hit frames settle by @corelli18512 in https://github.com/corelli18512/kraki/pull/247
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.7...mac-v0.2.8
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.8/Kraki.app.zip" length="7992004" type="application/octet-stream" sparkle:edSignature="86PWXdwUrEJ3DZD/5E22Ne7XSyZ3IW6cTACkC4MfcJLV7swKPDzukwnUvpwVOeyY1gHk2p3iEVhkTiZVvYlsBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: LV2wSQld1Eeq3XMAekLMSIQd8x9ux+oXVPE6wwrViZlMxXI8nsQkXtoZRsyuJrJXaZr6KRdIJekpFKYdWEAyAA==
-length: 3717
+edSignature: qyISGsxsxba5gteMWEQ544bpNkYzgyNUV67Qo6XIvuRbKH2X60FBRmf+0Xmpyd9PC2HxhoROpVUl/ljR31PNBg==
+length: 3817
 -->
