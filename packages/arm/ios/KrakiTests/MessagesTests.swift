@@ -198,6 +198,38 @@ final class ChatMessageTests: XCTestCase {
 
 @MainActor
 final class MessageProviderHeadTests: XCTestCase {
+    func testEnsureNewerLoadedAdvancesAcrossOffSpineSeqGaps() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-newer-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let sessionId = "sess-newer"
+        func makeMessage(_ seq: Int) -> ChatMessage {
+            ChatMessage(
+                type: seq == 1 ? "user_message" : "agent_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "dev-1",
+                timestamp: "2026-08-06T00:00:00Z",
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+        try database.insert(sessionId, [makeMessage(1), makeMessage(3)])
+
+        let app = AppState(testDatabase: database)
+        _ = app.messageStore.loadInitialWindow(sessionId)
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.bottomSeq, 3)
+
+        // Newer persistent rows can be sparse because off-spine protocol
+        // events consume seq values without entering this SQLite table.
+        try database.insert(sessionId, [makeMessage(5), makeMessage(7)])
+        app.messageProvider?.setTentacleInfo(sessionId: sessionId, lastSeq: 7, deviceId: "dev-1")
+
+        XCTAssertTrue(app.messageProvider?.ensureNewerLoaded(sessionId: sessionId) == true)
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.bottomSeq, 7)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).map(\.seq), [1, 3, 5, 7])
+    }
+
     func testHistoryBatchAdvancesSessionHeadAndUnreadProjection() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-message-provider-test-\(UUID().uuidString)", isDirectory: true)

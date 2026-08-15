@@ -1424,6 +1424,12 @@ final class MacChatBubbleCell: NSView {
             measuredActionHeight = 0
         }
 
+        let configuredRenderKey = renderRevision
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.renderRevision == configuredRenderKey else { return }
+            self.validateDeferredActionHeight(renderKey: configuredRenderKey)
+        }
+
         let exposesInteractiveContent = content.action != nil
             || bodyHasTables
             || !content.inlineImages.isEmpty
@@ -1442,6 +1448,7 @@ final class MacChatBubbleCell: NSView {
     /// separate offscreen MacTextMeasure path a second time.
     func configuredHeight() -> CGFloat {
         guard let content else { return 1 }
+        _ = refreshActionHeightFromHost()
         let artifactHeight = MacHTMLArtifactCardsView.height(for: content.htmlArtifacts.count)
         var bubbleInnerHeight = measuredBodyHeight
         if artifactHeight > 0 {
@@ -1489,6 +1496,30 @@ final class MacChatBubbleCell: NSView {
     }
 
     @objc private func stepsTapped() { onTapSteps?(self) }
+
+    @discardableResult
+    private func refreshActionHeightFromHost() -> Bool {
+        guard content?.action != nil else { return false }
+        actionHost.layoutSubtreeIfNeeded()
+        let nextHeight = max(ceil(actionHost.fittingSize.height), 1)
+        guard abs(measuredActionHeight - nextHeight) > 0.5 else { return false }
+        measuredActionHeight = nextHeight
+        needsLayout = true
+        return true
+    }
+
+    private func validateDeferredActionHeight(renderKey: String) {
+        guard renderRevision == renderKey else { return }
+        if refreshActionHeightFromHost() {
+            onHeightInvalidated?()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
+            guard let self, self.renderRevision == renderKey else { return }
+            if self.refreshActionHeightFromHost() {
+                self.onHeightInvalidated?()
+            }
+        }
+    }
 
     override func layout() {
         super.layout()

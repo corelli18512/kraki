@@ -99,7 +99,7 @@ final class MessageStore {
     /// creates an unnecessarily long scrollbar and extra height warm-up. Start
     /// with a compact tail and lazy-load the rest as the user reaches the top.
     #if os(macOS)
-    private static let initialWindowSize = 60
+    private static let initialWindowSize = 15
     #else
     private static let initialWindowSize = 200
     #endif
@@ -322,12 +322,52 @@ final class MessageStore {
         windows[sessionId] = updated
     }
 
+    /// Append a DB-selected newer page by persistent-spine order. Protocol
+    /// seq values can have off-spine gaps, so this path must not require the
+    /// first row to equal `bottomSeq + 1`.
+    func appendNewerPage(_ sessionId: String, _ rawPage: [ChatMessage]) {
+        let page = rawPage.filter(Self.isPersistent)
+        guard !page.isEmpty,
+              let state = windows[sessionId], state.bottomSeq > 0 else { return }
+
+        let existing = Set((messages[sessionId] ?? []).map(\.seq))
+        let append = page.filter { $0.seq > state.bottomSeq && !existing.contains($0.seq) }
+        guard !append.isEmpty else { return }
+
+        var window = messages[sessionId] ?? []
+        window.append(contentsOf: append)
+        var updated = state
+        updated.bottomSeq = append.last!.seq
+
+        if let h = heightForSeq, maxWindowPx.isFinite {
+            func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
+            let oldCount = window.count - append.count
+            let maxRemove = min(append.count, max(0, oldCount - 1))
+            var removed = 0
+            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+                window.removeFirst()
+                updated.topSeq = window.first!.seq
+                removed += 1
+            }
+        }
+
+        let countCeiling = heightForSeq != nil ? Self.pxModeCountCeiling : Self.maxWindowSize
+        if window.count > countCeiling {
+            let overflow = window.count - countCeiling
+            window.removeFirst(overflow)
+            updated.topSeq = window.first!.seq
+        }
+
+        messages[sessionId] = window
+        windows[sessionId] = updated
+    }
+
     /// Extend the in-memory window with rows from `batch` that
     /// adjoin either end of the current window. **No DB write.**
-    /// Used both by `ingestBatch` (after persist) and by the
-    /// DB-first paths in `MessageProvider.ensureOlderLoaded` /
-    /// `ensureNewerLoaded` where the rows are already in DB and we
-    /// only need to expose them to the window.
+    /// Used by `ingestBatch` (after persist) and the synchronous older-page
+    /// path where the rows are already in DB and we only need to expose them
+    /// to the window. Sparse DB pages use `prependOlderPage` or
+    /// `appendNewerPage` instead.
     ///
     /// Batches that don't adjoin either end leave the window
     /// untouched and emit a 🪢 ⚠️ warning so a buggy caller is

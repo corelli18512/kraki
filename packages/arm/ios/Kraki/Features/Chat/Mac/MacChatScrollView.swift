@@ -609,29 +609,17 @@ final class MacChatDocumentView: NSView {
                     // to a placeholder and repeating the same 20–45ms layout
                     // on the next frame. Exact geometry commits on the next
                     // main-loop turn while the stable viewport anchor is held.
-                    let exactHeight = cell.configuredHeight()
-                    if abs((heightCache[signature] ?? item.estimatedHeight) - exactHeight) > 0.5 {
-                        if !isAnimatingLiveHeight(cacheKey: signature, target: exactHeight) {
-                            pendingHeights[signature] = exactHeight
-                            if intersectsViewport { geometryBarrierReached = true }
-                            if !warmedGeometryPending {
-                                warmedGeometryPending = true
-                                DispatchQueue.main.async { [weak self] in
-                                    guard let self else { return }
-                                    self.onWarmedHeightsReady?()
-                                }
+                    if stageConfiguredHeight(cell, for: item, cacheKey: signature) {
+                        if intersectsViewport { geometryBarrierReached = true }
+                        if !warmedGeometryPending {
+                            warmedGeometryPending = true
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                self.onWarmedHeightsReady?()
                             }
                         }
-                        visibleSignatures[index] = signature
-                    } else {
-                        heightCache[signature] = exactHeight
-                        Self.exactHeightCache.setObject(
-                            NSNumber(value: Double(exactHeight)),
-                            forKey: signature as NSString,
-                            cost: 16
-                        )
-                        visibleSignatures[index] = signature
                     }
+                    visibleSignatures[index] = signature
                     configuredCount += 1
                 }
             }
@@ -640,6 +628,18 @@ final class MacChatDocumentView: NSView {
                 geometryBarrierReached = true
             }
             guard let cell else { continue }
+            if !cell.isPlaceholderFlag,
+               visibleSignatures[index] == signature,
+               pendingHeights[signature] == nil,
+               stageConfiguredHeight(cell, for: item, cacheKey: signature) {
+                if intersectsViewport { geometryBarrierReached = true }
+                if !warmedGeometryPending {
+                    warmedGeometryPending = true
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onWarmedHeightsReady?()
+                    }
+                }
+            }
             cell.frame = itemFrames[index]
             cell.documentWidthVar = documentWidth
             cell.needsLayout = true
@@ -842,6 +842,7 @@ final class MacChatDocumentView: NSView {
                     self.codeHighlightUpgradePending = true
                     return
                 }
+                var geometryChanged = false
                 for (index, item, key, content) in prepared
                 where index < self.contents.count
                     && self.cacheKey(self.contents[index]) == key
@@ -853,6 +854,17 @@ final class MacChatDocumentView: NSView {
                     cell.frame = self.itemFrames[index]
                     cell.documentWidthVar = self.documentWidth
                     cell.needsLayout = true
+                    geometryChanged = self.stageConfiguredHeight(
+                        cell,
+                        for: item,
+                        cacheKey: key
+                    ) || geometryChanged
+                }
+                if geometryChanged, !self.warmedGeometryPending {
+                    self.warmedGeometryPending = true
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onWarmedHeightsReady?()
+                    }
                 }
             }
         }
@@ -1155,6 +1167,27 @@ final class MacChatDocumentView: NSView {
         return content
     }
 
+    @discardableResult
+    private func stageConfiguredHeight(
+        _ cell: MacChatBubbleCell,
+        for item: MacChatItem,
+        cacheKey key: String
+    ) -> Bool {
+        let exactHeight = cell.configuredHeight()
+        guard abs((heightCache[key] ?? item.estimatedHeight) - exactHeight) > 0.5 else {
+            heightCache[key] = exactHeight
+            Self.exactHeightCache.setObject(
+                NSNumber(value: Double(exactHeight)),
+                forKey: key as NSString,
+                cost: 16
+            )
+            return false
+        }
+        guard !isAnimatingLiveHeight(cacheKey: key, target: exactHeight) else { return false }
+        pendingHeights[key] = exactHeight
+        return true
+    }
+
     func layoutDiagnostics(viewport: NSRect) -> [String: Any] {
         let indexedCells = visibleCells.compactMap { index, cell -> (Int, MacChatBubbleCell)? in
             guard index < contents.count else { return nil }
@@ -1166,6 +1199,10 @@ final class MacChatDocumentView: NSView {
             $0.1.htmlArtifactFrameInSuperview?.intersects(viewport) == true
         }
         let anchor = visibleAnchor(at: viewport.minY)
+        let stableAnchor = stableVisibleAnchor(in: viewport)
+        let intersectingIndexes = desiredIndexes(for: viewport, runway: 0).filter {
+            $0 < contents.count && $0 < itemFrames.count && itemFrames[$0].intersects(viewport)
+        }
         var result: [String: Any] = [
             "itemCount": contents.count,
             "visibleCellCount": indexedCells.count,
@@ -1183,9 +1220,17 @@ final class MacChatDocumentView: NSView {
             "viewportX": Double(viewport.minX), "viewportY": Double(viewport.minY),
             "viewportWidth": Double(viewport.width), "viewportHeight": Double(viewport.height),
             "exactHeightCount": heightCache.count,
+            "pendingHeightCount": pendingHeights.count,
             "preparedContentCount": contentCache.count,
             "geometryWarmCompletedCount": geometryWarmCompleted.count,
             "viewportFillScheduled": viewportFillScheduled,
+            "intersectingItemSeqs": intersectingIndexes.map { contents[$0].seq },
+            "intersectingRealSeqs": intersecting.compactMap { index, cell in
+                cell.isPlaceholderFlag ? nil : contents[index].seq
+            },
+            "intersectingPlaceholderSeqs": intersecting.compactMap { index, cell in
+                cell.isPlaceholderFlag ? contents[index].seq : nil
+            },
             "windowWarmActive": warmBatchActive,
             "provisionalContentCount": contentCache.values.reduce(0) { count, content in
                 guard let body = content.body else { return count }
@@ -1211,6 +1256,8 @@ final class MacChatDocumentView: NSView {
                     "screenY": Double(cell.frame.minY - viewport.minY),
                     "width": Double(cell.frame.width),
                     "height": Double(cell.frame.height),
+                    "configuredHeight": Double(cell.configuredHeight()),
+                    "heightDelta": Double(cell.configuredHeight() - cell.frame.height),
                     "hidden": cell.isHidden,
                     "alpha": Double(cell.alphaValue),
                     "placeholder": cell.isPlaceholderFlag,
@@ -1231,6 +1278,12 @@ final class MacChatDocumentView: NSView {
            index < contents.count {
             result["anchorSeq"] = contents[index].seq
             result["anchorDelta"] = Double(anchor.delta)
+        }
+        if let stableAnchor,
+           let index = indexByKey[stableAnchor.key],
+           index < contents.count {
+            result["stableAnchorSeq"] = contents[index].seq
+            result["stableAnchorDelta"] = Double(stableAnchor.delta)
         }
         return result
     }
@@ -2439,14 +2492,23 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     var edgePagingDiagnostics: [String: Any] {
-        [
+        var result: [String: Any] = [
             "allowsEdgePaging": allowsEdgePaging,
             "olderEdgeArmed": olderEdgeArmed,
             "loadingOlder": loadingOlder,
+            "loadingNewer": loadingNewer,
+            "hasUnloadedNewer": hasUnloadedNewer,
+            "suppressNewerPagingAfterOlder": suppressNewerPagingAfterOlder,
             "hasUserScrolled": hasUserScrolled,
             "discreteWheelActive": discreteWheelActive,
             "liveScrollActive": liveScrollActive,
         ]
+        if let geometryAnchorLock,
+           let frame = chatDocumentView.frame(forKey: geometryAnchorLock.key) {
+            result["geometryAnchorDelta"] = Double(geometryAnchorLock.delta)
+            result["geometryAnchorScreenY"] = Double(frame.minY - contentView.bounds.minY)
+        }
+        return result
     }
 
     var distanceToBottom: CGFloat {

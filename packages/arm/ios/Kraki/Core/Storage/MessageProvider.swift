@@ -637,11 +637,13 @@ final class MessageProvider {
 
         let page = appState.messageStore.dbMessages(sessionId, from: from, to: to)
 
-        if let first = page.first, first.seq == from {
-            appState.messageStore.expandWindow(sessionId, page)
+        if !page.isEmpty {
+            appState.messageStore.appendNewerPage(sessionId, page)
             let newBottom = appState.messageStore.windowState(sessionId)?.bottomSeq ?? state.bottomSeq
-            KLog.d("📥 [2/history←DB ensureNewerLoaded] session=\(sessionId.prefix(12)) bottomSeq=\(state.bottomSeq)→\(newBottom) source=GRDB count=\(page.count)")
-            return true
+            if newBottom > state.bottomSeq {
+                KLog.d("📥 [2/history←DB ensureNewerLoaded] session=\(sessionId.prefix(12)) bottomSeq=\(state.bottomSeq)→\(newBottom) source=GRDB count=\(page.count)")
+                return true
+            }
         }
 
         KLog.d("📤 [2/history→WS ensureNewerLoaded] session=\(sessionId.prefix(12)) bottomSeq=\(state.bottomSeq) tentacle=\(last) — DB exhausted, request head")

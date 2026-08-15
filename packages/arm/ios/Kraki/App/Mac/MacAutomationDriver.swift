@@ -12,9 +12,11 @@ import WebKit
 /// invokes the same semantic actions as the SwiftUI controls and exposes state
 /// over a user-private Unix domain socket using newline-delimited JSON.
 ///
-/// Enable explicitly with `KRAKI_NATIVE_AUTOMATION=1`. An already-running app
-/// is never launched or restarted by the client; the client only connects to
-/// the socket advertised in `KRAKI_NATIVE_AUTOMATION_SOCKET`.
+/// Enable explicitly with `KRAKI_NATIVE_AUTOMATION=1` or the Debug-only
+/// `--kraki-native-automation` launch argument. An already-running app is
+/// never launched or restarted by the client; the client only connects to
+/// the socket advertised in `KRAKI_NATIVE_AUTOMATION_SOCKET` or the matching
+/// launch argument.
 @MainActor
 final class MacAutomationDriver {
     static let shared = MacAutomationDriver()
@@ -31,10 +33,21 @@ final class MacAutomationDriver {
 
     var enabled: Bool {
         ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
+            || CommandLine.arguments.contains("--kraki-native-automation")
     }
 
     var socketPath: String {
-        ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_SOCKET"]
+        if let value = CommandLine.arguments.first(where: {
+            $0.hasPrefix("--kraki-native-automation-socket=")
+        }) {
+            return String(value.dropFirst("--kraki-native-automation-socket=".count))
+        }
+        if let index = CommandLine.arguments.firstIndex(
+            of: "--kraki-native-automation-socket"
+        ), index + 1 < CommandLine.arguments.count {
+            return CommandLine.arguments[index + 1]
+        }
+        return ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_SOCKET"]
             ?? Self.defaultSocketPath
     }
 
@@ -202,6 +215,13 @@ final class MacAutomationDriver {
             }
             postUIAction("pageOlder", ["sessionId": sessionId])
             send(result: ["requested": true, "sessionId": sessionId], id: id, on: connection)
+        case "pageNewer":
+            let sessionId = params["sessionId"] as? String ?? selectedSessionId
+            guard let appState, let sessionId else {
+                send(error: "invalid_params", message: "sessionId is required", id: id, on: connection); return
+            }
+            let moved = appState.messageProvider?.ensureNewerLoaded(sessionId: sessionId) ?? false
+            send(result: ["requested": true, "moved": moved, "sessionId": sessionId], id: id, on: connection)
         case "jumpLatest":
             let sessionId = params["sessionId"] as? String ?? selectedSessionId
             guard let sessionId else {
