@@ -127,15 +127,21 @@ private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
 
 @MainActor
 final class KrakiVoiceInputTests: XCTestCase {
-    private func lease(expiryOffset: Int = 600, jti: String = "lease-1") -> VoiceLease {
-        VoiceLease(
+    private func lease(
+        expiryOffset: Int = 600,
+        jti: String = "lease-1",
+        issuedAt: Int? = nil,
+        expiration: Int? = nil
+    ) -> VoiceLease {
+        let now = Int(Date().timeIntervalSince1970)
+        return VoiceLease(
             payload: VoiceLeasePayload(
                 ver: 1,
                 iss: "kraki-head",
                 sub: "user-1",
                 did: "device-1",
-                iat: Int(Date().timeIntervalSince1970),
-                exp: Int(Date().timeIntervalSince1970) + expiryOffset,
+                iat: issuedAt ?? now,
+                exp: expiration ?? now + expiryOffset,
                 quotaSeconds: 600,
                 resource: "voice/doubao",
                 jti: jti
@@ -458,6 +464,22 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertTrue(finals.isEmpty)
     }
 
+    func testLeaseFromPreviousUTCDateIsRejectedEvenBeforeExpiry() {
+        let now = Int(Date().timeIntervalSince1970)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = utc.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(now)))
+        let previousDay = utc.date(byAdding: .second, value: -1, to: today)!
+        let previousDayLease = lease(
+            issuedAt: Int(previousDay.timeIntervalSince1970),
+            expiration: now + 600
+        )
+
+        XCTAssertFalse(
+            KrakiVoiceInputController.isLeaseUsable(previousDayLease, nowUnixSec: now)
+        )
+    }
+
     func testForegroundWarmConnectionIsReusedAcrossRecordings() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
@@ -490,6 +512,32 @@ final class KrakiVoiceInputTests: XCTestCase {
         factory.sessions[0].emit(.final("second", rawText: nil))
         await Task.yield()
         XCTAssertEqual(finals, ["first", "second"])
+    }
+
+    func testWrongDayConnectionDiscardsLeaseAndRequestsReplacement() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        controller.prepare()
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertEqual(controller.state, .recording)
+        factory.sessions[0].emit(.failed("denied: lease_wrong_day"))
+        for _ in 0..<20 where host.requestedResources.count < 2 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(controller.state, .failed("The voice session authorization was rejected. Please try again."))
+        XCTAssertEqual(host.requestedResources, ["voice/doubao", "voice/doubao"])
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        XCTAssertEqual(factory.sessions.count, 1)
     }
 
     func testQuotaExhaustedConnectionDiscardsLeaseAndRequestsReplacement() async {
