@@ -111,8 +111,11 @@ interface SessionEntry {
   session: CopilotSession;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
-  /** Relay-owned logical turn identity echoed by terminal callbacks. */
+  /** Relay-owned logical turn identity for the next accepted prompt. */
   relayTurnId?: string;
+  /** Identity captured at assistant.turn_start and used by all events in that
+   * provider cycle. */
+  eventTurnId?: string;
   turnSettled?: boolean;
 }
 
@@ -517,6 +520,8 @@ export class CopilotAdapter extends AgentAdapter {
     const entry = this.sessions.get(sessionId);
     if (entry) {
       entry.relayTurnId = turnId;
+      // Keep the previous provider-run snapshot until assistant.turn_start;
+      // callbacks in the handoff window must not inherit the new ID.
       entry.turnSettled = false;
     }
   }
@@ -526,7 +531,8 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   private lifecycleEvent(sessionId: string): { turnId?: string } {
-    const turnId = this.sessions.get(sessionId)?.relayTurnId;
+    const entry = this.sessions.get(sessionId);
+    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
     return turnId ? { turnId } : {};
   }
 
@@ -541,7 +547,8 @@ export class CopilotAdapter extends AgentAdapter {
   private emitIdle(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry) entry.turnSettled = true;
-    if (entry?.relayTurnId) this.onIdle?.(sessionId, { turnId: entry.relayTurnId });
+    const event = this.lifecycleEvent(sessionId);
+    if (event.turnId) this.onIdle?.(sessionId, event);
     else this.onIdle?.(sessionId);
   }
 
@@ -1003,7 +1010,7 @@ export class CopilotAdapter extends AgentAdapter {
     const session = await this.client!.createSession(sessionConfig);
     const sid = session.sessionId;
 
-    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, relayTurnId: undefined });
+    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined });
     this.touchSession(sid);
     this.wireEvents(sid, session);
     this.linkCopilotStore(sid);
@@ -1539,7 +1546,7 @@ export class CopilotAdapter extends AgentAdapter {
       sessionId,
       this.makeResumeConfig(sessionId, pendingPermissions, pendingQuestions),
     );
-    const entry = { session, pendingPermissions, pendingQuestions, relayTurnId: undefined };
+    const entry = { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined };
 
     this.sessions.set(sessionId, entry);
     this.touchSession(sessionId);
@@ -1634,8 +1641,8 @@ export class CopilotAdapter extends AgentAdapter {
     const text = (this.pendingNarration.get(sessionId) ?? '').trim();
     this.pendingNarration.delete(sessionId);
     if (text) {
-      this.onNarration?.(sessionId, { content: text });
-      this.onNarrationTrace?.(sessionId, { content: text });
+      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
+      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
     }
   }
 
@@ -1661,7 +1668,7 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     session.on('assistant.message_delta', (event) => {
-      this.onMessageDelta?.(sessionId, { content: event.data.deltaContent });
+      this.onMessageDelta?.(sessionId, { content: event.data.deltaContent, ...this.lifecycleEvent(sessionId) });
     });
 
     session.on('assistant.message', (event) => {
@@ -1715,6 +1722,7 @@ export class CopilotAdapter extends AgentAdapter {
         data.mcpToolName as string | undefined,
       );
       this.onToolStart?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         toolName: protocolToolName,
         args,
         toolCallId,
@@ -1799,6 +1807,7 @@ export class CopilotAdapter extends AgentAdapter {
       clearInflight();
 
       this.onToolComplete?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         toolName,
         result,
         toolCallId,
@@ -1813,7 +1822,7 @@ export class CopilotAdapter extends AgentAdapter {
           (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
         );
         if (refs.length > 0) {
-          this.onAttachmentBytes?.(sessionId, { refs });
+          this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(sessionId) });
         }
       }
     });
@@ -1845,6 +1854,8 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('assistant.turn_start', () => {
+      const entry = this.sessions.get(sessionId);
+      if (entry) entry.eventTurnId = entry.relayTurnId;
       this.clearIdleTimer(sessionId);
       this.turnHasOutput.set(sessionId, false);
       // Only reset if no error was reported before this turn started
@@ -2029,6 +2040,7 @@ export class CopilotAdapter extends AgentAdapter {
       }, 'permission requested');
 
       this.onPermissionRequest?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         id: permId,
         ...parsed,
       });
@@ -2064,6 +2076,7 @@ export class CopilotAdapter extends AgentAdapter {
       }, 'question requested');
 
       this.onQuestionRequest?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         id: qId,
         question: req.question ?? '',
         choices: req.choices ?? undefined,

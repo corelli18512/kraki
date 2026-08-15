@@ -380,7 +380,7 @@ describe('pi prompt recovery', () => {
       return Promise.reject(new Error('pi process exited'));
     });
 
-    await adapter.sendMessage('s1', 'will exit');
+    await expect(adapter.sendMessage('s1', 'will exit')).rejects.toThrow('pi process exited');
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
@@ -397,7 +397,7 @@ describe('pi prompt recovery', () => {
       return Promise.resolve({});
     });
 
-    await adapter.sendMessage('s1', 'one delivery');
+    await expect(adapter.sendMessage('s1', 'one delivery')).rejects.toThrow('could not be reconciled');
     expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(1);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0]?.[1].message).toContain('could not be reconciled');
@@ -829,6 +829,10 @@ describe('pi finalize round (only when no trailing reply)', () => {
     adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
     adapter.setTurnIdentity(sid, 's1:turn-9');
+    emit({ type: 'agent_start' });
+    // A later Relay identity must not relabel callbacks already owned by this
+    // provider run.
+    adapter.setTurnIdentity(sid, 's1:turn-next');
 
     narrate('done');
     emit({ type: 'agent_settled' });

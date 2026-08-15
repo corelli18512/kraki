@@ -158,8 +158,11 @@ interface SessionEntry {
    */
   pendingText?: string;
   pendingError?: NormalizedClaudeError;
-  /** Relay-owned logical turn identity echoed by terminal callbacks. */
+  /** Relay-owned logical turn identity for the next accepted prompt. */
   relayTurnId?: string;
+  /** Identity captured when the SDK delivers the user message that starts
+   * the provider turn. */
+  eventTurnId?: string;
   turnFinalized?: boolean;
 }
 
@@ -656,6 +659,7 @@ export class ClaudeAdapter extends AgentAdapter {
       model: config.model,
       consumerLoop: Promise.resolve(),
       deferredConfig: config,
+      eventTurnId: undefined,
     };
 
     this.sessions.set(sessionId, entry);
@@ -698,6 +702,7 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId,
       model: meta?.model,
       consumerLoop: Promise.resolve(),
+      eventTurnId: undefined,
       deferredConfig: {
         resume: meta?.sdkSessionId ?? sessionId,
         ...(meta?.cwd && { cwd: meta.cwd }),
@@ -741,6 +746,7 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
+      eventTurnId: undefined,
       deferredConfig: {
         resume: resumeId,
         fork: true,
@@ -814,15 +820,19 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   setTurnIdentity(sessionId: string, turnId: string): void {
     const entry = this.sessions.get(sessionId);
-    if (entry) entry.relayTurnId = turnId;
+    if (!entry) return;
+    entry.relayTurnId = turnId;
+    // Keep the previous provider-run snapshot until the next SDK user event;
+    // a late callback in the handoff window must not inherit this new ID.
   }
 
   isTurnSettled(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.turnFinalized === true;
   }
 
-  private lifecycleEvent(entry: SessionEntry): { turnId?: string } {
-    return entry.relayTurnId ? { turnId: entry.relayTurnId } : {};
+  private lifecycleEvent(entry?: SessionEntry): { turnId?: string } {
+    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
+    return turnId ? { turnId } : {};
   }
 
   private emitMessage(sessionId: string, entry: SessionEntry, content: string): void {
@@ -834,7 +844,8 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   private emitIdle(sessionId: string, entry: SessionEntry): void {
-    if (entry.relayTurnId) this.onIdle?.(sessionId, { turnId: entry.relayTurnId });
+    const event = this.lifecycleEvent(entry);
+    if (event.turnId) this.onIdle?.(sessionId, event);
     else this.onIdle?.(sessionId);
   }
 
@@ -1203,8 +1214,8 @@ export class ClaudeAdapter extends AgentAdapter {
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
     if (text) {
-      this.onNarration?.(sessionId, { content: text });
-      this.onNarrationTrace?.(sessionId, { content: text });
+      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
+      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
     }
   }
 
@@ -1291,6 +1302,7 @@ export class ClaudeAdapter extends AgentAdapter {
             sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args });
 
             this.onToolStart?.(sessionId, {
+              ...this.lifecycleEvent(entry),
               toolName: canonicalToolName,
               args,
               toolCallId: toolBlock.id,
@@ -1312,7 +1324,7 @@ export class ClaudeAdapter extends AgentAdapter {
         if (event.type === 'content_block_delta') {
           const delta = event.delta as Record<string, unknown> | undefined;
           if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-            this.onMessageDelta?.(sessionId, { content: delta.text });
+            this.onMessageDelta?.(sessionId, { content: delta.text, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
           }
         }
         break;
@@ -1373,6 +1385,8 @@ export class ClaudeAdapter extends AgentAdapter {
       }
 
       case 'user': {
+        const entry = this.sessions.get(sessionId);
+        if (entry) entry.eventTurnId = entry.relayTurnId;
         // User messages include tool_result content blocks when tools complete.
         // Extract tool results and fire tool_complete callbacks.
         const userMsg = msg as SDKUserMessage;
@@ -1428,6 +1442,7 @@ export class ClaudeAdapter extends AgentAdapter {
               }
 
               this.onToolComplete?.(sessionId, {
+                ...this.lifecycleEvent(entry),
                 toolName: tracked?.toolName ?? 'tool',
                 result,
                 toolCallId,
@@ -1441,7 +1456,7 @@ export class ClaudeAdapter extends AgentAdapter {
                   (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
                 );
                 if (refs.length > 0) {
-                  this.onAttachmentBytes?.(sessionId, { refs });
+                  this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(entry) });
                 }
               }
 
@@ -1562,6 +1577,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }, 'permission requested');
 
       this.onPermissionRequest?.(sessionId, {
+        ...this.lifecycleEvent(this.sessions.get(sessionId)),
         id: permId,
         ...parsed,
       });
@@ -1607,6 +1623,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // best-effort prompt so the user isn't stuck, resolve empty.
         const qId = makeId('q');
         this.onQuestionRequest?.(sessionId, {
+          ...this.lifecycleEvent(this.sessions.get(sessionId)),
           id: qId,
           question: (input.question as string) ?? 'The agent has a question',
           choices: undefined,
@@ -1647,6 +1664,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }, 'question requested');
 
     this.onQuestionRequest?.(sessionId, {
+      ...this.lifecycleEvent(this.sessions.get(sessionId)),
       id: qId,
       question: q?.question ?? 'The agent has a question',
       choices,

@@ -28,30 +28,30 @@ export interface MessageEvent extends TurnLifecycleEvent {
   content: string;
 }
 
-export interface MessageDeltaEvent {
+export interface MessageDeltaEvent extends TurnLifecycleEvent {
   content: string;
 }
 
-export interface PermissionRequestEvent {
+export interface PermissionRequestEvent extends TurnLifecycleEvent {
   id: string;
   toolArgs: ToolArgs;
   description: string;
 }
 
-export interface QuestionRequestEvent {
+export interface QuestionRequestEvent extends TurnLifecycleEvent {
   id: string;
   question: string;
   choices?: string[];
   allowFreeform: boolean;
 }
 
-export interface ToolStartEvent {
+export interface ToolStartEvent extends TurnLifecycleEvent {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId?: string;
 }
 
-export interface ToolCompleteEvent {
+export interface ToolCompleteEvent extends TurnLifecycleEvent {
   toolName: string;
   result: string;
   toolCallId?: string;
@@ -62,7 +62,7 @@ export interface ToolCompleteEvent {
 /** Emitted alongside a tool_complete that carries one or more
  *  `ContentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
  *  to all connected devices as `attachment_data` chunks. */
-export interface AttachmentBytesEvent {
+export interface AttachmentBytesEvent extends TurnLifecycleEvent {
   refs: Array<import('@kraki/protocol').ContentRef>;
 }
 
@@ -76,7 +76,7 @@ export interface ErrorEvent extends TurnLifecycleEvent {
 
 export type CompactionReason = 'manual' | 'threshold' | 'overflow';
 
-export interface CompactionEvent {
+export interface CompactionEvent extends TurnLifecycleEvent {
   phase: 'start' | 'end';
   reason?: CompactionReason;
   aborted?: boolean;
@@ -86,7 +86,7 @@ export interface CompactionEvent {
 
 /** A Kraki-originated system notice (not the agent's words). See
  *  protocol `SystemMessage`. First use: `kind: 'no_reply'`. */
-export interface SystemMessageEvent {
+export interface SystemMessageEvent extends TurnLifecycleEvent {
   kind: string;
   content?: string;
 }

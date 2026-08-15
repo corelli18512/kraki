@@ -255,6 +255,24 @@ export class RelayClient {
     return false;
   }
 
+  /** Non-terminal events must not mutate a turn after its terminal boundary.
+   * Legacy untagged callbacks retain compatibility; real adapters tag every
+   * turn-scoped event so a same-turn late callback is rejected here. */
+  private acceptsAdapterEvent(sessionId: string, turnId?: string): boolean {
+    if (!this.acceptsAdapterTurn(sessionId, turnId)) return false;
+    if (turnId && this.settledAdapterTurnIds.get(sessionId) === turnId) {
+      traceLog.info({
+        ns: process.hrtime.bigint().toString(),
+        comp: 'tentacle',
+        evt: 'ADAPTER-SETTLED-CALLBACK',
+        sessionId,
+        turnId,
+      });
+      return false;
+    }
+    return true;
+  }
+
   private inputFingerprint(
     text: string,
     attachments?: import('@kraki/protocol').Attachment[],
@@ -303,7 +321,12 @@ export class RelayClient {
       ? proposedAnchor
       : Math.max(proposedAnchor, (this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
     if (effectiveDelivery === 'prompt') this.nextInputTurnAnchors.set(sessionId, turnAnchor);
-    const turnId = `${sessionId}:${turnAnchor}`;
+    // An accepted active-turn steer stays inside the provider run that is
+    // already in flight. Reuse its identity so provider callbacks captured at
+    // that run boundary remain admissible; only a stale steer opens a new turn.
+    const turnId = effectiveDelivery === 'steer' && !staleSteer
+      ? this.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
+      : `${sessionId}:${turnAnchor}`;
     if (!clientId) return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
 
     const fingerprint = this.inputFingerprint(text, attachments);
@@ -320,7 +343,11 @@ export class RelayClient {
       // sending the replayed payload again. `dispatching` is deliberately
       // treated as at-most-once: the daemon may have crossed the adapter
       // boundary before it crashed, so replaying it could duplicate the turn.
-      if (existing.status === 'persisted' && existing.userSeq !== undefined) {
+      if ((existing.status === 'persisted' || existing.status === 'rejected') && existing.userSeq !== undefined) {
+        // A rejected adapter call is known not to have been acknowledged. The
+        // transcript row already exists, so retry the same clientId without
+        // appending another user_message. `dispatching` remains at-most-once:
+        // a crash may have crossed the adapter boundary before the state write.
         return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
       }
       if (existing.status === 'pending') {
@@ -729,6 +756,7 @@ export class RelayClient {
     pending: PendingHumanAction,
     answer: { text: string; attachments?: import('@kraki/protocol').Attachment[] },
     wasFreeform: boolean,
+    turnId?: string,
   ): Promise<void> {
     await this.ensureSessionResumed(sessionId);
     const result = await this.adapter.respondToQuestion(sessionId, pending.questionId, answer, wasFreeform);
@@ -744,7 +772,7 @@ export class RelayClient {
         'Continue the previous task using this answer. Do not ask the same question again unless the answer is genuinely insufficient.',
       ].join('\n');
       this.send({ type: 'active', sessionId, payload: {} });
-      this.beginAdapterTurn(sessionId);
+      this.beginAdapterTurn(sessionId, turnId);
       this.sessionManager.markActive(sessionId);
       await this.adapter.sendMessage(sessionId, recoveryPrompt, answer.attachments);
     }
@@ -1318,11 +1346,11 @@ export class RelayClient {
 
           const pendingAtArrival = this.soleOpenQuestion(sessionId);
           if (pendingAtArrival) {
+            this.updateInputLedger(sessionId, clientId, 'dispatching');
             const delivery = this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
               text: msg.payload.text === '[image]' ? '' : msg.payload.text,
               attachments: msg.payload.attachments,
-            }, true);
-            this.updateInputLedger(sessionId, clientId, 'dispatching');
+            }, true, reservation.turnId);
             void delivery.then(() => {
               this.updateInputLedger(sessionId, clientId, 'delivered');
             }).catch((err) => {
@@ -1348,8 +1376,8 @@ export class RelayClient {
               this.beginAdapterTurn(sessionId, reservation.turnId);
               this.sessionManager.markActive(sessionId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
-              const delivery = this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
               this.updateInputLedger(sessionId, clientId, 'dispatching');
+              const delivery = this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
               await delivery;
               this.updateInputLedger(sessionId, clientId, 'delivered');
               traceLog.info({
@@ -1390,10 +1418,10 @@ export class RelayClient {
                 this.beginAdapterTurn(sessionId, reservation.turnId);
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
                 this.sessionManager.markActive(sessionId);
+                this.updateInputLedger(sessionId, clientId, 'dispatching');
                 const delivery = queueBehindMaintenance
                   ? this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
                   : this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
-                this.updateInputLedger(sessionId, clientId, 'dispatching');
                 await delivery;
                 this.updateInputLedger(sessionId, clientId, 'delivered');
                 traceLog.info({
@@ -1976,7 +2004,7 @@ export class RelayClient {
     };
 
     this.adapter.onMessage = (sessionId, event) => {
-      if (!this.acceptsAdapterTurn(sessionId, event.turnId)) return;
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       // A genuine final reply is authoritative for the turn. Any provider error
       // broadcast before recovery must not be frozen as the outcome at idle.
       this.pendingTerminalErrors.delete(sessionId);
@@ -1997,6 +2025,7 @@ export class RelayClient {
     };
 
     this.adapter.onMessageDelta = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       // Streaming narration/progress prose → the draft bubble (coalesced in
       // send()). Rendered as a clean in-flow spine bubble, kept-last per segment.
       this.card.onDelta(sessionId, event.content);
@@ -2006,6 +2035,7 @@ export class RelayClient {
     // the frozen final narration in place so it morphs seamlessly into the final
     // reply. Finalizes into the agent_message spine bubble at idle.
     this.adapter.onFinalizeDelta = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       this.card.onDelta(sessionId, event.content);
     };
 
@@ -2018,13 +2048,16 @@ export class RelayClient {
     //    intermediate steps — never the trailing one that graduates into the
     //    bubble — so a reply never shows duplicated (last Step + bubble).
     this.adapter.onNarration = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       this.card.onNarrationFinal(sessionId, event.content);
     };
     this.adapter.onNarrationTrace = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       const action = {
         type: 'permission' as const,
         payload: { ...event.toolArgs, id: event.id, description: event.description },
@@ -2060,6 +2093,7 @@ export class RelayClient {
     };
 
     this.adapter.onQuestionRequest = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       const action = {
         type: 'question' as const,
         payload: {
@@ -2087,6 +2121,7 @@ export class RelayClient {
     };
 
     this.adapter.onToolStart = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       const headline = makeHeadline(event.toolName, event.args);
       const argsRef = this.offloadArgs(sessionId, event.toolName, event.args);
       // Ship args inline when below the offload floor so clients always have source data
@@ -2140,6 +2175,7 @@ export class RelayClient {
     };
 
     this.adapter.onToolComplete = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       // Recompute headline from the args we stashed at start; falls back to
       // toolName if args aren't available.
       const stashedArgs = this.lastArgsByToolCallId.get(event.toolCallId ?? '');
@@ -2189,7 +2225,9 @@ export class RelayClient {
     // Bytes remain in AttachmentStore until an Arm actually renders the
     // ContentRef. Broadcasting large results to every Arm blocked unrelated
     // control and live messages in Pulse's ordered stream.
-    this.adapter.onAttachmentBytes = () => {};
+    this.adapter.onAttachmentBytes = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
+    };
 
     this.adapter.onIdle = (sessionId, event) => {
       if (!this.acceptsAdapterTurn(sessionId, event?.turnId)) return;
@@ -2209,16 +2247,14 @@ export class RelayClient {
     };
 
     this.adapter.onCompaction = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       if (event.phase === 'start') this.setCompacting(sessionId, true, event.reason);
       else this.setCompacting(sessionId, false);
     };
 
     this.adapter.onError = (sessionId, event) => {
-      if (!this.acceptsAdapterTurn(sessionId, event.turnId)) return;
-      // A settled idle owns terminalization for this turn. Ignore late duplicate
-      // adapter errors until a different accepted turn identity is active.
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       const activeTurnId = event.turnId ?? this.activeInputTurnIds.get(sessionId) ?? '__unidentified__';
-      if (this.settledAdapterTurnIds.get(sessionId) === activeTurnId) return;
 
       // Stage as the terminal outcome so idle freezes it as a `failed` card,
       // AND broadcast the error immediately so apps surface it without waiting
@@ -2251,6 +2287,7 @@ export class RelayClient {
     // bubble so the turn — which produced no final reply — still has an
     // anchor for its "Steps" history.
     this.adapter.onSystemMessage = (sessionId, event) => {
+      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       this.card.onBubble(sessionId);
       this.send({
         type: 'system_message',

@@ -128,6 +128,17 @@ describe('SessionManager', () => {
       expect(compacted.some((entry) => entry.clientId === 'terminal-0')).toBe(false);
       expect(compacted.some((entry) => entry.clientId === 'still-persisted')).toBe(true);
       expect(compacted.some((entry) => entry.clientId === 'terminal-newest')).toBe(true);
+      // The bounded state file may evict the oldest terminal row, but the
+      // append-only identity index must still reject its clientId on replay.
+      expect(restarted.getInputLedgerEntry(sessionId, 'terminal-0')).toMatchObject({
+        clientId: 'terminal-0',
+        status: 'settled',
+      });
+      const afterRestart = new SessionManager(dir);
+      expect(afterRestart.getInputLedgerEntry(sessionId, 'terminal-0')).toMatchObject({
+        clientId: 'terminal-0',
+        status: 'settled',
+      });
     });
   });
 

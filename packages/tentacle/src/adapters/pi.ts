@@ -330,8 +330,10 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
-  /** Relay-owned logical turn identity echoed by terminal callbacks. */
+  /** Relay-owned logical turn identity for the next accepted prompt. */
   relayTurnId?: string;
+  /** Identity captured when the provider run started. */
+  eventTurnId?: string;
   /** Set before the process-exit callback publishes idle, so an in-flight
    *  prompt rejection cannot publish the same terminal idle a second time. */
   exitObserved: boolean;
@@ -777,7 +779,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => this.handleProcessExit(sessionId, sess);
     proc.start();
@@ -838,7 +840,7 @@ export class PiAdapter extends AgentAdapter {
    *  so it can never be the graduating reply. Clears the pending slot. */
   private flushPendingNarration(sessionId: string, s: PiSession): void {
     if (s.pendingNarration) {
-      this.onNarrationTrace?.(sessionId, { content: s.pendingNarration });
+      this.onNarrationTrace?.(sessionId, { content: s.pendingNarration, ...this.lifecycleEvent(s) });
       s.pendingNarration = '';
     }
   }
@@ -851,19 +853,20 @@ export class PiAdapter extends AgentAdapter {
     if (active) {
       if (this.compactingSessions.has(sessionId)) return;
       this.compactingSessions.add(sessionId);
-      this.onCompaction?.(sessionId, { phase: 'start', ...event });
+      this.onCompaction?.(sessionId, { phase: 'start', ...event, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
       return;
     }
     if (!this.compactingSessions.delete(sessionId)) return;
-    this.onCompaction?.(sessionId, { phase: 'end', ...event });
+    this.onCompaction?.(sessionId, { phase: 'end', ...event, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
   }
 
   private normalizeCompactionReason(value: unknown): import('./base.js').CompactionReason | undefined {
     return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
   }
 
-  private lifecycleEvent(s: PiSession): { turnId?: string } {
-    return s.relayTurnId ? { turnId: s.relayTurnId } : {};
+  private lifecycleEvent(s?: PiSession): { turnId?: string } {
+    const turnId = s?.eventTurnId ?? s?.relayTurnId;
+    return turnId ? { turnId } : {};
   }
 
   private emitMessage(sessionId: string, s: PiSession, content: string): void {
@@ -877,13 +880,18 @@ export class PiAdapter extends AgentAdapter {
   private emitIdleOnce(sessionId: string, s: PiSession): void {
     if (s.settledTurn === s.logicalTurn) return;
     s.settledTurn = s.logicalTurn;
-    if (s.relayTurnId) this.onIdle?.(sessionId, { turnId: s.relayTurnId });
+    const event = this.lifecycleEvent(s);
+    if (event.turnId) this.onIdle?.(sessionId, event);
     else this.onIdle?.(sessionId);
   }
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
-    if (s) s.relayTurnId = turnId;
+    if (!s) return;
+    s.relayTurnId = turnId;
+    // A new prompt captures its identity at agent_start. Keep the previous
+    // snapshot until that boundary so a late callback from the old run cannot
+    // fall back to this newly assigned relayTurnId.
   }
 
   isTurnSettled(sessionId: string): boolean {
@@ -992,11 +1000,14 @@ export class PiAdapter extends AgentAdapter {
           errorMessage: typeof e.errorMessage === 'string' ? e.errorMessage : undefined,
         });
         break;
-      case 'agent_start':
+      case 'agent_start': {
+        const s = this.sessions.get(sessionId);
+        if (s) s.eventTurnId = s.relayTurnId;
         // Streaming proves any preceding compaction is over even if its end
         // event was missed during resume/reconciliation.
         this.setCompacting(sessionId, false);
         break;
+      }
       case 'message_update': {
         // Real model/tool activity also proves a stale compaction indicator is
         // no longer current. Clear only the adapter-owned compaction lifecycle;
@@ -1009,7 +1020,7 @@ export class PiAdapter extends AgentAdapter {
           // at the kept closing line (lastNarration) — any pre-thinking prose the
           // model emits before calling finalize_reply is suppressed so the draft
           // doesn't churn. Outside the finalize round, narration streams normally.
-          if (!s?.finalizing) this.onMessageDelta?.(sessionId, { content: am.delta });
+          if (!s?.finalizing) this.onMessageDelta?.(sessionId, { content: am.delta, ...this.lifecycleEvent(s) });
           break;
         }
         // finalize_reply streams its `text` arg like prose: pi parses the partial
@@ -1030,7 +1041,7 @@ export class PiAdapter extends AgentAdapter {
             if (txt.length > s.finalizeStreamLen) {
               const suffix = txt.slice(s.finalizeStreamLen);
               s.finalizeStreamLen = txt.length;
-              this.onFinalizeDelta?.(sessionId, { content: suffix });
+              this.onFinalizeDelta?.(sessionId, { content: suffix, ...this.lifecycleEvent(s) });
             }
           }
         }
@@ -1074,7 +1085,7 @@ export class PiAdapter extends AgentAdapter {
               // confirmed intermediate (a newer narration or a tool follows) —
               // never the trailing reply. Flush the PREVIOUS pending here (a new
               // segment supersedes it). Tracked for the skip-finalize rule.
-              this.onNarration?.(sessionId, { content: prose });
+              this.onNarration?.(sessionId, { content: prose, ...this.lifecycleEvent(s) });
               this.flushPendingNarration(sessionId, s);
               s.pendingNarration = prose;
               s.narrationSegments += 1;
@@ -1115,7 +1126,7 @@ export class PiAdapter extends AgentAdapter {
               // onMessage clears the draft and lands the permanent bubble in place.
               this.emitMessage(sessionId, s, reply);
             } else {
-              this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+              this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
             }
           }
           break;
@@ -1133,6 +1144,7 @@ export class PiAdapter extends AgentAdapter {
           s.toolSinceLastNarration = true;
         }
         this.onToolStart?.(sessionId, {
+          ...this.lifecycleEvent(s),
           toolName,
           args: (e.args as Record<string, unknown>) ?? {},
           toolCallId: e.toolCallId as string | undefined,
@@ -1195,6 +1207,7 @@ export class PiAdapter extends AgentAdapter {
         }
         if (outputAttachments.length > 0 && !resultText) resultText = 'Output is ready.';
         this.onToolComplete?.(sessionId, {
+          ...this.lifecycleEvent(this.sessions.get(sessionId)),
           toolName,
           result: resultText,
           toolCallId: e.toolCallId as string | undefined,
@@ -1205,7 +1218,7 @@ export class PiAdapter extends AgentAdapter {
           const refs = outputAttachments.filter(
             (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
           );
-          if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs });
+          if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
         }
         break;
       }
@@ -1275,7 +1288,7 @@ export class PiAdapter extends AgentAdapter {
               s.pendingNarration = '';
               const draft = s.lastNarration.trim();
               if (draft) this.emitMessage(sessionId, s, draft);
-              else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+              else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
             }
           }
           s.finalizing = false;
@@ -1335,7 +1348,7 @@ export class PiAdapter extends AgentAdapter {
             s.pendingNarration = '';
             const fallback = s.lastNarration.trim();
             if (fallback) this.emitMessage(sessionId, s, fallback);
-            else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
+            else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
             logger.warn({ sessionId, err: (err as Error).message }, 'pi finalize prompt rejected');
             this.emitIdleOnce(sessionId, s);
           });
@@ -1364,6 +1377,7 @@ export class PiAdapter extends AgentAdapter {
           s.pendingQuestions.set(qid, qid);
           const choices = Array.isArray(e.options) ? (e.options as string[]) : undefined;
           this.onQuestionRequest?.(sessionId, {
+            ...this.lifecycleEvent(s),
             id: qid,
             question: String(e.title ?? 'The agent has a question'),
             choices,
@@ -1404,7 +1418,7 @@ export class PiAdapter extends AgentAdapter {
         s.pendingPerms.set(permId, permId);
         const { toolArgs, description } = parsePiPermission(toolName, inputJson);
         logger.debug({ sessionId, permId, toolName: toolArgs.toolName }, 'pi permission requested');
-        this.onPermissionRequest?.(sessionId, { id: permId, toolArgs, description });
+        this.onPermissionRequest?.(sessionId, { ...this.lifecycleEvent(s), id: permId, toolArgs, description });
         break;
       }
       default:
@@ -1585,6 +1599,10 @@ export class PiAdapter extends AgentAdapter {
       // Unexpected process exit owns its terminal idle in proc.onExit. Other
       // transport/watchdog failures still need to release the active UI here.
       if (!s.exitObserved) this.emitIdleOnce(sessionId, s);
+      // RelayClient records this as rejected, making a replay with the same
+      // clientId retry the already-persisted transcript row. Do not turn an
+      // unacknowledged adapter request into a falsely delivered input.
+      throw err;
     }
   }
 
