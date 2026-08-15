@@ -77,6 +77,7 @@ vi.mock('@kraki/crypto', async () => {
 
 import { RelayClient } from '../relay-client.js';
 import { AttachmentStore } from '../attachment-store.js';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -153,6 +154,8 @@ function createAdapter(): Record<string, unknown> {
     getSessionUsage: vi.fn(() => null),
     setSessionUsage: vi.fn(),
     registerSessionAgent: vi.fn(),
+    setTurnIdentity: vi.fn(),
+    isTurnSettled: vi.fn(() => false),
     sendMessage: vi.fn(async () => {}),
     respondToQuestion: vi.fn(async () => 'accepted'),
     respondToPermission: vi.fn(async () => {}),
@@ -2284,6 +2287,76 @@ describe('RelayClient pending-question digest', () => {
     expect(ledger.get('cid-once')?.status).toBe('delivered');
   });
 
+  it('recovers a transcript-persisted input after daemon restart without appending it twice', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>([
+      ['cid-restart', {
+        version: 1,
+        clientId: 'cid-restart',
+        status: 'persisted',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: 'sess_1:43',
+        contentLength: 13,
+        contentHash: 'ignored-by-mock',
+        userSeq: 43,
+        updatedAt: new Date().toISOString(),
+      }],
+    ]);
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    // Match the replay body fingerprint while retaining the persisted state.
+    ledger.get('cid-restart')!.contentHash = createHash('sha256')
+      .update(JSON.stringify({ text: 'restart-safe', attachments: [] }))
+      .digest('hex');
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 701,
+      timestamp: new Date().toISOString(), payload: { text: 'restart-safe', clientId: 'cid-restart' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', 'restart-safe', undefined);
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(0);
+    expect(ledger.get('cid-restart')?.status).toBe('delivered');
+  });
+
+  it('replays a pending reservation when the daemon stopped before transcript persistence', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>();
+    ledger.set('cid-pending', {
+      version: 1,
+      clientId: 'cid-pending',
+      status: 'pending',
+      requestedDelivery: 'prompt',
+      delivery: 'prompt',
+      turnId: 'sess_1:44',
+      contentLength: 13,
+      contentHash: createHash('sha256')
+        .update(JSON.stringify({ text: 'persist-again', attachments: [] }))
+        .digest('hex'),
+      updatedAt: new Date().toISOString(),
+    });
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    smMock.findUserMessageSeqByClientId.mockReturnValue(null);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 702,
+      timestamp: new Date().toISOString(), payload: { text: 'persist-again', clientId: 'cid-pending' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(1);
+    expect(ledger.get('cid-pending')?.status).toBe('delivered');
+  });
+
   it('converts a post-idle steer into a new prompt before spine persistence', async () => {
     const { adapter, sm, ws } = buildClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -2300,6 +2373,80 @@ describe('RelayClient pending-question digest', () => {
     expect(JSON.parse(userMessage![2]).payload).not.toHaveProperty('delivery', 'steer');
   });
 
+  it('converts steer to a new prompt when the adapter is settled but session metadata is still active', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'active', lastSeq: 50, currentTurnStartSeq: 47 });
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 703,
+      timestamp: new Date().toISOString(), payload: { text: 'settled steer', delivery: 'steer' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', 'settled steer', undefined);
+    const userMessage = smMock.appendMessage.mock.calls.find((call) => call[1] === 'user_message');
+    expect(JSON.parse(userMessage![2]).payload).not.toHaveProperty('delivery', 'steer');
+  });
+
+  it('drops terminal callbacks carrying an older relay turn identity', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const send = (seq: number, text: string) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text },
+    })));
+
+    send(704, 'first turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: 'sess_1:1' });
+    send(705, 'second turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.setTurnIdentity).toHaveBeenLastCalledWith('sess_1', 'sess_1:2');
+
+    smMock.appendMessage.mockClear();
+    smMock.markIdle.mockClear();
+    (adapter.onMessage as (sid: string, event: { content: string; turnId: string }) => void)(
+      'sess_1', { content: 'late reply', turnId: 'sess_1:1' },
+    );
+    (adapter.onError as (sid: string, event: { message: string; turnId: string }) => void)(
+      'sess_1', { message: 'late error', turnId: 'sess_1:1' },
+    );
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:1' },
+    );
+
+    expect(smMock.appendMessage).not.toHaveBeenCalled();
+    expect(smMock.markIdle).not.toHaveBeenCalled();
+  });
+
+  it('does not freeze a staged error from an older turn when a settled adapter accepts new work', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const send = (seq: number, text: string, delivery?: 'steer') => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, ...(delivery && { delivery }) },
+    })));
+
+    send(706, 'first turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onError as (sid: string, event: { message: string; turnId: string }) => void)(
+      'sess_1', { message: 'old provider error', turnId: 'sess_1:1' },
+    );
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    send(707, 'new work', 'steer');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+
+    smMock.appendMessage.mockClear();
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:2' },
+    );
+
+    expect(smMock.appendMessage.mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
+    expect(smMock.markIdle).toHaveBeenCalledWith('sess_1');
+  });
+
   it('reasserts active after steer acceptance when the preceding work idles during its ACK', async () => {
     const { adapter, ws, sm } = buildClient();
     let accept!: () => void;
@@ -2312,13 +2459,17 @@ describe('RelayClient pending-question digest', () => {
     })));
     await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
 
-    (adapter.onIdle as (sid: string) => void)('sess_1');
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:0' },
+    );
     expect(sm.markIdle).not.toHaveBeenCalled();
     accept();
     await vi.waitFor(() => expect(sm.markActive).toHaveBeenCalledTimes(2));
     expect(sm.markIdle).not.toHaveBeenCalled();
 
-    (adapter.onIdle as (sid: string) => void)('sess_1');
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:0' },
+    );
     expect(sm.markIdle).toHaveBeenCalledTimes(1);
   });
 

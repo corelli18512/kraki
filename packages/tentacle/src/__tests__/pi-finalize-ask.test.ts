@@ -54,6 +54,7 @@ function makeAdapter(promptWatchdog?: {
     mode: 'execute',
     usage: {},
     lastActivity: Date.now(),
+    relayTurnId: undefined as string | undefined,
     exitObserved: false,
     pendingPerms: new Map<string, string>(),
     pendingQuestions: new Map<string, string>(),
@@ -819,6 +820,46 @@ describe('pi finalize round (only when no trailing reply)', () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(proc.request).not.toHaveBeenCalledWith('prompt', expect.anything(), expect.anything());
     expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('echoes the relay turn identity on final message and idle callbacks', () => {
+    const { adapter, sid, emit, narrate } = makeAdapter();
+    const onMessage = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onIdle = onIdle;
+    adapter.setTurnIdentity(sid, 's1:turn-9');
+
+    narrate('done');
+    emit({ type: 'agent_settled' });
+
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'done', turnId: 's1:turn-9' });
+    expect(onIdle).toHaveBeenCalledWith('s1', { turnId: 's1:turn-9' });
+  });
+
+  it('flushes a pending provider error before process-exit idle', () => {
+    const { adapter, sid, session } = makeAdapter();
+    const events: string[] = [];
+    const onError = vi.fn((_sessionId: string, event: { message: string; turnId?: string }) => {
+      events.push(`error:${event.message}:${event.turnId}`);
+    });
+    const onIdle = vi.fn((_sessionId: string, event?: { turnId?: string }) => {
+      events.push(`idle:${event?.turnId}`);
+    });
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    adapter.setTurnIdentity(sid, 's1:turn-exit');
+    session.pendingError = 'provider failed before settlement';
+
+    (adapter as unknown as { handleProcessExit: (sessionId: string, value: typeof session) => void })
+      .handleProcessExit(sid, session);
+
+    expect(events).toEqual([
+      'error:provider failed before settlement:s1:turn-exit',
+      'idle:s1:turn-exit',
+    ]);
+    expect(session.pendingError).toBeUndefined();
+    expect(session.exitObserved).toBe(true);
   });
 
   it('aborted stopReason → no finalize round, just idle', () => {

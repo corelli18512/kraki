@@ -8,6 +8,7 @@ type Entry = {
   pendingQuestions: Map<string, unknown>;
   pendingText?: string;
   pendingError?: { message: string; quality: number };
+  relayTurnId?: string;
   turnFinalized?: boolean;
 };
 
@@ -92,6 +93,21 @@ describe('Claude error finalization', () => {
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'recovered answer' });
     expect(onIdle).toHaveBeenCalledTimes(1);
     expect(entry.pendingError).toBeUndefined();
+  });
+
+  it('echoes relay turn identity on result-owned message and idle callbacks', () => {
+    const { adapter, entry, handle } = setup();
+    const onMessage = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onIdle = onIdle;
+    adapter.setTurnIdentity('s1', 's1:claude-turn');
+    entry.pendingText = 'completed';
+
+    handle({ type: 'result', is_error: false, subtype: 'success' });
+
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'completed', turnId: 's1:claude-turn' });
+    expect(onIdle).toHaveBeenCalledWith('s1', { turnId: 's1:claude-turn' });
   });
 
   it('re-arms the result boundary when a steer follows a completed turn', async () => {

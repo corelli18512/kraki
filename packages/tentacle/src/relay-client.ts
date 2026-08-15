@@ -221,7 +221,7 @@ export class RelayClient {
   private turnIdleWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>();
   /** Adapter errors become terminal only when the same logical turn reaches
    *  idle. Keeping them pending avoids freezing recoverable tool failures. */
-  private pendingTerminalErrors = new Map<string, { message: string; code?: string; source: 'adapter' | 'backend' | 'process' }>();
+  private pendingTerminalErrors = new Map<string, { message: string; code?: string; source: 'adapter' | 'backend' | 'process'; turnId?: string }>();
   /** Last adapter idle boundary per logical turn. The old implementation used
    *  one Session-wide boolean, which let a late callback cross a turn boundary. */
   private settledAdapterTurnIds = new Map<string, string>();
@@ -229,10 +229,30 @@ export class RelayClient {
   private activeInputTurnIds = new Map<string, string>();
   private nextInputTurnAnchors = new Map<string, number>();
 
-  private beginAdapterTurn(sessionId: string, turnId?: string): void {
+  private beginAdapterTurn(sessionId: string, turnId?: string): string {
     const resolvedTurnId = turnId ?? `${sessionId}:${(this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1}`;
     if (!turnId) this.nextInputTurnAnchors.set(sessionId, (this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
     this.activeInputTurnIds.set(sessionId, resolvedTurnId);
+    this.adapter.setTurnIdentity?.(sessionId, resolvedTurnId);
+    return resolvedTurnId;
+  }
+
+  /** A terminal adapter event must identify the accepted turn it belongs to.
+   *  Legacy adapters/tests may omit the token; those events retain the old
+   *  fallback behavior, while tokenized events are strictly fenced. */
+  private acceptsAdapterTurn(sessionId: string, turnId?: string): boolean {
+    if (!turnId) return true;
+    const activeTurnId = this.activeInputTurnIds.get(sessionId);
+    if (activeTurnId === turnId) return true;
+    traceLog.info({
+      ns: process.hrtime.bigint().toString(),
+      comp: 'tentacle',
+      evt: 'ADAPTER-LATE-CALLBACK',
+      sessionId,
+      turnId,
+      activeTurnId,
+    });
+    return false;
   }
 
   private inputFingerprint(
@@ -259,10 +279,22 @@ export class RelayClient {
     requestedDelivery: 'prompt' | 'steer',
     text: string,
     attachments?: import('@kraki/protocol').Attachment[],
-  ): { duplicate: boolean; conflict: boolean; effectiveDelivery: 'prompt' | 'steer'; turnId: string; entry?: InputLedgerEntry } {
+  ): { duplicate: boolean; conflict: boolean; recovery: boolean; effectiveDelivery: 'prompt' | 'steer'; turnId: string; entry?: InputLedgerEntry } {
     const meta = this.sessionManager.getMeta(sessionId);
+    const adapterSettled = this.adapter.isTurnSettled?.(sessionId) === true;
     const staleSteer = requestedDelivery === 'steer'
-      && (meta?.state === 'idle' || meta?.state === 'disconnected');
+      && (
+        meta?.state === 'idle'
+        || meta?.state === 'disconnected'
+        || adapterSettled
+      );
+    if (requestedDelivery === 'steer' && adapterSettled && meta?.state === 'active') {
+      // Reconcile a terminal callback that Relay missed before opening the new
+      // prompt. Otherwise the prior normal-input chain remains blocked forever
+      // waiting for an idle the adapter has already crossed.
+      const settledTurnId = this.activeInputTurnIds.get(sessionId);
+      this.settleAdapterIdle(sessionId, settledTurnId ? { turnId: settledTurnId } : undefined);
+    }
     const effectiveDelivery = staleSteer ? 'prompt' : requestedDelivery;
     const proposedAnchor = effectiveDelivery === 'steer'
       ? (meta?.currentTurnStartSeq ?? meta?.lastSeq ?? 0)
@@ -272,35 +304,67 @@ export class RelayClient {
       : Math.max(proposedAnchor, (this.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
     if (effectiveDelivery === 'prompt') this.nextInputTurnAnchors.set(sessionId, turnAnchor);
     const turnId = `${sessionId}:${turnAnchor}`;
-    if (!clientId) return { duplicate: false, conflict: false, effectiveDelivery, turnId };
+    if (!clientId) return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
 
     const fingerprint = this.inputFingerprint(text, attachments);
-    const existing = this.sessionManager.getInputLedgerEntry(sessionId, clientId);
+    const ledgerEntries = this.sessionManager.getInputLedger?.(sessionId) ?? [];
+    const existing = this.sessionManager.getInputLedgerEntry?.(sessionId, clientId)
+      ?? ledgerEntries.find((entry) => entry.clientId === clientId)
+      ?? null;
     if (existing) {
       if (existing.contentHash !== fingerprint.contentHash) {
-        return { duplicate: true, conflict: true, effectiveDelivery, turnId };
+        return { duplicate: true, conflict: true, recovery: false, effectiveDelivery, turnId };
       }
-      if (existing.status !== 'pending' || this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId) !== null) {
-        return { duplicate: true, conflict: false, effectiveDelivery, turnId, entry: existing };
+      // `persisted` means the user_message is durable but adapter dispatch has
+      // not started. It is the only restart state that is safe to recover by
+      // sending the replayed payload again. `dispatching` is deliberately
+      // treated as at-most-once: the daemon may have crossed the adapter
+      // boundary before it crashed, so replaying it could duplicate the turn.
+      if (existing.status === 'persisted' && existing.userSeq !== undefined) {
+        return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
       }
-    } else {
-      const recoveredSeq = this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
-      if (recoveredSeq !== null) {
-        const recovered: InputLedgerEntry = {
-          version: 1,
-          clientId,
-          status: 'persisted',
-          requestedDelivery,
-          delivery: effectiveDelivery,
-          turnId,
-          contentLength: fingerprint.contentLength,
-          contentHash: fingerprint.contentHash,
-          userSeq: recoveredSeq,
-          updatedAt: new Date().toISOString(),
-        };
-        this.sessionManager.recordInputLedger(sessionId, recovered);
-        return { duplicate: true, conflict: false, effectiveDelivery, turnId, entry: recovered };
+      if (existing.status === 'pending') {
+        const recoveredSeq = this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
+        if (recoveredSeq !== null) {
+          const recovered: InputLedgerEntry = {
+            ...existing,
+            status: 'persisted',
+            userSeq: recoveredSeq,
+            updatedAt: new Date().toISOString(),
+          };
+          this.sessionManager.recordInputLedger(sessionId, recovered);
+          return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: recovered.delivery === 'steer' ? 'steer' : 'prompt', turnId: recovered.turnId, entry: recovered };
+        }
+        // The reservation survived but the transcript append did not. Reuse
+        // its identity and perform the normal persistence path exactly once.
+        return { duplicate: false, conflict: false, recovery: false, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
       }
+      return { duplicate: true, conflict: false, recovery: false, effectiveDelivery, turnId, entry: existing };
+    }
+
+    // Only legacy sessions with no ledger need the compatibility transcript
+    // scan. Once the durable index exists, the hot input path is O(1) in the
+    // number of historical messages.
+    const recoveredSeq = ledgerEntries.length === 0
+      ? this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId)
+      : null;
+    if (recoveredSeq !== null) {
+      const recovered: InputLedgerEntry = {
+        version: 1,
+        clientId,
+        status: 'persisted',
+        requestedDelivery,
+        delivery: effectiveDelivery,
+        turnId,
+        contentLength: fingerprint.contentLength,
+        contentHash: fingerprint.contentHash,
+        userSeq: recoveredSeq,
+        updatedAt: new Date().toISOString(),
+      };
+      this.sessionManager.recordInputLedger(sessionId, recovered);
+      // Without a matching ledger entry we cannot prove the replayed body is
+      // the original body, so preserve at-most-once behavior for legacy data.
+      return { duplicate: true, conflict: false, recovery: false, effectiveDelivery, turnId, entry: recovered };
     }
 
     const entry: InputLedgerEntry = {
@@ -315,7 +379,7 @@ export class RelayClient {
       updatedAt: new Date().toISOString(),
     };
     this.sessionManager.recordInputLedger(sessionId, entry);
-    return { duplicate: false, conflict: false, effectiveDelivery, turnId, entry };
+    return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId, entry };
   }
 
   private updateInputLedger(
@@ -369,14 +433,20 @@ export class RelayClient {
     }
   }
 
-  private settleAdapterIdle(sessionId: string): void {
-    // Adapter idle callbacks do not carry a turn id. Use the relay's accepted
-    // input turn as a fence and suppress only a repeat for that same identity.
-    // Pi additionally suppresses duplicate agent_settled callbacks at the source.
-    const turnId = this.activeInputTurnIds.get(sessionId);
+  private settleAdapterIdle(sessionId: string, event?: { turnId?: string }): void {
+    if (!this.acceptsAdapterTurn(sessionId, event?.turnId)) return;
+    // Tokenized callbacks use their source identity. Only legacy callbacks fall
+    // back to the currently active relay turn.
+    const turnId = event?.turnId ?? this.activeInputTurnIds.get(sessionId);
     const idleTurnId = turnId ?? '__unidentified__';
     if (this.settledAdapterTurnIds.get(sessionId) === idleTurnId) return;
-    const terminalError = this.pendingTerminalErrors.get(sessionId);
+    const stagedError = this.pendingTerminalErrors.get(sessionId);
+    const terminalError = stagedError && (!stagedError.turnId || stagedError.turnId === idleTurnId)
+      ? stagedError
+      : undefined;
+    if (stagedError?.turnId && stagedError.turnId !== idleTurnId) {
+      this.pendingTerminalErrors.delete(sessionId);
+    }
     if (this.soleOpenQuestion(sessionId) && !terminalError) return;
     this.settledAdapterTurnIds.set(sessionId, idleTurnId);
     if (turnId) {
@@ -392,10 +462,11 @@ export class RelayClient {
     }
     if (terminalError) {
       this.pendingTerminalErrors.delete(sessionId);
+      const { turnId: _turnId, ...terminalPayload } = terminalError;
       this.finishTurnWithStatus(sessionId, {
         type: 'failed',
         payload: {
-          ...terminalError,
+          ...terminalPayload,
           failedAt: new Date().toISOString(),
         },
       });
@@ -1204,6 +1275,7 @@ export class RelayClient {
             requestedDelivery,
             delivery: reservation.effectiveDelivery,
             turnId: reservation.turnId,
+            recovery: reservation.recovery,
             contentHash: reservation.entry?.contentHash,
           });
           if (reservation.conflict) {
@@ -1214,20 +1286,24 @@ export class RelayClient {
 
           const inputEntry = reservation.entry;
           const effectiveDelivery = reservation.effectiveDelivery;
-          this.send({
-            type: 'user_message',
-            sessionId,
-            payload: {
-              content: msg.payload.text,
-              ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
-              ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
-              ...(effectiveDelivery === 'steer' && { delivery: 'steer' as const }),
-            },
-          });
-          const persistedSeq = clientId
-            ? this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId)
-            : null;
-          this.updateInputLedger(sessionId, clientId, 'persisted', persistedSeq ?? undefined);
+          let persistedSeq = inputEntry?.userSeq;
+          if (!reservation.recovery) {
+            const userMessage = {
+              type: 'user_message' as const,
+              sessionId,
+              payload: {
+                content: msg.payload.text,
+                ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
+                ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
+                ...(effectiveDelivery === 'steer' && { delivery: 'steer' as const }),
+              },
+            };
+            this.send(userMessage);
+            // send() assigns the per-session sequence by mutating the outbound
+            // message. Reuse it instead of rescanning messages.jsonl.
+            persistedSeq = (userMessage as typeof userMessage & { seq?: number }).seq;
+            this.updateInputLedger(sessionId, clientId, 'persisted', persistedSeq);
+          }
           traceLog.info({
             ns: process.hrtime.bigint().toString(),
             comp: 'tentacle',
@@ -1242,10 +1318,12 @@ export class RelayClient {
 
           const pendingAtArrival = this.soleOpenQuestion(sessionId);
           if (pendingAtArrival) {
-            void this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
+            const delivery = this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
               text: msg.payload.text === '[image]' ? '' : msg.payload.text,
               attachments: msg.payload.attachments,
-            }, true).then(() => {
+            }, true);
+            this.updateInputLedger(sessionId, clientId, 'dispatching');
+            void delivery.then(() => {
               this.updateInputLedger(sessionId, clientId, 'delivered');
             }).catch((err) => {
               this.updateInputLedger(sessionId, clientId, 'rejected');
@@ -1270,7 +1348,9 @@ export class RelayClient {
               this.beginAdapterTurn(sessionId, reservation.turnId);
               this.sessionManager.markActive(sessionId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
-              await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
+              const delivery = this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
+              this.updateInputLedger(sessionId, clientId, 'dispatching');
+              await delivery;
               this.updateInputLedger(sessionId, clientId, 'delivered');
               traceLog.info({
                 ns: process.hrtime.bigint().toString(),
@@ -1310,11 +1390,11 @@ export class RelayClient {
                 this.beginAdapterTurn(sessionId, reservation.turnId);
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
                 this.sessionManager.markActive(sessionId);
-                if (queueBehindMaintenance) {
-                  await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' });
-                } else {
-                  await this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
-                }
+                const delivery = queueBehindMaintenance
+                  ? this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
+                  : this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+                this.updateInputLedger(sessionId, clientId, 'dispatching');
+                await delivery;
                 this.updateInputLedger(sessionId, clientId, 'delivered');
                 traceLog.info({
                   ns: process.hrtime.bigint().toString(),
@@ -1896,6 +1976,7 @@ export class RelayClient {
     };
 
     this.adapter.onMessage = (sessionId, event) => {
+      if (!this.acceptsAdapterTurn(sessionId, event.turnId)) return;
       // A genuine final reply is authoritative for the turn. Any provider error
       // broadcast before recovery must not be frozen as the outcome at idle.
       this.pendingTerminalErrors.delete(sessionId);
@@ -2110,12 +2191,13 @@ export class RelayClient {
     // control and live messages in Pulse's ordered stream.
     this.adapter.onAttachmentBytes = () => {};
 
-    this.adapter.onIdle = (sessionId) => {
+    this.adapter.onIdle = (sessionId, event) => {
+      if (!this.acceptsAdapterTurn(sessionId, event?.turnId)) return;
       if (this.steerAcceptanceInFlight.has(sessionId)) {
         this.idleDuringSteerAcceptance.add(sessionId);
         return;
       }
-      this.settleAdapterIdle(sessionId);
+      this.settleAdapterIdle(sessionId, event);
     };
 
     this.adapter.onFlushComplete = (sessionId) => {
@@ -2132,9 +2214,10 @@ export class RelayClient {
     };
 
     this.adapter.onError = (sessionId, event) => {
+      if (!this.acceptsAdapterTurn(sessionId, event.turnId)) return;
       // A settled idle owns terminalization for this turn. Ignore late duplicate
       // adapter errors until a different accepted turn identity is active.
-      const activeTurnId = this.activeInputTurnIds.get(sessionId) ?? '__unidentified__';
+      const activeTurnId = event.turnId ?? this.activeInputTurnIds.get(sessionId) ?? '__unidentified__';
       if (this.settledAdapterTurnIds.get(sessionId) === activeTurnId) return;
 
       // Stage as the terminal outcome so idle freezes it as a `failed` card,
@@ -2144,12 +2227,13 @@ export class RelayClient {
       // fallback rather than surfacing `success` or `unknown` as an error.
       const candidate = normalizeTerminalErrorMessage(event.message);
       const current = this.pendingTerminalErrors.get(sessionId);
-      const currentQuality = current
-        ? normalizeTerminalErrorMessage(current.message).quality
+      const currentForTurn = current?.turnId === activeTurnId ? current : undefined;
+      const currentQuality = currentForTurn
+        ? normalizeTerminalErrorMessage(currentForTurn.message).quality
         : -1;
-      const selected = !current || candidate.quality > currentQuality
-        ? { message: candidate.message, source: 'backend' as const }
-        : current;
+      const selected = !currentForTurn || candidate.quality > currentQuality
+        ? { message: candidate.message, source: 'backend' as const, turnId: activeTurnId }
+        : currentForTurn;
       this.pendingTerminalErrors.set(sessionId, selected);
       this.recordTrace({
         type: 'error',

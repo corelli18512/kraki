@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SessionManager } from '../session-manager.js';
+import { SessionManager, type InputLedgerEntry } from '../session-manager.js';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -86,6 +86,48 @@ describe('SessionManager', () => {
 
       restarted.markInputLedgerSettled(sessionId, `${sessionId}:${userSeq}`);
       expect(restarted.getInputLedgerEntry(sessionId, 'cid-1')?.status).toBe('settled');
+    });
+
+    it('bounds terminal ledger history while preserving unresolved inputs', () => {
+      const { sessionId } = sm.createSession('pi');
+      const entries: InputLedgerEntry[] = Array.from({ length: 2055 }, (_, index) => ({
+        version: 1 as const,
+        clientId: `terminal-${index}`,
+        status: 'settled' as const,
+        requestedDelivery: 'prompt' as const,
+        delivery: 'prompt' as const,
+        turnId: `${sessionId}:${index + 1}`,
+        contentLength: 1,
+        contentHash: `hash-${index}`,
+        userSeq: index + 1,
+        updatedAt: new Date(index + 1).toISOString(),
+      }));
+      entries.push({
+        version: 1,
+        clientId: 'still-persisted',
+        status: 'persisted',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: `${sessionId}:open`,
+        contentLength: 1,
+        contentHash: 'open-hash',
+        userSeq: 3000,
+        updatedAt: new Date().toISOString(),
+      });
+      writeFileSync(join(dir, sessionId, 'input-ledger.json'), JSON.stringify(entries));
+
+      const restarted = new SessionManager(dir);
+      restarted.recordInputLedger(sessionId, {
+        ...entries[2054],
+        clientId: 'terminal-newest',
+        updatedAt: new Date().toISOString(),
+      });
+
+      const compacted = restarted.getInputLedger(sessionId);
+      expect(compacted.filter((entry) => entry.status === 'settled')).toHaveLength(2048);
+      expect(compacted.some((entry) => entry.clientId === 'terminal-0')).toBe(false);
+      expect(compacted.some((entry) => entry.clientId === 'still-persisted')).toBe(true);
+      expect(compacted.some((entry) => entry.clientId === 'terminal-newest')).toBe(true);
     });
   });
 

@@ -172,7 +172,7 @@ export interface PendingHumanAction {
 export interface InputLedgerEntry {
   version: 1;
   clientId: string;
-  status: 'pending' | 'persisted' | 'delivered' | 'settled' | 'rejected';
+  status: 'pending' | 'persisted' | 'dispatching' | 'delivered' | 'settled' | 'rejected';
   requestedDelivery: 'prompt' | 'steer';
   delivery: 'prompt' | 'steer' | 'follow_up';
   turnId: string;
@@ -185,7 +185,10 @@ export interface InputLedgerEntry {
 // ── Session Manager ─────────────────────────────────────
 
 export class SessionManager {
+  private static readonly INPUT_LEDGER_TERMINAL_LIMIT = 2048;
+
   private sessionsDir: string;
+  private inputLedgerCache = new Map<string, InputLedgerEntry[]>();
 
   constructor(sessionsDir?: string) {
     this.sessionsDir = sessionsDir ?? join(getConfigDir(), 'sessions');
@@ -520,6 +523,7 @@ export class SessionManager {
    * Delete a session permanently. Removes all files for this session.
    */
   deleteSession(sessionId: string): void {
+    this.inputLedgerCache.delete(sessionId);
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true });
@@ -787,7 +791,7 @@ export class SessionManager {
     return join(this.sessionDir(sessionId), 'input-ledger.json');
   }
 
-  getInputLedger(sessionId: string): InputLedgerEntry[] {
+  private loadInputLedger(sessionId: string): InputLedgerEntry[] {
     const path = this.inputLedgerPath(sessionId);
     if (!existsSync(path)) return [];
     try {
@@ -804,15 +808,36 @@ export class SessionManager {
     }
   }
 
+  getInputLedger(sessionId: string): InputLedgerEntry[] {
+    if (!this.inputLedgerCache.has(sessionId)) {
+      this.inputLedgerCache.set(sessionId, this.loadInputLedger(sessionId));
+    }
+    return this.inputLedgerCache.get(sessionId)!.map((entry) => ({ ...entry }));
+  }
+
   getInputLedgerEntry(sessionId: string, clientId: string): InputLedgerEntry | null {
     return this.getInputLedger(sessionId).find((entry) => entry.clientId === clientId) ?? null;
   }
 
+  private compactInputLedger(entries: InputLedgerEntry[]): InputLedgerEntry[] {
+    const isOpen = (entry: InputLedgerEntry) =>
+      entry.status === 'pending' || entry.status === 'persisted' || entry.status === 'dispatching';
+    const retainedTerminalIds = new Set(
+      entries.filter((entry) => !isOpen(entry))
+        .slice(-SessionManager.INPUT_LEDGER_TERMINAL_LIMIT)
+        .map((entry) => entry.clientId),
+    );
+    return entries.filter((entry) => isOpen(entry) || retainedTerminalIds.has(entry.clientId));
+  }
+
   recordInputLedger(sessionId: string, entry: InputLedgerEntry): void {
     const path = this.inputLedgerPath(sessionId);
-    const entries = this.getInputLedger(sessionId).filter((item) => item.clientId !== entry.clientId);
-    entries.push(entry);
-    atomicWrite(path, JSON.stringify(entries, null, 2));
+    const entries = (this.inputLedgerCache.get(sessionId) ?? this.loadInputLedger(sessionId))
+      .filter((item) => item.clientId !== entry.clientId);
+    entries.push({ ...entry });
+    const compacted = this.compactInputLedger(entries);
+    this.inputLedgerCache.set(sessionId, compacted);
+    atomicWrite(path, JSON.stringify(compacted, null, 2));
   }
 
   findUserMessageSeqByClientId(sessionId: string, clientId: string): number | null {
@@ -841,12 +866,16 @@ export class SessionManager {
     let changed = false;
     const now = new Date().toISOString();
     for (const entry of entries) {
-      if (entry.turnId !== turnId || (entry.status !== 'persisted' && entry.status !== 'delivered')) continue;
+      if (entry.turnId !== turnId || (entry.status !== 'persisted' && entry.status !== 'dispatching' && entry.status !== 'delivered')) continue;
       entry.status = 'settled';
       entry.updatedAt = now;
       changed = true;
     }
-    if (changed) atomicWrite(this.inputLedgerPath(sessionId), JSON.stringify(entries, null, 2));
+    if (changed) {
+      const compacted = this.compactInputLedger(entries);
+      this.inputLedgerCache.set(sessionId, compacted);
+      atomicWrite(this.inputLedgerPath(sessionId), JSON.stringify(compacted, null, 2));
+    }
   }
 
   // ── Message log ────────────────────────────────────────

@@ -19,7 +19,12 @@ export interface SessionCreatedEvent {
   model?: string;
 }
 
-export interface MessageEvent {
+export interface TurnLifecycleEvent {
+  /** Relay-assigned logical turn identity. Missing only for legacy callers/tests. */
+  turnId?: string;
+}
+
+export interface MessageEvent extends TurnLifecycleEvent {
   content: string;
 }
 
@@ -65,7 +70,7 @@ export interface SessionEndedEvent {
   reason: string;
 }
 
-export interface ErrorEvent {
+export interface ErrorEvent extends TurnLifecycleEvent {
   message: string;
 }
 
@@ -171,11 +176,19 @@ export abstract class AgentAdapter {
   /** Called immediately after onToolComplete when bytes need to be pushed
    *  (broadcast as `attachment_data` chunks) to connected devices. */
   onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
-  onIdle: ((sessionId: string) => void) | null = null;
+  onIdle: ((sessionId: string, event?: TurnLifecycleEvent) => void) | null = null;
   /** Called when the adapter has finished all writes to the session's history file
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
+  /** Set before a send is handed to an adapter. Terminal callbacks must echo
+   *  this identity so RelayClient can reject late events from an older turn. */
+  setTurnIdentity(_sessionId: string, _turnId: string): void { /* no-op by default */ }
+
+  /** True when the adapter has already reached its terminal boundary for the
+   *  currently selected turn, even if Relay missed the callback during a race. */
+  isTurnSettled(_sessionId: string): boolean { return false; }
+
   /** Transient agent-runtime compaction activity. Never persisted to the spine
    *  or TRACE; RelayClient maps it to the server-owned status-card slot. */
   onCompaction: ((sessionId: string, event: CompactionEvent) => void) | null = null;

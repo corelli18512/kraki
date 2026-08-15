@@ -330,6 +330,8 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
+  /** Relay-owned logical turn identity echoed by terminal callbacks. */
+  relayTurnId?: string;
   /** Set before the process-exit callback publishes idle, so an in-flight
    *  prompt rejection cannot publish the same terminal idle a second time. */
   exitObserved: boolean;
@@ -775,25 +777,33 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
-    proc.onExit = () => {
-      // Process gone (crash/kill) → no agent_end will arrive. Permissions cannot
-      // be reconstructed, but ask_user is durable at RelayClient/CardManager:
-      // keep its id/card so the next answer can transparently use a recovery
-      // prompt after lazy resume.
-      sess.exitObserved = true;
-      this.clearPendingPerms(sessionId);
-      this.pendingModeSignals.delete(sessionId);
-      this.emitIdleOnce(sessionId, sess);
-      this.onSessionEvicted?.(sessionId);
-    };
+    proc.onExit = () => this.handleProcessExit(sessionId, sess);
     proc.start();
     this.sessions.set(sessionId, sess);
     // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
     // (kraki_get_mode reads it) before the first turn runs.
     this.persistMeta(sessionId, sess);
     return sess;
+  }
+
+  private handleProcessExit(sessionId: string, sess: PiSession): void {
+    // Process gone (crash/kill) means agent_settled may never arrive.
+    // Permissions cannot be reconstructed, but ask_user is durable at
+    // RelayClient/CardManager: keep its id/card so the next answer can use a
+    // recovery prompt after lazy resume.
+    sess.exitObserved = true;
+    this.clearPendingPerms(sessionId);
+    this.pendingModeSignals.delete(sessionId);
+    // A concrete provider error must cross the adapter boundary before idle;
+    // otherwise Relay would freeze the turn as successful on process death.
+    if (sess.pendingError) {
+      this.emitError(sessionId, sess, sess.pendingError);
+      sess.pendingError = undefined;
+    }
+    this.emitIdleOnce(sessionId, sess);
+    this.onSessionEvicted?.(sessionId);
   }
 
   /** Drop any outstanding permission cards for a session (child died / respawn)
@@ -852,10 +862,33 @@ export class PiAdapter extends AgentAdapter {
     return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
   }
 
+  private lifecycleEvent(s: PiSession): { turnId?: string } {
+    return s.relayTurnId ? { turnId: s.relayTurnId } : {};
+  }
+
+  private emitMessage(sessionId: string, s: PiSession, content: string): void {
+    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(s) });
+  }
+
+  private emitError(sessionId: string, s: PiSession, message: string): void {
+    this.onError?.(sessionId, { message, ...this.lifecycleEvent(s) });
+  }
+
   private emitIdleOnce(sessionId: string, s: PiSession): void {
     if (s.settledTurn === s.logicalTurn) return;
     s.settledTurn = s.logicalTurn;
-    this.onIdle?.(sessionId);
+    if (s.relayTurnId) this.onIdle?.(sessionId, { turnId: s.relayTurnId });
+    else this.onIdle?.(sessionId);
+  }
+
+  setTurnIdentity(sessionId: string, turnId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (s) s.relayTurnId = turnId;
+  }
+
+  isTurnSettled(sessionId: string): boolean {
+    const s = this.sessions.get(sessionId);
+    return !!s && s.settledTurn === s.logicalTurn;
   }
 
   private resetTurnTracking(s: PiSession): void {
@@ -1080,7 +1113,7 @@ export class PiAdapter extends AgentAdapter {
               // For resummarize the streamed text already replaced the draft; for
               // keep (resummarize:false) the draft is still the frozen narration.
               // onMessage clears the draft and lands the permanent bubble in place.
-              this.onMessage?.(sessionId, { content: reply });
+              this.emitMessage(sessionId, s, reply);
             } else {
               this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
             }
@@ -1237,11 +1270,11 @@ export class PiAdapter extends AgentAdapter {
             const finalizeProse = s.finalizeNarration.trim();
             if (finalizeProse) {
               this.flushPendingNarration(sessionId, s);
-              this.onMessage?.(sessionId, { content: finalizeProse });
+              this.emitMessage(sessionId, s, finalizeProse);
             } else {
               s.pendingNarration = '';
               const draft = s.lastNarration.trim();
-              if (draft) this.onMessage?.(sessionId, { content: draft });
+              if (draft) this.emitMessage(sessionId, s, draft);
               else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
             }
           }
@@ -1254,7 +1287,7 @@ export class PiAdapter extends AgentAdapter {
         if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
           s.pendingNarration = '';
           if (s.lastStopReason === 'error' && s.pendingError) {
-            this.onError?.(sessionId, { message: s.pendingError });
+            this.emitError(sessionId, s, s.pendingError);
             s.pendingError = undefined;
           }
           this.emitIdleOnce(sessionId, s);
@@ -1274,7 +1307,7 @@ export class PiAdapter extends AgentAdapter {
           // The trailing narration graduates verbatim into the bubble — discard
           // the deferred trace so it isn't ALSO shown as the last Step.
           s.pendingNarration = '';
-          this.onMessage?.(sessionId, { content: s.lastNarration.trim() });
+          this.emitMessage(sessionId, s, s.lastNarration.trim());
           this.emitIdleOnce(sessionId, s);
           break;
         }
@@ -1301,7 +1334,7 @@ export class PiAdapter extends AgentAdapter {
             s.finalizeStreamLen = 0;
             s.pendingNarration = '';
             const fallback = s.lastNarration.trim();
-            if (fallback) this.onMessage?.(sessionId, { content: fallback });
+            if (fallback) this.emitMessage(sessionId, s, fallback);
             else this.onSystemMessage?.(sessionId, { kind: 'no_reply' });
             logger.warn({ sessionId, err: (err as Error).message }, 'pi finalize prompt rejected');
             this.emitIdleOnce(sessionId, s);
@@ -1312,7 +1345,7 @@ export class PiAdapter extends AgentAdapter {
         // kept draft, which graduates into the bubble → discard its deferred trace.
         s.pendingNarration = '';
         const fallback = s.lastNarration.trim();
-        if (fallback) this.onMessage?.(sessionId, { content: fallback });
+        if (fallback) this.emitMessage(sessionId, s, fallback);
         this.emitIdleOnce(sessionId, s);
         break;
       }
@@ -1548,10 +1581,10 @@ export class PiAdapter extends AgentAdapter {
         return;
       }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
-      this.onError?.(sessionId, { message });
+      this.emitError(sessionId, s, message);
       // Unexpected process exit owns its terminal idle in proc.onExit. Other
       // transport/watchdog failures still need to release the active UI here.
-      if (!s.exitObserved) this.onIdle?.(sessionId);
+      if (!s.exitObserved) this.emitIdleOnce(sessionId, s);
     }
   }
 

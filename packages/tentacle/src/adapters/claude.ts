@@ -158,6 +158,8 @@ interface SessionEntry {
    */
   pendingText?: string;
   pendingError?: NormalizedClaudeError;
+  /** Relay-owned logical turn identity echoed by terminal callbacks. */
+  relayTurnId?: string;
   turnFinalized?: boolean;
 }
 
@@ -810,6 +812,32 @@ export class ClaudeAdapter extends AgentAdapter {
    * SDK gets its first user message, then starts the consumer loop for
    * multi-turn conversation.
    */
+  setTurnIdentity(sessionId: string, turnId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.relayTurnId = turnId;
+  }
+
+  isTurnSettled(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.turnFinalized === true;
+  }
+
+  private lifecycleEvent(entry: SessionEntry): { turnId?: string } {
+    return entry.relayTurnId ? { turnId: entry.relayTurnId } : {};
+  }
+
+  private emitMessage(sessionId: string, entry: SessionEntry, content: string): void {
+    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(entry) });
+  }
+
+  private emitError(sessionId: string, entry: SessionEntry, message: string): void {
+    this.onError?.(sessionId, { message, ...this.lifecycleEvent(entry) });
+  }
+
+  private emitIdle(sessionId: string, entry: SessionEntry): void {
+    if (entry.relayTurnId) this.onIdle?.(sessionId, { turnId: entry.relayTurnId });
+    else this.onIdle?.(sessionId);
+  }
+
   private async spawnQuery(sessionId: string, initialPrompt: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
@@ -1143,10 +1171,14 @@ export class ClaudeAdapter extends AgentAdapter {
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
       if (!entry?.turnFinalized) {
-        if (entry?.pendingError) this.onError?.(sessionId, { message: entry.pendingError.message });
+        if (entry?.pendingError) this.emitError(sessionId, entry, entry.pendingError.message);
         else this.flushConclusion(sessionId);
-        if (entry) entry.turnFinalized = true;
-        this.onIdle?.(sessionId);
+        if (entry) {
+          entry.turnFinalized = true;
+          this.emitIdle(sessionId, entry);
+        } else {
+          this.onIdle?.(sessionId);
+        }
       }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
@@ -1154,7 +1186,9 @@ export class ClaudeAdapter extends AgentAdapter {
         return;
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
-      this.onError?.(sessionId, { message: getErrorMessage(err) });
+      const entry = this.sessions.get(sessionId);
+      if (entry) this.emitError(sessionId, entry, getErrorMessage(err));
+      else this.onError?.(sessionId, { message: getErrorMessage(err) });
       this.onSessionEnded?.(sessionId, { reason: 'error' });
     }
   }
@@ -1183,7 +1217,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (!entry) return;
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
-    if (text) this.onMessage?.(sessionId, { content: text });
+    if (text) this.emitMessage(sessionId, entry, text);
   }
 
   /**
@@ -1297,7 +1331,8 @@ export class ClaudeAdapter extends AgentAdapter {
             entry.pendingError = error;
             entry.pendingText = '';
           }
-          this.onError?.(sessionId, { message: error.message });
+          if (entry) this.emitError(sessionId, entry, error.message);
+          else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
           this.flushConclusion(sessionId);
@@ -1324,8 +1359,12 @@ export class ClaudeAdapter extends AgentAdapter {
         }
 
         // The result is the authoritative turn boundary.
-        if (entry) entry.turnFinalized = true;
-        this.onIdle?.(sessionId);
+        if (entry) {
+          entry.turnFinalized = true;
+          this.emitIdle(sessionId, entry);
+        } else {
+          this.onIdle?.(sessionId);
+        }
 
         // Poll for SDK-native title changes (the SDK auto-generates titles
         // but doesn't emit title events in the stream)
