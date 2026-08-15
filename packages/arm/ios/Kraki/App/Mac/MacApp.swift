@@ -13,7 +13,151 @@
 
 #if os(macOS)
 import AppKit
+import Observation
 import SwiftUI
+
+/// Process-scoped launch routing for the production Mac window.
+///
+/// The coordinator deliberately lives above MainWindowView: neither Chat nor
+/// the signed-out page is mounted behind the launch surface. A cold process
+/// starts with no selected Session; closing and reopening the window while the
+/// menu-bar process remains alive reuses `lastSelectedSessionId` instead.
+@Observable
+@MainActor
+final class MacLaunchCoordinator {
+    enum Phase: Equatable {
+        case launching
+        case authenticated
+        case signedOut
+    }
+
+    private(set) var phase: Phase = .launching
+    private(set) var isCheckingCredentials = false
+    private(set) var loginCheckFailed = false
+    var lastSelectedSessionId: String?
+
+    @ObservationIgnored private var hasStarted = false
+    @ObservationIgnored private var servicesStarted = false
+
+    func bootstrap(
+        appState: AppState,
+        tentacleCLI: TentacleCLIManager,
+        devLocal: Bool,
+        mock: Bool,
+        bypassProductionLaunch: Bool
+    ) async {
+        guard !hasStarted else { return }
+        hasStarted = true
+
+        if bypassProductionLaunch {
+            phase = .authenticated
+            return
+        }
+
+        let startedAt = Date()
+        KLog.diag("[MacLaunch] gate presented")
+        if !servicesStarted {
+            servicesStarted = true
+            Task { @MainActor in
+                await tentacleCLI.refreshInstallState()
+                await tentacleCLI.refreshDaemonState()
+                tentacleCLI.startPolling()
+            }
+        }
+
+        #if DEBUG
+        let forceSignedOut = ProcessInfo.processInfo.environment["KRAKI_MAC_FORCE_SIGNED_OUT"] == "1"
+        #else
+        let forceSignedOut = false
+        #endif
+
+        let canEnterAuthenticatedRoot: Bool
+        if forceSignedOut {
+            canEnterAuthenticatedRoot = false
+        } else if devLocal {
+            appState.devConnect()
+            canEnterAuthenticatedRoot = true
+        } else if mock {
+            canEnterAuthenticatedRoot = true
+        } else {
+            // Keep the launch gate mounted while the app resolves its preferred
+            // CLI credential. This removes the old signed-out-page flash before
+            // a returning CLI user was recognised.
+            let usedCLILogin = await appState.attemptCLILogin()
+            if !usedCLILogin, appState.hasStoredCredentials {
+                appState.connect()
+            }
+            canEnterAuthenticatedRoot = usedCLILogin || appState.hasStoredCredentials
+        }
+
+        // A very fast cache/auth path should still look intentional rather than
+        // flashing one frame of branding. This is a short visual floor, never a
+        // network wait: Relay authentication continues in the destination UI.
+        #if DEBUG
+        let minimumVisibleSeconds = ProcessInfo.processInfo.environment["KRAKI_MAC_LAUNCH_MIN_MS"]
+            .flatMap(Double.init)
+            .map { max(0, $0 / 1_000) }
+            ?? 0.35
+        #else
+        let minimumVisibleSeconds = 0.35
+        #endif
+        let remaining = minimumVisibleSeconds - Date().timeIntervalSince(startedAt)
+        if remaining > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+        guard !Task.isCancelled else {
+            // Closing the only window can cancel its SwiftUI `.task` while the
+            // menu-bar process stays alive. Permit the warm reopen to bootstrap
+            // again instead of leaving the process permanently on Launch.
+            hasStarted = false
+            return
+        }
+        phase = canEnterAuthenticatedRoot ? .authenticated : .signedOut
+        let elapsedMs = Date().timeIntervalSince(startedAt) * 1_000
+        KLog.diag(
+            "[MacLaunch] destination=\(canEnterAuthenticatedRoot ? "authenticated" : "signedOut") "
+                + String(format: "elapsedMs=%.1f", elapsedMs)
+        )
+    }
+
+    func retryLogin(appState: AppState) async {
+        guard !isCheckingCredentials else { return }
+        isCheckingCredentials = true
+        loginCheckFailed = false
+        defer { isCheckingCredentials = false }
+
+        KLog.diag("[MacLaunch] retrying CLI credential discovery")
+        let usedCLILogin = await appState.attemptCLILogin()
+        if usedCLILogin || appState.hasStoredCredentials {
+            if !usedCLILogin, appState.connectionStatus == .awaitingLogin {
+                appState.connect()
+            }
+            phase = .authenticated
+        } else {
+            loginCheckFailed = true
+        }
+    }
+
+    func reconcileAuthentication(
+        hasStoredCredentials: Bool,
+        connectionStatus: ConnectionStatus
+    ) {
+        guard phase != .launching else { return }
+        if hasStoredCredentials {
+            loginCheckFailed = false
+            phase = .authenticated
+        } else if connectionStatus == .awaitingLogin, phase == .authenticated {
+            // Explicit logout or a failed first authentication returns to the
+            // shared entry gate and drops process-local navigation state.
+            lastSelectedSessionId = nil
+            phase = .signedOut
+        }
+    }
+
+    func recordSelectedSession(_ sessionId: String?) {
+        lastSelectedSessionId = sessionId
+    }
+}
 
 @main
 struct MacApp: App {
@@ -21,6 +165,7 @@ struct MacApp: App {
 
     @State private var appState: AppState
     @State private var tentacleCLI = TentacleCLIManager()
+    @State private var launchCoordinator = MacLaunchCoordinator()
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
     init() {
@@ -69,18 +214,24 @@ struct MacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Kraki", id: "main") {
+        Window("Kraki", id: "main") {
             Group {
                 #if DEBUG
                 if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1" {
                     MacChatScenarioTestView()
                 } else if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1" {
                     MacChatPerfTestView()
+                } else if let fixture = ProcessInfo.processInfo.environment["KRAKI_MAC_ENTRY_GATE_PAGE"] {
+                    MacEntryGateView(
+                        mode: fixture.hasPrefix("signed-out") ? .signedOut : .launching,
+                        isCheckingCredentials: fixture == "signed-out-checking",
+                        loginCheckFailed: fixture == "signed-out-failed"
+                    )
                 } else {
-                    MainWindowView()
+                    productionRoot
                 }
                 #else
-                MainWindowView()
+                productionRoot
                 #endif
             }
                 .environment(appState)
@@ -96,12 +247,49 @@ struct MacApp: App {
                 // window, while the zoom divides the true window size.
                 .windowZoom()
                 .frame(minWidth: 800, idealWidth: 1100, minHeight: 600, idealHeight: 720)
+                .animation(.easeInOut(duration: 0.16), value: launchCoordinator.phase)
+                .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
+                    // Explicit user/deep-link navigation is allowed to cross the
+                    // cold-launch gate. Scenario-window notifications are scoped
+                    // and must never seed the production window.
+                    guard note.userInfo?["scope"] as? String == nil,
+                          let sessionId = note.userInfo?["sessionId"] as? String else { return }
+                    launchCoordinator.recordSelectedSession(sessionId)
+                }
+                #if DEBUG
+                .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
+                    guard MacAutomationDriver.shared.enabled,
+                          note.userInfo?["action"] as? String == "selectSession",
+                          let sessionId = note.userInfo?["sessionId"] as? String else { return }
+                    launchCoordinator.recordSelectedSession(sessionId)
+                }
+                #endif
+                .onChange(of: appState.hasStoredCredentials) { _, hasStoredCredentials in
+                    launchCoordinator.reconcileAuthentication(
+                        hasStoredCredentials: hasStoredCredentials,
+                        connectionStatus: appState.connectionStatus
+                    )
+                }
+                .onChange(of: appState.connectionStatus) { _, connectionStatus in
+                    launchCoordinator.reconcileAuthentication(
+                        hasStoredCredentials: appState.hasStoredCredentials,
+                        connectionStatus: connectionStatus
+                    )
+                }
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSApplication.didBecomeActiveNotification
                 )) { _ in
-                    // macOS keeps the broker connection optimistically warm;
-                    // activation bypasses any stale reconnect backoff.
-                    appState.handleForegroundRehydrate()
+                    if launchCoordinator.phase == .signedOut {
+                        // Returning from Terminal after `kraki connect` should
+                        // discover the new CLI login without requiring a relaunch.
+                        Task {
+                            await launchCoordinator.retryLogin(appState: appState)
+                        }
+                    } else {
+                        // macOS keeps the broker connection optimistically warm;
+                        // activation bypasses any stale reconnect backoff.
+                        appState.handleForegroundRehydrate()
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSWindow.didBecomeKeyNotification
@@ -119,35 +307,18 @@ struct MacApp: App {
                     #if DEBUG
                     MacAutomationDriver.shared.start(appState: appState)
                     #endif
-                    let snapshotTest = ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
-                        || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
-                        || ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
-                    if snapshotTest {
-                        // The snapshot harness runs the production UI and local
-                        // data stack unchanged against an isolated KRAKI_DATA_DIR.
-                        // Never authenticate, connect, poll daemons, or mutate a
-                        // real Tentacle from this process.
-                        return
-                    }
-                    let isMock = ProcessInfo.processInfo.environment["KRAKI_MAC_MOCK"] == "1"
-                    if appState.devLocalActive {
-                        appState.devConnect()
-                    } else if !isMock {
-                        // Prefer the existing CLI login on macOS. It is an
-                        // independent credential and can recover from a
-                        // denied/stale Keychain ACL without clearing the
-                        // user's stored device identity.
-                        let usedCLILogin = await appState.attemptCLILogin()
-                        if !usedCLILogin, appState.hasStoredCredentials {
-                            // No CLI credential available: returning-user
-                            // fallback is challenge auth against the stored
-                            // device and its Keychain signing key.
-                            appState.connect()
-                        }
-                    }
-                    await tentacleCLI.refreshInstallState()
-                    await tentacleCLI.refreshDaemonState()
-                    tentacleCLI.startPolling()
+                    let environment = ProcessInfo.processInfo.environment
+                    let bypassProductionLaunch = environment["KRAKI_MAC_CHAT_SNAPSHOT_TEST"] == "1"
+                        || environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
+                        || environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
+                        || environment["KRAKI_MAC_ENTRY_GATE_PAGE"] != nil
+                    await launchCoordinator.bootstrap(
+                        appState: appState,
+                        tentacleCLI: tentacleCLI,
+                        devLocal: appState.devLocalActive,
+                        mock: environment["KRAKI_MAC_MOCK"] == "1",
+                        bypassProductionLaunch: bypassProductionLaunch
+                    )
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -194,6 +365,34 @@ struct MacApp: App {
             Label("Kraki", systemImage: tentacleCLI.menuBarSymbolName)
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    @ViewBuilder
+    private var productionRoot: some View {
+        switch launchCoordinator.phase {
+        case .launching:
+            MacEntryGateView(mode: .launching)
+                .transition(.opacity)
+        case .authenticated:
+            MainWindowView(
+                initialSelectedSessionId: launchCoordinator.lastSelectedSessionId,
+                onSelectedSessionChanged: { sessionId in
+                    launchCoordinator.recordSelectedSession(sessionId)
+                }
+            )
+            .transition(.opacity)
+        case .signedOut:
+            LoginView(
+                isCheckingCredentials: launchCoordinator.isCheckingCredentials,
+                loginCheckFailed: launchCoordinator.loginCheckFailed,
+                onRetry: {
+                    Task {
+                        await launchCoordinator.retryLogin(appState: appState)
+                    }
+                }
+            )
+            .transition(.opacity)
+        }
     }
 }
 

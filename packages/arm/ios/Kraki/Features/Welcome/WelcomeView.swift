@@ -276,13 +276,23 @@ struct WelcomeView: View {
     }
 
     private var selectSessionCard: some View {
-        VStack(spacing: 8) {
-            Text("Select a session in the sidebar")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.textSecondary)
-            Text("Or press ⌘N to start a new one.")
-                .font(.system(size: 11))
+        VStack(spacing: 10) {
+            Text("Ready when you are")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.textPrimary)
+            Text("Choose a session from the sidebar or start something new.")
+                .font(.system(size: 11.5))
                 .foregroundStyle(Color.textMuted)
+                .multilineTextAlignment(.center)
+
+            Button {
+                NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+            } label: {
+                Label("New Session", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.krakiPrimary)
+            .padding(.top, 4)
         }
     }
 
