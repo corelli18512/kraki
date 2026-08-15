@@ -198,6 +198,26 @@ final class KrakiVoiceInputController {
         self.host = host
     }
 
+    /// Lease validity has two independent boundaries: its signed expiry and
+    /// the UTC calendar day on which it was issued. Head's daily accounting
+    /// intentionally rejects activation after that day, even when `exp` has
+    /// not elapsed yet.
+    static func isLeaseUsable(_ lease: VoiceLease, nowUnixSec: Int) -> Bool {
+        guard lease.payload.exp > nowUnixSec + 5,
+              lease.payload.iat <= nowUnixSec + 30 else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let issuedDay = calendar.dateComponents(
+            [.era, .year, .month, .day],
+            from: Date(timeIntervalSince1970: TimeInterval(lease.payload.iat))
+        )
+        let currentDay = calendar.dateComponents(
+            [.era, .year, .month, .day],
+            from: Date(timeIntervalSince1970: TimeInterval(nowUnixSec))
+        )
+        return issuedDay == currentDay
+    }
+
     /// Ensure a signed and activated broker connection exists without touching
     /// microphone permission or the audio session.
     func prepare() {
@@ -211,7 +231,7 @@ final class KrakiVoiceInputController {
               audioPolicy.permission != .denied else { return }
 
         let now = Int(Date().timeIntervalSince1970)
-        if let lease, lease.payload.exp > now + 5 {
+        if let lease, Self.isLeaseUsable(lease, nowUnixSec: now) {
             openConnection(lease, capability: capability)
             return
         }
@@ -344,7 +364,7 @@ final class KrakiVoiceInputController {
               let deviceID = host.voiceDeviceID,
               lease.payload.did == deviceID,
               lease.payload.resource == capability.resource,
-              lease.payload.exp > Int(Date().timeIntervalSince1970) else { return }
+              Self.isLeaseUsable(lease, nowUnixSec: Int(Date().timeIntervalSince1970)) else { return }
         leaseRequestInFlight = false
         leaseTimeoutTask?.cancel()
         leaseTimeoutTask = nil
@@ -453,13 +473,15 @@ final class KrakiVoiceInputController {
     private func handleConnectionFailure(_ reason: String) {
         KLog.d("🎙️ [voice] stage=connection-failed reason=\(reason)")
         let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
-        closeConnection(keepLease: !quotaExhausted)
+        let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
+        let requiresFreshLease = quotaExhausted || leaseDayChanged
+        closeConnection(keepLease: !requiresFreshLease)
         if isBusy {
             let message = Self.userFacingGatewayError(reason)
             recordingCleanup(clearHandlers: true)
             state = .failed(message)
         }
-        if warmConnectionDesired { scheduleReconnect(immediate: quotaExhausted) }
+        if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
     }
 
     private func scheduleLeaseTimeout() {
@@ -495,7 +517,16 @@ final class KrakiVoiceInputController {
     private func scheduleRefresh() {
         refreshTask?.cancel()
         guard let lease else { return }
-        let delay = max(1, lease.payload.exp - Int(Date().timeIntervalSince1970) - 60)
+        let now = Int(Date().timeIntervalSince1970)
+        let expiryDelay = max(1, lease.payload.exp - now - 60)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let nowDate = Date(timeIntervalSince1970: TimeInterval(now))
+        let startOfToday = utc.startOfDay(for: nowDate)
+        let nextDay = utc.date(byAdding: .day, value: 1, to: startOfToday)
+            ?? nowDate.addingTimeInterval(86_400)
+        let dayBoundaryDelay = max(1, Int(ceil(nextDay.timeIntervalSince(nowDate))) + 1)
+        let delay = min(expiryDelay, dayBoundaryDelay)
         refreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.warmConnectionDesired else { return }
