@@ -94,15 +94,14 @@ final class MessageStore {
         msg.seq > 0 && persistentTypes.contains(msg.type)
     }
 
-    /// iOS keeps the production 200-row bootstrap. The Mac viewport is much
-    /// wider and has edge-triggered DB pagination, so opening 200 raw rows only
-    /// creates an unnecessarily long scrollbar and extra height warm-up. Start
-    /// with a compact tail and lazy-load the rest as the user reaches the top.
+    /// Start from a compact tail and lazy-load the rest as the user reaches the
+    /// top. iOS previously materialized 200 rows at entry, which made one rich
+    /// history window repeatedly rebuild hundreds of offscreen geometries.
     #if os(macOS)
     private static let initialWindowSize = 15
     private static let defaultMinimumPixelManagedWindowCount = 15
     #else
-    private static let initialWindowSize = 200
+    private static let initialWindowSize = 30
     private static let defaultMinimumPixelManagedWindowCount = 1
     #endif
     /// Maximum count of in-memory window before `expandWindow` trims

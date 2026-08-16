@@ -198,6 +198,33 @@ final class ChatMessageTests: XCTestCase {
 
 @MainActor
 final class MessageProviderHeadTests: XCTestCase {
+    func testEnsureOlderLoadedAddsTenRowsToCompactIOSWindow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-older-page-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let sessionId = "sess-older-page"
+        let messages = (1...80).map { seq in
+            ChatMessage(
+                type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "dev-1",
+                timestamp: "2026-08-16T00:00:00Z",
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+        try database.insert(sessionId, messages)
+
+        let app = AppState(testDatabase: database)
+        _ = app.messageStore.loadInitialWindow(sessionId)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).map(\.seq), Array(51...80))
+
+        XCTAssertTrue(app.messageProvider?.ensureOlderLoaded(sessionId: sessionId) == true)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).map(\.seq), Array(41...80))
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 41)
+    }
+
     func testEnsureNewerLoadedAdvancesAcrossOffSpineSeqGaps() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-message-provider-newer-test-\(UUID().uuidString)", isDirectory: true)

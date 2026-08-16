@@ -465,14 +465,10 @@ final class MessageProvider {
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq, reason: reason)
     }
 
-    /// Page size for ensure-older / ensure-newer DB-first reads. macOS uses a
-    /// smaller incremental page so reaching the history edge does not replace a
-    /// compact scrollbar with another 200-row slab in one update.
-    #if os(macOS)
+    /// Page size for ensure-older / ensure-newer DB-first reads. Keep both
+    /// platforms incremental so reaching a history edge does not inject a large
+    /// cold TextKit slab into one collection-view update.
     private static let ensurePageSize = 10
-    #else
-    private static let ensurePageSize = 200
-    #endif
 
     /// Load one page of older messages, DB-first. Reads the page
     /// `[topSeq - PAGE..topSeq - 1]` from disk; if that page is
