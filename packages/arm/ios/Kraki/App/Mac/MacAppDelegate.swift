@@ -701,6 +701,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                     pieces: transcriptPieces(samples[0]),
                     revision: "0"
                 )
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 560)
             )
         )
@@ -713,11 +714,42 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = host
         host.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 600, height: 180)
 
+        let layoutProbe = MacComposerVoiceTranscriptView(frame: NSRect(x: 0, y: 0, width: 560, height: 18))
+        _ = layoutProbe.update(pieces: transcriptPieces(samples[0]), width: 560)
+        _ = layoutProbe.update(pieces: transcriptPieces(samples[3]), width: 560)
+        let dynamicLongHeight = layoutProbe.intrinsicContentSize.height
+        let surfaceHost = NSHostingView(
+            rootView: AnyView(
+                HStack(spacing: 12) {
+                    MacComposerVoiceTranscript(
+                        pieces: transcriptPieces(samples[3]),
+                        revision: "surface-long"
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Color.clear.frame(width: 38, height: 32)
+                }
+                .padding(.leading, 18)
+                .padding(.trailing, 12)
+                .padding(.vertical, 4)
+                .frame(width: 500, alignment: .leading)
+            )
+        )
+        let surfaceWindow = NSWindow(
+            contentRect: NSRect(x: -20_000, y: -20_000, width: 500, height: 220),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        surfaceWindow.contentView = surfaceHost
+        surfaceHost.frame = surfaceWindow.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 500, height: 220)
+        surfaceHost.layoutSubtreeIfNeeded()
         let started = CACurrentMediaTime()
         for round in 0..<200 {
             let index = round % samples.count
             host.rootView = AnyView(
                 MacComposerVoiceTranscript(pieces: transcriptPieces(samples[index]), revision: "\(round)")
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(width: 560)
             )
             host.layoutSubtreeIfNeeded()
@@ -748,6 +780,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             let streamed = String(chineseStream.prefix(count))
             host.rootView = AnyView(
                 MacComposerVoiceTranscript(pieces: voiceOnlyPieces(streamed), revision: "cjk-\(count)")
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(width: 560)
             )
             host.layoutSubtreeIfNeeded()
@@ -803,7 +836,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         ) as? NSColor
         let lookaheadOpacityOK = abs((lookaheadAlpha?.alphaComponent ?? 0) - 0.30) < 0.01
         NSLog(
-            "[voice-transcript-regression] rounds=200 ms=%.3f pureCoreText=%d scrollViews=%d prefixOK=%d font=%.1f adaptiveColor=%d lookaheadOpacity=%d lightBrightness=%.3f darkBrightness=%.3f height=%.1f",
+            "[voice-transcript-regression] rounds=200 ms=%.3f pureCoreText=%d scrollViews=%d prefixOK=%d font=%.1f adaptiveColor=%d lookaheadOpacity=%d lightBrightness=%.3f darkBrightness=%.3f dynamicHeight=%.1f dynamicHeightOK=%d surfaceHeight=%.1f surfaceHeightOK=%d height=%.1f",
             elapsed,
             transcriptView == nil ? 0 : 1,
             scrollViewCount,
@@ -813,6 +846,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             lookaheadOpacityOK ? 1 : 0,
             lightBrightness,
             darkBrightness,
+            dynamicLongHeight,
+            dynamicLongHeight >= 140 ? 1 : 0,
+            surfaceHost.fittingSize.height,
+            surfaceHost.fittingSize.height >= 140 ? 1 : 0,
             transcriptView?.bounds.height ?? 0
         )
         NSLog(
