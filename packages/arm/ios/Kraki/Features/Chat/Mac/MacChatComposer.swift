@@ -1173,9 +1173,19 @@ private struct MacComposerVoiceSurface: View {
 final class MacComposerVoiceTranscriptView: NSView {
     typealias Piece = (text: String, opacity: Double)
 
+    private static let font = NSFont.systemFont(ofSize: 15)
+    static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+    static let maxVisibleLines: CGFloat = 8
+
     private var pieces: [Piece] = []
     private var value = NSAttributedString(string: "")
     private var framesetter: CTFramesetter?
+    private var measuredWidth: CGFloat = 0
+    private var measuredHeight: CGFloat = lineHeight
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
+    }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -1187,9 +1197,16 @@ final class MacComposerVoiceTranscriptView: NSView {
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Voice transcript")
         setAccessibilityValue(value.string)
-        let height = Self.measure(value, width: width)
+        if width > 1 {
+            measuredWidth = width
+            measuredHeight = min(Self.measure(value, width: width), Self.lineHeight * Self.maxVisibleLines)
+        } else {
+            measuredWidth = 0
+            measuredHeight = Self.lineHeight
+        }
+        invalidateIntrinsicContentSize()
         needsDisplay = true
-        return height
+        return measuredHeight
     }
 
     static func measure(_ pieces: [Piece], width: CGFloat) -> CGFloat {
@@ -1233,7 +1250,7 @@ final class MacComposerVoiceTranscriptView: NSView {
     }
 
     private static func measure(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
-        guard text.length > 0 else { return 18 }
+        guard text.length > 0 else { return lineHeight }
         let framesetter = CTFramesetterCreateWithAttributedString(text)
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter,
@@ -1242,7 +1259,19 @@ final class MacComposerVoiceTranscriptView: NSView {
             CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
             nil
         )
-        return max(18, ceil(suggested.height + 1))
+        return max(lineHeight, ceil(suggested.height + 1))
+    }
+
+    override func layout() {
+        super.layout()
+        guard bounds.width > 1,
+              abs(bounds.width - measuredWidth) > 0.5 else { return }
+        measuredWidth = bounds.width
+        let height = min(Self.measure(value, width: bounds.width), Self.lineHeight * Self.maxVisibleLines)
+        guard abs(height - measuredHeight) > 0.5 else { return }
+        measuredHeight = height
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1343,8 +1372,10 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
         guard let proposedWidth = proposal.width, proposedWidth > 1 else { return nil }
         let width = proposedWidth
         let contentHeight = MacComposerVoiceTranscriptView.measure(pieces, width: width)
-        let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15)))
-        return CGSize(width: width, height: min(contentHeight, lineHeight * 8))
+        return CGSize(
+            width: width,
+            height: min(contentHeight, MacComposerVoiceTranscriptView.lineHeight * MacComposerVoiceTranscriptView.maxVisibleLines)
+        )
     }
 }
 
