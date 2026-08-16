@@ -183,6 +183,9 @@ final class KrakiVoiceInputController {
     private var metricStart: ContinuousClock.Instant?
     private var reconnectAttempt = 0
     private var warmConnectionDesired = false
+    private var leaseRolloverAttempt = 0
+
+    private static let maxLeaseRolloverAttempts = 1
 
     init(
         host: KrakiVoiceInputHost? = nil,
@@ -288,6 +291,7 @@ final class KrakiVoiceInputController {
 
         let currentRecording = UUID()
         recordingGeneration = currentRecording
+        leaseRolloverAttempt = 0
         resetPresentation()
         activeSessionID = sessionID
         self.context = context
@@ -473,6 +477,8 @@ final class KrakiVoiceInputController {
     private func handleConnectionFailure(_ reason: String) {
         KLog.d("🎙️ [voice] stage=connection-failed reason=\(reason)")
         let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
+        if quotaExhausted, recoverFromExhaustedLease() { return }
+
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
         let requiresFreshLease = quotaExhausted || leaseDayChanged
         closeConnection(keepLease: !requiresFreshLease)
@@ -482,6 +488,55 @@ final class KrakiVoiceInputController {
             state = .failed(message)
         }
         if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
+    }
+
+    /// Broker `quota_exhausted` means this signed lease's rolling allowance was
+    /// consumed. It is distinct from Head denying a replacement lease because
+    /// the account's daily quota is exhausted. Preserve the user's active
+    /// recording intent while a fresh lease and warm connection are acquired.
+    private func recoverFromExhaustedLease() -> Bool {
+        switch state {
+        case .recording, .obtainingLease:
+            guard leaseRolloverAttempt < Self.maxLeaseRolloverAttempts else { return false }
+            leaseRolloverAttempt += 1
+            checkpointCurrentRawSegment()
+            closeConnection(keepLease: false)
+            state = .obtainingLease
+            metricStart = .now
+            KLog.d("🎙️ [voice] stage=lease-rollover attempt=\(leaseRolloverAttempt)")
+            if warmConnectionDesired { scheduleReconnect(immediate: true) }
+            return true
+
+        case .finishing:
+            let recoveredText = rawText
+            let handler = finalHandler
+            closeConnection(keepLease: false)
+            recordingCleanup(clearHandlers: true)
+            state = .idle
+            if !recoveredText.isEmpty { handler?(recoveredText) }
+            if warmConnectionDesired { scheduleReconnect(immediate: true) }
+            return true
+
+        case .requestingPermission:
+            closeConnection(keepLease: false)
+            if warmConnectionDesired { scheduleReconnect(immediate: true) }
+            return true
+
+        case .idle, .failed:
+            closeConnection(keepLease: false)
+            if warmConnectionDesired { scheduleReconnect(immediate: true) }
+            return true
+        }
+    }
+
+    private func checkpointCurrentRawSegment() {
+        guard !currentRawSegment.isEmpty else { return }
+        stableRawPrefix = VoiceDraftMerger.merge(
+            existing: stableRawPrefix,
+            final: currentRawSegment
+        )
+        currentRawSegment = ""
+        rawText = stableRawPrefix
     }
 
     private func scheduleLeaseTimeout() {
@@ -681,6 +736,7 @@ final class KrakiVoiceInputController {
 
     private func recordingCleanup(clearHandlers: Bool) {
         recordingGeneration = UUID()
+        leaseRolloverAttempt = 0
         correctionDisplayTask?.cancel()
         correctionDisplayTask = nil
         pendingCorrectionText = nil
