@@ -34,6 +34,8 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
       onSessionEvicted: null,
       onTitleChanged: null,
       onUsageUpdate: null,
+      setTurnIdentity: vi.fn(),
+      isTurnSettled: vi.fn(() => false),
     } as unknown as AgentAdapter;
   }
 
@@ -71,6 +73,31 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
     stub.onFinalizeDelta?.('s1', { content: '✅ done' });
 
     expect(seen).toHaveBeenCalledWith('s1', { content: '✅ done' });
+  });
+
+  it('forwards the relay turn identity on idle', () => {
+    const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
+    const stub = makeStubAdapter();
+    (multi as unknown as { wireCallbacks(id: string, a: AgentAdapter): void }).wireCallbacks('pi', stub);
+
+    const seen = vi.fn();
+    multi.onIdle = seen;
+    stub.onIdle?.('s1', { turnId: 's1:9' });
+
+    expect(seen).toHaveBeenCalledWith('s1', { turnId: 's1:9' });
+  });
+
+  it('routes turn identity and settlement queries to the owning adapter', () => {
+    const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
+    const stub = makeStubAdapter();
+    (multi as unknown as { adapters: Map<string, AgentAdapter> }).adapters.set('pi', stub);
+    (multi as unknown as { sessionAgent: Map<string, string> }).sessionAgent.set('s1', 'pi');
+    (stub.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    multi.setTurnIdentity('s1', 's1:10');
+
+    expect(stub.setTurnIdentity).toHaveBeenCalledWith('s1', 's1:10');
+    expect(multi.isTurnSettled('s1')).toBe(true);
   });
 
   it('forwards transient compaction lifecycle events', () => {

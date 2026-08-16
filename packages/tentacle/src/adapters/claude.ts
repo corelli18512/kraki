@@ -131,6 +131,13 @@ interface InputChannel {
   end(): void;
 }
 
+interface NormalizedClaudeError {
+  message: string;
+  status?: number;
+  requestId?: string;
+  quality: number;
+}
+
 /** Everything we track per session. */
 interface SessionEntry {
   query: Query | null;
@@ -150,6 +157,13 @@ interface SessionEntry {
    * the single conclusion bubble (onMessage) when the turn ends.
    */
   pendingText?: string;
+  pendingError?: NormalizedClaudeError;
+  /** Relay-owned logical turn identity for the next accepted prompt. */
+  relayTurnId?: string;
+  /** Identity captured when the SDK delivers the user message that starts
+   * the provider turn. */
+  eventTurnId?: string;
+  turnFinalized?: boolean;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -161,6 +175,52 @@ function makeId(prefix: string): string {
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function meaningfulClaudeErrorText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || /^(success|unknown|error_during_execution)$/i.test(text)) return undefined;
+  return text;
+}
+
+function assistantText(message: unknown): string | undefined {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((block): block is { type: string; text: string } =>
+      !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string')
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+  return meaningfulClaudeErrorText(text);
+}
+
+export function normalizeClaudeSDKError(value: Record<string, unknown>): NormalizedClaudeError {
+  const errors = Array.isArray(value.errors)
+    ? value.errors.map(meaningfulClaudeErrorText).filter((item): item is string => !!item)
+    : [];
+  const text = errors.join('; ')
+    || assistantText(value.message)
+    || meaningfulClaudeErrorText(value.result)
+    || meaningfulClaudeErrorText(value.error_message);
+  const statusCandidate = value.api_error_status ?? value.apiErrorStatus ?? value.status ?? value.statusCode;
+  const status = typeof statusCandidate === 'number' ? statusCandidate : undefined;
+  const requestIdCandidate = value.request_id ?? value.requestId;
+  const requestId = typeof requestIdCandidate === 'string' ? requestIdCandidate : undefined;
+  const category = meaningfulClaudeErrorText(value.error);
+  const fallback = status ? `Claude API error (HTTP ${status})` : category ? `Claude API error: ${category}` : 'Claude API request failed';
+  const message = text ?? fallback;
+  const quality = text ? (status ? 4 : 3) : status ? 2 : category ? 1 : 0;
+  return { message, ...(status ? { status } : {}), ...(requestId ? { requestId } : {}), quality };
+}
+
+function preferClaudeError(
+  current: NormalizedClaudeError | undefined,
+  candidate: NormalizedClaudeError,
+): NormalizedClaudeError {
+  return !current || candidate.quality > current.quality ? candidate : current;
 }
 
 /**
@@ -599,6 +659,7 @@ export class ClaudeAdapter extends AgentAdapter {
       model: config.model,
       consumerLoop: Promise.resolve(),
       deferredConfig: config,
+      eventTurnId: undefined,
     };
 
     this.sessions.set(sessionId, entry);
@@ -641,6 +702,7 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId,
       model: meta?.model,
       consumerLoop: Promise.resolve(),
+      eventTurnId: undefined,
       deferredConfig: {
         resume: meta?.sdkSessionId ?? sessionId,
         ...(meta?.cwd && { cwd: meta.cwd }),
@@ -684,6 +746,7 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
+      eventTurnId: undefined,
       deferredConfig: {
         resume: resumeId,
         fork: true,
@@ -718,9 +781,14 @@ export class ClaudeAdapter extends AgentAdapter {
     }
 
     // Streaming input accepts another user message while the query is running.
-    // Keep the active draft for an interjection; only a normal prompt opens a
-    // fresh turn and resets the draft-bubble prose buffer.
-    if (options?.delivery !== 'steer') entry.pendingText = '';
+    // Keep the active draft for an interjection. A steer arriving after the
+    // authoritative result belongs to a new logical turn and must re-arm the
+    // terminal callback guard before it enters the SDK input channel.
+    if (options?.delivery !== 'steer' || entry.turnFinalized) {
+      entry.pendingText = '';
+      entry.pendingError = undefined;
+      entry.turnFinalized = false;
+    }
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -750,6 +818,37 @@ export class ClaudeAdapter extends AgentAdapter {
    * SDK gets its first user message, then starts the consumer loop for
    * multi-turn conversation.
    */
+  setTurnIdentity(sessionId: string, turnId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    entry.relayTurnId = turnId;
+    // Keep the previous provider-run snapshot until the next SDK user event;
+    // a late callback in the handoff window must not inherit this new ID.
+  }
+
+  isTurnSettled(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.turnFinalized === true;
+  }
+
+  private lifecycleEvent(entry?: SessionEntry): { turnId?: string } {
+    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
+    return turnId ? { turnId } : {};
+  }
+
+  private emitMessage(sessionId: string, entry: SessionEntry, content: string): void {
+    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(entry) });
+  }
+
+  private emitError(sessionId: string, entry: SessionEntry, message: string): void {
+    this.onError?.(sessionId, { message, ...this.lifecycleEvent(entry) });
+  }
+
+  private emitIdle(sessionId: string, entry: SessionEntry): void {
+    const event = this.lifecycleEvent(entry);
+    if (event.turnId) this.onIdle?.(sessionId, event);
+    else this.onIdle?.(sessionId);
+  }
+
   private async spawnQuery(sessionId: string, initialPrompt: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
@@ -1079,16 +1178,28 @@ export class ClaudeAdapter extends AgentAdapter {
         }
       }
 
-      // Query completed normally
-      this.flushConclusion(sessionId);
-      this.onIdle?.(sessionId);
+      // Query completed normally. A result event is the authoritative turn
+      // boundary; only fall back here when the SDK ended without one.
+      const entry = this.sessions.get(sessionId);
+      if (!entry?.turnFinalized) {
+        if (entry?.pendingError) this.emitError(sessionId, entry, entry.pendingError.message);
+        else this.flushConclusion(sessionId);
+        if (entry) {
+          entry.turnFinalized = true;
+          this.emitIdle(sessionId, entry);
+        } else {
+          this.onIdle?.(sessionId);
+        }
+      }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.debug({ sessionId }, 'Session query aborted');
         return;
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
-      this.onError?.(sessionId, { message: getErrorMessage(err) });
+      const entry = this.sessions.get(sessionId);
+      if (entry) this.emitError(sessionId, entry, getErrorMessage(err));
+      else this.onError?.(sessionId, { message: getErrorMessage(err) });
       this.onSessionEnded?.(sessionId, { reason: 'error' });
     }
   }
@@ -1103,8 +1214,8 @@ export class ClaudeAdapter extends AgentAdapter {
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
     if (text) {
-      this.onNarration?.(sessionId, { content: text });
-      this.onNarrationTrace?.(sessionId, { content: text });
+      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
+      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
     }
   }
 
@@ -1117,7 +1228,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (!entry) return;
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
-    if (text) this.onMessage?.(sessionId, { content: text });
+    if (text) this.emitMessage(sessionId, entry, text);
   }
 
   /**
@@ -1152,9 +1263,9 @@ export class ClaudeAdapter extends AgentAdapter {
       case 'assistant': {
         const assistantMsg = msg as SDKAssistantMessage;
         if (assistantMsg.error) {
-          this.onError?.(sessionId, {
-            message: `Claude API error: ${typeof assistantMsg.error === 'string' ? assistantMsg.error : JSON.stringify(assistantMsg.error)}`,
-          });
+          const entry = this.sessions.get(sessionId);
+          const normalized = normalizeClaudeSDKError(assistantMsg as unknown as Record<string, unknown>);
+          if (entry) entry.pendingError = preferClaudeError(entry.pendingError, normalized);
           break;
         }
 
@@ -1191,6 +1302,7 @@ export class ClaudeAdapter extends AgentAdapter {
             sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args });
 
             this.onToolStart?.(sessionId, {
+              ...this.lifecycleEvent(entry),
               toolName: canonicalToolName,
               args,
               toolCallId: toolBlock.id,
@@ -1212,7 +1324,7 @@ export class ClaudeAdapter extends AgentAdapter {
         if (event.type === 'content_block_delta') {
           const delta = event.delta as Record<string, unknown> | undefined;
           if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-            this.onMessageDelta?.(sessionId, { content: delta.text });
+            this.onMessageDelta?.(sessionId, { content: delta.text, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
           }
         }
         break;
@@ -1221,11 +1333,21 @@ export class ClaudeAdapter extends AgentAdapter {
       case 'result': {
         const result = msg as SDKResultMessage;
         const resultAny = result as unknown as Record<string, unknown>;
+        const entry = this.sessions.get(sessionId);
+        if (entry?.turnFinalized) break;
 
         if (resultAny.is_error) {
-          const errors = resultAny.errors as string[] | undefined;
-          const errorMsg = errors?.join('; ') || (resultAny.subtype as string) || 'Unknown error';
-          this.onError?.(sessionId, { message: errorMsg });
+          const normalized = normalizeClaudeSDKError(resultAny);
+          const error = preferClaudeError(entry?.pendingError, normalized);
+          if (entry) {
+            entry.pendingError = error;
+            entry.pendingText = '';
+          }
+          if (entry) this.emitError(sessionId, entry, error.message);
+          else this.onError?.(sessionId, { message: error.message });
+        } else {
+          if (entry) entry.pendingError = undefined;
+          this.flushConclusion(sessionId);
         }
 
         // Update final usage
@@ -1248,10 +1370,13 @@ export class ClaudeAdapter extends AgentAdapter {
           this.onUsageUpdate?.(sessionId, updated);
         }
 
-        // Flush any buffered prose as the turn's single conclusion bubble
-        // before going idle (draft-bubble model).
-        this.flushConclusion(sessionId);
-        this.onIdle?.(sessionId);
+        // The result is the authoritative turn boundary.
+        if (entry) {
+          entry.turnFinalized = true;
+          this.emitIdle(sessionId, entry);
+        } else {
+          this.onIdle?.(sessionId);
+        }
 
         // Poll for SDK-native title changes (the SDK auto-generates titles
         // but doesn't emit title events in the stream)
@@ -1260,6 +1385,8 @@ export class ClaudeAdapter extends AgentAdapter {
       }
 
       case 'user': {
+        const entry = this.sessions.get(sessionId);
+        if (entry) entry.eventTurnId = entry.relayTurnId;
         // User messages include tool_result content blocks when tools complete.
         // Extract tool results and fire tool_complete callbacks.
         const userMsg = msg as SDKUserMessage;
@@ -1315,6 +1442,7 @@ export class ClaudeAdapter extends AgentAdapter {
               }
 
               this.onToolComplete?.(sessionId, {
+                ...this.lifecycleEvent(entry),
                 toolName: tracked?.toolName ?? 'tool',
                 result,
                 toolCallId,
@@ -1328,7 +1456,7 @@ export class ClaudeAdapter extends AgentAdapter {
                   (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
                 );
                 if (refs.length > 0) {
-                  this.onAttachmentBytes?.(sessionId, { refs });
+                  this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(entry) });
                 }
               }
 
@@ -1449,6 +1577,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }, 'permission requested');
 
       this.onPermissionRequest?.(sessionId, {
+        ...this.lifecycleEvent(this.sessions.get(sessionId)),
         id: permId,
         ...parsed,
       });
@@ -1494,6 +1623,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // best-effort prompt so the user isn't stuck, resolve empty.
         const qId = makeId('q');
         this.onQuestionRequest?.(sessionId, {
+          ...this.lifecycleEvent(this.sessions.get(sessionId)),
           id: qId,
           question: (input.question as string) ?? 'The agent has a question',
           choices: undefined,
@@ -1534,6 +1664,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }, 'question requested');
 
     this.onQuestionRequest?.(sessionId, {
+      ...this.lifecycleEvent(this.sessions.get(sessionId)),
       id: qId,
       question: q?.question ?? 'The agent has a question',
       choices,

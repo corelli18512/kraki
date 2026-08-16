@@ -18,6 +18,9 @@ export default defineConfig({
       '@kraki/voice-broker/mock': resolve(__dirname, '../voice-broker/src/mock-doubao.ts'),
       '@kraki/voice-broker/logger': resolve(__dirname, '../voice-broker/src/logger.ts'),
       '@kraki/voice-broker': resolve(__dirname, '../voice-broker/src/index.ts'),
+      // Integration tests run on Node 24; force their native SQLite import to
+      // the test-only compatible version instead of Head's published 11.x line.
+      'better-sqlite3': resolve(__dirname, 'node_modules/better-sqlite3/lib/index.js'),
     },
   },
 });

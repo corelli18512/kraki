@@ -19,34 +19,39 @@ export interface SessionCreatedEvent {
   model?: string;
 }
 
-export interface MessageEvent {
+export interface TurnLifecycleEvent {
+  /** Relay-assigned logical turn identity. Missing only for legacy callers/tests. */
+  turnId?: string;
+}
+
+export interface MessageEvent extends TurnLifecycleEvent {
   content: string;
 }
 
-export interface MessageDeltaEvent {
+export interface MessageDeltaEvent extends TurnLifecycleEvent {
   content: string;
 }
 
-export interface PermissionRequestEvent {
+export interface PermissionRequestEvent extends TurnLifecycleEvent {
   id: string;
   toolArgs: ToolArgs;
   description: string;
 }
 
-export interface QuestionRequestEvent {
+export interface QuestionRequestEvent extends TurnLifecycleEvent {
   id: string;
   question: string;
   choices?: string[];
   allowFreeform: boolean;
 }
 
-export interface ToolStartEvent {
+export interface ToolStartEvent extends TurnLifecycleEvent {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId?: string;
 }
 
-export interface ToolCompleteEvent {
+export interface ToolCompleteEvent extends TurnLifecycleEvent {
   toolName: string;
   result: string;
   toolCallId?: string;
@@ -57,7 +62,7 @@ export interface ToolCompleteEvent {
 /** Emitted alongside a tool_complete that carries one or more
  *  `ContentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
  *  to all connected devices as `attachment_data` chunks. */
-export interface AttachmentBytesEvent {
+export interface AttachmentBytesEvent extends TurnLifecycleEvent {
   refs: Array<import('@kraki/protocol').ContentRef>;
 }
 
@@ -65,13 +70,13 @@ export interface SessionEndedEvent {
   reason: string;
 }
 
-export interface ErrorEvent {
+export interface ErrorEvent extends TurnLifecycleEvent {
   message: string;
 }
 
 export type CompactionReason = 'manual' | 'threshold' | 'overflow';
 
-export interface CompactionEvent {
+export interface CompactionEvent extends TurnLifecycleEvent {
   phase: 'start' | 'end';
   reason?: CompactionReason;
   aborted?: boolean;
@@ -81,7 +86,7 @@ export interface CompactionEvent {
 
 /** A Kraki-originated system notice (not the agent's words). See
  *  protocol `SystemMessage`. First use: `kind: 'no_reply'`. */
-export interface SystemMessageEvent {
+export interface SystemMessageEvent extends TurnLifecycleEvent {
   kind: string;
   content?: string;
 }
@@ -171,11 +176,19 @@ export abstract class AgentAdapter {
   /** Called immediately after onToolComplete when bytes need to be pushed
    *  (broadcast as `attachment_data` chunks) to connected devices. */
   onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
-  onIdle: ((sessionId: string) => void) | null = null;
+  onIdle: ((sessionId: string, event?: TurnLifecycleEvent) => void) | null = null;
   /** Called when the adapter has finished all writes to the session's history file
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
   onFlushComplete: ((sessionId: string) => void) | null = null;
   onError: ((sessionId: string, event: ErrorEvent) => void) | null = null;
+  /** Set before a send is handed to an adapter. Terminal callbacks must echo
+   *  this identity so RelayClient can reject late events from an older turn. */
+  setTurnIdentity(_sessionId: string, _turnId: string): void { /* no-op by default */ }
+
+  /** True when the adapter has already reached its terminal boundary for the
+   *  currently selected turn, even if Relay missed the callback during a race. */
+  isTurnSettled(_sessionId: string): boolean { return false; }
+
   /** Transient agent-runtime compaction activity. Never persisted to the spine
    *  or TRACE; RelayClient maps it to the server-owned status-card slot. */
   onCompaction: ((sessionId: string, event: CompactionEvent) => void) | null = null;

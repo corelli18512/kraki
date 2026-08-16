@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SessionManager } from '../session-manager.js';
+import { SessionManager, type InputLedgerEntry } from '../session-manager.js';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -56,6 +56,89 @@ describe('SessionManager', () => {
       expect(existsSync(join(dir, sessionId, 'meta.json'))).toBe(true);
       expect(existsSync(join(dir, sessionId, 'context.json'))).toBe(true);
       expect(existsSync(join(dir, sessionId, 'runs', 'run_001.json'))).toBe(true);
+    });
+  });
+
+  describe('durable input identity', () => {
+    it('recovers a clientId ledger and message sequence after a new manager loads the same directory', () => {
+      const { sessionId } = sm.createSession('pi');
+      const userPayload = JSON.stringify({ payload: { content: 'one', clientId: 'cid-1' } });
+      const userSeq = sm.appendMessage(sessionId, 'user_message', userPayload);
+      sm.recordInputLedger(sessionId, {
+        version: 1,
+        clientId: 'cid-1',
+        status: 'delivered',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: `${sessionId}:${userSeq}`,
+        contentLength: 3,
+        contentHash: 'hash-1',
+        userSeq,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const restarted = new SessionManager(dir);
+      expect(restarted.findUserMessageSeqByClientId(sessionId, 'cid-1')).toBe(userSeq);
+      expect(restarted.getInputLedgerEntry(sessionId, 'cid-1')).toMatchObject({
+        status: 'delivered',
+        userSeq,
+      });
+
+      restarted.markInputLedgerSettled(sessionId, `${sessionId}:${userSeq}`);
+      expect(restarted.getInputLedgerEntry(sessionId, 'cid-1')?.status).toBe('settled');
+    });
+
+    it('bounds terminal ledger history while preserving unresolved inputs', () => {
+      const { sessionId } = sm.createSession('pi');
+      const entries: InputLedgerEntry[] = Array.from({ length: 2055 }, (_, index) => ({
+        version: 1 as const,
+        clientId: `terminal-${index}`,
+        status: 'settled' as const,
+        requestedDelivery: 'prompt' as const,
+        delivery: 'prompt' as const,
+        turnId: `${sessionId}:${index + 1}`,
+        contentLength: 1,
+        contentHash: `hash-${index}`,
+        userSeq: index + 1,
+        updatedAt: new Date(index + 1).toISOString(),
+      }));
+      entries.push({
+        version: 1,
+        clientId: 'still-persisted',
+        status: 'persisted',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: `${sessionId}:open`,
+        contentLength: 1,
+        contentHash: 'open-hash',
+        userSeq: 3000,
+        updatedAt: new Date().toISOString(),
+      });
+      writeFileSync(join(dir, sessionId, 'input-ledger.json'), JSON.stringify(entries));
+
+      const restarted = new SessionManager(dir);
+      restarted.recordInputLedger(sessionId, {
+        ...entries[2054],
+        clientId: 'terminal-newest',
+        updatedAt: new Date().toISOString(),
+      });
+
+      const compacted = restarted.getInputLedger(sessionId);
+      expect(compacted.filter((entry) => entry.status === 'settled')).toHaveLength(2048);
+      expect(compacted.some((entry) => entry.clientId === 'terminal-0')).toBe(false);
+      expect(compacted.some((entry) => entry.clientId === 'still-persisted')).toBe(true);
+      expect(compacted.some((entry) => entry.clientId === 'terminal-newest')).toBe(true);
+      // The bounded state file may evict the oldest terminal row, but the
+      // append-only identity index must still reject its clientId on replay.
+      expect(restarted.getInputLedgerEntry(sessionId, 'terminal-0')).toMatchObject({
+        clientId: 'terminal-0',
+        status: 'settled',
+      });
+      const afterRestart = new SessionManager(dir);
+      expect(afterRestart.getInputLedgerEntry(sessionId, 'terminal-0')).toMatchObject({
+        clientId: 'terminal-0',
+        status: 'settled',
+      });
     });
   });
 

@@ -77,6 +77,7 @@ vi.mock('@kraki/crypto', async () => {
 
 import { RelayClient } from '../relay-client.js';
 import { AttachmentStore } from '../attachment-store.js';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -153,6 +154,8 @@ function createAdapter(): Record<string, unknown> {
     getSessionUsage: vi.fn(() => null),
     setSessionUsage: vi.fn(),
     registerSessionAgent: vi.fn(),
+    setTurnIdentity: vi.fn(),
+    isTurnSettled: vi.fn(() => false),
     sendMessage: vi.fn(async () => {}),
     respondToQuestion: vi.fn(async () => 'accepted'),
     respondToPermission: vi.fn(async () => {}),
@@ -174,6 +177,10 @@ function createSessionManager(): Record<string, unknown> {
     updateContext: vi.fn(),
     getContext: vi.fn(() => null),
     getMeta: vi.fn(() => null),
+    getInputLedgerEntry: vi.fn(() => null),
+    findUserMessageSeqByClientId: vi.fn(() => null),
+    recordInputLedger: vi.fn(),
+    markInputLedgerSettled: vi.fn(),
     setTitle: vi.fn(),
     setAutoTitle: vi.fn(),
     setMode: vi.fn(),
@@ -2256,6 +2263,236 @@ describe('RelayClient pending-question digest', () => {
     });
   });
 
+  it('does not persist or deliver a duplicate clientId after reconnect-style replay', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>();
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    const send = (seq: number) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text: 'once', clientId: 'cid-once' },
+    })));
+
+    send(700);
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    send(701);
+    await Promise.resolve();
+
+    expect(adapter.sendMessage).toHaveBeenCalledTimes(1);
+    const userMessages = smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message');
+    expect(userMessages).toHaveLength(1);
+    expect(ledger.get('cid-once')?.status).toBe('delivered');
+  });
+
+  it('retries a rejected adapter input with the same clientId without appending it twice', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>();
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    (adapter.sendMessage as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('adapter did not accept input'))
+      .mockResolvedValue(undefined);
+    const send = (seq: number) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text: 'retryable', clientId: 'cid-rejected' },
+    })));
+
+    send(699);
+    await vi.waitFor(() => expect(ledger.get('cid-rejected')?.status).toBe('rejected'));
+    send(700);
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(1);
+    expect(ledger.get('cid-rejected')?.status).toBe('delivered');
+  });
+
+  it('recovers a transcript-persisted input after daemon restart without appending it twice', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>([
+      ['cid-restart', {
+        version: 1,
+        clientId: 'cid-restart',
+        status: 'persisted',
+        requestedDelivery: 'prompt',
+        delivery: 'prompt',
+        turnId: 'sess_1:43',
+        contentLength: 13,
+        contentHash: 'ignored-by-mock',
+        userSeq: 43,
+        updatedAt: new Date().toISOString(),
+      }],
+    ]);
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    // Match the replay body fingerprint while retaining the persisted state.
+    ledger.get('cid-restart')!.contentHash = createHash('sha256')
+      .update(JSON.stringify({ text: 'restart-safe', attachments: [] }))
+      .digest('hex');
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 701,
+      timestamp: new Date().toISOString(), payload: { text: 'restart-safe', clientId: 'cid-restart' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', 'restart-safe', undefined);
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(0);
+    expect(ledger.get('cid-restart')?.status).toBe('delivered');
+  });
+
+  it('replays a pending reservation when the daemon stopped before transcript persistence', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>();
+    ledger.set('cid-pending', {
+      version: 1,
+      clientId: 'cid-pending',
+      status: 'pending',
+      requestedDelivery: 'prompt',
+      delivery: 'prompt',
+      turnId: 'sess_1:44',
+      contentLength: 13,
+      contentHash: createHash('sha256')
+        .update(JSON.stringify({ text: 'persist-again', attachments: [] }))
+        .digest('hex'),
+      updatedAt: new Date().toISOString(),
+    });
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    smMock.findUserMessageSeqByClientId.mockReturnValue(null);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 702,
+      timestamp: new Date().toISOString(), payload: { text: 'persist-again', clientId: 'cid-pending' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(1);
+    expect(ledger.get('cid-pending')?.status).toBe('delivered');
+  });
+
+  it('converts a post-idle steer into a new prompt before spine persistence', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'idle', lastSeq: 42, currentTurnStartSeq: 40 });
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 702,
+      timestamp: new Date().toISOString(), payload: { text: 'late steer', clientId: 'cid-late', delivery: 'steer' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', 'late steer', undefined);
+    const userMessage = smMock.appendMessage.mock.calls.find((call) => call[1] === 'user_message');
+    expect(userMessage).toBeDefined();
+    expect(JSON.parse(userMessage![2]).payload).not.toHaveProperty('delivery', 'steer');
+  });
+
+  it('converts steer to a new prompt when the adapter is settled but session metadata is still active', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'active', lastSeq: 50, currentTurnStartSeq: 47 });
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 703,
+      timestamp: new Date().toISOString(), payload: { text: 'settled steer', delivery: 'steer' },
+    })));
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', 'settled steer', undefined);
+    const userMessage = smMock.appendMessage.mock.calls.find((call) => call[1] === 'user_message');
+    expect(JSON.parse(userMessage![2]).payload).not.toHaveProperty('delivery', 'steer');
+  });
+
+  it('drops a same-turn final message arriving after idle settlement', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 704,
+      timestamp: new Date().toISOString(), payload: { text: 'one turn' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:1' },
+    );
+    smMock.appendMessage.mockClear();
+    (adapter.onMessage as (sid: string, event: { content: string; turnId: string }) => void)(
+      'sess_1', { content: 'late final', turnId: 'sess_1:1' },
+    );
+
+    expect(smMock.appendMessage).not.toHaveBeenCalled();
+    expect(smMock.markIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops terminal callbacks carrying an older relay turn identity', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const send = (seq: number, text: string) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text },
+    })));
+
+    send(704, 'first turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: 'sess_1:1' });
+    send(705, 'second turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.setTurnIdentity).toHaveBeenLastCalledWith('sess_1', 'sess_1:2');
+
+    smMock.appendMessage.mockClear();
+    smMock.markIdle.mockClear();
+    (adapter.onMessage as (sid: string, event: { content: string; turnId: string }) => void)(
+      'sess_1', { content: 'late reply', turnId: 'sess_1:1' },
+    );
+    (adapter.onError as (sid: string, event: { message: string; turnId: string }) => void)(
+      'sess_1', { message: 'late error', turnId: 'sess_1:1' },
+    );
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:1' },
+    );
+
+    expect(smMock.appendMessage).not.toHaveBeenCalled();
+    expect(smMock.markIdle).not.toHaveBeenCalled();
+  });
+
+  it('does not freeze a staged error from an older turn when a settled adapter accepts new work', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const send = (seq: number, text: string, delivery?: 'steer') => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, ...(delivery && { delivery }) },
+    })));
+
+    send(706, 'first turn');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onError as (sid: string, event: { message: string; turnId: string }) => void)(
+      'sess_1', { message: 'old provider error', turnId: 'sess_1:1' },
+    );
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    send(707, 'new work', 'steer');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+
+    smMock.appendMessage.mockClear();
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:2' },
+    );
+
+    expect(smMock.appendMessage.mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
+    expect(smMock.markIdle).toHaveBeenCalledWith('sess_1');
+  });
+
   it('reasserts active after steer acceptance when the preceding work idles during its ACK', async () => {
     const { adapter, ws, sm } = buildClient();
     let accept!: () => void;
@@ -2268,13 +2505,17 @@ describe('RelayClient pending-question digest', () => {
     })));
     await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
 
-    (adapter.onIdle as (sid: string) => void)('sess_1');
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:0' },
+    );
     expect(sm.markIdle).not.toHaveBeenCalled();
     accept();
     await vi.waitFor(() => expect(sm.markActive).toHaveBeenCalledTimes(2));
     expect(sm.markIdle).not.toHaveBeenCalled();
 
-    (adapter.onIdle as (sid: string) => void)('sess_1');
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)(
+      'sess_1', { turnId: 'sess_1:0' },
+    );
     expect(sm.markIdle).toHaveBeenCalledTimes(1);
   });
 
@@ -2516,6 +2757,102 @@ describe('RelayClient pending-question digest', () => {
     expect(idleCall![3]).toBe(false);
     expect(sm.readCurrentTurnArtifacts).toHaveBeenCalledWith('sess_1');
     expect(adapter.abortSession).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('lets a genuine final message clear a pending adapter error before idle', () => {
+    const { adapter, sm } = buildClient();
+    (adapter.onError as (sid: string, event: { message: string }) => void)(
+      'sess_1',
+      { message: '524 status code (no body)' },
+    );
+    (adapter.onMessage as (sid: string, event: { content: string }) => void)(
+      'sess_1',
+      { content: 'Recovered final reply' },
+    );
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+
+    const messages = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    const finalCalls = messages.filter((call) => call[1] === 'agent_message');
+    expect(finalCalls).toHaveLength(1);
+    expect(JSON.parse(finalCalls[0][2]).payload.content).toBe('Recovered final reply');
+    expect(messages.some((call) => call[1] === 'turn_status')).toBe(false);
+
+    const idleCalls = messages.filter((call) => call[1] === 'idle');
+    expect(idleCalls).toHaveLength(1);
+    expect(JSON.parse(idleCalls[0][2]).payload.reason).toBeUndefined();
+  });
+
+  it('keeps a concrete provider error when later callbacks report generic values', () => {
+    const { adapter, sm } = buildClient();
+    const onError = adapter.onError as (sid: string, event: { message: string }) => void;
+    onError('sess_1', { message: 'HTTP 400 invalid request (request id req_123)' });
+    onError('sess_1', { message: 'unknown' });
+    onError('sess_1', { message: 'success' });
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+
+    const messages = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    const errorMessages = messages
+      .filter((call) => call[1] === 'error')
+      .map((call) => JSON.parse(call[2]).payload.message);
+    expect(errorMessages).toEqual([
+      'HTTP 400 invalid request (request id req_123)',
+      'HTTP 400 invalid request (request id req_123)',
+      'HTTP 400 invalid request (request id req_123)',
+    ]);
+    expect(errorMessages).not.toContain('success');
+    expect(errorMessages).not.toContain('unknown');
+
+    const statusCalls = messages.filter((call) => call[1] === 'turn_status');
+    expect(statusCalls).toHaveLength(1);
+    expect(JSON.parse(statusCalls[0][2]).payload.action.payload.message).toBe(
+      'HTTP 400 invalid request (request id req_123)',
+    );
+  });
+
+  it('uses a safe fallback for a standalone invalid adapter error', () => {
+    const { adapter, sm } = buildClient();
+    (adapter.onError as (sid: string, event: { message: string }) => void)(
+      'sess_1',
+      { message: 'success' },
+    );
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+
+    const messages = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    const errorCall = messages.find((call) => call[1] === 'error');
+    const statusCall = messages.find((call) => call[1] === 'turn_status');
+    expect(JSON.parse(errorCall![2]).payload.message).toBe('Agent request failed');
+    expect(JSON.parse(statusCall![2]).payload.action.payload.message).toBe(
+      'Agent request failed',
+    );
+  });
+
+  it('suppresses duplicate terminal callbacks until the next explicit turn starts', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const onError = adapter.onError as (sid: string, event: { message: string }) => void;
+    const onIdle = adapter.onIdle as (sid: string) => void;
+
+    onError('sess_1', { message: 'HTTP 524 status code (no body)' });
+    onIdle('sess_1');
+    onError('sess_1', { message: 'unknown' });
+    onIdle('sess_1');
+
+    let messages = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(messages.filter((call) => call[1] === 'turn_status')).toHaveLength(1);
+    expect(messages.filter((call) => call[1] === 'idle')).toHaveLength(1);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 509,
+      timestamp: new Date().toISOString(), payload: { text: 'start the next turn' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledWith(
+      'sess_1', 'start the next turn', undefined,
+    ));
+    onIdle('sess_1');
+    await vi.runAllTimersAsync();
+
+    messages = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(messages.filter((call) => call[1] === 'turn_status')).toHaveLength(1);
+    expect(messages.filter((call) => call[1] === 'idle')).toHaveLength(2);
   });
 
   it('freezes an adapter error as failed only when the turn reaches idle and stamps step count', async () => {

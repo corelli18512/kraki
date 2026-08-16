@@ -16,7 +16,7 @@
     "@kraki/protocol": "workspace:*",
     "@kraki/tentacle": "workspace:*",
     "@kraki/voice-broker": "workspace:*",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "13.0.3",
     "ws": "^8.19.0"
   },
   "devDependencies": {

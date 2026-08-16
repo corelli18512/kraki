@@ -405,7 +405,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onToolStart = (sid, e) => this.onToolStart?.(sid, e);
     adapter.onToolComplete = (sid, e) => this.onToolComplete?.(sid, e);
     adapter.onAttachmentBytes = (sid, e) => this.onAttachmentBytes?.(sid, e);
-    adapter.onIdle = (sid) => this.onIdle?.(sid);
+    adapter.onIdle = (sid, e) => this.onIdle?.(sid, e);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);
     adapter.onCompaction = (sid, e) => this.onCompaction?.(sid, e);
@@ -424,5 +424,13 @@ export class MultiAgentAdapter extends AgentAdapter {
     };
     adapter.onTitleChanged = (sid, t) => this.onTitleChanged?.(sid, t);
     adapter.onUsageUpdate = (sid, u) => this.onUsageUpdate?.(sid, u);
+  }
+
+  setTurnIdentity(sessionId: string, turnId: string): void {
+    this.getSessionAdapter(sessionId).setTurnIdentity(sessionId, turnId);
+  }
+
+  isTurnSettled(sessionId: string): boolean {
+    return this.getSessionAdapter(sessionId).isTurnSettled(sessionId);
   }
 }

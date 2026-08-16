@@ -111,6 +111,12 @@ interface SessionEntry {
   session: CopilotSession;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
+  /** Relay-owned logical turn identity for the next accepted prompt. */
+  relayTurnId?: string;
+  /** Identity captured at assistant.turn_start and used by all events in that
+   * provider cycle. */
+  eventTurnId?: string;
+  turnSettled?: boolean;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -508,6 +514,42 @@ export class CopilotAdapter extends AgentAdapter {
     this.cliPath = options.cliPath;
     this.attachmentStore = options.attachmentStore;
     this.krakiMcp = options.krakiMcp;
+  }
+
+  setTurnIdentity(sessionId: string, turnId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry) {
+      entry.relayTurnId = turnId;
+      // Keep the previous provider-run snapshot until assistant.turn_start;
+      // callbacks in the handoff window must not inherit the new ID.
+      entry.turnSettled = false;
+    }
+  }
+
+  isTurnSettled(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.turnSettled === true;
+  }
+
+  private lifecycleEvent(sessionId: string): { turnId?: string } {
+    const entry = this.sessions.get(sessionId);
+    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
+    return turnId ? { turnId } : {};
+  }
+
+  private emitMessage(sessionId: string, content: string): void {
+    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(sessionId) });
+  }
+
+  private emitError(sessionId: string, message: string): void {
+    this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
+  }
+
+  private emitIdle(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.turnSettled = true;
+    const event = this.lifecycleEvent(sessionId);
+    if (event.turnId) this.onIdle?.(sessionId, event);
+    else this.onIdle?.(sessionId);
   }
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
@@ -968,7 +1010,7 @@ export class CopilotAdapter extends AgentAdapter {
     const session = await this.client!.createSession(sessionConfig);
     const sid = session.sessionId;
 
-    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions });
+    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined });
     this.touchSession(sid);
     this.wireEvents(sid, session);
     this.linkCopilotStore(sid);
@@ -1504,7 +1546,7 @@ export class CopilotAdapter extends AgentAdapter {
       sessionId,
       this.makeResumeConfig(sessionId, pendingPermissions, pendingQuestions),
     );
-    const entry = { session, pendingPermissions, pendingQuestions };
+    const entry = { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined };
 
     this.sessions.set(sessionId, entry);
     this.touchSession(sessionId);
@@ -1541,12 +1583,10 @@ export class CopilotAdapter extends AgentAdapter {
   private handleUnavailableSession(sessionId: string, err: unknown): void {
     this.broadcastPendingResolutions(sessionId);
 
-    this.sessions.delete(sessionId);
     this.cleanupSessionPermissions(sessionId);
     logger.warn({ err, sessionId }, 'Session became unavailable');
-    this.onError?.(sessionId, {
-      message: 'Session is no longer active in Copilot. Please start a new session.',
-    });
+    this.emitError(sessionId, 'Session is no longer active in Copilot. Please start a new session.');
+    this.sessions.delete(sessionId);
     this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
   }
 
@@ -1588,9 +1628,7 @@ export class CopilotAdapter extends AgentAdapter {
   private fireAuthError(sessionId: string, err: unknown): void {
     const raw = getErrorMessage(err);
     logger.error({ sessionId, err }, 'Authentication error detected');
-    this.onError?.(sessionId, {
-      message: `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``,
-    });
+    this.emitError(sessionId, `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``);
   }
 
   // ── SDK → callback wiring ─────────────────────────
@@ -1603,8 +1641,8 @@ export class CopilotAdapter extends AgentAdapter {
     const text = (this.pendingNarration.get(sessionId) ?? '').trim();
     this.pendingNarration.delete(sessionId);
     if (text) {
-      this.onNarration?.(sessionId, { content: text });
-      this.onNarrationTrace?.(sessionId, { content: text });
+      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
+      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
     }
   }
 
@@ -1615,7 +1653,7 @@ export class CopilotAdapter extends AgentAdapter {
   private flushConclusion(sessionId: string): void {
     const text = (this.pendingNarration.get(sessionId) ?? '').trim();
     this.pendingNarration.delete(sessionId);
-    if (text) this.onMessage?.(sessionId, { content: text });
+    if (text) this.emitMessage(sessionId, text);
   }
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
@@ -1630,7 +1668,7 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     session.on('assistant.message_delta', (event) => {
-      this.onMessageDelta?.(sessionId, { content: event.data.deltaContent });
+      this.onMessageDelta?.(sessionId, { content: event.data.deltaContent, ...this.lifecycleEvent(sessionId) });
     });
 
     session.on('assistant.message', (event) => {
@@ -1684,6 +1722,7 @@ export class CopilotAdapter extends AgentAdapter {
         data.mcpToolName as string | undefined,
       );
       this.onToolStart?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         toolName: protocolToolName,
         args,
         toolCallId,
@@ -1768,6 +1807,7 @@ export class CopilotAdapter extends AgentAdapter {
       clearInflight();
 
       this.onToolComplete?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         toolName,
         result,
         toolCallId,
@@ -1782,7 +1822,7 @@ export class CopilotAdapter extends AgentAdapter {
           (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
         );
         if (refs.length > 0) {
-          this.onAttachmentBytes?.(sessionId, { refs });
+          this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(sessionId) });
         }
       }
     });
@@ -1800,9 +1840,7 @@ export class CopilotAdapter extends AgentAdapter {
       const wasAborted = this.cycleUserAborted.get(sessionId);
       if (hasOutput === false && !hadError && !wasAborted) {
         logger.warn({ sessionId }, 'Empty cycle detected — agent produced no output for entire user message');
-        this.onError?.(sessionId, {
-          message: 'Agent produced no output. The session may need to be restarted or the model may be unavailable.',
-        });
+        this.emitError(sessionId, 'Agent produced no output. The session may need to be restarted or the model may be unavailable.');
       }
       // Clear the abort flag — next sendMessage starts a fresh cycle anyway,
       // but clearing here keeps state tidy if no new sendMessage follows.
@@ -1811,11 +1849,13 @@ export class CopilotAdapter extends AgentAdapter {
       // Flush any buffered prose as the turn's single conclusion bubble
       // before going idle (draft-bubble model).
       this.flushConclusion(sessionId);
-      this.onIdle?.(sessionId);
+      this.emitIdle(sessionId);
       this.signalFlushComplete(sessionId);
     });
 
     session.on('assistant.turn_start', () => {
+      const entry = this.sessions.get(sessionId);
+      if (entry) entry.eventTurnId = entry.relayTurnId;
       this.clearIdleTimer(sessionId);
       this.turnHasOutput.set(sessionId, false);
       // Only reset if no error was reported before this turn started
@@ -1835,7 +1875,7 @@ export class CopilotAdapter extends AgentAdapter {
         if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, message);
         } else {
-          this.onError?.(sessionId, { message });
+          this.emitError(sessionId, message);
         }
       }
     });
@@ -1859,15 +1899,13 @@ export class CopilotAdapter extends AgentAdapter {
       if (entry) {
         entry.session.abort().catch(() => {});
         entry.session.disconnect().catch(() => {});
-        this.sessions.delete(sessionId);
       }
 
-      this.onError?.(sessionId, {
-        message: `${requested} is currently unavailable. Session paused — send a message to retry.`,
-      });
+      this.emitError(sessionId, `${requested} is currently unavailable. Session paused — send a message to retry.`);
       // Discard any buffered prose — the turn is being torn down, not concluded.
       this.pendingNarration.delete(sessionId);
-      this.onIdle?.(sessionId);
+      this.emitIdle(sessionId);
+      if (entry) this.sessions.delete(sessionId);
       this.signalFlushComplete(sessionId);
       this.cleanupSessionPermissions(sessionId);
     });
@@ -1897,7 +1935,7 @@ export class CopilotAdapter extends AgentAdapter {
         if (await this.probeRuntime() === 'auth_error') {
           this.fireAuthError(sessionId, errorMsg);
         } else {
-          this.onError?.(sessionId, { message: errorMsg });
+          this.emitError(sessionId, errorMsg);
         }
       }
 
@@ -1913,7 +1951,7 @@ export class CopilotAdapter extends AgentAdapter {
         this.idleTimers.delete(sessionId);
         logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
         this.flushConclusion(sessionId);
-        this.onIdle?.(sessionId);
+        this.emitIdle(sessionId);
         this.signalFlushComplete(sessionId);
       }, CopilotAdapter.IDLE_FALLBACK_MS));
     });
@@ -2002,6 +2040,7 @@ export class CopilotAdapter extends AgentAdapter {
       }, 'permission requested');
 
       this.onPermissionRequest?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         id: permId,
         ...parsed,
       });
@@ -2037,6 +2076,7 @@ export class CopilotAdapter extends AgentAdapter {
       }, 'question requested');
 
       this.onQuestionRequest?.(sessionId, {
+        ...this.lifecycleEvent(sessionId),
         id: qId,
         question: req.question ?? '',
         choices: req.choices ?? undefined,
