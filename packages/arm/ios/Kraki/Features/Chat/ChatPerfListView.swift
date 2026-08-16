@@ -549,6 +549,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// time). Separate from the now-persistent edge spinners.
     private var fetchingOlder = false
     private var fetchingNewer = false
+    /// A fetched page is still queued for exact measurement. Keep this state
+    /// separate from the DB read so live synchronization cannot reveal cold
+    /// rows in the gap between fetch completion and the pager barrier.
+    private var measuringOlderPage = false
+    private var measuringNewerPage = false
+    /// The model snapshot has advanced past `items`, but those edge rows are
+    /// intentionally buffered until measurement and a stable anchored apply.
+    private var paginationSnapshotDeferred = false
     private var didInitialScroll = false
 
     /// Bumped on every re-anchor (jump-to-latest) so a fetch that was already
@@ -659,6 +667,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmKickWork = nil
         cancelPendingWarm()
         pager.cancelAll()
+        measuringOlderPage = false
+        measuringNewerPage = false
         chatPerfLog.log("[lifecycle] willDisappear movingFromParent=\(isMovingFromParent ? 1 : 0)")
         super.viewWillDisappear(animated)
     }
@@ -1288,6 +1298,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var lastWarmWidth: CGFloat = 0
     private var pendingHeightRefreshIDs = Set<String>()
     private var heightRefreshScheduled = false
+    /// Keep one compact screen of nearby rows hot after entry/settling. The
+    /// initial window is only 30 persistent messages, so eight neighbors cover
+    /// typical real Sessions without restoring the old whole-history warm storm.
+    private static let warmRadius = 8
 
     private func scheduleWarmKick() {
         warmKickWork?.cancel()
@@ -1377,10 +1391,19 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         sizer.prepare(width: width)
 
         let visible = collectionView.indexPathsForVisibleItems.map(\.item).sorted()
-        let candidates = visible.isEmpty ? [items.count - 1] : visible
+        var candidates = visible.isEmpty ? [items.count - 1] : visible
+        if let first = visible.first, let last = visible.last {
+            for distance in 1...Self.warmRadius {
+                let before = first - distance
+                let after = last + distance
+                if before >= 0 { candidates.append(before) }
+                if after < items.count { candidates.append(after) }
+            }
+        }
 
+        var seen = Set<Int>()
         var jobs: [() -> Void] = []
-        for index in candidates {
+        for index in candidates where seen.insert(index).inserted {
             guard index >= 0, index < items.count,
                   let message = message(items[index]) else { continue }
             if sizer.cached(message.id) != nil {
@@ -1521,6 +1544,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // page settles; `cardChanged` (streaming tail) still reconfigures the
         // single live-card cell cheaply so the tail keeps updating live.
         let pagingInFlight = fetchingOlder || fetchingNewer
+            || measuringOlderPage || measuringNewerPage
+            || paginationSnapshotDeferred || pendingApply != nil
         if pagingInFlight {
             refreshSpineSnapshot()
             if cardChanged, let idx = items.firstIndex(of: Self.liveCardID) {
@@ -1598,6 +1623,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                 loadingOlder = hasLoadedWindow && !atOldest
                 loadingNewer = hasLoadedWindow && hasAuthoritativeHead && !atNewest
                 items = newIds
+                paginationSnapshotDeferred = false
                 collectionView.reloadData()
                 collectionView.layoutIfNeeded()
             }
@@ -1651,6 +1677,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
 
         items = newIds
+        paginationSnapshotDeferred = false
         let newCount = items.count
 
         UIView.performWithoutAnimation {
@@ -1879,19 +1906,28 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private func resumeBufferedPageMeasurements() {
         let older = bufferedOlderCount()
         if older > 0 {
+            paginationSnapshotDeferred = true
+            measuringOlderPage = true
             measurePage(messages.prefix(older)) { [weak self] in
                 guard let self else { return }
+                self.measuringOlderPage = false
                 self.maybeFlushOlder(reason: self.atOldest ? "atOldest" : "resume")
                 self.prefetchOlderIfNeeded()
             }
         }
         let newer = bufferedNewerCount()
         if newer > 0 {
+            paginationSnapshotDeferred = true
+            measuringNewerPage = true
             measurePage(messages.suffix(newer)) { [weak self] in
                 guard let self else { return }
+                self.measuringNewerPage = false
                 self.maybeFlushNewer(reason: self.atNewest ? "atNewest" : "resume")
                 self.prefetchNewerIfNeeded()
             }
+        }
+        if older == 0, newer == 0, items == ids {
+            paginationSnapshotDeferred = false
         }
     }
 
@@ -1959,9 +1995,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let n = bufferedNewerCount()
         guard n > 0 else { return 0 }
         let w = collectionView.bounds.width
-        var hgt: CGFloat = 0
-        for message in messages.suffix(n) { hgt += sizer.height(for: message, width: w) }
-        return hgt
+        return messages.suffix(n).reduce(0) { total, message in
+            total + (sizer.cached(message.id) ?? sizer.estimatedHeight(for: message, width: w))
+        }
     }
     /// Distance from the viewport to the bottom of loaded content (px).
     private func distanceToBottom() -> CGFloat {
@@ -1973,7 +2009,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// refreshes the snapshot, measures the buffered page off-frame, then re-evaluates flush +
     /// prefetch. Mirror of `fetchOlder`.
     private func fetchNewer() {
-        guard !fetchingNewer, !atNewest, !scrollingToTop else { return }
+        guard !fetchingNewer, !measuringNewerPage, !atNewest, !scrollingToTop else { return }
         fetchingNewer = true
         KLog.chat("📤 [page] fetch-newer session=\(sessionId.prefix(12)) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) distBottom=\(Int(distanceToBottom()))")
         let gen = pagingGeneration
@@ -1998,10 +2034,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                 chatPerfLog.log("[txn \(txn.id)] END noop moved=false total=\(self.f1(txn.total()))")
                 return
             }
+            self.paginationSnapshotDeferred = true
             self.refreshSpineSnapshot()
             let n = self.bufferedNewerCount()
+            if self.items == self.ids { self.paginationSnapshotDeferred = false }
             chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
+            self.measuringNewerPage = true
             self.measurePage(self.messages.suffix(n)) {
+                self.measuringNewerPage = false
                 self.maybeFlushNewer(reason: self.atNewest ? "atNewest" : "fetched")
                 self.prefetchNewerIfNeeded()
             }
@@ -2012,7 +2052,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// the band. Mirror of `prefetchOlderIfNeeded`.
     private func prefetchNewerIfNeeded() {
         guard !suppressPagingForBottom else { return }
-        guard !atNewest, !fetchingNewer, !scrollingToTop else { return }
+        guard pendingApply == nil else { return }
+        guard !atNewest, !fetchingNewer, !measuringNewerPage, !scrollingToTop else { return }
         guard distanceToBottom() < olderPrefetchStart() else { return }
         guard bufferedNewerHeight() < olderBufferTargetHeight else { return }
         fetchNewer()
@@ -2022,6 +2063,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// `maybeFlushOlder` (near the BOTTOM instead of the top).
     private func maybeFlushNewer(reason: String) {
         guard !suppressPagingForBottom else { return }
+        guard pendingApply == nil, !measuringNewerPage else { return }
         let n = bufferedNewerCount()
         guard n > 0, !scrollingToTop else { return }
         let atRest = !collectionView.isDragging && !collectionView.isDecelerating
@@ -2045,6 +2087,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[flush \(reason)] NO-COMMON reload old=\(old.count) new=\(new.count)")
             loadingNewer = !atNewest
             items = new
+            paginationSnapshotDeferred = false
             collectionView.reloadData()
             warmWindow()
             return
@@ -2057,6 +2100,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → reload")
             loadingNewer = !atNewest
             items = new
+            paginationSnapshotDeferred = false
             collectionView.reloadData()
             warmWindow()
             return
@@ -2096,9 +2140,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let n = bufferedOlderCount()
         guard n > 0 else { return 0 }
         let w = collectionView.bounds.width
-        var hgt: CGFloat = 0
-        for message in messages.prefix(n) { hgt += sizer.height(for: message, width: w) }
-        return hgt
+        return messages.prefix(n).reduce(0) { total, message in
+            total + (sizer.cached(message.id) ?? sizer.estimatedHeight(for: message, width: w))
+        }
     }
     /// Keep filling the buffer until it can cover this much content above the
     /// viewport — enough to clear the trigger band in one reveal (+ margin).
@@ -2113,7 +2157,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// (advances the model), measures the buffered page off-frame, then
     /// re-evaluates flush + prefetch.
     private func fetchOlder() {
-        guard !fetchingOlder, !atOldest, !scrollingToTop else { return }
+        guard !fetchingOlder, !measuringOlderPage, !atOldest, !scrollingToTop else { return }
         fetchingOlder = true
         KLog.chat("📤 [page] fetch-older session=\(sessionId.prefix(12)) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) off=\(Int(collectionView.contentOffset.y))")
         let gen = pagingGeneration
@@ -2144,12 +2188,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             // Advance the grouped model — the buffer grows. (The test page's
             // `provider.loadOlder()` is the analog; snapshot refresh is the cost the mock
             // window doesn't have, kept here off the REVEAL.)
+            self.paginationSnapshotDeferred = true
             self.refreshSpineSnapshot()
             let n = self.bufferedOlderCount()
+            if self.items == self.ids { self.paginationSnapshotDeferred = false }
             chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
             // Warm the buffered turns off-frame; only THEN are their heights
             // known, so flush/prefetch decisions read a hot cache.
+            self.measuringOlderPage = true
             self.measurePage(self.messages.prefix(n)) {
+                self.measuringOlderPage = false
                 self.maybeFlushOlder(reason: self.atOldest ? "atOldest" : "fetched")
                 self.prefetchOlderIfNeeded()
             }
@@ -2159,7 +2207,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Top up the buffer while approaching the top, until it can clear the band.
     private func prefetchOlderIfNeeded() {
         guard !suppressPagingForBottom else { return }
-        guard !atOldest, !fetchingOlder, !scrollingToTop else { return }
+        guard pendingApply == nil else { return }
+        guard !atOldest, !fetchingOlder, !measuringOlderPage, !scrollingToTop else { return }
         let y = collectionView.contentOffset.y
         guard y < olderPrefetchStart() else { return }
         // Buffer already deep enough to clear the band → hold (don't over-fetch).
@@ -2175,6 +2224,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// older rows to arrive instead of washboarding one tiny page per frame.
     private func maybeFlushOlder(reason: String) {
         guard !suppressPagingForBottom else { return }
+        guard pendingApply == nil, !measuringOlderPage else { return }
         let n = bufferedOlderCount()
         guard n > 0, !scrollingToTop else { return }
         let y = collectionView.contentOffset.y
@@ -2201,6 +2251,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[flush \(reason)] NO-COMMON reload old=\(old.count) new=\(new.count)")
             loadingOlder = !atOldest
             items = new
+            paginationSnapshotDeferred = false
             collectionView.reloadData()
             warmWindow()
             return
@@ -2213,6 +2264,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → reload")
             loadingOlder = !atOldest
             items = new
+            paginationSnapshotDeferred = false
             collectionView.reloadData()
             warmWindow()
             return

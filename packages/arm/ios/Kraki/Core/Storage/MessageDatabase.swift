@@ -275,6 +275,50 @@ final class MessageDatabase {
         }
     }
 
+    /// The last `limit` rows strictly before `beforeSeq`, sorted ascending.
+    /// Unlike a numeric seq range, this remains a real page when legacy logs
+    /// contain holes from historical off-spine events.
+    func messagesBefore(_ sessionId: String, beforeSeq: Int, limit: Int) -> [ChatMessage] {
+        do {
+            return try dbPool.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT payload FROM messages
+                        WHERE session_id = ? AND seq < ?
+                        ORDER BY seq DESC
+                        LIMIT ?
+                        """,
+                    arguments: [sessionId, beforeSeq, limit]
+                )
+                return Self.decode(rows).reversed()
+            }
+        } catch {
+            return []
+        }
+    }
+
+    /// The first `limit` rows strictly after `afterSeq`, sorted ascending.
+    func messagesAfter(_ sessionId: String, afterSeq: Int, limit: Int) -> [ChatMessage] {
+        do {
+            return try dbPool.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT payload FROM messages
+                        WHERE session_id = ? AND seq > ?
+                        ORDER BY seq ASC
+                        LIMIT ?
+                        """,
+                    arguments: [sessionId, afterSeq, limit]
+                )
+                return Self.decode(rows)
+            }
+        } catch {
+            return []
+        }
+    }
+
     /// The last `limit` messages by seq, sorted ascending. Used to
     /// bootstrap a session's initial window and to feed preview
     /// recomputation without loading the whole session.

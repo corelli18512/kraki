@@ -465,16 +465,17 @@ final class MessageProvider {
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq, reason: reason)
     }
 
-    /// Page size for ensure-older / ensure-newer DB-first reads. Keep both
-    /// platforms incremental so reaching a history edge does not inject a large
-    /// cold TextKit slab into one collection-view update.
-    private static let ensurePageSize = 10
+    /// Number of persistent rows in each DB-first page. Page by row count,
+    /// not by a numeric seq interval: current sessions are dense, but legacy
+    /// logs may contain large seq holes from historical off-spine events.
+    private static let ensurePageRowLimit = 10
+    /// Do not jump across a genuinely missing local cache region. Legacy logs
+    /// can have modest off-spine seq gaps; larger boundaries fall back to Relay
+    /// so a partial SQLite cache cannot silently skip history.
+    private static let maxLegacyBoundaryGap = 100
 
-    /// Load one page of older messages, DB-first. Reads the page
-    /// `[topSeq - PAGE..topSeq - 1]` from disk; if that page is
-    /// contiguous (last seq == topSeq - 1) it goes into the in-memory
-    /// window with no network. Otherwise we don't have it — escalate
-    /// to a WS `requestBefore`.
+    /// Load one page of older persistent rows, DB-first. A non-empty page is
+    /// prepended in spine order; an empty page escalates to WS `requestBefore`.
     ///
     /// Returns `true` when the window grew synchronously (DB hit).
     /// `false` means either we're already at history start, or a WS
@@ -488,18 +489,15 @@ final class MessageProvider {
             return false
         }
         let topSeq = state.topSeq
-        let from = max(1, topSeq - Self.ensurePageSize)
-        let to = topSeq - 1
+        let page = appState.messageStore.db.messagesBefore(
+            sessionId,
+            beforeSeq: topSeq,
+            limit: Self.ensurePageRowLimit
+        )
 
-        let page = appState.messageStore.dbMessages(sessionId, from: from, to: to)
-
-        // Contiguity check: the row immediately below the window
-        // (topSeq - 1) must be present. DB rows can have holes when a
-        // session was only partially backfilled, so an empty page or
-        // a page whose last seq < to means we don't truly have what
-        // sits between us and the next chunk.
-        if let last = page.last, last.seq == to {
-            appState.messageStore.expandWindow(sessionId, page)
+        if let nearest = page.last,
+           topSeq - nearest.seq <= Self.maxLegacyBoundaryGap {
+            appState.messageStore.prependOlderPage(sessionId, page)
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
             KLog.diag("📥 [2/history←DB ensureOlderLoaded] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) source=GRDB count=\(page.count)")
             return true
@@ -550,8 +548,6 @@ final class MessageProvider {
         guard !loadingOlderDB.contains(sessionId) else { return false }
 
         let topSeq = state.topSeq
-        let from = max(1, topSeq - Self.ensurePageSize)
-        let to = topSeq - 1
 
         loadingOlderDB.insert(sessionId)
         defer { loadingOlderDB.remove(sessionId) }
@@ -582,7 +578,7 @@ final class MessageProvider {
         let db = appState.messageStore.db
         let tRead0 = CFAbsoluteTimeGetCurrent()
         let page = await Task.detached(priority: .userInitiated) {
-            db.messages(sessionId, from: from, to: to)
+            db.messagesBefore(sessionId, beforeSeq: topSeq, limit: Self.ensurePageRowLimit)
         }.value
         let readMs = (CFAbsoluteTimeGetCurrent() - tRead0) * 1000
 
@@ -601,7 +597,8 @@ final class MessageProvider {
             return false
         }
 
-        if !page.isEmpty {
+        if let nearest = page.last,
+           topSeq - nearest.seq <= Self.maxLegacyBoundaryGap {
             let tExp0 = CFAbsoluteTimeGetCurrent()
             // Persistent spine rows are ordered but need not be integer-adjacent;
             // off-spine events legitimately consume protocol seq values.
@@ -653,12 +650,14 @@ final class MessageProvider {
         guard let last = tentacleLastSeq[sessionId], state.bottomSeq < last else {
             return false                          // already at head
         }
-        let from = state.bottomSeq + 1
-        let to = state.bottomSeq + Self.ensurePageSize
+        let page = appState.messageStore.db.messagesAfter(
+            sessionId,
+            afterSeq: state.bottomSeq,
+            limit: Self.ensurePageRowLimit
+        )
 
-        let page = appState.messageStore.dbMessages(sessionId, from: from, to: to)
-
-        if !page.isEmpty {
+        if let nearest = page.first,
+           nearest.seq - state.bottomSeq <= Self.maxLegacyBoundaryGap {
             appState.messageStore.appendNewerPage(sessionId, page)
             let newBottom = appState.messageStore.windowState(sessionId)?.bottomSeq ?? state.bottomSeq
             if newBottom > state.bottomSeq {

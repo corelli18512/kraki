@@ -225,6 +225,61 @@ final class MessageProviderHeadTests: XCTestCase {
         XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 41)
     }
 
+    func testEnsureOlderLoadedPagesByPersistentRowsAcrossLegacySeqGaps() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-sparse-older-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let sessionId = "sess-sparse-older"
+        let messages = (1...80).map { index in
+            let seq = index * 7
+            return ChatMessage(
+                type: index.isMultiple(of: 2) ? "agent_message" : "user_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "dev-1",
+                timestamp: "2026-08-17T00:00:00Z",
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+        try database.insert(sessionId, messages)
+
+        let app = AppState(testDatabase: database)
+        _ = app.messageStore.loadInitialWindow(sessionId)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).map(\.seq), stride(from: 357, through: 560, by: 7).map { $0 })
+
+        XCTAssertTrue(app.messageProvider?.ensureOlderLoaded(sessionId: sessionId) == true)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).prefix(10).map(\.seq), stride(from: 287, through: 350, by: 7).map { $0 })
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 287)
+    }
+
+    func testEnsureOlderLoadedDoesNotSkipLargeLocalCacheHole() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-hole-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let sessionId = "sess-local-hole"
+        let seqs = Array(1...10) + Array(1_000...1_029)
+        let messages = seqs.map { seq in
+            ChatMessage(
+                type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "dev-1",
+                timestamp: "2026-08-17T00:00:00Z",
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+        try database.insert(sessionId, messages)
+
+        let app = AppState(testDatabase: database)
+        _ = app.messageStore.loadInitialWindow(sessionId)
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 1_000)
+
+        XCTAssertFalse(app.messageProvider?.ensureOlderLoaded(sessionId: sessionId) == true)
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 1_000)
+    }
+
     func testEnsureNewerLoadedAdvancesAcrossOffSpineSeqGaps() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-message-provider-newer-test-\(UUID().uuidString)", isDirectory: true)
