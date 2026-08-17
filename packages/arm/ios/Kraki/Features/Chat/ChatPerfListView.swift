@@ -658,6 +658,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         pager.resume()
         resumeBufferedPageMeasurements()
         logEntryState("viewDidAppear")
+        // Upgrade only what is already on screen on the first display-link tick.
+        // This keeps entry non-blocking while preventing a visibly clipped
+        // estimate from surviving until the delayed look-ahead warm pass.
+        warmWindow(radius: 0)
         scheduleWarmKick()
     }
 
@@ -1356,7 +1360,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             }
             guard !paths.isEmpty else { return }
             let layoutStarted = CFAbsoluteTimeGetCurrent()
-            context.invalidateItems(at: paths)
+            let oldContentHeight = self.collectionView.contentSize.height
+            let oldHeights = Dictionary(uniqueKeysWithValues: paths.map { path in
+                (path, self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1)
+            })
+            // `sizeForItemAt` is a FlowLayout delegate metric. Invalidating only
+            // item attributes can leave the old estimated height cached until a
+            // user scroll starts another layout cycle, producing the observed
+            // "broken on entry, fixed after one swipe" state. Force FlowLayout
+            // to re-read the now-exact sizer cache in this same settled pass.
+            context.invalidateFlowLayoutDelegateMetrics = true
+            context.invalidateFlowLayoutAttributes = true
             self.collectionView.collectionViewLayout.invalidateLayout(with: context)
             self.collectionView.layoutIfNeeded()
 
@@ -1368,13 +1382,23 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             }
             self.appliedHeightIDs.formUnion(applicableIDs)
             let layoutMs = (CFAbsoluteTimeGetCurrent() - layoutStarted) * 1_000
-            if layoutMs > 4 {
-                chatPerfLog.log("[height] apply n=\(paths.count) ms=\(String(format: "%.1f", layoutMs))")
+            let changed = paths.reduce(into: 0) { count, path in
+                let old = oldHeights[path] ?? -1
+                let new = self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1
+                if abs(new - old) > 0.5 { count += 1 }
+            }
+            if layoutMs > 4 || changed > 0 {
+                chatPerfLog.log(
+                    "[height] apply n=\(paths.count) changed=\(changed) "
+                        + "content=\(String(format: "%.1f", oldContentHeight))"
+                        + "→\(String(format: "%.1f", self.collectionView.contentSize.height)) "
+                        + "ms=\(String(format: "%.1f", layoutMs))"
+                )
             }
         }
     }
 
-    private func warmWindow() {
+    private func warmWindow(radius requestedRadius: Int? = nil) {
         let width = collectionView.bounds.width
         guard width > 0,
               !items.isEmpty,
@@ -1392,8 +1416,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         let visible = collectionView.indexPathsForVisibleItems.map(\.item).sorted()
         var candidates = visible.isEmpty ? [items.count - 1] : visible
-        if let first = visible.first, let last = visible.last {
-            for distance in 1...Self.warmRadius {
+        let radius = requestedRadius ?? Self.warmRadius
+        if radius > 0, let first = visible.first, let last = visible.last {
+            for distance in 1...radius {
                 let before = first - distance
                 let after = last + distance
                 if before >= 0 { candidates.append(before) }
@@ -2157,7 +2182,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// (advances the model), measures the buffered page off-frame, then
     /// re-evaluates flush + prefetch.
     private func fetchOlder() {
-        guard !fetchingOlder, !measuringOlderPage, !atOldest, !scrollingToTop else { return }
+        guard !fetchingOlder, !measuringOlderPage, !vm.isLoadingOlder,
+              !atOldest, !scrollingToTop else { return }
         fetchingOlder = true
         KLog.chat("📤 [page] fetch-older session=\(sessionId.prefix(12)) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) off=\(Int(collectionView.contentOffset.y))")
         let gen = pagingGeneration
@@ -2208,7 +2234,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private func prefetchOlderIfNeeded() {
         guard !suppressPagingForBottom else { return }
         guard pendingApply == nil else { return }
-        guard !atOldest, !fetchingOlder, !measuringOlderPage, !scrollingToTop else { return }
+        guard !atOldest, !fetchingOlder, !measuringOlderPage,
+              !vm.isLoadingOlder, !scrollingToTop else { return }
         let y = collectionView.contentOffset.y
         guard y < olderPrefetchStart() else { return }
         // Buffer already deep enough to clear the band → hold (don't over-fetch).
