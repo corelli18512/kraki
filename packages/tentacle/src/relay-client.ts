@@ -2323,9 +2323,30 @@ export class RelayClient {
     // state by marking the session `disconnected` on eviction. No arm
     // broadcast — load-state is internal; the next user interaction goes
     // through ensureSessionResumed and lazy-loads transparently.
+    //
+    // Defensive fail-closed path: an adapter must never evict an active turn,
+    // but process lifecycle bugs can violate that contract (for example, a long
+    // retry backoff with no events being mistaken for idle). Terminalize every
+    // accepted unsettled turn before disconnecting; this also resolves a normal
+    // prompt waiter when present, but covers waiter-less steer/initial turns too.
+    // Keep a sole open question recoverable: Pi deliberately retains that card
+    // across process loss so its answer can become a lazy-resume recovery prompt.
     this.adapter.onSessionEvicted = (sessionId) => {
+      const turnId = this.activeInputTurnIds.get(sessionId);
+      const hasUnsettledAcceptedTurn = !!turnId
+        && this.settledAdapterTurnIds.get(sessionId) !== turnId;
+      const hasRecoverableQuestion = !!this.soleOpenQuestion(sessionId);
+      if (hasUnsettledAcceptedTurn && !hasRecoverableQuestion) {
+        this.pendingTerminalErrors.set(sessionId, {
+          message: 'Agent process was evicted before the active turn settled.',
+          code: 'process_lost',
+          source: 'process',
+          turnId,
+        });
+        this.settleAdapterIdle(sessionId, { turnId });
+      }
       this.sessionManager.markDisconnected(sessionId);
-      if (!this.soleOpenQuestion(sessionId)) this.card.delete(sessionId);
+      if (!hasRecoverableQuestion) this.card.delete(sessionId);
     };
 
     // SDK title fallback — use as fast placeholder while LLM generation runs

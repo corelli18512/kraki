@@ -31,6 +31,7 @@ interface StubProc {
   send: ReturnType<typeof vi.fn>;
   sendRaw: ReturnType<typeof vi.fn>;
   request: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
 }
 
 function makeAdapter(promptWatchdog?: {
@@ -46,6 +47,7 @@ function makeAdapter(promptWatchdog?: {
     send: vi.fn(),
     sendRaw: vi.fn(),
     request: vi.fn().mockResolvedValue({}),
+    kill: vi.fn(),
   };
   const session = {
     proc,
@@ -82,6 +84,49 @@ function makeAdapter(promptWatchdog?: {
 }
 
 type Sess = ReturnType<typeof makeAdapter>['session'];
+
+describe('pi idle eviction lifecycle', () => {
+  it('does not evict a logical turn that is still retrying after agent_end', () => {
+    const { adapter, sid, proc, session, emit } = makeAdapter();
+    const onSessionEvicted = vi.fn();
+    adapter.onSessionEvicted = onSessionEvicted;
+
+    emit({ type: 'agent_end', willRetry: true });
+    session.lastActivity = Date.now() - 30 * 60_000 - 1;
+    (adapter as unknown as { sweepIdle: () => void }).sweepIdle();
+
+    expect(session.settledTurn).toBeUndefined();
+    expect(proc.kill).not.toHaveBeenCalled();
+    expect(onSessionEvicted).not.toHaveBeenCalledWith(sid);
+  });
+
+  it('does not evict settled sessions while native compaction is still active', () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onSessionEvicted = vi.fn();
+    adapter.onSessionEvicted = onSessionEvicted;
+    session.settledTurn = session.logicalTurn;
+    emit({ type: 'compaction_start', reason: 'threshold' });
+    session.lastActivity = Date.now() - 30 * 60_000 - 1;
+
+    (adapter as unknown as { sweepIdle: () => void }).sweepIdle();
+
+    expect(proc.kill).not.toHaveBeenCalled();
+    expect(onSessionEvicted).not.toHaveBeenCalled();
+  });
+
+  it('still evicts a genuinely settled, non-compacting session after the TTL', () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    const onSessionEvicted = vi.fn();
+    adapter.onSessionEvicted = onSessionEvicted;
+    session.settledTurn = session.logicalTurn;
+    session.lastActivity = Date.now() - 30 * 60_000 - 1;
+
+    (adapter as unknown as { sweepIdle: () => void }).sweepIdle();
+
+    expect(proc.kill).toHaveBeenCalledTimes(1);
+    expect(onSessionEvicted).toHaveBeenCalledWith(sid);
+  });
+});
 
 describe('pi narration → draft + TRACE', () => {
   it('message_end prose → onNarration RECONCILE now, TRACE deferred (may still graduate)', () => {
@@ -161,7 +206,7 @@ describe('pi narration → draft + TRACE', () => {
 
 describe('pi abort', () => {
   it('waits for the pi abort acknowledgement before resolving', async () => {
-    const { adapter, sid, proc } = makeAdapter();
+    const { adapter, sid, proc, session } = makeAdapter();
     let acknowledge!: () => void;
     proc.request.mockReturnValueOnce(new Promise<void>((resolve) => { acknowledge = resolve; }));
 
@@ -175,6 +220,7 @@ describe('pi abort', () => {
     acknowledge();
     await aborting;
     expect(resolved).toBe(true);
+    expect(session.settledTurn).toBe(session.logicalTurn);
   });
 
   it('cancels pending question and permission UI requests before aborting', async () => {

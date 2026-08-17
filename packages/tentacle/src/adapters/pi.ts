@@ -1631,6 +1631,10 @@ export class PiAdapter extends AgentAdapter {
       // active tool process group and waitForIdle() has completed. Relay-client
       // must not announce `idle` before that acknowledgement arrives.
       await s.proc.request('abort');
+      // RelayClient owns the visible aborted idle boundary, but the adapter must
+      // still record that this logical turn is terminal. Otherwise the stricter
+      // idle-eviction gate would retain an acknowledged-aborted Pi forever.
+      s.settledTurn = s.logicalTurn;
     } finally {
       s.aborting = false;
     }
@@ -1871,6 +1875,8 @@ export class PiAdapter extends AgentAdapter {
     for (const [id, s] of this.sessions) {
       if (
         s.proc.alive
+        && s.settledTurn === s.logicalTurn
+        && !this.compactingSessions.has(id)
         && s.pendingQuestions.size === 0
         && s.pendingPerms.size === 0
         && !s.aborting
