@@ -1246,7 +1246,18 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func flushPendingApply() {
-        guard let work = pendingApply else { return }
+        guard !collectionView.isDragging,
+              !collectionView.isDecelerating,
+              !scrollingToTop,
+              let work = pendingApply else { return }
+        // A Relay history response can extend the buffered edge after this
+        // apply was first deferred. Never let that larger, colder buffer slip
+        // through the old barrier and synchronously self-size in applyEdges.
+        if measuringOlderPage || measuringNewerPage
+            || bufferedOlderNeedsMeasurement() || bufferedNewerNeedsMeasurement() {
+            resumeBufferedPageMeasurements()
+            return
+        }
         pendingApply = nil
         work()
     }
@@ -1580,6 +1591,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             return
         }
         refreshSpineSnapshot()
+        // A network `.before` response may advance the raw window after the
+        // initiating DB-first task has already returned. Treat that external
+        // front growth as the same buffered pagination transaction rather than
+        // reloading cold rows directly from this observation callback.
+        if !items.isEmpty,
+           let edge = reconcileEdges(old: items, new: ids),
+           edge.insertFront > 0 {
+            paginationSnapshotDeferred = true
+            resumeBufferedPageMeasurements()
+            return
+        }
         // Tail append (including the important empty → first-message
         // transition): reconcile items → ids and reload. Head metadata can
         // also change without changing ids; refresh the footer/jump state so
@@ -1928,27 +1950,65 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// look-ahead), `apply` runs on the next tick with nothing to measure —
     /// so this adds no latency when warm and bounded latency when cold,
     /// instead of a synchronous self-size storm inside `applyEdges`.
+    private func bufferedOlderNeedsMeasurement() -> Bool {
+        let count = bufferedOlderCount()
+        guard count > 0 else { return false }
+        return messages.prefix(count).contains { sizer.cached($0.id) == nil }
+    }
+
+    private func bufferedNewerNeedsMeasurement() -> Bool {
+        let count = bufferedNewerCount()
+        guard count > 0 else { return false }
+        return messages.suffix(count).contains { sizer.cached($0.id) == nil }
+    }
+
+    private func finishOlderPageMeasurement(reason: String) {
+        measuringOlderPage = false
+        // The store can grow again while the pager is budget-slicing the first
+        // response. Re-run the barrier over the current buffer before applying.
+        if bufferedOlderNeedsMeasurement() {
+            resumeBufferedPageMeasurements()
+            return
+        }
+        if pendingApply != nil {
+            flushPendingApply()
+            return
+        }
+        maybeFlushOlder(reason: reason)
+        prefetchOlderIfNeeded()
+    }
+
+    private func finishNewerPageMeasurement(reason: String) {
+        measuringNewerPage = false
+        if bufferedNewerNeedsMeasurement() {
+            resumeBufferedPageMeasurements()
+            return
+        }
+        if pendingApply != nil {
+            flushPendingApply()
+            return
+        }
+        maybeFlushNewer(reason: reason)
+        prefetchNewerIfNeeded()
+    }
+
     private func resumeBufferedPageMeasurements() {
         let older = bufferedOlderCount()
-        if older > 0 {
+        if older > 0, !measuringOlderPage {
             paginationSnapshotDeferred = true
             measuringOlderPage = true
             measurePage(messages.prefix(older)) { [weak self] in
                 guard let self else { return }
-                self.measuringOlderPage = false
-                self.maybeFlushOlder(reason: self.atOldest ? "atOldest" : "resume")
-                self.prefetchOlderIfNeeded()
+                self.finishOlderPageMeasurement(reason: self.atOldest ? "atOldest" : "resume")
             }
         }
         let newer = bufferedNewerCount()
-        if newer > 0 {
+        if newer > 0, !measuringNewerPage {
             paginationSnapshotDeferred = true
             measuringNewerPage = true
             measurePage(messages.suffix(newer)) { [weak self] in
                 guard let self else { return }
-                self.measuringNewerPage = false
-                self.maybeFlushNewer(reason: self.atNewest ? "atNewest" : "resume")
-                self.prefetchNewerIfNeeded()
+                self.finishNewerPageMeasurement(reason: self.atNewest ? "atNewest" : "resume")
             }
         }
         if older == 0, newer == 0, items == ids {
@@ -2066,9 +2126,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
             self.measuringNewerPage = true
             self.measurePage(self.messages.suffix(n)) {
-                self.measuringNewerPage = false
-                self.maybeFlushNewer(reason: self.atNewest ? "atNewest" : "fetched")
-                self.prefetchNewerIfNeeded()
+                self.finishNewerPageMeasurement(reason: self.atNewest ? "atNewest" : "fetched")
             }
         }
     }
@@ -2223,9 +2281,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             // known, so flush/prefetch decisions read a hot cache.
             self.measuringOlderPage = true
             self.measurePage(self.messages.prefix(n)) {
-                self.measuringOlderPage = false
-                self.maybeFlushOlder(reason: self.atOldest ? "atOldest" : "fetched")
-                self.prefetchOlderIfNeeded()
+                self.finishOlderPageMeasurement(reason: self.atOldest ? "atOldest" : "fetched")
             }
         }
     }
