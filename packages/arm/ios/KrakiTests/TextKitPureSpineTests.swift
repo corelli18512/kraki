@@ -29,12 +29,12 @@ final class TextKitPureSpineTests: XCTestCase {
         }
     }
 
-    func testFlowLayoutMetricInvalidationReflowsFollowingRowsWithoutScroll() {
+    func testFlowLayoutMetricInvalidationReflowsRowsAndPreservesBottomOffsetWithoutScroll() {
         let layout = UICollectionViewFlowLayout()
         layout.minimumLineSpacing = 0
         layout.estimatedItemSize = .zero
         let collection = UICollectionView(
-            frame: CGRect(x: 0, y: 0, width: 320, height: 600),
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             collectionViewLayout: layout
         )
         let probe = FlowLayoutMetricProbe()
@@ -46,17 +46,20 @@ final class TextKitPureSpineTests: XCTestCase {
 
         XCTAssertEqual(layout.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))?.frame.minY, 100)
         XCTAssertEqual(collection.contentSize.height, 300)
+        collection.contentOffset.y = 100
 
         probe.heights[0] = 240
         let context = UICollectionViewFlowLayoutInvalidationContext()
         context.invalidateFlowLayoutDelegateMetrics = true
         context.invalidateFlowLayoutAttributes = true
+        context.contentOffsetAdjustment = CGPoint(x: 0, y: 140)
         layout.invalidateLayout(with: context)
         collection.layoutIfNeeded()
 
         XCTAssertEqual(layout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))?.frame.height, 240)
         XCTAssertEqual(layout.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))?.frame.minY, 240)
         XCTAssertEqual(collection.contentSize.height, 440)
+        XCTAssertEqual(collection.contentOffset.y, 240)
     }
 
     private func message(_ type: String, seq: Int, content: String? = nil) -> ChatMessage {
@@ -274,6 +277,31 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(ChatEntryLoading.isEntryGateActive(
             providerWaitingForLatest: false,
             hasMaterializedLatest: false
+        ))
+
+        for status in [ConnectionStatus.awaitingLogin, .connecting, .authenticating] {
+            XCTAssertTrue(ChatEntryLoading.isInitialConnectionGateActive(
+                hasStoredCredentials: true,
+                hasCompletedInitialConnect: false,
+                connectionStatus: status
+            ))
+        }
+        for status in [ConnectionStatus.connected, .disconnected, .error] {
+            XCTAssertFalse(ChatEntryLoading.isInitialConnectionGateActive(
+                hasStoredCredentials: true,
+                hasCompletedInitialConnect: false,
+                connectionStatus: status
+            ))
+        }
+        XCTAssertFalse(ChatEntryLoading.isInitialConnectionGateActive(
+            hasStoredCredentials: false,
+            hasCompletedInitialConnect: false,
+            connectionStatus: .connecting
+        ))
+        XCTAssertFalse(ChatEntryLoading.isInitialConnectionGateActive(
+            hasStoredCredentials: true,
+            hasCompletedInitialConnect: true,
+            connectionStatus: .connecting
         ))
     }
 

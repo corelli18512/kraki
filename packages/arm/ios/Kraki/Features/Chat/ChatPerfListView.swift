@@ -260,13 +260,13 @@ private final class RealCellSizer {
     /// Warm path: measure + cache off the critical frame (called by the
     /// scheduler). Cheap no-op if already cached. No sync-miss log — this is
     /// the intended, budget-sliced measurement.
-    func prime(_ t: ChatMessage, width: CGFloat) {
+    func prime(_ t: ChatMessage, width: CGFloat, notify: Bool = true) {
         guard width > 0 else { return }
         resetIfWidthChanged(width)
         if cache[t.id] != nil { return }
         let t0 = CFAbsoluteTimeGetCurrent()
         cache[t.id] = measure(t, width: width)
-        onHeightReady?(t.id)
+        if notify { onHeightReady?(t.id) }
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         if ms > 8 {
             chatPerfLog.log("[prime] slow id=\(t.id) ms=\(String(format: "%.1f", ms))")
@@ -652,15 +652,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        isLeavingView = false
+        settleInitialVisibleGeometryBeforePresentation()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isLeavingView = false
         pager.resume()
         resumeBufferedPageMeasurements()
         logEntryState("viewDidAppear")
-        // Upgrade only what is already on screen on the first display-link tick.
-        // This keeps entry non-blocking while preventing a visibly clipped
-        // estimate from surviving until the delayed look-ahead warm pass.
+        // Catch rows that materialized after viewWillAppear (for example an
+        // empty DB window filled by the provider), then start the delayed
+        // look-ahead pass. Ordinary loaded entry rows were already settled
+        // before the navigation transition was presented.
         warmWindow(radius: 0)
         scheduleWarmKick()
     }
@@ -1302,6 +1309,73 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         updateJumpButtonVisibility()
     }
 
+    /// Resolve the bottom viewport before UIKit presents the navigation
+    /// transition. The list can cheaply estimate every loaded row, but exposing
+    /// those estimates makes the final bubble (or the rows immediately above a
+    /// live card) appear clipped until the async warmer expands them. Measuring
+    /// only the already-visible tail here keeps entry bounded while ensuring
+    /// the first composited frame uses the same exact geometry as the cells.
+    private func settleInitialVisibleGeometryBeforePresentation() {
+        guard !initialVisibleGeometrySettled,
+              !isSettlingInitialVisibleGeometry,
+              collectionView != nil,
+              !items.isEmpty else { return }
+        let width = collectionView.bounds.width
+        guard width > 0 else { return }
+
+        isSettlingInitialVisibleGeometry = true
+        defer { isSettlingInitialVisibleGeometry = false }
+        let started = CFAbsoluteTimeGetCurrent()
+        let oldContentHeight = collectionView.contentSize.height
+        sizer.prepare(width: width)
+        lastWarmWidth = width
+        collectionView.layoutIfNeeded()
+
+        var measuredIDs = Set<String>()
+        // A height correction can slightly change which older row intersects
+        // the top edge. Iterate a small bounded number of times so every row in
+        // the final first viewport is exact without warming the whole window.
+        for _ in 0..<3 {
+            let cold = collectionView.indexPathsForVisibleItems
+                .sorted()
+                .compactMap { indexPath -> ChatMessage? in
+                    guard indexPath.item < items.count,
+                          let message = message(items[indexPath.item]),
+                          sizer.cached(message.id) == nil else { return nil }
+                    return message
+                }
+            guard !cold.isEmpty else { break }
+            for message in cold {
+                sizer.prime(message, width: width, notify: false)
+                measuredIDs.insert(message.id)
+            }
+            let context = UICollectionViewFlowLayoutInvalidationContext()
+            context.invalidateFlowLayoutDelegateMetrics = true
+            context.invalidateFlowLayoutAttributes = true
+            collectionView.collectionViewLayout.invalidateLayout(with: context)
+            collectionView.layoutIfNeeded()
+            if followingBottom {
+                pinToBottom(reason: "entry-exact")
+            }
+        }
+
+        let hasColdVisibleMessage = collectionView.indexPathsForVisibleItems.contains { indexPath in
+            guard indexPath.item < items.count,
+                  let message = message(items[indexPath.item]) else { return false }
+            return sizer.cached(message.id) == nil
+        }
+        guard !hasColdVisibleMessage else { return }
+        appliedHeightIDs.formUnion(measuredIDs)
+        initialVisibleGeometrySettled = true
+        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
+        chatPerfLog.log(
+            "[entry] exact-visible n=\(measuredIDs.count) "
+                + "content=\(String(format: "%.1f", oldContentHeight))"
+                + "→\(String(format: "%.1f", collectionView.contentSize.height)) "
+                + "ms=\(String(format: "%.1f", elapsed)) live=\(hasLiveCardItem ? 1 : 0)"
+        )
+    }
+
     /// Pre-measure heights OFF the scroll critical path. Warm the loaded
     /// window's turns during idle so on-screen scrolling never pays a
     /// synchronous self-size. Unlike the old preload-everything provider we
@@ -1311,6 +1385,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var warmEnqueued = Set<String>()
     private var appliedHeightIDs = Set<String>()
     private var lastWarmWidth: CGFloat = 0
+    private var initialVisibleGeometrySettled = false
+    private var isSettlingInitialVisibleGeometry = false
     private var pendingHeightRefreshIDs = Set<String>()
     private var heightRefreshScheduled = false
     /// Keep one compact screen of nearby rows hot after entry/settling. The
@@ -1375,6 +1451,19 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let oldHeights = Dictionary(uniqueKeysWithValues: paths.map { path in
                 (path, self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1)
             })
+            let contentHeightDelta = paths.reduce(CGFloat.zero) { total, path in
+                let old = oldHeights[path] ?? 0
+                guard path.item < self.items.count,
+                      let new = self.sizer.cached(self.items[path.item]), old >= 0 else { return total }
+                return total + new - old
+            }
+            if self.followingBottom, abs(contentHeightDelta) > 0.5 {
+                // Rebase the scroll offset inside the same FlowLayout
+                // invalidation transaction that changes content height. Laying
+                // out first and pinning second briefly exposes an earlier,
+                // clipped viewport when nearby rows warm after entry.
+                context.contentOffsetAdjustment = CGPoint(x: 0, y: contentHeightDelta)
+            }
             // `sizeForItemAt` is a FlowLayout delegate metric. Invalidating only
             // item attributes can leave the old estimated height cached until a
             // user scroll starts another layout cycle, producing the observed
@@ -1386,7 +1475,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             self.collectionView.layoutIfNeeded()
 
             if self.followingBottom {
-                self.pinToBottom(reason: "height-warm")
+                self.lastPinnedViewportSize = self.collectionView.bounds.size
+                self.lastPinnedAdjustedInsets = self.collectionView.adjustedContentInset
             } else if let anchor,
                       let newFrame = self.collectionView.layoutAttributesForItem(at: anchor.0)?.frame {
                 self.collectionView.contentOffset.y += newFrame.minY - anchor.1
@@ -1403,6 +1493,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                     "[height] apply n=\(paths.count) changed=\(changed) "
                         + "content=\(String(format: "%.1f", oldContentHeight))"
                         + "→\(String(format: "%.1f", self.collectionView.contentSize.height)) "
+                        + "off=\(String(format: "%.1f", self.collectionView.contentOffset.y)) "
+                        + "distBottom=\(String(format: "%.1f", self.distanceToBottom())) "
                         + "ms=\(String(format: "%.1f", layoutMs))"
                 )
             }
@@ -1616,6 +1708,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         if idsChanged || edgeStateChanged {
             // Full reload only when the spine item set or edge spinners moved.
             let wasAtBottom = followingBottom || distanceToBottom() <= Self.bottomFollowTolerance
+            let isFirstMaterialization = items.isEmpty && !newIds.isEmpty
             items = newIds
             lastLiveCardSignature = cardSig
             collectionView.reloadData()
@@ -1623,6 +1716,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             if !items.isEmpty, !didInitialScroll || wasAtBottom {
                 followingBottom = true
                 pinToBottom(reason: "live-update", animated: didInitialScroll && !wasAtBottom)
+            }
+            // If the controller was created while its DB window was still
+            // empty, this observation is its real first frame. Settle that tail
+            // synchronously in the same run-loop turn before it can be shown.
+            if isFirstMaterialization {
+                initialVisibleGeometrySettled = false
+                settleInitialVisibleGeometryBeforePresentation()
             }
         } else if cardChanged {
             // Only the streaming tail cell's content changed (same item set).
