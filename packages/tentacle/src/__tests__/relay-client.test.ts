@@ -2237,6 +2237,83 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
   });
 
+  it('fails closed and releases the prompt queue when an active adapter session is evicted', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    let state = 'active';
+    smMock.getMeta.mockImplementation(() => ({
+      id: 'sess_1', agent: 'pi', state, lastSeq: 610, currentTurnStartSeq: 609,
+    }));
+    smMock.markActive.mockImplementation(() => { state = 'active'; });
+    smMock.markIdle.mockImplementation(() => { state = 'idle'; });
+    smMock.markDisconnected.mockImplementation(() => { state = 'disconnected'; });
+    smMock.resumeSession.mockImplementation(() => ({ context: {} }));
+
+    for (const [seq, text] of [[609, 'first'], [610, 'second']] as const) {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+        timestamp: new Date().toISOString(), payload: { text },
+      })));
+    }
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    (adapter.onSessionEvicted as (sid: string) => void)('sess_1');
+    (adapter.onSessionEvicted as (sid: string) => void)('sess_1');
+
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    expect(adapter.resumeSession).toHaveBeenCalledWith('sess_1', {});
+    expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
+    const statusCalls = smMock.appendMessage.mock.calls.filter((call) => call[1] === 'turn_status');
+    expect(statusCalls).toHaveLength(1);
+    expect(JSON.parse(statusCalls[0][2]).payload).toMatchObject({
+      action: {
+        type: 'failed',
+        payload: { source: 'process' },
+      },
+    });
+  });
+
+  it('terminalizes an active waiter-less steer when the adapter session is evicted', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 609,
+      timestamp: new Date().toISOString(), payload: { text: 'change direction', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    (adapter.onSessionEvicted as (sid: string) => void)('sess_1');
+
+    const statusCalls = smMock.appendMessage.mock.calls.filter((call) => call[1] === 'turn_status');
+    expect(statusCalls).toHaveLength(1);
+    expect(JSON.parse(statusCalls[0][2]).payload).toMatchObject({
+      action: {
+        type: 'failed',
+        payload: { source: 'process' },
+      },
+    });
+    expect(smMock.markDisconnected).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('keeps a sole open question recoverable across adapter eviction', async () => {
+    const { adapter, ws, sm, askQ } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 609,
+      timestamp: new Date().toISOString(), payload: { text: 'ask me' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    askQ('q-recover');
+
+    (adapter.onSessionEvicted as (sid: string) => void)('sess_1');
+
+    const statusCalls = smMock.appendMessage.mock.calls.filter((call) => call[1] === 'turn_status');
+    expect(statusCalls).toHaveLength(0);
+    expect(smMock.markDisconnected).toHaveBeenCalledWith('sess_1');
+  });
+
   it('dispatches and persists active-turn steer immediately without waiting for idle', async () => {
     const { adapter, ws, sm } = buildClient();
     ws.emit('message', Buffer.from(JSON.stringify({
