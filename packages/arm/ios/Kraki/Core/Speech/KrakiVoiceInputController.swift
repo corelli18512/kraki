@@ -184,6 +184,7 @@ final class KrakiVoiceInputController {
     private var reconnectAttempt = 0
     private var warmConnectionDesired = false
     private var leaseRolloverAttempt = 0
+    private var rolloverRawPrefix = ""
 
     private static let maxLeaseRolloverAttempts = 1
 
@@ -530,13 +531,17 @@ final class KrakiVoiceInputController {
     }
 
     private func checkpointCurrentRawSegment() {
-        guard !currentRawSegment.isEmpty else { return }
-        stableRawPrefix = VoiceDraftMerger.merge(
+        let currentConnectionText = VoiceDraftMerger.merge(
             existing: stableRawPrefix,
             final: currentRawSegment
         )
+        rolloverRawPrefix = VoiceDraftMerger.merge(
+            existing: rolloverRawPrefix,
+            final: currentConnectionText
+        )
+        stableRawPrefix = ""
         currentRawSegment = ""
-        rawText = stableRawPrefix
+        rawText = rolloverRawPrefix
     }
 
     private func scheduleLeaseTimeout() {
@@ -619,14 +624,29 @@ final class KrakiVoiceInputController {
     }
 
     private func resolvedFinalText(_ text: String, gatewayRawText: String?) -> String {
-        guard !stableRawPrefix.isEmpty else { return text }
-        let accumulatedLength = rawText.count
-        let gatewayRawLength = gatewayRawText?.count ?? 0
-        if text.count + 5 < accumulatedLength,
-           gatewayRawLength + 5 < accumulatedLength {
-            return VoiceDraftMerger.merge(existing: stableRawPrefix, final: text)
+        let currentConnectionText: String
+        if stableRawPrefix.isEmpty {
+            currentConnectionText = text
+        } else {
+            let accumulatedText = VoiceDraftMerger.merge(
+                existing: stableRawPrefix,
+                final: currentRawSegment
+            )
+            let gatewayRawLength = gatewayRawText?.count ?? 0
+            if text.count + 5 < accumulatedText.count,
+               gatewayRawLength + 5 < accumulatedText.count {
+                currentConnectionText = VoiceDraftMerger.merge(
+                    existing: stableRawPrefix,
+                    final: text
+                )
+            } else {
+                currentConnectionText = text
+            }
         }
-        return text
+        return VoiceDraftMerger.merge(
+            existing: rolloverRawPrefix,
+            final: currentConnectionText
+        )
     }
 
     #if DEBUG
@@ -656,7 +676,14 @@ final class KrakiVoiceInputController {
         } else {
             currentRawSegment = text
         }
-        rawText = VoiceDraftMerger.merge(existing: stableRawPrefix, final: currentRawSegment)
+        let currentConnectionText = VoiceDraftMerger.merge(
+            existing: stableRawPrefix,
+            final: currentRawSegment
+        )
+        rawText = VoiceDraftMerger.merge(
+            existing: rolloverRawPrefix,
+            final: currentConnectionText
+        )
     }
 
     private static func sharedPrefixLength(_ lhs: String, _ rhs: String) -> Int {
@@ -665,7 +692,10 @@ final class KrakiVoiceInputController {
 
     private func setCorrectionDelta(_ text: String) {
         guard state == .finishing, !text.isEmpty else { return }
-        pendingCorrectionText = text
+        pendingCorrectionText = VoiceDraftMerger.merge(
+            existing: rolloverRawPrefix,
+            final: text
+        )
         if correctionText.isEmpty {
             applyPendingCorrectionText()
             return
@@ -755,6 +785,7 @@ final class KrakiVoiceInputController {
         rawText = ""
         stableRawPrefix = ""
         currentRawSegment = ""
+        rolloverRawPrefix = ""
         correctionSource = ""
         correctionText = ""
         correctionSourceOffset = 0
@@ -765,7 +796,9 @@ final class KrakiVoiceInputController {
     private static func userFacingGatewayError(_ reason: String) -> String {
         let lower = reason.lowercased()
         if lower.contains("permission") { return VoiceInputError.microphoneDenied.localizedDescription }
-        if lower.contains("quota") { return "The voice-input quota was exhausted." }
+        if lower.contains("quota") {
+            return "The voice session couldn't be renewed. Please try again."
+        }
         if lower.contains("lease") || lower.contains("denied") || lower.contains("authorization") {
             return "The voice session authorization was rejected. Please try again."
         }

@@ -556,7 +556,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         var finals: [String] = []
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
         XCTAssertEqual(controller.state, .recording)
-        factory.sessions[0].emit(.partial("before quota rollover"))
+        factory.sessions[0].emit(.partial("hi"))
         await Task.yield()
         factory.sessions[0].emit(.failed("denied: quota_exhausted"))
         for _ in 0..<20 where host.requestedResources.count < 2 {
@@ -564,7 +564,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         }
 
         XCTAssertEqual(controller.state, .obtainingLease)
-        XCTAssertEqual(controller.rawText, "before quota rollover")
+        XCTAssertEqual(controller.rawText, "hi")
         XCTAssertEqual(host.requestedResources, ["voice/doubao", "voice/doubao"])
         XCTAssertEqual(factory.sessions[0].closeCount, 1)
         XCTAssertTrue(finals.isEmpty)
@@ -576,13 +576,61 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(factory.sessions[1].starts.count, 1)
 
-        factory.sessions[1].emit(.partial("after rollover"))
+        factory.sessions[1].emit(.partial("first segment after rollover"))
         await Task.yield()
-        XCTAssertEqual(controller.rawText, "before quota rollover after rollover")
-        factory.sessions[1].emit(.final("after rollover", rawText: "after rollover"))
+        factory.sessions[1].emit(.partial("next"))
         await Task.yield()
-        XCTAssertEqual(finals, ["before quota rollover after rollover"])
+        XCTAssertEqual(controller.rawText, "hi first segment after rollover next")
+        controller.finish()
+        factory.sessions[1].emit(.correctionDelta("corrected segment after rollover next"))
+        await Task.yield()
+        XCTAssertEqual(controller.displayText, "hi corrected segment after rollover next")
+        factory.sessions[1].emit(
+            .final(
+                "corrected segment after rollover next",
+                rawText: "first segment after rollover next"
+            )
+        )
+        await Task.yield()
+        XCTAssertEqual(finals, ["hi corrected segment after rollover next"])
         XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testRepeatedBrokerQuotaExhaustionUsesRenewalErrorNotDailyQuotaError() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        controller.prepare()
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+
+        var finals: [String] = []
+        await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
+        factory.sessions[0].emit(.failed("denied: quota_exhausted"))
+        for _ in 0..<20 where host.requestedResources.count < 2 {
+            await Task.yield()
+        }
+        controller.receiveLease(lease(jti: "lease-2"))
+        factory.sessions[1].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+
+        factory.sessions[1].emit(.failed("denied: quota_exhausted"))
+        for _ in 0..<20 where host.requestedResources.count < 3 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(
+            controller.state,
+            .failed("The voice session couldn't be renewed. Please try again.")
+        )
+        XCTAssertEqual(host.requestedResources.count, 3)
+        XCTAssertTrue(finals.isEmpty)
     }
 
     func testQuotaExhaustedWhileFinishingCommitsRawDraftAndWarmsReplacement() async {
