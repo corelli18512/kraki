@@ -126,7 +126,8 @@ Supported methods:
 - `pageNewer`
 - `scrollToBubble`
 - `scrollChat`
-- `simulateMissingLiveScrollEnd` — Debug-only scroll-settle watchdog regression hook
+- `simulateMissingLiveScrollEnd` — Debug-only scroll-settle watchdog regression hook;
+  pass `overlapScrollerKnob=true` to cover a concurrent scrollbar drag
 - `createSession`
 - `selectSession`
 - `sendInput`
@@ -182,7 +183,8 @@ Mac history records use four prefixes:
 - `mac-window`: initial window selection and older/newer px-managed trimming;
 - `mac-fetch`: DB/Relay pagination start, apply, stale-result, and fallback;
 - `mac-page`: the window projected into the AppKit list, including seq ranges,
-  visible real/placeholder seqs, cache counts, warm state, offset, and edge state;
+  visible real/placeholder/unmaterialized seqs, cache counts, warm state, offset,
+  and edge state;
 - `mac-watchdog`: a missing AppKit live-scroll-end callback was recovered.
 
 After a reproduction, preserve the approximate time and Session ID/title, then
@@ -196,7 +198,14 @@ log show --last 30m --style compact \
   --predicate 'subsystem == "chat.kraki.ios" AND eventMessage CONTAINS "mac-"'
 ```
 
-A healthy page converges to `placeholders=[]`, `warm=0`, and
-`pendingHeight=0`. `reason=placeholder-stuck`, repeated page transitions with
-no new user input, or a window shrinking below the Mac 15-row floor identifies
-the failing layer without exposing message content.
+The CLI exposes both watchdog paths without native input:
+
+```bash
+scripts/kraki-native.py simulate-missing-scroll-end
+scripts/kraki-native.py simulate-missing-scroll-end --overlap-scroller-knob
+```
+
+A healthy page converges to `placeholders=[]`, `missing=[]`, `warm=0`, and
+`pendingHeight=0`. `reason=viewport-stuck`, repeated page transitions with no
+new user input, or a window shrinking below the Mac 15-row floor identifies the
+failing layer without exposing message content.

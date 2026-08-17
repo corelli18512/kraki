@@ -76,7 +76,8 @@ def parser() -> argparse.ArgumentParser:
     scroll_chat = sub.add_parser("scroll-chat")
     scroll_chat.add_argument("direction", choices=["up", "down"])
     scroll_chat.add_argument("--ticks", type=int, default=1)
-    sub.add_parser("simulate-missing-scroll-end")
+    missing_scroll_end = sub.add_parser("simulate-missing-scroll-end")
+    missing_scroll_end.add_argument("--overlap-scroller-knob", action="store_true")
 
     create = sub.add_parser("create-session")
     create.add_argument("--device", required=True)
@@ -160,7 +161,9 @@ def main() -> None:
     elif command == "scroll-chat":
         method, params = "scrollChat", {"direction": args.direction, "ticks": args.ticks}
     elif command == "simulate-missing-scroll-end":
-        method, params = "simulateMissingLiveScrollEnd", {}
+        method, params = "simulateMissingLiveScrollEnd", {
+            "overlapScrollerKnob": args.overlap_scroller_knob,
+        }
     elif command == "create-session":
         method = "createSession"
         params = compact({

@@ -9,11 +9,16 @@ fileprivate struct MacChatPresentationHealth {
     let intersectingSeqs: [Int]
     let realSeqs: [Int]
     let placeholderSeqs: [Int]
+    let unmaterializedSeqs: [Int]
     let preparedContentCount: Int
     let exactHeightCount: Int
     let pendingHeightCount: Int
     let warmActive: Bool
     let viewportFillScheduled: Bool
+
+    var unresolvedSeqs: [Int] {
+        Array(Set(placeholderSeqs + unmaterializedSeqs)).sorted()
+    }
 }
 
 private enum MacChatPerf {
@@ -1205,9 +1210,12 @@ final class MacChatDocumentView: NSView {
             $0 < contents.count && $0 < itemFrames.count && itemFrames[$0].intersects(viewport)
         }
         let visible = indexes.compactMap { index -> (Int, MacChatBubbleCell)? in
-            guard let cell = visibleCells[index], !cell.isHidden else { return nil }
+            guard let cell = visibleCells[index], !cell.isHidden, cell.alphaValue > 0.01 else {
+                return nil
+            }
             return (index, cell)
         }
+        let visibleIndexes = Set(visible.map { $0.0 })
         return MacChatPresentationHealth(
             itemCount: contents.count,
             intersectingSeqs: indexes.map { contents[$0].seq },
@@ -1217,22 +1225,15 @@ final class MacChatDocumentView: NSView {
             placeholderSeqs: visible.compactMap { index, cell in
                 cell.isPlaceholderFlag ? contents[index].seq : nil
             }.sorted(),
+            unmaterializedSeqs: indexes.compactMap { index in
+                visibleIndexes.contains(index) ? nil : contents[index].seq
+            }.sorted(),
             preparedContentCount: contentCache.count,
             exactHeightCount: heightCache.count,
             pendingHeightCount: pendingHeights.count,
             warmActive: warmBatchActive,
             viewportFillScheduled: viewportFillScheduled
         )
-    }
-
-    func intersectingPlaceholderSeqs(in viewport: NSRect) -> [Int] {
-        visibleCells.compactMap { index, cell in
-            guard index < contents.count,
-                  !cell.isHidden,
-                  cell.isPlaceholderFlag,
-                  cell.frame.intersects(viewport) else { return nil }
-            return contents[index].seq
-        }.sorted()
     }
 
     func layoutDiagnostics(viewport: NSRect) -> [String: Any] {
@@ -1856,7 +1857,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var thumbViewportGeneration = 0
     private var snapshotApplyActive = false
     private var suppressRunwayForNextReflect = false
-    private var olderEdgeArmed = true
+    private var olderEdgeArmed = false
     private(set) var hasUserScrolled = false
     private var initialTailTrimRequested = false
     private(set) var representedSessionId: String?
@@ -2144,7 +2145,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         pendingBubbleActionClick = nil
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
-        olderEdgeArmed = true
+        olderEdgeArmed = false
         hasUserScrolled = false
         initialTailTrimRequested = false
         allowsEdgePaging = false
@@ -2221,6 +2222,11 @@ final class MacChatScrollView: MacSmoothScrollView {
     private func endScrollInteraction(scrollerKnob: Bool) {
         if scrollerKnob {
             knobScrollActive = false
+            // A missing live-scroll-end may have overlapped a scrollbar drag.
+            // The watchdog deliberately yields while the knob owns geometry;
+            // re-arm it once knob tracking finishes so the live state cannot
+            // remain fenced forever.
+            if liveScrollActive { notePreciseScrollActivity() }
         } else {
             liveScrollActive = false
             scrollInteractionWatchdogWorkItem?.cancel()
@@ -2236,16 +2242,16 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollInteractionWatchdogWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self,
-                  generation == self.scrollActivityGeneration,
-                  self.liveScrollActive,
-                  !self.knobScrollActive else { return }
+                  generation == self.scrollActivityGeneration else { return }
             self.scrollInteractionWatchdogWorkItem = nil
+            guard self.liveScrollActive, !self.knobScrollActive else { return }
             self.liveScrollActive = false
             let sessionPrefix = self.representedSessionId.map { String($0.prefix(12)) } ?? "none"
+            let health = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
             KLog.chatEntry(
                 "mac-watchdog session=\(sessionPrefix) "
-                    + "reason=missing-live-scroll-end placeholders="
-                    + "\(self.chatDocumentView.intersectingPlaceholderSeqs(in: self.contentView.bounds).count)"
+                    + "reason=missing-live-scroll-end placeholders=\(health.placeholderSeqs.count) "
+                    + "unmaterialized=\(health.unmaterializedSeqs.count)"
             )
             self.scheduleScrollSettleIfIdle()
         }
@@ -2289,8 +2295,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds, runwayOverride: 0)
         adoptStableGeometryAnchorIfNeeded()
         let settledHealth = chatDocumentView.presentationHealth(in: contentView.bounds)
-        if !settledHealth.placeholderSeqs.isEmpty {
-            emitPresentationLog(reason: "settled-placeholder", force: true)
+        if !settledHealth.unresolvedSeqs.isEmpty {
+            emitPresentationLog(reason: "settled-unresolved", force: true)
             schedulePresentationHealthCheck()
         }
         if deferredEdgePaging {
@@ -2436,7 +2442,14 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     func noteFirstUsableLayout() {
-        emitPresentationLog(reason: "initial-ready", force: true)
+        let epoch = presentationEpoch
+        DispatchQueue.main.async { [weak self] in
+            guard let self, epoch == self.presentationEpoch else { return }
+            // `notePresentationSnapshot` runs after the atomic AppKit apply.
+            // Deferring one turn ensures initial-ready carries that window's
+            // actual range/counts instead of the prepare-time zero values.
+            self.emitPresentationLog(reason: "initial-ready", force: true)
+        }
     }
 
     func notePresentationSnapshot(
@@ -2447,8 +2460,6 @@ final class MacChatScrollView: MacSmoothScrollView {
         atOldest: Bool,
         atNewest: Bool
     ) {
-        presentationHealthWorkItem?.cancel()
-        presentationHealthWorkItem = nil
         diagnosticWindowTop = windowTop
         diagnosticWindowBottom = windowBottom
         diagnosticRawCount = rawCount
@@ -2456,19 +2467,22 @@ final class MacChatScrollView: MacSmoothScrollView {
         diagnosticAtOldest = atOldest
         diagnosticAtNewest = atNewest
         emitPresentationLog(reason: "apply", force: false)
-        if !chatDocumentView.intersectingPlaceholderSeqs(in: contentView.bounds).isEmpty {
+        if !chatDocumentView.presentationHealth(in: contentView.bounds).unresolvedSeqs.isEmpty {
             schedulePresentationHealthCheck()
         }
     }
 
     private func schedulePresentationHealthCheck() {
-        presentationHealthWorkItem?.cancel()
+        // Streaming snapshots may arrive 10–20 times per second. Keep the first
+        // deadline for this epoch instead of perpetually postponing diagnosis;
+        // the work item reads the latest window metadata when it fires.
+        guard presentationHealthWorkItem == nil else { return }
         let epoch = presentationEpoch
         let work = DispatchWorkItem { [weak self] in
             guard let self, epoch == self.presentationEpoch else { return }
             self.presentationHealthWorkItem = nil
             let health = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
-            if !self.isScrollInteractionActive, !health.placeholderSeqs.isEmpty {
+            if !self.isScrollInteractionActive, !health.unresolvedSeqs.isEmpty {
                 _ = self.chatDocumentView.updateVisibleCells(
                     in: self.contentView.bounds,
                     runwayOverride: 0
@@ -2476,9 +2490,9 @@ final class MacChatScrollView: MacSmoothScrollView {
             }
             let refreshed = self.chatDocumentView.presentationHealth(in: self.contentView.bounds)
             self.emitPresentationLog(
-                reason: refreshed.placeholderSeqs.isEmpty
-                    ? "placeholder-resolved"
-                    : "placeholder-stuck",
+                reason: refreshed.unresolvedSeqs.isEmpty
+                    ? "viewport-resolved"
+                    : "viewport-stuck",
                 force: true
             )
         }
@@ -2490,8 +2504,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         guard let representedSessionId else { return }
         let health = chatDocumentView.presentationHealth(in: contentView.bounds)
         let signature = "\(diagnosticWindowTop):\(diagnosticWindowBottom):\(health.itemCount):"
-            + "\(health.realSeqs):\(health.placeholderSeqs):\(health.preparedContentCount):"
-            + "\(health.exactHeightCount):\(health.pendingHeightCount):\(health.warmActive):"
+            + "\(health.realSeqs):\(health.placeholderSeqs):\(health.unmaterializedSeqs):"
+            + "\(health.preparedContentCount):\(health.exactHeightCount):"
+            + "\(health.pendingHeightCount):\(health.warmActive):"
             + "\(loadingOlder):\(loadingNewer):\(diagnosticAtOldest):\(diagnosticAtNewest)"
         guard force || signature != lastPresentationLogSignature else { return }
         lastPresentationLogSignature = signature
@@ -2500,7 +2515,8 @@ final class MacChatScrollView: MacSmoothScrollView {
                 + "epoch=\(presentationEpoch) window=[\(diagnosticWindowTop),\(diagnosticWindowBottom)] "
                 + "raw=\(diagnosticRawCount) bubbles=\(diagnosticBubbleCount) "
                 + "viewport=\(health.intersectingSeqs) real=\(health.realSeqs) "
-                + "placeholders=\(health.placeholderSeqs) prepared=\(health.preparedContentCount) "
+                + "placeholders=\(health.placeholderSeqs) missing=\(health.unmaterializedSeqs) "
+                + "prepared=\(health.preparedContentCount) "
                 + "exact=\(health.exactHeightCount) pendingHeight=\(health.pendingHeightCount) "
                 + "warm=\(health.warmActive ? 1 : 0) fill=\(health.viewportFillScheduled ? 1 : 0) "
                 + "offset=\(Int(contentView.bounds.minY)) distanceBottom=\(Int(distanceToBottom)) "
@@ -2520,9 +2536,14 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     #if DEBUG
-    func automationSimulateMissingLiveScrollEnd() {
+    func automationSimulateMissingLiveScrollEnd(overlapScrollerKnob: Bool = false) {
         beginScrollInteraction(scrollerKnob: false)
         notePreciseScrollActivity()
+        guard overlapScrollerKnob else { return }
+        beginScrollInteraction(scrollerKnob: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+            self?.endScrollInteraction(scrollerKnob: true)
+        }
     }
     #endif
 

@@ -268,6 +268,19 @@ final class MessageStoreTests: XCTestCase {
         XCTAssertEqual(localStore.currentWindow(sessionId).count, 25)
         XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(1...25))
         XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 1, bottomSeq: 25))
+
+        // The contiguous replay/live-ingest path uses expandWindow rather than
+        // the sparse-page helpers. It must retain the same pre-call overlap.
+        localStore.messages[sessionId] = (11...25).map(message)
+        localStore.windows[sessionId] = .init(topSeq: 11, bottomSeq: 25)
+        localStore.expandWindow(sessionId, (1...10).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(1...25))
+        XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 1, bottomSeq: 25))
+
+        localStore.expandWindow(sessionId, (26...35).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).count, 25)
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(11...35))
+        XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 11, bottomSeq: 35))
     }
 
     // MARK: - Reset
