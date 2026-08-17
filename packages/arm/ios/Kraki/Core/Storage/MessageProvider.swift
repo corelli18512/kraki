@@ -559,6 +559,12 @@ final class MessageProvider {
 
         loadingOlderDB.insert(sessionId)
         defer { loadingOlderDB.remove(sessionId) }
+        #if os(macOS)
+        KLog.chatEntry(
+            "mac-fetch phase=start direction=older session=\(sessionId.prefix(12)) "
+                + "window=[\(state.topSeq),\(state.bottomSeq)] query=[\(from),\(to)]"
+        )
+        #endif
 
         #if DEBUG
         // Isolated Chat performance runs can inject a realistic round-trip so
@@ -590,6 +596,12 @@ final class MessageProvider {
         // the new top.
         guard let nowState = appState.messageStore.windowState(sessionId),
               nowState.topSeq == topSeq else {
+            #if os(macOS)
+            KLog.chatEntry(
+                "mac-fetch phase=stale direction=older session=\(sessionId.prefix(12)) "
+                    + "requestedTop=\(topSeq) currentTop=\(appState.messageStore.windowState(sessionId)?.topSeq ?? 0)"
+            )
+            #endif
             return false
         }
 
@@ -602,6 +614,14 @@ final class MessageProvider {
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
             if newTop < topSeq {
                 KLog.diag("📥 [2/history←DB ensureOlderLoadedAsync] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) count=\(page.count) ⏱️read=\(Int(readMs))ms prepend=\(String(format: "%.1f", expMs))ms")
+                #if os(macOS)
+                let current = appState.messageStore.windowState(sessionId)
+                KLog.chatEntry(
+                    "mac-fetch phase=applied direction=older session=\(sessionId.prefix(12)) "
+                        + "beforeTop=\(topSeq) after=[\(current?.topSeq ?? 0),\(current?.bottomSeq ?? 0)] "
+                        + "rows=\(page.count) readMs=\(Int(readMs))"
+                )
+                #endif
                 return true
             }
         }
@@ -615,6 +635,11 @@ final class MessageProvider {
             return false
         }
         KLog.diag("📤 [2/history→WS ensureOlderLoadedAsync] session=\(sessionId.prefix(12)) topSeq=\(topSeq) — DB exhausted, request older")
+        #if os(macOS)
+        KLog.chatEntry(
+            "mac-fetch phase=ws-fallback direction=older session=\(sessionId.prefix(12)) top=\(topSeq)"
+        )
+        #endif
         requestBefore(sessionId: sessionId, beforeSeq: topSeq, reason: "olderPage")
         return false
     }

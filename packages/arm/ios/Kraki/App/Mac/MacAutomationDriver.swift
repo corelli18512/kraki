@@ -257,6 +257,18 @@ final class MacAutomationDriver {
                 "afterY": Double(result.after),
                 "moved": abs(result.after - result.before) > 0.5,
             ], id: id, on: connection)
+        case "simulateMissingLiveScrollEnd":
+            guard let scrollView = findChatScrollView() else {
+                send(error: "invalid_state", message: "No production MacChatScrollView is mounted", id: id, on: connection); return
+            }
+            let overlapScrollerKnob = params["overlapScrollerKnob"] as? Bool ?? false
+            scrollView.automationSimulateMissingLiveScrollEnd(
+                overlapScrollerKnob: overlapScrollerKnob
+            )
+            send(result: [
+                "requested": true,
+                "overlapScrollerKnob": overlapScrollerKnob,
+            ], id: id, on: connection)
         case "captureHTMLArtifactCard":
             guard let scrollView = findChatScrollView() else {
                 send(error: "invalid_state", message: "No production MacChatScrollView is mounted", id: id, on: connection); return
