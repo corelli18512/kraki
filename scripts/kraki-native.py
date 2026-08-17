@@ -76,6 +76,7 @@ def parser() -> argparse.ArgumentParser:
     scroll_chat = sub.add_parser("scroll-chat")
     scroll_chat.add_argument("direction", choices=["up", "down"])
     scroll_chat.add_argument("--ticks", type=int, default=1)
+    sub.add_parser("simulate-missing-scroll-end")
 
     create = sub.add_parser("create-session")
     create.add_argument("--device", required=True)
@@ -158,6 +159,8 @@ def main() -> None:
         method, params = "scrollToBubble", {"seq": args.seq, "screenY": args.screen_y}
     elif command == "scroll-chat":
         method, params = "scrollChat", {"direction": args.direction, "ticks": args.ticks}
+    elif command == "simulate-missing-scroll-end":
+        method, params = "simulateMissingLiveScrollEnd", {}
     elif command == "create-session":
         method = "createSession"
         params = compact({

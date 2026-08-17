@@ -220,6 +220,56 @@ final class MessageStoreTests: XCTestCase {
         XCTAssertNil(store.turnSteps("sess-1", bubbleSeq: 99))
     }
 
+    // MARK: - Pixel-managed history window
+
+    func testPixelManagedWindowRetainsInitialTailFloorAcrossPaging() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-window-floor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let localStore = MessageStore(db: database)
+        let sessionId = "window-floor"
+        func message(_ seq: Int) -> ChatMessage {
+            ChatMessage(
+                type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "dev-1",
+                timestamp: nil,
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+
+        localStore.minimumPixelManagedWindowCount = 15
+        localStore.maxWindowPx = 4_800
+        localStore.heightForSeq = { _, _ in 1_000 }
+        localStore.messages[sessionId] = (11...25).map(message)
+        localStore.windows[sessionId] = .init(topSeq: 11, bottomSeq: 25)
+
+        XCTAssertFalse(localStore.trimTailWindowToRenderedHeight(sessionId))
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(11...25))
+
+        localStore.prependOlderPage(sessionId, (1...10).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).count, 25)
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(1...25))
+        XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 1, bottomSeq: 25))
+
+        localStore.messages[sessionId] = (1...15).map(message)
+        localStore.windows[sessionId] = .init(topSeq: 1, bottomSeq: 15)
+        localStore.appendNewerPage(sessionId, (16...25).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(1...25))
+
+        localStore.appendNewerPage(sessionId, (26...35).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).count, 25)
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(11...35))
+        XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 11, bottomSeq: 35))
+
+        localStore.prependOlderPage(sessionId, (1...10).map(message))
+        XCTAssertEqual(localStore.currentWindow(sessionId).count, 25)
+        XCTAssertEqual(localStore.currentWindow(sessionId).map(\.seq), Array(1...25))
+        XCTAssertEqual(localStore.windowState(sessionId), .init(topSeq: 1, bottomSeq: 25))
+    }
+
     // MARK: - Reset
 
     func testResetClearsCardsTracesAndRuntimeStatus() {

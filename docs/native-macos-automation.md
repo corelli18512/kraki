@@ -120,6 +120,13 @@ Supported methods:
 
 - `ping`
 - `snapshot`
+- `chatState`
+- `chatLayout`
+- `pageOlder`
+- `pageNewer`
+- `scrollToBubble`
+- `scrollChat`
+- `simulateMissingLiveScrollEnd` — Debug-only scroll-settle watchdog regression hook
 - `createSession`
 - `selectSession`
 - `sendInput`
@@ -162,3 +169,34 @@ Semantic automation verifies the real application state and rendering path. A
 test that specifically requires physical native mouse/key events must run in a
 dedicated macOS VM or test Mac, because macOS does not provide headless native
 window-event isolation comparable to browser contexts.
+
+## Production Mac history diagnostics
+
+The production Mac app writes a bounded, low-frequency Chat presentation trace
+to `~/Documents/chat-entry.log` and mirrors the same records to Unified Log.
+The file rotates at 512 KiB. It never records message text, attachment data,
+credentials, tokens, or tool arguments/results.
+
+Mac history records use four prefixes:
+
+- `mac-window`: initial window selection and older/newer px-managed trimming;
+- `mac-fetch`: DB/Relay pagination start, apply, stale-result, and fallback;
+- `mac-page`: the window projected into the AppKit list, including seq ranges,
+  visible real/placeholder seqs, cache counts, warm state, offset, and edge state;
+- `mac-watchdog`: a missing AppKit live-scroll-end callback was recovered.
+
+After a reproduction, preserve the approximate time and Session ID/title, then
+inspect only the relevant metadata lines:
+
+```bash
+tail -300 ~/Documents/chat-entry.log \
+  | grep -E 'mac-(window|fetch|page|watchdog)'
+
+log show --last 30m --style compact \
+  --predicate 'subsystem == "chat.kraki.ios" AND eventMessage CONTAINS "mac-"'
+```
+
+A healthy page converges to `placeholders=[]`, `warm=0`, and
+`pendingHeight=0`. `reason=placeholder-stuck`, repeated page transitions with
+no new user input, or a window shrinking below the Mac 15-row floor identifies
+the failing layer without exposing message content.

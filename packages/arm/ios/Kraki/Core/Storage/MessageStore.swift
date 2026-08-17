@@ -100,8 +100,10 @@ final class MessageStore {
     /// with a compact tail and lazy-load the rest as the user reaches the top.
     #if os(macOS)
     private static let initialWindowSize = 15
+    private static let defaultMinimumPixelManagedWindowCount = 15
     #else
     private static let initialWindowSize = 200
+    private static let defaultMinimumPixelManagedWindowCount = 1
     #endif
     /// Maximum count of in-memory window before `expandWindow` trims
     /// the opposite end. DB still has everything; trimmed rows can
@@ -128,6 +130,10 @@ final class MessageStore {
     /// `heightForSeq` is set. ~14 screens; keeps both paging edges far apart so
     /// applies stay incremental. `.infinity` (default) disables the px cap.
     var maxWindowPx: CGFloat = .infinity
+    /// Minimum row overlap retained whenever the px cap trims a window. macOS
+    /// keeps its compact 15-row initial tail; iOS preserves the existing
+    /// one-row sliding behavior. Tests can override this policy explicitly.
+    var minimumPixelManagedWindowCount: Int = MessageStore.defaultMinimumPixelManagedWindowCount
 
 
     // MARK: - Live write
@@ -291,6 +297,7 @@ final class MessageStore {
         guard !older.isEmpty else { return }
 
         var window = messages[sessionId] ?? []
+        let beforeCount = window.count
         let existing = Set(window.map(\.seq))
         let prepend = older.filter { !existing.contains($0.seq) }
         guard !prepend.isEmpty else { return }
@@ -299,8 +306,15 @@ final class MessageStore {
         updated.topSeq = prepend.first!.seq
 
         if let h = heightForSeq, maxWindowPx.isFinite {
-            let oldCount = window.count - prepend.count
-            let maxRemove = min(prepend.count, max(0, oldCount - 1))
+            // Never let a px-managed window collapse below the compact initial
+            // tail. A handful of very tall bubbles can exceed maxWindowPx by
+            // themselves; keeping the 15-row floor is still memory-bounded and
+            // prevents older pagination from trimming away the user's visible
+            // anchor before the prepend is presented.
+            let maxRemove = min(
+                prepend.count,
+                max(0, beforeCount - minimumPixelManagedWindowCount)
+            )
             var removed = 0
             func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
             while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
@@ -320,6 +334,14 @@ final class MessageStore {
         }
         messages[sessionId] = window
         windows[sessionId] = updated
+        #if os(macOS)
+        let trimmed = max(0, beforeCount + prepend.count - window.count)
+        KLog.chatEntry(
+            "mac-window reason=prepend session=\(sessionId.prefix(12)) "
+                + "before=[\(state.topSeq),\(state.bottomSeq)] after=[\(updated.topSeq),\(updated.bottomSeq)] "
+                + "added=\(prepend.count) trimmedNewer=\(trimmed) retained=\(window.count)"
+        )
+        #endif
     }
 
     /// Append a DB-selected newer page by persistent-spine order. Protocol
@@ -335,14 +357,17 @@ final class MessageStore {
         guard !append.isEmpty else { return }
 
         var window = messages[sessionId] ?? []
+        let beforeCount = window.count
         window.append(contentsOf: append)
         var updated = state
         updated.bottomSeq = append.last!.seq
 
         if let h = heightForSeq, maxWindowPx.isFinite {
             func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
-            let oldCount = window.count - append.count
-            let maxRemove = min(append.count, max(0, oldCount - 1))
+            let maxRemove = min(
+                append.count,
+                max(0, beforeCount - minimumPixelManagedWindowCount)
+            )
             var removed = 0
             while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
                 window.removeFirst()
@@ -360,6 +385,14 @@ final class MessageStore {
 
         messages[sessionId] = window
         windows[sessionId] = updated
+        #if os(macOS)
+        let trimmed = max(0, beforeCount + append.count - window.count)
+        KLog.chatEntry(
+            "mac-window reason=append session=\(sessionId.prefix(12)) "
+                + "before=[\(state.topSeq),\(state.bottomSeq)] after=[\(updated.topSeq),\(updated.bottomSeq)] "
+                + "added=\(append.count) trimmedOlder=\(trimmed) retained=\(window.count)"
+        )
+        #endif
     }
 
     /// Extend the in-memory window with rows from `batch` that
@@ -395,6 +428,7 @@ final class MessageStore {
         let extendsBotSlice = batch[botIdx...]
 
         var window = messages[sessionId] ?? []
+        let originalWindowCount = window.count
         var updated = state
         var didPrepend = false
         var didAppend = false
@@ -460,15 +494,17 @@ final class MessageStore {
         // for tall turns could be < a screen → the two paging edges co-fire =
         // the ping-pong/crash). The trim mirrors the validated ScrollPerfTest
         // engine: SLIDE not leap — remove at most the page we just added (so the
-        // window slides rather than collapses) and keep ≥1 of the pre-call rows
-        // as overlap, so a single update never swaps the whole window.
+        // window slides rather than collapses) and never fall below the compact
+        // initial-tail count, so tall rows cannot reduce the overlap to one row.
         if let h = heightForSeq, maxWindowPx.isFinite {
             func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
             if didAppend {
                 // Extended the bottom → trim the TOP (older rows, off-screen
-                // above). Keep ≥1 old row; remove ≤ the page we just appended.
-                let oldCount = window.count - appendedCount
-                let maxRemove = min(appendedCount, max(0, oldCount - 1))
+                // above). Keep the initial-tail floor; remove ≤ the appended page.
+                let maxRemove = min(
+                    appendedCount,
+                    max(0, originalWindowCount - minimumPixelManagedWindowCount)
+                )
                 var removed = 0
                 while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
                     window.removeFirst()
@@ -477,9 +513,11 @@ final class MessageStore {
                 }
             } else if didPrepend {
                 // Extended the top → trim the BOTTOM (newer rows, off-screen
-                // below). Keep ≥1 old row; remove ≤ the page we just prepended.
-                let oldCount = window.count - prependedCount
-                let maxRemove = min(prependedCount, max(0, oldCount - 1))
+                // below). Keep the initial-tail floor; remove ≤ the prepended page.
+                let maxRemove = min(
+                    prependedCount,
+                    max(0, originalWindowCount - minimumPixelManagedWindowCount)
+                )
                 var removed = 0
                 while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
                     window.removeLast()
@@ -531,16 +569,28 @@ final class MessageStore {
         guard renderedHeight > maxWindowPx else { return false }
 
         var removeCount = 0
-        while removeCount < window.count - 1, renderedHeight > maxWindowPx {
+        let maxRemove = max(0, window.count - minimumPixelManagedWindowCount)
+        while removeCount < maxRemove, renderedHeight > maxWindowPx {
             renderedHeight -= heightForSeq(sessionId, window[removeCount].seq)
             removeCount += 1
         }
         guard removeCount > 0 else { return false }
 
+        let oldTop = state.topSeq
+        let oldBottom = state.bottomSeq
+        let oldCount = window.count
         window.removeFirst(removeCount)
         state.topSeq = window.first!.seq
         messages[sessionId] = window
         windows[sessionId] = state
+        #if os(macOS)
+        KLog.chatEntry(
+            "mac-window reason=tail-trim session=\(sessionId.prefix(12)) "
+                + "before=[\(oldTop),\(oldBottom)] after=[\(state.topSeq),\(state.bottomSeq)] "
+                + "removed=\(removeCount) retained=\(window.count) oldCount=\(oldCount) "
+                + "renderedPx=\(Int(renderedHeight)) capPx=\(Int(maxWindowPx))"
+        )
+        #endif
         return true
     }
 
@@ -590,6 +640,12 @@ final class MessageStore {
             topSeq: first.seq,
             bottomSeq: last.seq
         )
+        #if os(macOS)
+        KLog.chatEntry(
+            "mac-window reason=initial session=\(sessionId.prefix(12)) "
+                + "window=[\(first.seq),\(last.seq)] rows=\(recent.count)"
+        )
+        #endif
         return recent
     }
 
