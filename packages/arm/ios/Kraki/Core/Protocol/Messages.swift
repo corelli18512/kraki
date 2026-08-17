@@ -159,6 +159,39 @@ struct SessionSummary: Codable, Identifiable, Sendable {
     var messageCount: Int
 }
 
+// MARK: - Session spine contract
+
+/// The durable per-Session sequence owned by Tentacle.
+///
+/// There are three distinct ordering domains in the protocol:
+/// - transport/Pulse ordering, which is connection-scoped;
+/// - the global envelope `seq` retained by transient live messages;
+/// - this dense per-Session spine `seq`, assigned only when Tentacle appends a
+///   `PERSISTENT_TYPE` to `messages.jsonl`.
+///
+/// Rendering is a projection of this set: lifecycle rows, `error`, and `idle`
+/// remain on the durable spine even when they do not produce their own cell.
+/// Historical pre-pure-spine logs can be sparse because retired transient rows
+/// consumed Session seq values; replay filters those rows without renumbering.
+/// Keep this set exactly aligned with `RelayClient.PERSISTENT_TYPES`.
+enum SessionSpineContract {
+    static let persistentTypes: Set<String> = [
+        "session_created",
+        "agent_message",
+        "interrupted_turn",
+        "turn_status",
+        "user_message",
+        "system_message",
+        "error",
+        "session_ended",
+        "idle",
+    ]
+
+    static func contains(type: String, seq: Int) -> Bool {
+        seq > 0 && persistentTypes.contains(type)
+    }
+}
+
 // MARK: - Chat Message (unified storage type)
 
 /// Flat message representation used for storage and UI rendering.

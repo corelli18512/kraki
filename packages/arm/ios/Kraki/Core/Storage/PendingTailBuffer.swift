@@ -1,8 +1,9 @@
 /// PendingTailBuffer — pure data structure backing
 /// MessageProvider's push-gap recovery.
 ///
-/// **Problem.** Pushes from tentacle land with strictly ascending
-/// `seq`. Network reorder, brief WebSocket flap, or app-suspend
+/// **Problem.** Current Tentacle assigns a dense, strictly ascending Session
+/// spine `seq` only to persistent rows. Network reorder, brief WebSocket flap,
+/// or app-suspend
 /// races can cause us to receive `seq=205` while we last persisted
 /// `seq=200` (gap [201..204]). Today MessageStore silently drops
 /// such pushes from the in-memory window — they hit DB but the UI
@@ -19,13 +20,12 @@
 /// drain loop runs again, advancing as far as it can, and repeats
 /// until the buffer is empty.
 ///
-/// **Tombstones.** Tentacle filters non-persistent types out of the
-/// range response, so seqs that were live on the wire (e.g. an
-/// `active` heartbeat at seq=203 inside our [201..204] request)
-/// won't come back. The drain loop must still advance past them or
-/// it would stall forever. `tombstones` records seqs the server has
-/// explicitly told us are missing; drain treats them as virtual
-/// committed entries.
+/// **Tombstones.** Current pure-spine ranges are dense. Tombstones exist for
+/// replayed legacy logs, where tool/narration/state records once consumed a
+/// Session seq and are now filtered from range responses without renumbering.
+/// The drain loop must advance past those confirmed historical holes or it
+/// would stall forever. Global transport seqs on current transient messages are
+/// a different ordering domain and never participate here.
 ///
 /// **Why a separate pure struct?** The algorithm has enough corner
 /// cases (truncation, dedupe, multi-hole convergence, tombstone GC)
@@ -42,8 +42,8 @@ struct PendingTailBuffer {
     /// Sorted ascending by `seq`. Unique on `seq` (dedupe on insert).
     private(set) var messages: [ChatMessage] = []
 
-    /// Seqs that tentacle has confirmed are not persistent (filtered
-    /// from a `range_batch` response). Drain steps past these as if
+    /// Legacy Session seqs that Tentacle has confirmed are not persistent
+    /// (filtered from a `range_batch` response). Drain steps past these as if
     /// they were committed. GC'd to `seq >= cursor` after each drain.
     private(set) var tombstones: Set<Int> = []
 

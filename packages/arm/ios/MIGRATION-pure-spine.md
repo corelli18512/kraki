@@ -6,11 +6,13 @@
 > **pass-through ephemeral**, never business-logic'd or stored.
 >
 > Confirmed facts:
-> - Tentacle (`main`) already assigns **dense per-session seq only to spine**
->   (`PERSISTENT_TYPES = {session_created, agent_message, user_message, error,
->   system_message, session_ended, idle}`), tools/narration → `trace.jsonl`
->   (no seq), permission/question → card action slot (no seq). So the client's
->   `seq == bottomSeq+1` contiguity contract holds natively.
+> - Tentacle (`main`) assigns **dense per-session seq only to newly appended spine rows**
+>   (`PERSISTENT_TYPES = {session_created, agent_message, interrupted_turn,
+>   turn_status, user_message, error, system_message, session_ended, idle}`),
+>   tools/narration → `trace.jsonl` (no Session seq), permission/question → card
+>   action slot (no Session seq). Replayed pre-pure-spine logs retain historical
+>   seq holes after retired transient rows are filtered, so history paging must
+>   use spine-row order rather than numeric seq span.
 > - No back-compat: **wipe the local DB** on migration.
 > - `ChatMessage` is dynamic (`type` + `payload[AnyCodable]`) → new types are
 >   cheap (type strings + accessors, no per-type Codable).
@@ -38,10 +40,11 @@ Phases are ordered so each is independently buildable/testable.
 - [ ] Add `requestTurnTrace(sessionId:, bubbleSeq:)` → `request_turn_trace`.
 - [ ] Add `requestCard(sessionId:)` → `request_card`.
 
-**persistentTypes — TWO places must match the tentacle exactly**
-- [ ] `MessageStore.persistentTypes` (L74) →
-      `{ session_created, user_message, agent_message, system_message, error, idle, session_ended }`.
-- [ ] `MessageRouter.persistentTypes` (L96) → same set.
+**persistentTypes — routing and storage must match Tentacle exactly**
+- [ ] `SessionSpineContract.persistentTypes` →
+      `{ session_created, user_message, agent_message, interrupted_turn, turn_status,
+      system_message, error, idle, session_ended }`.
+- [ ] `MessageStore` and `MessageRouter` → consume that one shared Swift set.
 - [ ] `MessageRouter.notifyWorthyTypes` → `{ idle, error }` (permission/question
       are no longer spine; they're the card).
 
@@ -183,4 +186,5 @@ Phases are ordered so each is independently buildable/testable.
 ## Open decisions (locked)
 1. DB: **wipe** (schema v2 drop-recreate). ✅
 2. permission/question: **card slot only** (not spine-persisted). ✅ (matches web)
-3. spine seq density: **already dense** on tentacle. ✅ (verified in relay-client.ts)
+3. spine seq density: **dense for newly appended Tentacle rows**. ✅
+   Legacy replay remains ordered but may be integer-sparse. (verified in relay-client.ts)

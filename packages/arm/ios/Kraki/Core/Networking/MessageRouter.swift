@@ -101,20 +101,8 @@ final class MessageRouter {
     /// 126_037 would race ahead of an idle seq of 12 and the badge
     /// would never light up).
     ///
-    /// Keep this set in sync with `RelayClient.PERSISTENT_TYPES` in
-    /// `packages/tentacle/src/relay-client.ts`.
-    private static let persistentTypes: Set<String> = [
-        "session_created",
-        "agent_message",
-        "interrupted_turn",
-        "turn_status",
-        "user_message",
-        "system_message",
-        "error",
-        "session_ended",
-        "idle",
-        "session_replay_batch",
-    ]
+    /// The exact type set is centralized in `SessionSpineContract`, shared with
+    /// MessageStore so routing and persistence cannot silently drift apart.
 
     // MARK: Init
 
@@ -353,7 +341,7 @@ final class MessageRouter {
         // session_list/session_read authority. A genuinely visible Chat may
         // acknowledge the live seq immediately through the shared auto-read gate.
         if let seq = dict["seq"] as? Int,
-           Self.persistentTypes.contains(type) {
+           SessionSpineContract.contains(type: type, seq: seq) {
             appState.messageProvider?.observeLiveMessageSeq(sessionId, seq: seq, kind: type)
             // Keep the card/read projection in step with the persisted live
             // head. SQLite alone is not observable to the Session Card.
@@ -463,10 +451,11 @@ final class MessageRouter {
             // else lands in the live card action slot verbatim.
             appState.messageStore.applyCardAction(sessionId, Self.decodeCardAction(payload))
 
-        // ── Tool events (off-spine trace) ────────────────────────────────
-        // No longer persisted or seq'd — the live tool surfaces via the card
-        // action slot. We keep only the session-list activity chip + attachment
-        // pre-registration so an expanded tool's args/result show a spinner.
+        // ── Legacy raw tool events (off-spine trace) ─────────────────────
+        // Current Tentacle projects live tools only through `card_action` and
+        // returns raw tool records through `turn_trace_batch`. Keep these cases
+        // as compatibility handling for older Tentacles; never persist or use
+        // their global envelope seq as a Session spine cursor.
 
         case "tool_start":
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)

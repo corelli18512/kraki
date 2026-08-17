@@ -1000,7 +1000,7 @@ final class MacChatDocumentView: NSView {
         let key = cacheKey(item)
         // Estimated height is already projection-aware and attributed only to
         // the bubble's terminal seq. Returning it before idle warming lets the
-        // initial 200-row bootstrap be px-trimmed before first presentation;
+        // compact initial tail be px-trimmed before first presentation;
         // exact heights replace it as cells/warm jobs finish.
         return heightCache[key] ?? pendingHeights[key] ?? item.estimatedHeight
     }

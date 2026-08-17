@@ -87,8 +87,9 @@ export interface LoggedMessage {
 }
 
 /**
- * One line in a session's `trace.jsonl` — a tool_start/tool_complete broadcast
- * mirrored off the spine. Tagged with the turn's start seq (the user_message
+ * One line in a session's `trace.jsonl` — a tool/action trace record mirrored
+ * off the spine and projected live through `card_action`. Tagged with the
+ * turn's start seq (the user_message
  * that began the turn) so a turn's steps can be pulled by its bubble seq.
  * `payload` is the full enriched wire message (same JSON that was broadcast).
  */
@@ -1072,7 +1073,7 @@ export class SessionManager {
   // ── Turn trace (TRACE axis) ─────────────────────────────
 
   /**
-   * Mirror a tool_start/tool_complete broadcast to the session's `trace.jsonl`.
+   * Mirror an off-spine tool/action record to the session's `trace.jsonl`.
    * These are NOT on the spine (no per-session seq); they are tagged with the
    * current turn's start seq so {@link readTurnTrace} can slice them per turn.
    */
@@ -1328,9 +1329,10 @@ export class SessionManager {
    * and are layered on top separately by `enrichSessionList` (the attention
    * override), so they must never come from this file scan.
    *
-   * Scans complete JSONL rows backwards in bounded chunks: the spine is now
-   * sparse (`tool_start`/`tool_complete` live in `trace.jsonl`), but older
-   * sessions still carry them, and an inline-image row can be much larger than
+   * Scans complete JSONL rows backwards in bounded chunks. The current spine
+   * has fewer durable row types while retaining dense Session seqs; older logs
+   * may still carry tool rows and therefore replay as a sparse filtered spine.
+   * An inline-image row can also be much larger than
    * one read chunk.
    */
   private getSessionPreview(sessionId: string): import('@kraki/protocol').SessionPreviewDigest | undefined {

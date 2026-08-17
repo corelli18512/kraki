@@ -189,9 +189,10 @@ final class MessageProvider {
         }
     }
 
-    /// Live-message observer: called from `MessageRouter` every time
-    /// a persistent push message lands (user_message, agent_message,
-    /// tool_complete, etc.). Bumps `tentacleLastSeq` up to the new
+    /// Live-message observer: called from `MessageRouter` every time a durable
+    /// spine push lands (user_message, agent_message, idle, terminal status,
+    /// etc.). Off-spine tool/card/trace traffic never enters this path. Bumps
+    /// `tentacleLastSeq` up to the new
     /// seq so the `at-head` check in `requestLatest`/`ensureLoaded`
     /// reflects what we've actually received via push, not just what
     /// the last `session_list` reported. Without this, after a few
@@ -465,14 +466,10 @@ final class MessageProvider {
         requestFromTentacle(sessionId: sessionId, beforeSeq: beforeSeq, reason: reason)
     }
 
-    /// Number of persistent rows in each DB-first page. Page by row count,
-    /// not by a numeric seq interval: current sessions are dense, but legacy
-    /// logs may contain large seq holes from historical off-spine events.
+    /// Number of persistent spine rows in each DB-first page. Page by row count,
+    /// never by numeric seq distance: current Tentacle appends a dense spine,
+    /// while replay preserves arbitrarily large holes from legacy off-spine rows.
     private static let ensurePageRowLimit = 10
-    /// Do not jump across a genuinely missing local cache region. Legacy logs
-    /// can have modest off-spine seq gaps; larger boundaries fall back to Relay
-    /// so a partial SQLite cache cannot silently skip history.
-    private static let maxLegacyBoundaryGap = 100
 
     /// Load one page of older persistent rows, DB-first. A non-empty page is
     /// prepended in spine order; an empty page escalates to WS `requestBefore`.
@@ -489,14 +486,13 @@ final class MessageProvider {
             return false
         }
         let topSeq = state.topSeq
-        let page = appState.messageStore.db.messagesBefore(
+        let page = appState.messageStore.dbMessagesBefore(
             sessionId,
             beforeSeq: topSeq,
             limit: Self.ensurePageRowLimit
         )
 
-        if let nearest = page.last,
-           topSeq - nearest.seq <= Self.maxLegacyBoundaryGap {
+        if !page.isEmpty {
             appState.messageStore.prependOlderPage(sessionId, page)
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
             KLog.diag("📥 [2/history←DB ensureOlderLoaded] session=\(sessionId.prefix(12)) topSeq=\(topSeq)→\(newTop) source=GRDB count=\(page.count)")
@@ -554,7 +550,8 @@ final class MessageProvider {
         #if os(macOS)
         KLog.chatEntry(
             "mac-fetch phase=start direction=older session=\(sessionId.prefix(12)) "
-                + "window=[\(state.topSeq),\(state.bottomSeq)] query=[\(from),\(to)]"
+                + "window=[\(state.topSeq),\(state.bottomSeq)] "
+                + "query=rows-before-\(topSeq) limit=\(Self.ensurePageRowLimit)"
         )
         #endif
 
@@ -597,11 +594,11 @@ final class MessageProvider {
             return false
         }
 
-        if let nearest = page.last,
-           topSeq - nearest.seq <= Self.maxLegacyBoundaryGap {
+        if !page.isEmpty {
             let tExp0 = CFAbsoluteTimeGetCurrent()
-            // Persistent spine rows are ordered but need not be integer-adjacent;
-            // off-spine events legitimately consume protocol seq values.
+            // Current spine rows are dense; replayed legacy rows remain ordered
+            // but need not be integer-adjacent because retired transient events
+            // consumed the omitted historical seq values.
             appState.messageStore.prependOlderPage(sessionId, page)
             let expMs = (CFAbsoluteTimeGetCurrent() - tExp0) * 1000
             let newTop = appState.messageStore.windowState(sessionId)?.topSeq ?? topSeq
@@ -650,14 +647,13 @@ final class MessageProvider {
         guard let last = tentacleLastSeq[sessionId], state.bottomSeq < last else {
             return false                          // already at head
         }
-        let page = appState.messageStore.db.messagesAfter(
+        let page = appState.messageStore.dbMessagesAfter(
             sessionId,
             afterSeq: state.bottomSeq,
             limit: Self.ensurePageRowLimit
         )
 
-        if let nearest = page.first,
-           nearest.seq - state.bottomSeq <= Self.maxLegacyBoundaryGap {
+        if !page.isEmpty {
             appState.messageStore.appendNewerPage(sessionId, page)
             let newBottom = appState.messageStore.windowState(sessionId)?.bottomSeq ?? state.bottomSeq
             if newBottom > state.bottomSeq {
@@ -729,7 +725,7 @@ final class MessageProvider {
         }
 
         // Identify the exact turn-aligned request answered by this batch.
-        // `messages` contains only persistent spine rows, while older session
+        // `messages` contains only persistent spine rows, while legacy session
         // logs may have filtered tool/narration seqs near the upper boundary;
         // therefore the final persistent seq can legitimately be several
         // integers below `beforeSeq - 1`.

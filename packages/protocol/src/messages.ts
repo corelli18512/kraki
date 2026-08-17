@@ -286,14 +286,14 @@ export interface QuestionRequest extends BaseEnvelope {
 }
 
 /**
- * Live tool-lifecycle broadcast. Under the three-axis model these are no
- * longer persisted to messages.jsonl nor assigned a per-session (spine)
- * seq — they are removed from PERSISTENT_TYPES and instead mirrored to
- * `trace.jsonl`. They REMAIN the live wire event for a streaming turn's
- * steps: clients render them immediately and merge `tool_start` →
- * `tool_complete` by `toolCallId`. History / on-idle refresh is pulled via
- * {@link TurnTraceBatchMessage}, keyed by the concluding bubble's seq (no
- * separate turn id — a turn is already identified by its spine bubble).
+ * Tool-lifecycle trace record. Under the three-axis model these are neither
+ * persisted to messages.jsonl nor assigned a per-session (spine) seq. Current
+ * Tentacle mirrors them to `trace.jsonl` and projects live state through the
+ * server-owned `card_action` slot; it does not broadcast raw standalone tool
+ * messages. Arms may still decode this shape for pulled trace history and
+ * legacy Tentacle compatibility, merging `tool_start` → `tool_complete` by
+ * `toolCallId`. History is pulled via {@link TurnTraceBatchMessage}, keyed by
+ * the concluding bubble's seq.
  */
 export interface ToolStartMessage extends BaseEnvelope {
   type: 'tool_start';

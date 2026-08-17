@@ -160,10 +160,10 @@ final class ChatViewModel {
     }
 
     /// Keep stale cached history off-screen only while a real head request is
-    /// still in flight. `SessionInfo.lastSeq` covers the complete protocol
-    /// stream, while the render window contains only persistent spine rows; a
-    /// terminal idle/status event can therefore make the two seqs differ by one
-    /// even though every visible message is already authoritative.
+    /// still in flight. `SessionInfo.lastSeq` and the raw window boundaries are
+    /// both persistent-spine seqs; `cachedMessages` is merely the renderable
+    /// projection, so nonvisual idle/error/lifecycle rows do not affect whether
+    /// the raw cache has reached the authoritative Tentacle head.
     var isWaitingForLatestBubble: Bool {
         guard isDeviceOnline else { return false }
         let sessionLoading = appState?.sessionStore.loadingSessions.contains(sessionId) ?? false

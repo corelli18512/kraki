@@ -1350,7 +1350,7 @@ describe('SessionManager', () => {
       const { sessionId } = sm.createSession('copilot');
       const u1 = sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'a' } }));
       expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u1);
-      // A mid-turn permission (also persistent) must NOT move the turn start.
+      // Simulate a legacy on-spine permission; it must NOT move the turn start.
       sm.appendMessage(sessionId, 'permission', JSON.stringify({ type: 'permission', payload: { id: 'p1' } }));
       expect(sm.getMeta(sessionId)!.currentTurnStartSeq).toBe(u1);
       // Next normal user_message starts a new turn.
@@ -1432,7 +1432,7 @@ describe('SessionManager', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: {} }));
       tool(sm, sessionId, 'before', 'read_file');
-      // Permission is a spine message mid-turn; it must not split the trace turn.
+      // Simulate a legacy on-spine permission; it must not split the trace turn.
       sm.appendMessage(sessionId, 'permission', JSON.stringify({ type: 'permission', payload: { id: 'p1' } }));
       sm.appendMessage(sessionId, 'permission_resolved', JSON.stringify({ type: 'permission_resolved', payload: { permissionId: 'p1' } }));
       tool(sm, sessionId, 'after', 'edit');

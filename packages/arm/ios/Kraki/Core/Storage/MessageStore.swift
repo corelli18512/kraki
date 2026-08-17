@@ -1,9 +1,11 @@
 /// MessageStore — Per-session message window plus the disk-backed
 /// truth in `MessageDatabase`.
 ///
-/// **Design model.** Each session has a contiguous in-memory window
-/// (`messages[sessionId]`) that is a *subset* of what's actually
-/// persisted in SQLite. The window's range is tracked in
+/// **Design model.** Each session has a contiguous-in-spine-order in-memory
+/// window (`messages[sessionId]`) that is a *subset* of what's actually
+/// persisted in SQLite. Current Tentacle rows are integer-dense; replayed
+/// legacy rows may have seq holes where retired transient events once lived.
+/// The window's range is tracked in
 /// `windows[sessionId]`. Callers that need the full truth (e.g.
 /// `MessageProvider` deciding "do I need to fetch from tentacle?")
 /// go through the DB-only query methods below; callers that render
@@ -53,8 +55,9 @@ final class MessageStore {
     // MARK: - Per-session window
 
     /// Window of messages currently held in memory, per session.
-    /// Always a contiguous `[topSeq..bottomSeq]` slice of the DB,
-    /// or empty if the session has never been opened in this
+    /// Always a consecutive slice of persisted spine rows bounded by
+    /// `[topSeq...bottomSeq]`, not necessarily every integer in that range for
+    /// legacy logs. Empty if the session has never been opened in this
     /// process. Mutations are always single dict re-assignments so
     /// `@Observable` fires exactly once per logical update.
     var messages: [String: [ChatMessage]] = [:]
@@ -78,20 +81,10 @@ final class MessageStore {
     /// etc.) and lives only in memory. Optimistic pending input
     /// placeholders never reach this store — they live in
     /// `CommandSender.outbox` and are appended at render time.
-    static let persistentTypes: Set<String> = [
-        "session_created",
-        "agent_message",
-        "interrupted_turn",
-        "turn_status",
-        "user_message",
-        "system_message",
-        "error",
-        "session_ended",
-        "idle",
-    ]
+    static let persistentTypes = SessionSpineContract.persistentTypes
 
     static func isPersistent(_ msg: ChatMessage) -> Bool {
-        msg.seq > 0 && persistentTypes.contains(msg.type)
+        SessionSpineContract.contains(type: msg.type, seq: msg.seq)
     }
 
     /// Start from a compact tail and lazy-load the rest as the user reaches the
@@ -284,10 +277,10 @@ final class MessageStore {
         try? db.insert(sessionId, batch)
     }
 
-    /// Prepend a page selected by persistent-spine order. Unlike live-tail
-    /// ingestion, history paging must not require `seq == topSeq - 1`: protocol
-    /// seq values also belong to off-spine tools/narration that are deliberately
-    /// absent from this table and render window.
+    /// Prepend a page selected by persistent-spine row order. Unlike the live
+    /// tail emitted by current Tentacle, replayed legacy history must not require
+    /// `seq == topSeq - 1`: retired off-spine events may have consumed the
+    /// missing historical seq values before replay filtered them out.
     func prependOlderPage(_ sessionId: String, _ rawPage: [ChatMessage]) {
         let page = rawPage.filter(Self.isPersistent)
         guard !page.isEmpty,
@@ -343,9 +336,9 @@ final class MessageStore {
         #endif
     }
 
-    /// Append a DB-selected newer page by persistent-spine order. Protocol
-    /// seq values can have off-spine gaps, so this path must not require the
-    /// first row to equal `bottomSeq + 1`.
+    /// Append a DB-selected newer page by persistent-spine row order. Legacy
+    /// replay can contain historical seq gaps, so this path must not require
+    /// the first row to equal `bottomSeq + 1`.
     func appendNewerPage(_ sessionId: String, _ rawPage: [ChatMessage]) {
         let page = rawPage.filter(Self.isPersistent)
         guard !page.isEmpty,
@@ -550,7 +543,7 @@ final class MessageStore {
     // MARK: - Memory window control
 
     /// Trim an already-loaded tail window after rendered heights have warmed.
-    /// `expandWindow` enforces the px cap while paging, but the initial 200-row
+    /// `expandWindow` enforces the px cap while paging, but the initial compact
     /// bootstrap predates the height oracle and otherwise remains arbitrarily
     /// tall. This keeps the newest tail, removes only the oldest in-memory rows,
     /// and leaves SQLite untouched so scrolling to the top can page them back.
@@ -657,8 +650,8 @@ final class MessageStore {
 
     // MARK: - Memory queries (synchronous)
 
-    /// Returns the current window contents. Always a contiguous
-    /// `[topSeq..bottomSeq]` slice of server-confirmed messages.
+    /// Returns the current window contents. Always a consecutive slice of
+    /// server-confirmed persistent spine rows; legacy seq integers may be sparse.
     /// Optimistic pending input placeholders are NOT included —
     /// callers that want to render those merge `CommandSender.outbox`
     /// at their own layer.
@@ -700,6 +693,16 @@ final class MessageStore {
     /// escalation is needed.
     func dbMessages(_ sessionId: String, from: Int, to: Int) -> [ChatMessage] {
         db.messages(sessionId, from: from, to: to)
+    }
+
+    /// Persistent-spine row page immediately before a raw window boundary.
+    func dbMessagesBefore(_ sessionId: String, beforeSeq: Int, limit: Int) -> [ChatMessage] {
+        db.messagesBefore(sessionId, beforeSeq: beforeSeq, limit: limit)
+    }
+
+    /// Persistent-spine row page immediately after a raw window boundary.
+    func dbMessagesAfter(_ sessionId: String, afterSeq: Int, limit: Int) -> [ChatMessage] {
+        db.messagesAfter(sessionId, afterSeq: afterSeq, limit: limit)
     }
 
     /// Decide whether the seq range `(afterSeq, +∞)` contains any

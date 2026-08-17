@@ -198,6 +198,24 @@ final class ChatMessageTests: XCTestCase {
 
 @MainActor
 final class MessageProviderHeadTests: XCTestCase {
+    func testSessionSpineContractMatchesTentaclePersistentTypes() {
+        XCTAssertEqual(SessionSpineContract.persistentTypes, Set([
+            "session_created",
+            "agent_message",
+            "interrupted_turn",
+            "turn_status",
+            "user_message",
+            "system_message",
+            "error",
+            "session_ended",
+            "idle",
+        ]))
+        for transient in ["active", "compacting", "agent_message_delta", "card_action",
+                          "tool_start", "tool_complete", "agent_narration", "permission", "question"] {
+            XCTAssertFalse(SessionSpineContract.contains(type: transient, seq: 99), transient)
+        }
+    }
+
     func testEnsureOlderLoadedAddsTenRowsToCompactIOSWindow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-message-provider-older-page-test-\(UUID().uuidString)", isDirectory: true)
@@ -253,16 +271,16 @@ final class MessageProviderHeadTests: XCTestCase {
         XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 287)
     }
 
-    func testEnsureOlderLoadedDoesNotSkipLargeLocalCacheHole() throws {
+    func testEnsureOlderLoadedPagesAcrossLargeLegacySeqGaps() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kraki-message-provider-hole-test-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("kraki-message-provider-large-legacy-gap-test-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
-        let sessionId = "sess-local-hole"
-        let seqs = Array(1...10) + Array(1_000...1_029)
-        let messages = seqs.map { seq in
-            ChatMessage(
-                type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
+        let sessionId = "sess-large-legacy-gap"
+        let messages = (1...80).map { index in
+            let seq = index * 496
+            return ChatMessage(
+                type: index.isMultiple(of: 2) ? "agent_message" : "user_message",
                 seq: seq,
                 sessionId: sessionId,
                 deviceId: "dev-1",
@@ -274,10 +292,12 @@ final class MessageProviderHeadTests: XCTestCase {
 
         let app = AppState(testDatabase: database)
         _ = app.messageStore.loadInitialWindow(sessionId)
-        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 1_000)
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 25_296)
 
-        XCTAssertFalse(app.messageProvider?.ensureOlderLoaded(sessionId: sessionId) == true)
-        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 1_000)
+        XCTAssertTrue(app.messageProvider?.ensureOlderLoaded(sessionId: sessionId) == true)
+        XCTAssertEqual(app.messageStore.currentWindow(sessionId).prefix(10).map(\.seq),
+                       stride(from: 20_336, through: 24_800, by: 496).map { $0 })
+        XCTAssertEqual(app.messageStore.windowState(sessionId)?.topSeq, 20_336)
     }
 
     func testEnsureNewerLoadedAdvancesAcrossOffSpineSeqGaps() throws {
@@ -302,8 +322,8 @@ final class MessageProviderHeadTests: XCTestCase {
         _ = app.messageStore.loadInitialWindow(sessionId)
         XCTAssertEqual(app.messageStore.windowState(sessionId)?.bottomSeq, 3)
 
-        // Newer persistent rows can be sparse because off-spine protocol
-        // events consume seq values without entering this SQLite table.
+        // Replayed legacy persistent rows can remain sparse because retired
+        // off-spine events consumed the historical seq values before filtering.
         try database.insert(sessionId, [makeMessage(5), makeMessage(7)])
         app.messageProvider?.setTentacleInfo(sessionId: sessionId, lastSeq: 7, deviceId: "dev-1")
 

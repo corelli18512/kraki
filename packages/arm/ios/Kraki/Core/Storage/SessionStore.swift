@@ -607,8 +607,9 @@ final class SessionStore {
     }
 
     /// Apply a live state transition without persisting the metadata snapshot.
-    /// `active`, `idle`, and `compacting` envelopes carry a global transport seq
-    /// and are reconciled authoritatively by session_list after reconnect.
+    /// `active`/`compacting` carry only global envelope ordering; `idle` is also
+    /// a durable spine row, but session_list remains the reconnect authority for
+    /// the Session's state and cursor pair.
     func setTransientState(_ id: String, _ state: SessionState) {
         applyState(id, state)
     }
@@ -625,7 +626,8 @@ final class SessionStore {
         }
     }
 
-    /// Record the tool whose `tool_start` event just arrived. The icon
+    /// Compatibility projection for a raw `tool_start` from an older Tentacle.
+    /// Current Tentacles put the live action in `card_action`. The icon
     /// (and headline) is later cleared by either the matching
     /// `tool_complete` (handled in `clearCurrentTool`) or an `idle`
     /// transition. Also bumps the activity snapshot to `.toolRunning`.
