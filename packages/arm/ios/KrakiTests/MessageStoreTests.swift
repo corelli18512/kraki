@@ -129,7 +129,11 @@ final class MessageStoreTests: XCTestCase {
         XCTAssertEqual(store.cards[sid]?.action?.type, "question")
         XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
 
-        store.applyCardMessage(sid, "", reset: false)
+        store.applyCardMessage(sid, " Ready for approval.", reset: false)
+        XCTAssertEqual(
+            store.cards[sid]?.text,
+            "The deployment is ready. Ready for approval."
+        )
         XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
     }
 
