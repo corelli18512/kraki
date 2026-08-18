@@ -611,14 +611,7 @@ private struct MacSessionStatusGlyph: View {
             case .active:
                 activityDots
             case .compacting:
-                Image(systemName: "square.stack.3d.down.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x0891B2))
-                    .symbolEffect(
-                        .variableColor.iterative.reversing.dimInactiveLayers,
-                        options: .repeat(.continuous).speed(0.72),
-                        isActive: !reduceMotion
-                    )
+                CompactingStatusGlyph()
             case .waiting:
                 LucideIcon(.messageCircleQuestion,
                            size: 14,
