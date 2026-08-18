@@ -901,8 +901,11 @@ final class MessageStore {
     /// ACK. Unlike incremental delta/action handlers this is an authoritative
     /// reconnect/page-entry snapshot, so it may reopen the card gate when the
     /// digest says a turn is live and the snapshot actually carries draft or
-    /// action state. Empty idle/ended snapshots keep the concluded-turn gate
-    /// closed and can never resurrect a stale bubble.
+    /// action state. A durable pending question is the exception: Tentacle
+    /// intentionally rehydrates it after the agent has gone idle/disconnected,
+    /// and its authoritative question action must remain answerable. Empty
+    /// idle/ended snapshots still keep the concluded-turn gate closed and can
+    /// never resurrect a stale bubble.
     func replaceCardFromSubscription(
         _ sessionId: String,
         draft: String,
@@ -912,7 +915,13 @@ final class MessageStore {
         cards.removeValue(forKey: sessionId)
         let hasLiveCard = !draft.isEmpty || action != nil
         let liveState = state == .active || state == .compacting
-        guard liveState && hasLiveCard else {
+        // Pending questions are durable human-blocking state. They survive a
+        // Tentacle/Pi restart, whose session digest can legitimately be idle
+        // or disconnected while the question remains answerable. Do not apply
+        // this exception to ordinary drafts/tool cards: those still require a
+        // live digest so stale snapshots cannot resurrect a concluded turn.
+        let durableQuestion = action?.type == "question"
+        guard (liveState || durableQuestion) && hasLiveCard else {
             if !liveState { closedCardTurns.insert(sessionId) }
             return
         }

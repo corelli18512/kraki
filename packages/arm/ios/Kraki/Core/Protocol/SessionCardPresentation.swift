@@ -107,6 +107,38 @@ struct SessionCardProjection: Equatable {
     }
 }
 
+/// Shared Compacting glyph. Native variable-color layers provide the visual
+/// language; TimelineView periodically renews the view identity so a retained
+/// LazyVStack row cannot keep a stale symbol-effect presentation timeline.
+struct CompactingStatusGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let cycleDuration: TimeInterval = 2.4
+
+    var body: some View {
+        if reduceMotion {
+            symbol
+        } else {
+            TimelineView(.animation(minimumInterval: 0.18)) { context in
+                let cycle = Int(context.date.timeIntervalSinceReferenceDate / cycleDuration)
+                symbol
+                    .id(cycle)
+                    .symbolEffect(
+                        .variableColor.iterative.reversing.hideInactiveLayers,
+                        options: .repeat(.continuous).speed(0.9),
+                        isActive: true
+                    )
+            }
+        }
+    }
+
+    private var symbol: some View {
+        Image(systemName: "square.stack.3d.down.right")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color(hex: 0x0891B2))
+            .frame(width: 16, height: 16)
+    }
+}
+
 #if os(iOS)
 /// iOS counterpart of the native macOS status slot. The slot remains fixed so
 /// changes between active work, a speaker glyph, and an empty preview do not
@@ -114,13 +146,15 @@ struct SessionCardProjection: Equatable {
 struct SessionCardStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let status: SessionCardStatus
+    var hasDraft: Bool = false
 
     var body: some View {
         Group {
             switch status {
-            case .active, .compacting:
-                IOSSessionActivityDots(color: status == .compacting ? Color(hex: 0x0891B2) : .krakiPrimary,
-                                       reduceMotion: reduceMotion)
+            case .active:
+                IOSSessionActivityDots(color: .krakiPrimary, reduceMotion: reduceMotion)
+            case .compacting:
+                CompactingStatusGlyph()
             case .waiting:
                 LucideIcon(.messageCircleQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .approval:
@@ -134,7 +168,14 @@ struct SessionCardStatusGlyph: View {
             case .agentMessage:
                 LucideIcon(.botMessageSquare, size: 13, strokeWidth: 1.9, color: .krakiPrimary)
             case .humanMessage:
-                LucideIcon(.circleUser, size: 13, strokeWidth: 1.9, color: .secondary)
+                if hasDraft {
+                    LucideIcon(.keyboard,
+                               size: 14,
+                               strokeWidth: 2,
+                               color: Color(hex: 0x4F8C86))
+                } else {
+                    LucideIcon(.circleUser, size: 13, strokeWidth: 1.9, color: .secondary)
+                }
             case .idle:
                 Color.clear
             }

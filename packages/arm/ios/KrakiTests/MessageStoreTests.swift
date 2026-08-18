@@ -136,6 +136,43 @@ final class MessageStoreTests: XCTestCase {
         XCTAssertNil(store.cards[sid])
     }
 
+    func testIdleSubscriptionSnapshotRestoresDurableQuestionCard() {
+        let sid = "idle-question-subscription-card"
+        let question = ChatMessage(
+            type: "question", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
+            payload: [
+                "id": AnyCodable("q-rehydrated"),
+                "question": AnyCodable("Deploy now?"),
+                "choices": AnyCodable(["Yes", "No"]),
+            ])
+
+        store.endCardTurn(sid)
+        store.replaceCardFromSubscription(
+            sid, draft: "The deployment is ready.", action: question, state: .idle)
+
+        XCTAssertEqual(store.cards[sid]?.text, "The deployment is ready.")
+        XCTAssertEqual(store.cards[sid]?.action?.type, "question")
+        XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
+
+        store.applyCardMessage(sid, " Ready for approval.", reset: false)
+        XCTAssertEqual(
+            store.cards[sid]?.text,
+            "The deployment is ready. Ready for approval."
+        )
+        XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
+    }
+
+    func testIdleSubscriptionSnapshotDoesNotRestoreOrdinaryToolCard() {
+        let sid = "idle-tool-subscription-card"
+        let tool = ChatMessage(
+            type: "tool_start", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
+            payload: ["toolName": AnyCodable("shell")])
+
+        store.replaceCardFromSubscription(sid, draft: "stale", action: tool, state: .idle)
+
+        XCTAssertNil(store.cards[sid])
+    }
+
     func testActiveSubscriptionSnapshotCanAuthoritativelyReopenClosedGate() {
         let sid = "active-subscription-card"
         store.endCardTurn(sid)
