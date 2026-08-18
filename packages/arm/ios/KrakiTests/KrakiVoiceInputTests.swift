@@ -234,6 +234,26 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(factory.sessions[0].starts.count, 1)
     }
 
+    func testDeniedPermissionFailsWithoutRequestingItAgain() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let audio = FakeVoiceAudioPolicy()
+        audio.permission = .denied
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: audio
+        )
+
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+
+        XCTAssertEqual(controller.state, .failed(VoiceInputError.microphoneDenied.localizedDescription))
+        XCTAssertEqual(audio.permissionRequestCount, 0)
+        XCTAssertEqual(audio.activationCount, 0)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+        XCTAssertTrue(factory.sessions.isEmpty)
+    }
+
     func testCancelWhilePermissionPromptIsOpenDoesNotResumeRecordingSetup() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
@@ -307,6 +327,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         )
         await controller.begin(sessionID: "session-1", context: context()) { _ in }
         XCTAssertEqual(controller.state, .obtainingLease)
+        XCTAssertEqual(audio.permissionRequestCount, 0)
         XCTAssertEqual(host.requestedResources, ["voice/doubao"])
 
         controller.receiveLease(lease())
@@ -480,13 +501,14 @@ final class KrakiVoiceInputTests: XCTestCase {
         )
     }
 
-    func testForegroundWarmConnectionIsReusedAcrossRecordings() async {
+    func testForegroundWarmConnectionSkipsGrantedPermissionUIAndIsReusedAcrossRecordings() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
+        let audio = FakeVoiceAudioPolicy()
         let controller = KrakiVoiceInputController(
             host: host,
             sessionFactory: factory,
-            audioPolicy: FakeVoiceAudioPolicy()
+            audioPolicy: audio
         )
         controller.prepare()
         XCTAssertEqual(host.requestedResources, ["voice/doubao"])
@@ -499,6 +521,8 @@ final class KrakiVoiceInputTests: XCTestCase {
 
         var finals: [String] = []
         await controller.begin(sessionID: "session-1", context: context()) { finals.append($0) }
+        XCTAssertEqual(audio.permissionRequestCount, 0)
+        XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(factory.sessions[0].starts.count, 1)
         factory.sessions[0].emit(.final("first", rawText: nil))
         await Task.yield()
@@ -507,6 +531,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(factory.sessions[0].closeCount, 0)
 
         await controller.begin(sessionID: "session-2", context: context()) { finals.append($0) }
+        XCTAssertEqual(audio.permissionRequestCount, 0)
         XCTAssertEqual(factory.sessions.count, 1)
         XCTAssertEqual(factory.sessions[0].starts.count, 2)
         factory.sessions[0].emit(.final("second", rawText: nil))
