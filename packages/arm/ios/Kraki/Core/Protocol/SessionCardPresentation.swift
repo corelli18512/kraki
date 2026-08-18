@@ -114,13 +114,22 @@ struct SessionCardProjection: Equatable {
 struct SessionCardStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let status: SessionCardStatus
+    var hasDraft: Bool = false
 
     var body: some View {
         Group {
             switch status {
-            case .active, .compacting:
-                IOSSessionActivityDots(color: status == .compacting ? Color(hex: 0x0891B2) : .krakiPrimary,
-                                       reduceMotion: reduceMotion)
+            case .active:
+                IOSSessionActivityDots(color: .krakiPrimary, reduceMotion: reduceMotion)
+            case .compacting:
+                Image(systemName: "square.stack.3d.down.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x0891B2))
+                    .symbolEffect(
+                        .variableColor.iterative.reversing.dimInactiveLayers,
+                        options: .repeat(.continuous).speed(0.72),
+                        isActive: !reduceMotion
+                    )
             case .waiting:
                 LucideIcon(.messageCircleQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .approval:
@@ -134,7 +143,14 @@ struct SessionCardStatusGlyph: View {
             case .agentMessage:
                 LucideIcon(.botMessageSquare, size: 13, strokeWidth: 1.9, color: .krakiPrimary)
             case .humanMessage:
-                LucideIcon(.circleUser, size: 13, strokeWidth: 1.9, color: .secondary)
+                if hasDraft {
+                    LucideIcon(.keyboard,
+                               size: 14,
+                               strokeWidth: 2,
+                               color: Color(hex: 0x4F8C86))
+                } else {
+                    LucideIcon(.circleUser, size: 13, strokeWidth: 1.9, color: .secondary)
+                }
             case .idle:
                 Color.clear
             }

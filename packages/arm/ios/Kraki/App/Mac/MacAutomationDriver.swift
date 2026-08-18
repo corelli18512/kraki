@@ -545,6 +545,10 @@ final class MacAutomationDriver {
             transientScrollerRegression(id: id, connection: connection)
         case "sessionListScrollerRegression":
             sessionListScrollerRegression(id: id, connection: connection)
+        case "sessionActivityDotsRegression":
+            MacSessionActivityDotsRegression.run { [weak self] result in
+                self?.send(result: result, id: id, on: connection)
+            }
         case "composerPasteFocusRegression":
             MacComposerPasteFocusRegression.run { [weak self] result in
                 self?.send(result: result, id: id, on: connection)
