@@ -608,8 +608,17 @@ private struct MacSessionStatusGlyph: View {
     var body: some View {
         Group {
             switch status {
-            case .active, .compacting:
+            case .active:
                 activityDots
+            case .compacting:
+                Image(systemName: "square.stack.3d.down.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x0891B2))
+                    .symbolEffect(
+                        .variableColor.iterative.reversing.dimInactiveLayers,
+                        options: .repeat(.continuous).speed(0.72),
+                        isActive: !reduceMotion
+                    )
             case .waiting:
                 LucideIcon(.messageCircleQuestion,
                            size: 14,
@@ -635,10 +644,17 @@ private struct MacSessionStatusGlyph: View {
                            strokeWidth: 1.9,
                            color: Color.krakiPrimary)
             case .humanMessage:
-                LucideIcon(.circleUser,
-                           size: 13,
-                           strokeWidth: 1.9,
-                           color: hasDraft ? Color.red : Color.textSecondary)
+                if hasDraft {
+                    LucideIcon(.keyboard,
+                               size: 14,
+                               strokeWidth: 2,
+                               color: Color(hex: 0x4F8C86))
+                } else {
+                    LucideIcon(.circleUser,
+                               size: 13,
+                               strokeWidth: 1.9,
+                               color: Color.textSecondary)
+                }
             case .idle:
                 Color.clear
             }
@@ -647,13 +663,9 @@ private struct MacSessionStatusGlyph: View {
         .accessibilityHidden(true)
     }
 
-    private var activityColor: Color {
-        status == .compacting ? Color(hex: 0x0891B2) : Color.krakiPrimary
-    }
-
     private var activityDots: some View {
         MacSessionActivityDots(
-            color: NSColor(activityColor),
+            color: NSColor(Color.krakiPrimary),
             reduceMotion: reduceMotion
         )
         .frame(width: 14, height: 14)

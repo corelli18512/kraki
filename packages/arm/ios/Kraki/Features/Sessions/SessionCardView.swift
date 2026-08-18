@@ -150,7 +150,10 @@ private struct SessionCardBody: View {
 
     private var previewRow: some View {
         HStack(spacing: 5) {
-            SessionCardStatusGlyph(status: projection.status)
+            SessionCardStatusGlyph(
+                status: projection.status,
+                hasDraft: projection.isDraft
+            )
                 .accessibilityLabel(projection.status.accessibilityLabel ?? "")
 
             if let previewText = projection.previewText {
