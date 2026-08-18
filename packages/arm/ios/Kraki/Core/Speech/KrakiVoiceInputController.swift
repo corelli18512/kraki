@@ -298,26 +298,41 @@ final class KrakiVoiceInputController {
         self.context = context
         recordingStartedHandler = onRecordingStarted
         finalHandler = onFinal
-        state = .requestingPermission
-        KLog.d("🎙️ [voice] stage=permission session=\(sessionID.prefix(12)) warm=\(isConnectionWarm ? 1 : 0)")
 
-        let wasUndetermined = audioPolicy.permission == .undetermined
-        guard await audioPolicy.requestPermission() else {
-            if recordingGeneration == currentRecording {
-                failRecording(VoiceInputError.microphoneDenied, closeTransport: false)
-            }
+        switch audioPolicy.permission {
+        case .granted:
+            // The auth handshake already warmed the signed broker connection.
+            // Do not expose a synthetic permission phase when TCC access was
+            // granted previously; proceed directly to audio activation/start.
+            KLog.d("🎙️ [voice] stage=permission-ready session=\(sessionID.prefix(12)) warm=\(isConnectionWarm ? 1 : 0)")
+
+        case .denied:
+            failRecording(VoiceInputError.microphoneDenied, closeTransport: false)
             return
-        }
-        guard recordingGeneration == currentRecording else { return }
-        if wasUndetermined {
+
+        case .undetermined:
+            // Only a genuinely undecided OS permission belongs in the visible
+            // Requesting microphone state. Apple requires this prompt to remain
+            // user-initiated, so warm connection setup must not request it.
+            state = .requestingPermission
+            KLog.d("🎙️ [voice] stage=permission-request session=\(sessionID.prefix(12)) warm=\(isConnectionWarm ? 1 : 0)")
+            guard await audioPolicy.requestPermission() else {
+                if recordingGeneration == currentRecording {
+                    failRecording(VoiceInputError.microphoneDenied, closeTransport: false)
+                }
+                return
+            }
+            guard recordingGeneration == currentRecording else { return }
+            // The permission callback can win a short race with TCC's visible
+            // authorization state. Wait for the same policy used by capture.
             for _ in 0..<20 where audioPolicy.permission != .granted {
                 try? await Task.sleep(for: .milliseconds(50))
                 guard recordingGeneration == currentRecording else { return }
             }
-        }
-        guard audioPolicy.permission == .granted else {
-            failRecording(VoiceInputError.microphoneDenied, closeTransport: false)
-            return
+            guard audioPolicy.permission == .granted else {
+                failRecording(VoiceInputError.microphoneDenied, closeTransport: false)
+                return
+            }
         }
         guard audioPolicy.activate(), recordingGeneration == currentRecording else {
             if recordingGeneration == currentRecording {

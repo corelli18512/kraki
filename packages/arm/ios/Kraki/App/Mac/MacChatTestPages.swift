@@ -1359,7 +1359,7 @@ private extension MacChatScenarioHarness {
             sparseID,
             category: "History & virtualization",
             title: "08 · History · Sparse protocol seqs",
-            summary: "Persistent rows contain off-spine seq gaps; top pagination must still advance without stalling.",
+            summary: "Replayed legacy spine rows retain historical off-spine seq gaps; top pagination must still advance without stalling.",
             phases: [phase(
                 "Sparse tail",
                 messages: sparseMessages,

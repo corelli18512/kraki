@@ -68,14 +68,22 @@ struct ChatView: View {
         let _ = viewModel?.runtimeStatus
         let providerWaitingForLatest = viewModel == nil
             || viewModel?.isWaitingForLatestBubble == true
+        let waitingForInitialConnection = ChatEntryLoading.isInitialConnectionGateActive(
+            hasStoredCredentials: appState.hasStoredCredentials,
+            hasCompletedInitialConnect: appState.hasCompletedInitialConnect,
+            connectionStatus: appState.connectionStatus
+        )
+        let entrySourceWaiting = providerWaitingForLatest || waitingForInitialConnection
         let waitingForLatest = ChatEntryLoading.isEntryGateActive(
-            providerWaitingForLatest: providerWaitingForLatest,
+            providerWaitingForLatest: entrySourceWaiting,
             hasMaterializedLatest: hasMaterializedLatest
         )
         let entryDiagnosticSignature = [
             "session=\(sessionId)",
             "vm=\(viewModel == nil ? 0 : 1)",
             "gate=\(waitingForLatest ? 1 : 0)",
+            "connectionGate=\(waitingForInitialConnection ? 1 : 0)",
+            "connection=\(String(describing: appState.connectionStatus))",
             "metaHead=\(session?.lastSeq ?? 0)",
             "providerHead=\(viewModel?.sessionLastSeq ?? 0)",
             "window=\(viewModel?.windowTopSeq ?? 0)-\(viewModel?.windowBottomSeq ?? 0)",
@@ -167,7 +175,7 @@ struct ChatView: View {
         .onChange(of: entryDiagnosticSignature, initial: true) { _, state in
             KLog.chatEntry("surface \(state)")
         }
-        .onChange(of: providerWaitingForLatest, initial: true) { _, isWaiting in
+        .onChange(of: entrySourceWaiting, initial: true) { _, isWaiting in
             if !isWaiting { hasMaterializedLatest = true }
         }
         .task(id: sessionId) {

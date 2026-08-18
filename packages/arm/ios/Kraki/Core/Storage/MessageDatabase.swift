@@ -7,8 +7,8 @@
 /// `ChatMessage` field evolution doesn't require schema migration —
 /// only stable identity columns sit in the table proper.
 ///
-/// Used as the persistence backend for `MessageStore`. Not accessed
-/// directly by any other layer.
+/// Used as the persistence backend for `MessageStore`; MessageProvider captures
+/// it only for off-main DB reads and leaves all window mutation to the store.
 ///
 /// WAL mode is enabled so reads never block writes; writes are
 /// serialised by GRDB's `DatabasePool`.
@@ -74,8 +74,9 @@ final class MessageDatabase {
     /// DB is fine; downgrading is not supported.
     private static let schemaVersion = "v1"
     /// Pure-spine migration: PR #154 moved tools/narration/permission/question
-    /// off the spine, so old rows + their (now-mismatched) seqs are garbage.
-    /// No back-compat — drop and recreate the table for a clean slate.
+    /// off the spine, so old *client-cached* rows are invalid. Drop and recreate
+    /// locally; authoritative Tentacle replay then repopulates only persistent
+    /// rows, preserving any legitimate legacy seq holes from its old log.
     private static let schemaVersionPureSpine = "v2_pure_spine"
 
     // MARK: - State
@@ -267,6 +268,51 @@ final class MessageDatabase {
                         ORDER BY seq ASC
                         """,
                     arguments: [sessionId, from, to]
+                )
+                return Self.decode(rows)
+            }
+        } catch {
+            return []
+        }
+    }
+
+    /// The last `limit` persisted spine rows strictly before `beforeSeq`, sorted
+    /// ascending. Unlike a numeric seq range, this remains a real page when
+    /// replayed legacy logs contain arbitrarily large historical seq holes.
+    func messagesBefore(_ sessionId: String, beforeSeq: Int, limit: Int) -> [ChatMessage] {
+        do {
+            return try dbPool.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT payload FROM messages
+                        WHERE session_id = ? AND seq < ?
+                        ORDER BY seq DESC
+                        LIMIT ?
+                        """,
+                    arguments: [sessionId, beforeSeq, limit]
+                )
+                return Self.decode(rows).reversed()
+            }
+        } catch {
+            return []
+        }
+    }
+
+    /// The first `limit` persisted spine rows strictly after `afterSeq`, sorted
+    /// ascending. Row count, rather than seq span, defines the page.
+    func messagesAfter(_ sessionId: String, afterSeq: Int, limit: Int) -> [ChatMessage] {
+        do {
+            return try dbPool.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT payload FROM messages
+                        WHERE session_id = ? AND seq > ?
+                        ORDER BY seq ASC
+                        LIMIT ?
+                        """,
+                    arguments: [sessionId, afterSeq, limit]
                 )
                 return Self.decode(rows)
             }

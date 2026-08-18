@@ -939,6 +939,7 @@ final class TKBubbleContent {
     let frozenTimestamp: String?
 
     private var heightCache: [CGFloat: CGFloat] = [:]
+    private var bubbleWidthCache: [CGFloat: CGFloat] = [:]
     private var bodyTextHeightCache: [CGFloat: CGFloat] = [:]
 
     init(message: ChatMessage, kind: Kind, hueSeed: String,
@@ -1010,20 +1011,38 @@ final class TKBubbleContent {
     }
 
     func bubbleWidth(cellWidth: CGFloat) -> CGFloat {
+        if let cached = bubbleWidthCache[cellWidth] { return cached }
         let maximum = maximumBubbleWidth(cellWidth: cellWidth)
+        let width: CGFloat
         switch kind {
         case .agent, .user:
             // Match Web's max-width flex bubble: short body/action content hugs
             // its natural width while long content wraps at the established
-            // maximum. Attachments remain an independent sibling.
-            guard htmlArtifacts.isEmpty else { return maximum }
-            let bodyNatural = body.map(TKMeasure.naturalWidth) ?? 0
-            let natural = max(bodyNatural, naturalActionWidth())
-            let fitted = ceil(natural) + TKMetrics.msgPadH * 2
-            return min(maximum, max(fitted, TKMetrics.msgPadH * 2 + 1))
+            // maximum. Attachments remain an independent sibling. Natural width
+            // is expensive CoreText work, so cache it for every immutable content
+            // object instead of repeating it from each layoutSubviews pass.
+            if htmlArtifacts.isEmpty {
+                // Once a body is this long it will fill the bubble in ordinary
+                // prose/code/table history. Avoid shaping the entire attributed
+                // string at infinite width just to rediscover that it exceeds
+                // the cap; short messages still keep the exact hug-content look.
+                let bodyNatural: CGFloat
+                if let body, body.length > 160 {
+                    bodyNatural = maximum
+                } else {
+                    bodyNatural = body.map(TKMeasure.naturalWidth) ?? 0
+                }
+                let natural = max(bodyNatural, naturalActionWidth())
+                let fitted = ceil(natural) + TKMetrics.msgPadH * 2
+                width = min(maximum, max(fitted, TKMetrics.msgPadH * 2 + 1))
+            } else {
+                width = maximum
+            }
         case .error, .system:
-            return maximum
+            width = maximum
         }
+        bubbleWidthCache[cellWidth] = width
+        return width
     }
 
     func attachmentWidth(cellWidth: CGFloat) -> CGFloat {

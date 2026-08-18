@@ -4,19 +4,44 @@ import XCTest
 @MainActor
 final class MessageStoreTests: XCTestCase {
 
+    private var database: MessageDatabase!
     private var store: MessageStore!
 
     override func setUp() async throws {
         try await super.setUp()
-        let db = try MessageDatabase()
-        store = MessageStore(db: db)
+        database = try MessageDatabase()
+        store = MessageStore(db: database)
         store.clearCard("sess-1")
     }
 
     override func tearDown() async throws {
         store?.clearCard("sess-1")
         store = nil
+        database = nil
         try await super.tearDown()
+    }
+
+    func testInitialWindowLoadsThirtyNewestMessages() throws {
+        let sessionId = "initial-window"
+        let messages = (1...80).map { seq in
+            ChatMessage(
+                type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
+                seq: seq,
+                sessionId: sessionId,
+                deviceId: "device",
+                timestamp: "2026-08-16T00:00:00Z",
+                payload: ["content": AnyCodable("message-\(seq)")]
+            )
+        }
+        try database.insert(sessionId, messages)
+
+        let loaded = store.loadInitialWindow(sessionId)
+
+        XCTAssertEqual(loaded.count, 30)
+        XCTAssertEqual(loaded.first?.seq, 51)
+        XCTAssertEqual(loaded.last?.seq, 80)
+        XCTAssertEqual(store.windowState(sessionId)?.topSeq, 51)
+        XCTAssertEqual(store.windowState(sessionId)?.bottomSeq, 80)
     }
 
     // MARK: - Card draft (keep-last)

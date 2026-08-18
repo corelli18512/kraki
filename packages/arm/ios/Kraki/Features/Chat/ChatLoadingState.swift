@@ -15,6 +15,26 @@ enum ChatEntryLoading {
         !hasMaterializedLatest && providerWaitingForLatest
     }
 
+    /// A cold launch restores every cached device as offline until the first
+    /// authenticated Relay snapshot arrives. Keep Chat's first frame behind the
+    /// existing entry gate during that short handshake so it does not lay out
+    /// once without the composer and jump again when the device becomes online.
+    /// A genuine connection failure releases the gate and keeps offline history
+    /// available.
+    static func isInitialConnectionGateActive(
+        hasStoredCredentials: Bool,
+        hasCompletedInitialConnect: Bool,
+        connectionStatus: ConnectionStatus
+    ) -> Bool {
+        guard hasStoredCredentials, !hasCompletedInitialConnect else { return false }
+        switch connectionStatus {
+        case .awaitingLogin, .connecting, .authenticating:
+            return true
+        case .connected, .disconnected, .error:
+            return false
+        }
+    }
+
     static func isWaitingForLatest(
         expectedLastSeq: Int,
         windowBottomSeq: Int,
