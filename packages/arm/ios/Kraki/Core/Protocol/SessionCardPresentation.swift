@@ -107,6 +107,38 @@ struct SessionCardProjection: Equatable {
     }
 }
 
+/// Shared Compacting glyph. Native variable-color layers provide the visual
+/// language; TimelineView periodically renews the view identity so a retained
+/// LazyVStack row cannot keep a stale symbol-effect presentation timeline.
+struct CompactingStatusGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let cycleDuration: TimeInterval = 2.4
+
+    var body: some View {
+        if reduceMotion {
+            symbol
+        } else {
+            TimelineView(.animation(minimumInterval: 0.18)) { context in
+                let cycle = Int(context.date.timeIntervalSinceReferenceDate / cycleDuration)
+                symbol
+                    .id(cycle)
+                    .symbolEffect(
+                        .variableColor.iterative.reversing.hideInactiveLayers,
+                        options: .repeat(.continuous).speed(0.9),
+                        isActive: true
+                    )
+            }
+        }
+    }
+
+    private var symbol: some View {
+        Image(systemName: "square.stack.3d.down.right")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color(hex: 0x0891B2))
+            .frame(width: 16, height: 16)
+    }
+}
+
 #if os(iOS)
 /// iOS counterpart of the native macOS status slot. The slot remains fixed so
 /// changes between active work, a speaker glyph, and an empty preview do not
@@ -122,14 +154,7 @@ struct SessionCardStatusGlyph: View {
             case .active:
                 IOSSessionActivityDots(color: .krakiPrimary, reduceMotion: reduceMotion)
             case .compacting:
-                Image(systemName: "square.stack.3d.down.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(hex: 0x0891B2))
-                    .symbolEffect(
-                        .variableColor.iterative.reversing.dimInactiveLayers,
-                        options: .repeat(.continuous).speed(0.72),
-                        isActive: !reduceMotion
-                    )
+                CompactingStatusGlyph()
             case .waiting:
                 LucideIcon(.messageCircleQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .approval:

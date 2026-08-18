@@ -549,6 +549,8 @@ final class MacAutomationDriver {
             MacSessionActivityDotsRegression.run { [weak self] result in
                 self?.send(result: result, id: id, on: connection)
             }
+        case "compactingGlyphAnimationRegression":
+            compactingGlyphAnimationRegression(id: id, connection: connection)
         case "composerPasteFocusRegression":
             MacComposerPasteFocusRegression.run { [weak self] result in
                 self?.send(result: result, id: id, on: connection)
@@ -597,6 +599,52 @@ final class MacAutomationDriver {
             Task { @MainActor in self.stop() }
         default:
             send(error: "unknown_method", message: "Unknown method: \(method)", id: id, on: connection)
+        }
+    }
+
+    private func compactingGlyphAnimationRegression(id: Any?, connection: Int32) {
+        let host = NSHostingView(rootView: CompactingStatusGlyph())
+        host.frame = NSRect(x: 0, y: 0, width: 16, height: 16)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        host.display()
+
+        func renderedPNG() -> Data? {
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap.representation(using: .png, properties: [:])
+        }
+
+        guard let first = renderedPNG() else {
+            window.close()
+            send(error: "capture_failed", message: "Unable to render Compacting glyph", id: id, on: connection)
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            let second = renderedPNG()
+            let changed = second.map { $0 != first } ?? false
+            self?.send(
+                result: [
+                    "passed": changed,
+                    "changed": changed,
+                    "firstBytes": first.count,
+                    "secondBytes": second?.count ?? 0,
+                ],
+                id: id,
+                on: connection
+            )
+            window.close()
         }
     }
 
