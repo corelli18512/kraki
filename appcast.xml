@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.19</title>
+            <pubDate>Fri, 21 Aug 2026 12:47:02 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.19</sparkle:fullReleaseNotesLink>
+            <sparkle:version>21</sparkle:version>
+            <sparkle:shortVersionString>0.2.19</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(ios): keep large session navigation responsive by @corelli18512 in https://github.com/corelli18512/kraki/pull/255
+* fix(apps): keep cold-launch gates over first layout by @corelli18512 in https://github.com/corelli18512/kraki/pull/262
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.18...mac-v0.2.19
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.19/Kraki.app.zip" length="8130855" type="application/octet-stream" sparkle:edSignature="INjQMQznEJJJupDX9uEbUyinXTLHx/PPkFUVqmJXU91cV/kEOMxAXn28tcEjSlivKSagH+uGc9XTzo/RmrenBA=="/>
+        </item>
+        <item>
             <title>0.2.18</title>
             <pubDate>Tue, 18 Aug 2026 12:36:51 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,25 +54,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.17/Kraki.app.zip" length="8106173" type="application/octet-stream" sparkle:edSignature="VIdxBPU1Mymv9dBypPjSX/ky6PnSBjYU8Rbeqpl6HmHH3U5VAaFHBBGg758tzIvAle/nhXg1BJxfMs96J5qhCw=="/>
         </item>
-        <item>
-            <title>0.2.16</title>
-            <pubDate>Tue, 18 Aug 2026 07:39:25 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.16</sparkle:fullReleaseNotesLink>
-            <sparkle:version>18</sparkle:version>
-            <sparkle:shortVersionString>0.2.16</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): restore pending question cards after reconnect by @corelli18512 in https://github.com/corelli18512/kraki/pull/259
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.31.18...mac-v0.2.16
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.16/Kraki.app.zip" length="8102851" type="application/octet-stream" sparkle:edSignature="67YZJBBhrnlfDIERtbv4EqACCmUywh/+ipuHURfoTe50mfyxY6+vJBoPP2h8AAHXjx9s5EkMtieSddRX1djLAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Dv9xUa5Co8Feli12ipTd8XZe6+6CCGZprsyCyJpd+kp0zoxV24ya/FELKma/e2+KpX4t3Ba4UPIxxEzie07wCQ==
-length: 3742
+edSignature: STjgThc/IsfI6nMQuMHb48e/+cYOJJJ4pOHBL8esxxCBlenpFlPMksAQDmqfOnxDaqnEhWBRc3ZBftWb+b+tBw==
+length: 3860
 -->
