@@ -10,11 +10,13 @@ The production main scene is a single `Window(id: "main")`, not a `WindowGroup`.
 
 1. Show the Kraki launch gate immediately.
 2. Resolve local CLI/stored credential availability behind the gate.
-3. Keep the gate visible for at least 350 ms to avoid a one-frame flash.
-4. Route to one of:
-   - authenticated `MainWindowView`, landing on Welcome with no Session selected;
+3. For an authenticated launch, mount `MainWindowView` underneath the gate with no Session selected.
+4. Keep Session/deep-link navigation queued while an AppKit probe completes the shell's first window-backed layout pass.
+5. Keep the gate visible for at least 350 ms, then fade it after that presentation probe reports ready. A 2-second presentation watchdog is a bounded fallback if AppKit does not deliver the expected attach callback.
+6. Route to one of:
+   - the already-settled authenticated shell, landing on Welcome with no Session selected;
    - the signed-out entry gate, with `kraki connect` instructions.
-5. Relay authentication and Tentacle status may continue after the authenticated shell appears. Network readiness never blocks the full-window gate indefinitely.
+7. Relay authentication and Tentacle status may continue after the authenticated shell appears. Network readiness never blocks the full-window gate indefinitely.
 
 ### Warm window reopen
 
@@ -29,7 +31,9 @@ Launch and Signed Out use the same brand shell. Signed Out replaces the launch s
 - automatic credential discovery when the user returns to Kraki from Terminal;
 - in-place checking/failure status.
 
-Neither entry mode mounts Sidebar, Chat, Composer, CoreText cells, image preview, or HTML artifact state behind the gate.
+Signed Out never mounts the authenticated shell. Authenticated cold launch stages only the Sidebar/Welcome shell under the launch gate so its synchronous first layout is hidden; Session navigation stays queued, therefore Chat, Composer, CoreText cells, image preview, and HTML artifact state are not mounted behind the gate.
+
+A reconnecting `session_list` is reconciled as one SessionStore transaction and schedules one persistence snapshot. It must not invalidate the Sidebar and rebuild the full snapshot several times per Session.
 
 ## Restore policy
 

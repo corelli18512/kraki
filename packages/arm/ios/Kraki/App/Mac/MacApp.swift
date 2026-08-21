@@ -18,15 +18,20 @@ import SwiftUI
 
 /// Process-scoped launch routing for the production Mac window.
 ///
-/// The coordinator deliberately lives above MainWindowView: neither Chat nor
-/// the signed-out page is mounted behind the launch surface. A cold process
-/// starts with no selected Session; closing and reopening the window while the
-/// menu-bar process remains alive reuses `lastSelectedSessionId` instead.
+/// The coordinator deliberately owns routing above MainWindowView. Once local
+/// credentials resolve, it stages the authenticated shell below the launch gate
+/// for one real AppKit layout pass, but keeps Session navigation queued so Chat
+/// is not mounted behind the launch surface. A cold process starts with no
+/// selected Session; closing and reopening the window while the menu-bar process
+/// remains alive reuses `lastSelectedSessionId` instead.
 @Observable
 @MainActor
 final class MacLaunchCoordinator {
     enum Phase: Equatable {
         case launching
+        /// Credentials are resolved and the authenticated shell is mounted,
+        /// but the launch gate remains above it until its first real layout.
+        case preparingAuthenticated
         case authenticated
         case signedOut
     }
@@ -36,8 +41,15 @@ final class MacLaunchCoordinator {
     private(set) var loginCheckFailed = false
     var lastSelectedSessionId: String?
 
+    var isLaunchGateVisible: Bool {
+        phase == .launching || phase == .preparingAuthenticated
+    }
+
     @ObservationIgnored private var hasStarted = false
     @ObservationIgnored private var servicesStarted = false
+    @ObservationIgnored private var launchStartedAt: Date?
+    @ObservationIgnored private var isFinishingAuthenticatedSurface = false
+    @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
 
     func bootstrap(
         appState: AppState,
@@ -55,6 +67,7 @@ final class MacLaunchCoordinator {
         }
 
         let startedAt = Date()
+        launchStartedAt = startedAt
         KLog.diag("[MacLaunch] gate presented")
         if !servicesStarted {
             servicesStarted = true
@@ -90,9 +103,76 @@ final class MacLaunchCoordinator {
             canEnterAuthenticatedRoot = usedCLILogin || appState.hasStoredCredentials
         }
 
-        // A very fast cache/auth path should still look intentional rather than
-        // flashing one frame of branding. This is a short visual floor, never a
-        // network wait: Relay authentication continues in the destination UI.
+        guard !Task.isCancelled else {
+            // Closing the only window can cancel its SwiftUI `.task` while the
+            // menu-bar process stays alive. Permit the warm reopen to bootstrap
+            // again instead of leaving the process permanently on Launch.
+            hasStarted = false
+            return
+        }
+
+        if canEnterAuthenticatedRoot {
+            // Do not remove the gate and only then construct the Sidebar. Mount
+            // the authenticated shell underneath it; a presentation probe will
+            // remove the gate after the first AppKit-backed layout has settled.
+            beginPreparingAuthenticatedSurface()
+        } else {
+            await waitForMinimumLaunchVisibility()
+            guard !Task.isCancelled else {
+                hasStarted = false
+                return
+            }
+            phase = .signedOut
+            logDestination("signedOut")
+        }
+    }
+
+    func authenticatedSurfaceDidPresent() async {
+        presentationWatchdogTask?.cancel()
+        presentationWatchdogTask = nil
+        await finishAuthenticatedSurface(source: "probe")
+    }
+
+    private func beginPreparingAuthenticatedSurface() {
+        phase = .preparingAuthenticated
+        presentationWatchdogTask?.cancel()
+        presentationWatchdogTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self,
+                  self.phase == .preparingAuthenticated else { return }
+            self.presentationWatchdogTask = nil
+            KLog.diag("[MacLaunch] presentation watchdog fired")
+            await self.finishAuthenticatedSurface(source: "watchdog")
+        }
+    }
+
+    private func finishAuthenticatedSurface(source: String) async {
+        guard phase == .preparingAuthenticated,
+              !isFinishingAuthenticatedSurface else { return }
+        isFinishingAuthenticatedSurface = true
+        defer { isFinishingAuthenticatedSurface = false }
+
+        await waitForMinimumLaunchVisibility()
+        guard !Task.isCancelled, phase == .preparingAuthenticated else { return }
+        let queuedSelection = lastSelectedSessionId
+        phase = .authenticated
+        logDestination("authenticated source=\(source)")
+
+        // A deep link may have arrived while only the gate existed. Keep Chat
+        // unmounted during preparation, then deliver the queued navigation once
+        // the authenticated shell owns a stable first frame.
+        if let queuedSelection {
+            await Task.yield()
+            NotificationCenter.default.post(
+                name: .macSelectSession,
+                object: nil,
+                userInfo: ["sessionId": queuedSelection]
+            )
+        }
+    }
+
+    private func waitForMinimumLaunchVisibility() async {
+        let startedAt = launchStartedAt ?? Date()
         #if DEBUG
         let minimumVisibleSeconds = ProcessInfo.processInfo.environment["KRAKI_MAC_LAUNCH_MIN_MS"]
             .flatMap(Double.init)
@@ -103,19 +183,14 @@ final class MacLaunchCoordinator {
         #endif
         let remaining = minimumVisibleSeconds - Date().timeIntervalSince(startedAt)
         if remaining > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            try? await Task.sleep(for: .seconds(remaining))
         }
-        guard !Task.isCancelled else {
-            // Closing the only window can cancel its SwiftUI `.task` while the
-            // menu-bar process stays alive. Permit the warm reopen to bootstrap
-            // again instead of leaving the process permanently on Launch.
-            hasStarted = false
-            return
-        }
-        phase = canEnterAuthenticatedRoot ? .authenticated : .signedOut
-        let elapsedMs = Date().timeIntervalSince(startedAt) * 1_000
+    }
+
+    private func logDestination(_ destination: String) {
+        let elapsedMs = launchStartedAt.map { Date().timeIntervalSince($0) * 1_000 } ?? 0
         KLog.diag(
-            "[MacLaunch] destination=\(canEnterAuthenticatedRoot ? "authenticated" : "signedOut") "
+            "[MacLaunch] destination=\(destination) "
                 + String(format: "elapsedMs=%.1f", elapsedMs)
         )
     }
@@ -132,7 +207,8 @@ final class MacLaunchCoordinator {
             if !usedCLILogin, appState.connectionStatus == .awaitingLogin {
                 appState.connect()
             }
-            phase = .authenticated
+            launchStartedAt = Date()
+            beginPreparingAuthenticatedSurface()
         } else {
             loginCheckFailed = true
         }
@@ -145,10 +221,16 @@ final class MacLaunchCoordinator {
         guard phase != .launching else { return }
         if hasStoredCredentials {
             loginCheckFailed = false
-            phase = .authenticated
-        } else if connectionStatus == .awaitingLogin, phase == .authenticated {
+            if phase == .signedOut {
+                launchStartedAt = Date()
+                beginPreparingAuthenticatedSurface()
+            }
+        } else if connectionStatus == .awaitingLogin,
+                  phase == .authenticated || phase == .preparingAuthenticated {
             // Explicit logout or a failed first authentication returns to the
             // shared entry gate and drops process-local navigation state.
+            presentationWatchdogTask?.cancel()
+            presentationWatchdogTask = nil
             lastSelectedSessionId = nil
             phase = .signedOut
         }
@@ -268,7 +350,7 @@ struct MacApp: App {
                 // window, while the zoom divides the true window size.
                 .windowZoom()
                 .frame(minWidth: 800, idealWidth: 1100, minHeight: 600, idealHeight: 720)
-                .animation(.easeInOut(duration: 0.16), value: launchCoordinator.phase)
+                .animation(.easeInOut(duration: 0.16), value: launchCoordinator.isLaunchGateVisible)
                 .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
                     // Explicit user/deep-link navigation is allowed to cross the
                     // cold-launch gate. Scenario-window notifications are scoped
@@ -391,17 +473,37 @@ struct MacApp: App {
     @ViewBuilder
     private var productionRoot: some View {
         switch launchCoordinator.phase {
-        case .launching:
-            MacEntryGateView(mode: .launching)
-                .transition(.opacity)
-        case .authenticated:
-            MainWindowView(
-                initialSelectedSessionId: launchCoordinator.lastSelectedSessionId,
-                onSelectedSessionChanged: { sessionId in
-                    launchCoordinator.recordSelectedSession(sessionId)
+        case .launching, .preparingAuthenticated, .authenticated:
+            ZStack {
+                if launchCoordinator.phase != .launching {
+                    MainWindowView(
+                        // A cold-launch deep link remains queued until the shell's
+                        // first frame is ready, so Chat/Composer never mount behind
+                        // the launch gate. Warm reopen still restores immediately.
+                        initialSelectedSessionId: launchCoordinator.phase == .authenticated
+                            ? launchCoordinator.lastSelectedSessionId
+                            : nil,
+                        onSelectedSessionChanged: { sessionId in
+                            launchCoordinator.recordSelectedSession(sessionId)
+                        }
+                    )
+                    .allowsHitTesting(launchCoordinator.phase == .authenticated)
+                    .accessibilityHidden(launchCoordinator.phase != .authenticated)
+                    .background(
+                        MacLaunchPresentationReadyProbe {
+                            Task {
+                                await launchCoordinator.authenticatedSurfaceDidPresent()
+                            }
+                        }
+                    )
                 }
-            )
-            .transition(.opacity)
+
+                if launchCoordinator.isLaunchGateVisible {
+                    MacEntryGateView(mode: .launching)
+                        .transition(.opacity)
+                        .zIndex(10)
+                }
+            }
         case .signedOut:
             LoginView(
                 isCheckingCredentials: launchCoordinator.isCheckingCredentials,
@@ -413,6 +515,47 @@ struct MacApp: App {
                 }
             )
             .transition(.opacity)
+        }
+    }
+}
+
+/// Signals only after the authenticated AppKit surface is attached and has
+/// completed a real window layout pass. Keeping the launch gate above that work
+/// prevents the user from seeing a half-materialized Sidebar followed by a
+/// blocked frame.
+private struct MacLaunchPresentationReadyProbe: NSViewRepresentable {
+    let onReady: () -> Void
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.onReady = onReady
+        return view
+    }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.onReady = onReady
+        nsView.signalWhenReady()
+    }
+
+    final class ProbeView: NSView {
+        var onReady: (() -> Void)?
+        private var didSignal = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            signalWhenReady()
+        }
+
+        func signalWhenReady() {
+            guard window != nil, !didSignal else { return }
+            didSignal = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.window?.contentView?.layoutSubtreeIfNeeded()
+                DispatchQueue.main.async { [weak self] in
+                    self?.onReady?()
+                }
+            }
         }
     }
 }

@@ -625,19 +625,18 @@ final class MessageRouter {
             KLog.d("    [\(i)] \(pin) id=\(d.id) lastSeq=\(d.lastSeq) readSeq=\(d.readSeq) mode=\(d.mode.rawValue) agent=\(d.agent) model=\(d.model ?? "nil") state=\(d.state.rawValue) msgCount=\(d.messageCount) \(title) \(prev) \(usage)")
         }
 
-        // Remove sessions from this tentacle that are no longer in the list
-        let tentacleIds = Set(parsed.map(\.id))
-        for (sid, session) in appState.sessionStore.sessions {
-            if session.deviceId == tentacleDeviceId && !tentacleIds.contains(sid) {
-                appState.sessionStore.removeSession(sid)
-                appState.messageStore.clearRuntimeStatus(sid)
-                appState.messageStore.clearCard(sid)
-            }
+        let reconcileStartedAt = Date()
+        let removedSessionIDs = appState.sessionStore.reconcileSessionList(
+            parsed,
+            deviceId: tentacleDeviceId,
+            deviceName: deviceName
+        )
+        for sid in removedSessionIDs {
+            appState.messageStore.clearRuntimeStatus(sid)
+            appState.messageStore.clearCard(sid)
         }
 
         for digest in parsed {
-            appState.sessionStore.upsertSession(digest, deviceId: tentacleDeviceId, deviceName: deviceName)
-
             // Runtime status is ephemeral and the producer is authoritative.
             // Active live-card state is restored only by the current session's
             // subscription ACK; do not pull every active session via the legacy
@@ -660,19 +659,8 @@ final class MessageRouter {
                 appState.messageStore.endCardTurn(digest.id)
             }
 
-            // Sync mode
-            appState.sessionStore.setMode(digest.id, digest.mode)
-
-            // Sync usage
-            if let usage = digest.usage {
-                appState.sessionStore.setUsage(digest.id, usage)
-            }
-
-            // Sync pin
-            appState.sessionStore.setPinned(digest.id, digest.pinned ?? false)
-
-            // `upsertSession` has already applied Tentacle's authoritative
-            // last/read cursors. Local history never overrides them.
+            // `reconcileSessionList` already applied Tentacle's authoritative
+            // metadata and cursor pairs. Local history never overrides them.
 
             // Store tentacle info so any later replay request can be
             // routed to the right producer device.
@@ -682,6 +670,11 @@ final class MessageRouter {
                 deviceId: tentacleDeviceId
             )
         }
+        let reconcileMs = Date().timeIntervalSince(reconcileStartedAt) * 1_000
+        KLog.diag(
+            "[SessionList] reconciled count=\(parsed.count) removed=\(removedSessionIDs.count) "
+                + String(format: "elapsedMs=%.1f", reconcileMs)
+        )
 
         if let activeId = appState.sessionStore.activeSessionId,
            let active = appState.sessionStore.sessions[activeId] {

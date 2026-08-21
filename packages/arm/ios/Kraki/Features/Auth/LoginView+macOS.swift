@@ -1,8 +1,10 @@
 /// Shared macOS entry gate for cold launch and signed-out states.
 ///
-/// Both modes own the full window surface and are selected above
-/// MainWindowView, so Sidebar, Chat, Composer, CoreText cells, and restored
-/// Session state are never mounted behind them.
+/// Signed Out owns the full window surface without mounting authenticated UI.
+/// During authenticated cold launch, the shell may be staged underneath this
+/// gate for one window-backed layout pass; Session navigation remains queued,
+/// so Chat, Composer, CoreText cells, and restored Session state do not mount
+/// before the gate leaves.
 
 #if os(macOS)
 import AppKit

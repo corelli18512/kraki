@@ -218,6 +218,11 @@ final class SessionStore {
     /// toggles, transient streaming state, etc. — see KLog dump in
     /// PID 52588: 3 flushes of identical 69550 bytes within 9s).
     private var lastFlushedHash: Int?
+    #if DEBUG
+    /// Regression hook: authoritative session-list reconciliation must schedule
+    /// exactly one snapshot, regardless of how many Sessions it contains.
+    private(set) var snapshotScheduleCountForTesting = 0
+    #endif
 
     private static let snapshotURL: URL = {
         KrakiDataPaths.persistentDirectory()
@@ -256,6 +261,9 @@ final class SessionStore {
     /// disk. Called after any mutation that changes a card-visible field.
     /// Safe to call frequently — the cache coalesces.
     fileprivate func scheduleSave() {
+        #if DEBUG
+        snapshotScheduleCountForTesting += 1
+        #endif
         guard persistenceEnabled else { return }
         // Compacting is runtime-only. Persist the underlying working fallback
         // so a cold launch cannot resurrect stale compaction before the next
@@ -569,6 +577,126 @@ final class SessionStore {
         }
         // Unread is projected from Tentacle's authoritative cursor pair.
         scheduleSave()
+    }
+
+    /// Apply one Tentacle's authoritative `session_list` as a single observable
+    /// transaction. The former router path called `upsertSession`, `setMode`,
+    /// `setUsage`, and `setPinned` for every digest. Each call rebuilt the full
+    /// persistence snapshot and invalidated Sidebar/List projections, turning a
+    /// 200-Session cold reconnect into hundreds of full-dictionary copies and
+    /// visible main-thread stalls.
+    ///
+    /// Sessions owned by other devices are preserved. The returned identities
+    /// are the stale Sessions removed for this Tentacle so the router can clear
+    /// their message-only runtime state after the metadata commit.
+    @discardableResult
+    func reconcileSessionList(
+        _ digests: [SessionDigest],
+        deviceId: String,
+        deviceName: String
+    ) -> Set<String> {
+        let authoritativeIDs = Set(digests.map(\.id))
+        let removedIDs = Set(sessions.values.compactMap { session in
+            session.deviceId == deviceId && !authoritativeIDs.contains(session.id)
+                ? session.id
+                : nil
+        })
+
+        var nextSessions = sessions
+        var nextPinned = pinnedSessions
+        var nextModes = sessionModes
+        var nextUsage = sessionUsage
+        var nextPreviews = sessionPreviews
+        var nextDrafts = drafts
+        var nextAutoReadSuppressed = autoReadSuppressedSessions
+
+        for id in removedIDs {
+            nextSessions.removeValue(forKey: id)
+            nextPinned.remove(id)
+            nextModes.removeValue(forKey: id)
+            nextUsage.removeValue(forKey: id)
+            nextPreviews.removeValue(forKey: id)
+            nextDrafts.removeValue(forKey: id)
+            nextAutoReadSuppressed.remove(id)
+        }
+
+        for digest in digests {
+            let date = ISO8601.parse(digest.createdAt) ?? Date()
+            // The router's previous upsert + setPinned sequence treated an
+            // omitted authoritative pin as false. Preserve that wire behavior.
+            let pinned = digest.pinned ?? false
+            let lastSeq = max(0, digest.lastSeq)
+            let readSeq = min(max(0, digest.readSeq), lastSeq)
+
+            if var existing = nextSessions[digest.id] {
+                let previousReadSeq = existing.readSeq
+                existing.deviceId = deviceId
+                existing.deviceName = deviceName
+                existing.agent = digest.agent
+                existing.model = digest.model
+                existing.title = digest.title
+                existing.autoTitle = digest.autoTitle
+                existing.state = digest.state
+                existing.mode = digest.mode
+                existing.lastSeq = lastSeq
+                existing.readSeq = readSeq
+                existing.messageCount = digest.messageCount
+                existing.usage = digest.usage
+                existing.pinned = pinned
+                nextSessions[digest.id] = existing
+
+                if readSeq < previousReadSeq && readSeq < lastSeq {
+                    nextAutoReadSuppressed.insert(digest.id)
+                } else if readSeq >= lastSeq {
+                    nextAutoReadSuppressed.remove(digest.id)
+                }
+            } else {
+                nextSessions[digest.id] = SessionInfo(
+                    id: digest.id,
+                    deviceId: deviceId,
+                    deviceName: deviceName,
+                    agent: digest.agent,
+                    model: digest.model,
+                    title: digest.title,
+                    autoTitle: digest.autoTitle,
+                    state: digest.state,
+                    mode: digest.mode,
+                    lastSeq: lastSeq,
+                    readSeq: readSeq,
+                    messageCount: digest.messageCount,
+                    createdAt: date,
+                    usage: digest.usage,
+                    pinned: pinned,
+                    currentToolName: nil,
+                    currentToolHeadline: nil
+                )
+            }
+
+            nextModes[digest.id] = digest.mode
+            if let usage = digest.usage {
+                nextUsage[digest.id] = usage
+            }
+            if let preview = digest.preview {
+                nextPreviews[digest.id] = preview
+            } else {
+                nextPreviews.removeValue(forKey: digest.id)
+            }
+            if pinned {
+                nextPinned.insert(digest.id)
+            } else {
+                nextPinned.remove(digest.id)
+            }
+        }
+
+        sessions = nextSessions
+        pinnedSessions = nextPinned
+        sessionModes = nextModes
+        sessionUsage = nextUsage
+        sessionPreviews = nextPreviews
+        drafts = nextDrafts
+        autoReadSuppressedSessions = nextAutoReadSuppressed
+        scheduleSave()
+        return removedIDs
     }
 
     func removeSession(_ id: String) {
@@ -903,8 +1031,6 @@ final class SessionStore {
 
     /// Sync sessions from a parsed session list.
     func syncSessions(_ summaries: [SessionDigest], deviceId: String = "", deviceName: String = "") {
-        for digest in summaries {
-            upsertSession(digest, deviceId: deviceId, deviceName: deviceName)
-        }
+        reconcileSessionList(summaries, deviceId: deviceId, deviceName: deviceName)
     }
 }
