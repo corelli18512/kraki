@@ -62,7 +62,7 @@ struct MacEntryGateView: View {
         Image("KrakiLogo")
             .resizable()
             .interpolation(.high)
-            .frame(width: 112, height: 112)
+            .frame(width: 176, height: 176)
             .accessibilityLabel("Kraki")
     }
 
