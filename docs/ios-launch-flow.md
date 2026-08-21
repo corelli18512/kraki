@@ -7,7 +7,7 @@ Kraki iOS uses two launch surfaces:
 
 ## Returning authenticated user
 
-1. `RootView` starts in `IOSLaunchCoordinator.Phase.launching` and paints the branded entry gate.
+1. `RootView` starts in `IOSLaunchCoordinator.Phase.launching` and paints a minimal entry gate containing only the current theme background and centered Kraki logo.
 2. The initial Relay connection starts behind the gate. Network readiness does not control whether cached UI can eventually open.
 3. `MainTabView` mounts underneath the gate with notification/deep-link navigation disabled.
 4. `IOSLaunchPresentationReadyProbe` waits until the UIKit hierarchy is attached to a real `UIWindow`, forces its first layout pass, and reports on the following main-run-loop turn.

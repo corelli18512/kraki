@@ -25,30 +25,59 @@ struct MacEntryGateView: View {
     var onRetry: () -> Void = {}
 
     @State private var appeared = false
-    @State private var showDelayedLaunchStatus = false
 
     var body: some View {
-        ZStack {
-            Color.surfacePrimary
+        Group {
+            switch mode {
+            case .launching:
+                ZStack {
+                    Color.surfacePrimary
+                    launchLogo
+                }
                 .ignoresSafeArea()
+            case .signedOut:
+                ZStack {
+                    Color.surfacePrimary
+                        .ignoresSafeArea()
+                    signedOutContent
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier(mode == .launching ? "mac.entry.launching" : "mac.entry.signedOut")
+        .accessibilityElement(children: .contain)
+        .task(id: mode) {
+            guard mode == .signedOut, !appeared else { return }
+            if reduceMotion {
+                appeared = true
+            } else {
+                withAnimation(.easeOut(duration: 0.24)) {
+                    appeared = true
+                }
+            }
+        }
+    }
 
+    private var launchLogo: some View {
+        Image("KrakiLogo")
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 112, height: 112)
+            .accessibilityLabel("Kraki")
+    }
+
+    private var signedOutContent: some View {
+        ZStack {
             entryBackdrop
 
             VStack(spacing: 0) {
                 Spacer(minLength: 48)
 
-                sharedBrand
+                signedOutBrand
 
-                Group {
-                    switch mode {
-                    case .launching:
-                        launchStatus
-                    case .signedOut:
-                        signedOutActions
-                    }
-                }
-                .frame(maxWidth: 420, minHeight: 210, alignment: .top)
-                .padding(.top, 24)
+                signedOutActions
+                    .frame(maxWidth: 420, minHeight: 210, alignment: .top)
+                    .padding(.top, 24)
 
                 Spacer(minLength: 36)
 
@@ -57,28 +86,6 @@ struct MacEntryGateView: View {
             }
             .padding(.horizontal, 48)
             .padding(.vertical, 34)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier(mode == .launching ? "mac.entry.launching" : "mac.entry.signedOut")
-        .accessibilityElement(children: .contain)
-        .task(id: mode) {
-            if !appeared {
-                if reduceMotion {
-                    appeared = true
-                } else {
-                    withAnimation(.easeOut(duration: 0.24)) {
-                        appeared = true
-                    }
-                }
-            }
-
-            showDelayedLaunchStatus = false
-            guard mode == .launching else { return }
-            try? await Task.sleep(for: .milliseconds(550))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.16)) {
-                showDelayedLaunchStatus = true
-            }
         }
     }
 
@@ -100,7 +107,7 @@ struct MacEntryGateView: View {
         .accessibilityHidden(true)
     }
 
-    private var sharedBrand: some View {
+    private var signedOutBrand: some View {
         VStack(spacing: 16) {
             Image("KrakiLogo")
                 .resizable()
@@ -117,33 +124,13 @@ struct MacEntryGateView: View {
                     .tracking(4.2)
                     .foregroundStyle(Color.textTitle)
 
-                Text(mode == .launching ? "Your coding sessions, ready when you are." : "Connect this Mac to your relay")
+                Text("Connect this Mac to your relay")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
             }
             .opacity(appeared ? 1 : 0)
             .offset(y: appeared ? 0 : 5)
-        }
-    }
-
-    @ViewBuilder
-    private var launchStatus: some View {
-        if showDelayedLaunchStatus {
-            HStack(spacing: 9) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Opening Kraki…")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Color.textMuted)
-            }
-            .padding(.top, 18)
-            .transition(.opacity)
-            .accessibilityLabel("Opening Kraki")
-        } else {
-            Color.clear
-                .frame(height: 42)
-                .accessibilityHidden(true)
         }
     }
 
