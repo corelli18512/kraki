@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.21</title>
+            <pubDate>Fri, 21 Aug 2026 14:52:51 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.21</sparkle:fullReleaseNotesLink>
+            <sparkle:version>23</sparkle:version>
+            <sparkle:shortVersionString>0.2.21</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(native): enlarge launch screen logo by @corelli18512 in https://github.com/corelli18512/kraki/pull/264
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.20...mac-v0.2.21
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.21/Kraki.app.zip" length="8129990" type="application/octet-stream" sparkle:edSignature="i4z7fnb8LgOtYyILTZoE+SQmd1KqKcuqP6uiY5oBLth3X8QOOa1HsC4iWbtcGL+LSo8ZHb1vJV5VhTXVCoXjDw=="/>
+        </item>
+        <item>
             <title>0.2.20</title>
             <pubDate>Fri, 21 Aug 2026 13:48:02 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -38,25 +54,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.19/Kraki.app.zip" length="8130855" type="application/octet-stream" sparkle:edSignature="INjQMQznEJJJupDX9uEbUyinXTLHx/PPkFUVqmJXU91cV/kEOMxAXn28tcEjSlivKSagH+uGc9XTzo/RmrenBA=="/>
         </item>
-        <item>
-            <title>0.2.18</title>
-            <pubDate>Tue, 18 Aug 2026 12:36:51 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.18</sparkle:fullReleaseNotesLink>
-            <sparkle:version>20</sparkle:version>
-            <sparkle:shortVersionString>0.2.18</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): make Compacting status glyph visibly animate by @corelli18512 in https://github.com/corelli18512/kraki/pull/261
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.17...mac-v0.2.18
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.18/Kraki.app.zip" length="8108701" type="application/octet-stream" sparkle:edSignature="hOdqYKbsM7/LoQjQMxxb2GTMVlOKDXYD8j9Fl/agOlhzsReDX6WreDWDbK0XkfGAkZbOePZIpGXro/FLf9UNBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: S4UU/GWrjO+0TRPUJlai8uHj40sHnmTIITtKTqkQxEED/Kg3m6kI3TKNGziC+/SRyjdNAQ2I9N+HcKWrPWsGDQ==
-length: 3833
+edSignature: moH91XE4p8XMdrR+Fo3TTY9BD2lUfjAjlurMHbxHcfiujbww/+pPVy8nfxZ97PKwyWjeJzNXI79zxn/0sAo2DA==
+length: 3818
 -->
