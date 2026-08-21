@@ -224,102 +224,22 @@ struct RootView: View {
     }
 }
 
-/// In-app continuation of the system launch screen. It intentionally matches
-/// the Mac brand shell while adapting spacing and scale for an iPhone viewport.
+/// Minimal in-app continuation of the system launch screen: the current
+/// theme surface with only the centered Kraki logo.
 struct IOSEntryGateView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
-    @State private var showDelayedLaunchStatus = false
-
     var body: some View {
         ZStack {
             Color.surfacePrimary
-                .ignoresSafeArea()
 
-            ZStack {
-                Circle()
-                    .fill(Color.krakiPrimary.opacity(0.10))
-                    .frame(width: 360, height: 360)
-                    .blur(radius: 68)
-                    .offset(x: 150, y: -240)
-
-                Circle()
-                    .fill(Color.cyan.opacity(0.06))
-                    .frame(width: 320, height: 320)
-                    .blur(radius: 76)
-                    .offset(x: -170, y: 260)
-            }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-
-            VStack(spacing: 0) {
-                Spacer(minLength: 72)
-
-                VStack(spacing: 16) {
-                    Image("KrakiLogo")
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 108, height: 108)
-                        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                        .shadow(color: Color.black.opacity(0.22), radius: 24, y: 12)
-                        .scaleEffect(appeared ? 1 : 0.97)
-                        .opacity(appeared ? 1 : 0)
-
-                    VStack(spacing: 6) {
-                        Text("KRAKI")
-                            .font(.system(size: 23, weight: .heavy, design: .monospaced))
-                            .tracking(4.0)
-                            .foregroundStyle(Color.textTitle)
-
-                        Text("Your coding sessions, ready when you are.")
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(Color.textSecondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .opacity(appeared ? 1 : 0)
-                    .offset(y: appeared ? 0 : 5)
-                }
-
-                Group {
-                    if showDelayedLaunchStatus {
-                        HStack(spacing: 9) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Opening Kraki…")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .foregroundStyle(Color.textMuted)
-                        }
-                        .transition(.opacity)
-                        .accessibilityLabel("Opening Kraki")
-                    } else {
-                        Color.clear
-                    }
-                }
-                .frame(height: 54)
-                .padding(.top, 20)
-
-                Spacer(minLength: 48)
-            }
-            .padding(.horizontal, 36)
+            Image("KrakiLogo")
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 108, height: 108)
+                .accessibilityLabel("Kraki")
         }
+        .ignoresSafeArea()
         .accessibilityIdentifier("ios.entry.launching")
         .accessibilityElement(children: .contain)
-        .task {
-            if reduceMotion {
-                appeared = true
-            } else {
-                withAnimation(.easeOut(duration: 0.24)) {
-                    appeared = true
-                }
-            }
-
-            showDelayedLaunchStatus = false
-            try? await Task.sleep(for: .milliseconds(550))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.16)) {
-                showDelayedLaunchStatus = true
-            }
-        }
     }
 }
 

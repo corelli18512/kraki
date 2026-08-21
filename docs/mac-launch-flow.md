@@ -8,7 +8,7 @@ The production main scene is a single `Window(id: "main")`, not a `WindowGroup`.
 
 ### Cold process launch
 
-1. Show the Kraki launch gate immediately.
+1. Show the minimal Kraki launch gate immediately: the current theme background with only a centered Kraki logo.
 2. Resolve local CLI/stored credential availability behind the gate.
 3. For an authenticated launch, mount `MainWindowView` underneath the gate with no Session selected.
 4. Keep Session/deep-link navigation queued while an AppKit probe completes the shell's first window-backed layout pass.
@@ -24,7 +24,7 @@ When the process is still running in the menu bar, reopening the main window res
 
 ### Signed out
 
-Launch and Signed Out use the same brand shell. Signed Out replaces the launch status with:
+Launch and Signed Out share the same theme surface but intentionally have different content. Launch contains only the centered logo; Signed Out adds:
 
 - the `kraki connect` command and a native Copy action;
 - a `Check Again` action;
