@@ -4,6 +4,7 @@ import SwiftUI
 /// Root tab bar — mirrors the web Sidebar's mobile navigation tabs.
 struct MainTabView: View {
     @Environment(AppState.self) private var appState
+    let allowsInitialNavigation: Bool
     @State private var sessionPath = NavigationPath()
     @State private var devicePath = NavigationPath()
     @State private var selectedTab: Int = 0
@@ -23,28 +24,28 @@ struct MainTabView: View {
                 .environment(appState)
         }
         .onChange(of: appState.sessionStore.navigateToSession) { _, _ in
+            guard allowsInitialNavigation else { return }
             consumePendingSessionNavigation()
         }
         .onAppear {
             // A notification can launch the process before MainTabView exists.
-            // Consume the already-populated route as well as later changes.
+            // Keep it queued while the launch overlay prepares the Sessions
+            // shell, then consume it only after the first stable frame.
+            guard allowsInitialNavigation else { return }
             consumePendingSessionNavigation()
+            consumePendingDeviceNavigation()
+        }
+        .onChange(of: allowsInitialNavigation) { _, allowed in
+            guard allowed else { return }
+            consumePendingSessionNavigation()
+            consumePendingDeviceNavigation()
         }
         .onChange(of: appState.sessionStore.unreadSessionIDs, initial: true) { _, ids in
             appState.pushManager?.syncApplicationBadge(unreadSessionIDs: ids)
         }
-        .onChange(of: appState.deviceStore.navigateToDeviceId) { _, target in
-            guard let target else { return }
-            // Switch to Devices tab and push the requested device detail.
-            // Also pop the session navigation stack so when the user
-            // taps back to the Sessions tab they land on the list, not
-            // on the chat they were viewing.
-            selectedTab = 1
-            sessionPath = NavigationPath()
-            devicePath = NavigationPath()
-            devicePath.append(DeviceNavID(id: target))
-            // Clear so it can fire again next time.
-            appState.deviceStore.navigateToDeviceId = nil
+        .onChange(of: appState.deviceStore.navigateToDeviceId) { _, _ in
+            guard allowsInitialNavigation else { return }
+            consumePendingDeviceNavigation()
         }
         .onChange(of: appState.sessionStore.popToSessionListSignal) { _, _ in
             // A session was deleted while the user was viewing it.
@@ -54,8 +55,9 @@ struct MainTabView: View {
             sessionPath = NavigationPath()
         }
         #if DEBUG
-        .task {
-            guard let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
+        .task(id: allowsInitialNavigation) {
+            guard allowsInitialNavigation,
+                  let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
                   !target.isEmpty else { return }
             // Pairing/auth and session_list are asynchronous. Wait until the
             // requested session exists, then drive the normal navigation path.
@@ -78,6 +80,18 @@ struct MainTabView: View {
         sessionPath = NavigationPath()
         sessionPath.append(SessionNavID(id: target))
         appState.sessionStore.navigateToSession = nil
+    }
+
+    private func consumePendingDeviceNavigation() {
+        guard let target = appState.deviceStore.navigateToDeviceId else { return }
+        // Switch to Devices and push only after launch preparation. This keeps
+        // a notification-created detail hierarchy from materializing behind the
+        // cold-launch gate.
+        selectedTab = 1
+        sessionPath = NavigationPath()
+        devicePath = NavigationPath()
+        devicePath.append(DeviceNavID(id: target))
+        appState.deviceStore.navigateToDeviceId = nil
     }
 
     // MARK: - Sub-views (shared)

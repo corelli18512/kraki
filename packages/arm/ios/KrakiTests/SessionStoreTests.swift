@@ -74,6 +74,88 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["sess-1"]?.lastSeq, 20)
     }
 
+    func testReconcileSessionListIsAtomicAndDeviceScoped() {
+        store.upsertSession(
+            makeDigest(id: "keep", lastSeq: 10, readSeq: 10, pinned: true),
+            deviceId: "dev-a",
+            deviceName: "Old Mac"
+        )
+        store.upsertSession(
+            makeDigest(id: "stale", pinned: true),
+            deviceId: "dev-a",
+            deviceName: "Old Mac"
+        )
+        store.upsertSession(
+            makeDigest(id: "other"),
+            deviceId: "dev-b",
+            deviceName: "Server"
+        )
+        store.setPreview("stale", text: "stale preview")
+        store.setDraft("stale", "unsent draft")
+
+        var keep = makeDigest(
+            id: "keep",
+            state: .idle,
+            mode: .safe,
+            lastSeq: 20,
+            readSeq: 9,
+            pinned: false
+        )
+        keep.preview = SessionPreview(
+            text: "authoritative preview",
+            type: "agent",
+            timestamp: "2024-01-02T00:00:00.000Z"
+        )
+        let added = makeDigest(
+            id: "added",
+            state: .active,
+            mode: .execute,
+            lastSeq: 3,
+            readSeq: 3,
+            pinned: nil
+        )
+        let schedulesBefore = store.snapshotScheduleCountForTesting
+
+        let removed = store.reconcileSessionList(
+            [keep, added],
+            deviceId: "dev-a",
+            deviceName: "MacBook Pro"
+        )
+
+        XCTAssertEqual(removed, Set(["stale"]))
+        XCTAssertNil(store.sessions["stale"])
+        XCTAssertNil(store.sessionPreviews["stale"])
+        XCTAssertNil(store.drafts["stale"])
+        XCTAssertNotNil(store.sessions["other"], "another device's Sessions must survive")
+        XCTAssertEqual(store.sessions["keep"]?.deviceName, "MacBook Pro")
+        XCTAssertEqual(store.sessions["keep"]?.mode, .safe)
+        XCTAssertEqual(store.sessions["keep"]?.lastSeq, 20)
+        XCTAssertEqual(store.sessions["keep"]?.readSeq, 9)
+        XCTAssertEqual(store.sessions["keep"]?.pinned, false)
+        XCTAssertTrue(store.isAutoReadSuppressed("keep"))
+        XCTAssertEqual(store.sessionPreviews["keep"]?.text, "authoritative preview")
+        XCTAssertEqual(store.sessions["added"]?.readSeq, 3)
+        XCTAssertFalse(store.pinnedSessions.contains("added"))
+        XCTAssertEqual(store.snapshotScheduleCountForTesting, schedulesBefore + 1)
+    }
+
+    func testLargeSessionListSchedulesOneSnapshot() {
+        let digests = (0..<500).map { index in
+            makeDigest(
+                id: "session-\(index)",
+                lastSeq: index,
+                readSeq: index,
+                pinned: index.isMultiple(of: 7)
+            )
+        }
+        let schedulesBefore = store.snapshotScheduleCountForTesting
+
+        store.reconcileSessionList(digests, deviceId: "dev-a", deviceName: "MacBook")
+
+        XCTAssertEqual(store.sessions.count, 500)
+        XCTAssertEqual(store.snapshotScheduleCountForTesting, schedulesBefore + 1)
+    }
+
     // MARK: - Remove
 
     func testRemoveSession() {
@@ -451,5 +533,70 @@ final class SessionStoreTests: XCTestCase {
         let digest = makeDigest(lastSeq: 10, readSeq: 5)
         store.upsertSession(digest, deviceId: "d", deviceName: "n")
         XCTAssertEqual(store.unreadCounts["sess-1"], 1)
+    }
+
+    // MARK: - iOS cold-launch gate
+
+    @MainActor
+    func testIOSLaunchGateWaitsForAuthenticatedSurfacePresentation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-launch-gate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(
+            databaseURL: root.appendingPathComponent("messages.sqlite")
+        )
+        let app = AppState(testDatabase: database)
+        let coordinator = IOSLaunchCoordinator(minimumVisibleSecondsOverride: 0)
+
+        await coordinator.bootstrap(appState: app)
+        XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
+        XCTAssertTrue(coordinator.isLaunchGateVisible)
+
+        await coordinator.authenticatedSurfaceDidPresent()
+        XCTAssertEqual(coordinator.phase, .authenticated)
+        XCTAssertFalse(coordinator.isLaunchGateVisible)
+    }
+
+    @MainActor
+    func testIOSLaunchGateHasBoundedPresentationFallback() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-launch-watchdog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(
+            databaseURL: root.appendingPathComponent("messages.sqlite")
+        )
+        let app = AppState(testDatabase: database)
+        let coordinator = IOSLaunchCoordinator(
+            minimumVisibleSecondsOverride: 0,
+            presentationWatchdogSecondsOverride: 0.01
+        )
+
+        await coordinator.bootstrap(appState: app)
+        XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(coordinator.phase, .authenticated)
+        XCTAssertFalse(coordinator.isLaunchGateVisible)
+    }
+
+    @MainActor
+    func testIOSLaunchGateRoutesSignedOutWithoutMountingMainSurface() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-launch-signed-out-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(
+            databaseURL: root.appendingPathComponent("messages.sqlite")
+        )
+        let app = AppState(testDatabase: database)
+        app.hasStoredCredentials = false
+        let coordinator = IOSLaunchCoordinator(minimumVisibleSecondsOverride: 0)
+
+        await coordinator.bootstrap(appState: app)
+
+        XCTAssertEqual(coordinator.phase, .signedOut)
+        XCTAssertFalse(coordinator.isLaunchGateVisible)
     }
 }

@@ -5,6 +5,7 @@ import SwiftUI
 struct KrakiApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appState: AppState
+    @State private var launchCoordinator = IOSLaunchCoordinator()
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
     @Environment(\.scenePhase) private var scenePhase
     private let alignmentPreviewEnabled: Bool
@@ -38,23 +39,14 @@ struct KrakiApp: App {
                 } else if clientAlignmentPreviewEnabled {
                     IOSClientAlignmentPreview()
                 } else {
-                    RootView()
+                    RootView(launchCoordinator: launchCoordinator)
                         .onAppear {
                             // Wire PushManager so AppDelegate (no SwiftUI env) can reach it.
                             AppDelegate.pushManager = appState.pushManager
                             Task { await appState.pushManager?.refreshPermissionStatus() }
-
-                            if appState.connectionStatus == .awaitingLogin {
-                                // Open the WS so we can request auth_info; the
-                                // server's response unlocks the GitHub OAuth
-                                // button on the login screen. No credentials
-                                // are sent here — `bootstrapAuth` decides what
-                                // to do once the socket is up. Debug builds get
-                                // the same prod-default; the "Dev Login
-                                // (localhost)" button on LoginView is the
-                                // explicit opt-in path to the local relay.
-                                appState.connect()
-                            }
+                            // RootView's process-scoped launch coordinator owns
+                            // the initial connect so network/auth work starts
+                            // behind the in-app launch gate exactly once.
                         }
                         .onChange(of: scenePhase) {
                             switch scenePhase {
@@ -79,11 +71,12 @@ struct KrakiApp: App {
                         }
                 }
                 #else
-                RootView()
+                RootView(launchCoordinator: launchCoordinator)
                     .onAppear {
                         AppDelegate.pushManager = appState.pushManager
                         Task { await appState.pushManager?.refreshPermissionStatus() }
-                        if appState.connectionStatus == .awaitingLogin { appState.connect() }
+                        // RootView starts the first connection behind the
+                        // process-scoped launch gate.
                     }
                     .onChange(of: scenePhase) {
                         switch scenePhase {
