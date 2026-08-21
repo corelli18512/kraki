@@ -234,7 +234,7 @@ struct IOSEntryGateView: View {
             Image("KrakiLogo")
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 108, height: 108)
+                .frame(width: 156, height: 156)
                 .accessibilityLabel("Kraki")
         }
         .ignoresSafeArea()
