@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.20</title>
+            <pubDate>Fri, 21 Aug 2026 13:48:02 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.20</sparkle:fullReleaseNotesLink>
+            <sparkle:version>22</sparkle:version>
+            <sparkle:shortVersionString>0.2.20</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(native): simplify launch screen branding by @corelli18512 in https://github.com/corelli18512/kraki/pull/263
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.19...mac-v0.2.20
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.20/Kraki.app.zip" length="8130016" type="application/octet-stream" sparkle:edSignature="DuhKf5Q6AXZTgAGqoyKosXOCVsTlogYU/ZB/jzsc1HKa5QB1qI8GUwTvCezS2Y6r9IAk2LRuGPrdVQmiCGifCw=="/>
+        </item>
+        <item>
             <title>0.2.19</title>
             <pubDate>Fri, 21 Aug 2026 12:47:02 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -38,25 +54,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.18/Kraki.app.zip" length="8108701" type="application/octet-stream" sparkle:edSignature="hOdqYKbsM7/LoQjQMxxb2GTMVlOKDXYD8j9Fl/agOlhzsReDX6WreDWDbK0XkfGAkZbOePZIpGXro/FLf9UNBQ=="/>
         </item>
-        <item>
-            <title>0.2.17</title>
-            <pubDate>Tue, 18 Aug 2026 09:14:12 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.17</sparkle:fullReleaseNotesLink>
-            <sparkle:version>19</sparkle:version>
-            <sparkle:shortVersionString>0.2.17</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): keep session activity animation alive and refine status icons by @corelli18512 in https://github.com/corelli18512/kraki/pull/260
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.16...mac-v0.2.17
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.17/Kraki.app.zip" length="8106173" type="application/octet-stream" sparkle:edSignature="VIdxBPU1Mymv9dBypPjSX/ky6PnSBjYU8Rbeqpl6HmHH3U5VAaFHBBGg758tzIvAle/nhXg1BJxfMs96J5qhCw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: STjgThc/IsfI6nMQuMHb48e/+cYOJJJ4pOHBL8esxxCBlenpFlPMksAQDmqfOnxDaqnEhWBRc3ZBftWb+b+tBw==
-length: 3860
+edSignature: S4UU/GWrjO+0TRPUJlai8uHj40sHnmTIITtKTqkQxEED/Kg3m6kI3TKNGziC+/SRyjdNAQ2I9N+HcKWrPWsGDQ==
+length: 3833
 -->
