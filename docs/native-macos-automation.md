@@ -122,6 +122,7 @@ Supported methods:
 - `snapshot`
 - `chatState`
 - `chatLayout`
+- `scrollProductionGate` — Debug-only seven-case scroll reliability gate covering entry, older prepend, discrete wheel controller, precise momentum/watchdog, one-page-per-gesture arming, resize anchor, and top/bottom clamping
 - `pageOlder`
 - `pageNewer`
 - `scrollToBubble`
