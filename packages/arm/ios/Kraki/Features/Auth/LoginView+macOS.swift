@@ -23,6 +23,7 @@ struct MacEntryGateView: View {
     var isCheckingCredentials: Bool = false
     var loginCheckFailed: Bool = false
     var onRetry: () -> Void = {}
+    var onLaunchActivityCommitted: () -> Void = {}
 
     @State private var appeared = false
 
@@ -33,6 +34,17 @@ struct MacEntryGateView: View {
                 ZStack {
                     Color.surfacePrimary
                     launchLogo
+
+                    // Keep the Logo physically centered. The indicator is
+                    // positioned independently below it and does not change
+                    // the Logo's center or the launch-gate layout contract.
+                    MacLaunchActivityIndicator(
+                        reduceMotion: reduceMotion,
+                        onAnimationCommitted: onLaunchActivityCommitted
+                    )
+                    .frame(width: 128, height: 2)
+                    .offset(y: 119)
+                    .accessibilityLabel("Opening Kraki")
                 }
                 .ignoresSafeArea()
             case .signedOut:

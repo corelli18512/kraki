@@ -48,6 +48,7 @@ final class MacLaunchCoordinator {
     @ObservationIgnored private var hasStarted = false
     @ObservationIgnored private var servicesStarted = false
     @ObservationIgnored private var launchStartedAt: Date?
+    @ObservationIgnored private var hasCommittedLaunchActivity = false
     @ObservationIgnored private var isFinishingAuthenticatedSurface = false
     @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
 
@@ -69,6 +70,17 @@ final class MacLaunchCoordinator {
         let startedAt = Date()
         launchStartedAt = startedAt
         KLog.diag("[MacLaunch] gate presented")
+
+        // The launch gate must get one render-server-owned activity frame
+        // before authenticated shell construction can synchronously consume
+        // the main thread. The bounded fallback keeps a missing AppKit callback
+        // from turning this handshake into a new startup deadlock.
+        await waitForLaunchActivityCommit()
+        guard !Task.isCancelled else {
+            hasStarted = false
+            return
+        }
+
         if !servicesStarted {
             servicesStarted = true
             Task { @MainActor in
@@ -124,6 +136,26 @@ final class MacLaunchCoordinator {
             }
             phase = .signedOut
             logDestination("signedOut")
+        }
+    }
+
+    /// Called after the AppKit launch indicator has installed its repeating
+    /// CALayer animation and flushed the first transaction to the render
+    /// server. This is intentionally synchronous and process-scoped: a warm
+    /// window reopen must not wait on a stale view instance.
+    func launchActivityDidCommit() {
+        hasCommittedLaunchActivity = true
+    }
+
+    private func waitForLaunchActivityCommit() async {
+        guard !hasCommittedLaunchActivity else { return }
+        let deadline = Date().addingTimeInterval(0.35)
+        while !hasCommittedLaunchActivity, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(8))
+            if Task.isCancelled { return }
+        }
+        if !hasCommittedLaunchActivity {
+            KLog.diag("[MacLaunch] activity commit watchdog fired")
         }
     }
 
@@ -499,7 +531,12 @@ struct MacApp: App {
                 }
 
                 if launchCoordinator.isLaunchGateVisible {
-                    MacEntryGateView(mode: .launching)
+                    MacEntryGateView(
+                        mode: .launching,
+                        onLaunchActivityCommitted: {
+                            launchCoordinator.launchActivityDidCommit()
+                        }
+                    )
                         .transition(.opacity)
                         .zIndex(10)
                 }
