@@ -2593,8 +2593,13 @@ final class MacChatScrollView: MacSmoothScrollView {
     override func scrollWheel(with event: NSEvent) {
         geometryAnchorLock = nil
         hasUserScrolled = true
+        // Arm older pagination once per gesture, not once per momentum packet.
+        // Re-arming every precise delta lets one fast trackpad flick consume
+        // page after page as each prepend completes, which looks like the Chat
+        // jumped straight to the top after entering a Session.
+        let startsDirectGesture = !isScrollInteractionActive
         if event.scrollingDeltaY > 0.01 {
-            olderEdgeArmed = true
+            if startsDirectGesture { olderEdgeArmed = true }
         } else if event.scrollingDeltaY < -0.01 {
             suppressNewerPagingAfterOlder = false
         }
