@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.22</title>
+            <pubDate>Sat, 22 Aug 2026 06:59:56 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.22</sparkle:fullReleaseNotesLink>
+            <sparkle:version>24</sparkle:version>
+            <sparkle:shortVersionString>0.2.22</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(mac): expose session thinking controls by @corelli18512 in https://github.com/corelli18512/kraki/pull/265
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.21...mac-v0.2.22
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.22/Kraki.app.zip" length="8145741" type="application/octet-stream" sparkle:edSignature="ZWBWhm2VCJ98P1kduxvQ+ece/+iFxF/AQ8rD0Tw8b0NdLRvo05BPu8InUFy3RZguM9jQ52clpJh65NK2baATBg=="/>
+        </item>
+        <item>
             <title>0.2.21</title>
             <pubDate>Fri, 21 Aug 2026 14:52:51 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,26 +53,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.20/Kraki.app.zip" length="8130016" type="application/octet-stream" sparkle:edSignature="DuhKf5Q6AXZTgAGqoyKosXOCVsTlogYU/ZB/jzsc1HKa5QB1qI8GUwTvCezS2Y6r9IAk2LRuGPrdVQmiCGifCw=="/>
         </item>
-        <item>
-            <title>0.2.19</title>
-            <pubDate>Fri, 21 Aug 2026 12:47:02 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.19</sparkle:fullReleaseNotesLink>
-            <sparkle:version>21</sparkle:version>
-            <sparkle:shortVersionString>0.2.19</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(ios): keep large session navigation responsive by @corelli18512 in https://github.com/corelli18512/kraki/pull/255
-* fix(apps): keep cold-launch gates over first layout by @corelli18512 in https://github.com/corelli18512/kraki/pull/262
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.18...mac-v0.2.19
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.19/Kraki.app.zip" length="8130855" type="application/octet-stream" sparkle:edSignature="INjQMQznEJJJupDX9uEbUyinXTLHx/PPkFUVqmJXU91cV/kEOMxAXn28tcEjSlivKSagH+uGc9XTzo/RmrenBA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: moH91XE4p8XMdrR+Fo3TTY9BD2lUfjAjlurMHbxHcfiujbww/+pPVy8nfxZ97PKwyWjeJzNXI79zxn/0sAo2DA==
-length: 3818
+edSignature: 0lCfY5NfO/59IpcsG3bYGm+iRlcRueiQXIZV+tTBTUFwfrhH6S/GyhUo/2osw+MS1VwQRghTtpW6a+W/DwuaCg==
+length: 3689
 -->
