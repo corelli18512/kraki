@@ -62,6 +62,7 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("snapshot")
     sub.add_parser("chat-state")
     sub.add_parser("chat-layout")
+    sub.add_parser("scroll-production-gate")
 
     page_older = sub.add_parser("page-older")
     page_older.add_argument("--session-id")
@@ -152,6 +153,8 @@ def main() -> None:
         method, params = "chatState", {}
     elif command == "chat-layout":
         method, params = "chatLayout", {}
+    elif command == "scroll-production-gate":
+        method, params = "scrollProductionGate", {}
     elif command == "page-older":
         method, params = "pageOlder", compact({"sessionId": args.session_id})
     elif command == "page-newer":
