@@ -2238,7 +2238,7 @@ private extension MacChatScenarioHarness {
             sidebarDraftID,
             category: "Sidebar projection",
             title: "46 · Sidebar · Unsent draft",
-            summary: "Draft text remains stored, [draft] is absent, and only the human icon turns red.",
+            summary: "Draft text remains stored, [draft] is absent, and the draft text plus keyboard icon use a muted red reminder.",
             phases: [phase(
                 "Draft retained",
                 messages: basicConversation(sidebarDraftID, user: "Previous prompt", agent: "Previous response"),

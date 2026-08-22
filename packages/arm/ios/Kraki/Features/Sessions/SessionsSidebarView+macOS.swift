@@ -448,6 +448,10 @@ struct SessionsSidebarView: View {
 // digest-authoritative preview. The leading preview slot is reserved for
 // coarse state only; it never exposes a transient tool or narration.
 
+/// Muted enough for a dark sidebar, but clearly distinct from a sent human
+/// message. Draft text and its keyboard glyph share this reminder color.
+private let macDraftAccent = Color(hex: 0xC65D5D)
+
 private struct MacSidebarSessionRow: View {
     @Environment(AppState.self) private var appState
     let session: SessionInfo
@@ -581,7 +585,7 @@ private struct MacSidebarSessionRow: View {
             if let previewText = projection.previewText {
                 Text(previewText)
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.textSecondary)
+                    .foregroundStyle(projection.isDraft ? macDraftAccent : Color.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             } else {
@@ -593,6 +597,43 @@ private struct MacSidebarSessionRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Compacting is a physical compression gesture rather than a color pulse:
+/// three cyan squares stand vertically, squeeze together, then expand again.
+/// The fill stays constant so the state reads through geometry, not flashing.
+struct MacCompactingStatusGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let cycleDuration: TimeInterval = 1.6
+
+    var body: some View {
+        if reduceMotion {
+            squares(compression: 0)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 18.0)) { context in
+                let phase = context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: cycleDuration)
+                let normalized = phase / cycleDuration
+                let compression = 0.5 - 0.5 * cos(normalized * 2 * .pi)
+                squares(compression: compression)
+            }
+        }
+    }
+
+    private func squares(compression: Double) -> some View {
+        let spacing = 1.2 - 0.95 * compression
+        let scaleY = 1 - 0.28 * compression
+        return VStack(spacing: spacing) {
+            ForEach(0..<3, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1.2, style: .continuous)
+                    .fill(Color(hex: 0x0891B2))
+                    .frame(width: 4.8, height: 4.8)
+                    .scaleEffect(x: 1 - 0.06 * compression, y: scaleY)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
     }
 }
 
@@ -611,7 +652,7 @@ private struct MacSessionStatusGlyph: View {
             case .active:
                 activityDots
             case .compacting:
-                CompactingStatusGlyph()
+                MacCompactingStatusGlyph()
             case .waiting:
                 LucideIcon(.messageCircleQuestion,
                            size: 14,
@@ -641,7 +682,7 @@ private struct MacSessionStatusGlyph: View {
                     LucideIcon(.keyboard,
                                size: 14,
                                strokeWidth: 2,
-                               color: Color(hex: 0x4F8C86))
+                               color: macDraftAccent)
                 } else {
                     LucideIcon(.circleUser,
                                size: 13,

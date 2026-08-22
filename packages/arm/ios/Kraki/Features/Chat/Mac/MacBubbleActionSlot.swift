@@ -212,21 +212,22 @@ struct MacBubbleActionSlot: View {
         fill: Color,
         border: Color
     ) -> some View {
-        Button {
-            guard let permissionId = message.permissionId else { return }
-            onResolvePermission(permissionId, message.toolName, decision)
-        } label: {
+        MacChatActionButton(
+            action: {
+                guard let permissionId = message.permissionId else { return }
+                onResolvePermission(permissionId, message.toolName, decision)
+            },
+            foreground: foreground,
+            fill: fill,
+            border: border,
+            accent: decision == "deny" ? .red : (decision == "execute" ? .orange : .green)
+        ) {
             Text(label)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(foreground)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .frame(maxWidth: .infinity, minHeight: 32)
-                .background(fill, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(border, lineWidth: 1))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .accessibilityLabel("\(label) permission")
         .background {
@@ -291,22 +292,24 @@ struct MacBubbleActionSlot: View {
             } else if let choices = message.choices, !choices.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(choices, id: \.self) { choice in
-                        Button {
-                            guard let questionId = message.questionId else { return }
-                            onAnswerQuestion(questionId, choice)
-                        } label: {
+                        MacChatActionButton(
+                            action: {
+                                guard let questionId = message.questionId else { return }
+                                onAnswerQuestion(questionId, choice)
+                            },
+                            foreground: Color.textPrimary,
+                            fill: Color.surfacePrimary.opacity(0.6),
+                            border: Color.borderPrimary,
+                            accent: .purple
+                        ) {
                             Text(MacLiveMarkdown.attributed(choice))
                                 .font(.system(size: 13))
-                                .foregroundStyle(Color.textPrimary)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.surfacePrimary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.borderPrimary))
                         }
-                        .buttonStyle(.plain)
                         .accessibilityLabel("Answer: \(choice)")
                         .background {
                             GeometryReader { proxy in
@@ -330,6 +333,88 @@ struct MacBubbleActionSlot: View {
     static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
         guard mode == .discuss, let toolName else { return false }
         return ["write", "write_file", "create", "create_file", "edit", "edit_file"].contains(toolName)
+    }
+}
+
+/// Native-feeling action surface for buttons embedded in a Mac chat bubble.
+/// SwiftUI's plain button style removes the platform's visual feedback, so we
+/// provide explicit hover, pressed, and border layers while keeping the
+/// existing AppKit action-frame hit routing untouched.
+private struct MacChatActionButton<Label: View>: View {
+    let action: () -> Void
+    let foreground: Color
+    let fill: Color
+    let border: Color
+    let accent: Color
+    let label: () -> Label
+    @State private var isHovered = false
+
+    init(
+        action: @escaping () -> Void,
+        foreground: Color,
+        fill: Color,
+        border: Color,
+        accent: Color,
+        @ViewBuilder label: @escaping () -> Label
+    ) {
+        self.action = action
+        self.foreground = foreground
+        self.fill = fill
+        self.border = border
+        self.accent = accent
+        self.label = label
+    }
+
+    var body: some View {
+        Button(action: action) {
+            label()
+        }
+        .buttonStyle(MacChatActionButtonStyle(
+            foreground: foreground,
+            fill: fill,
+            border: border,
+            accent: accent,
+            isHovered: isHovered
+        ))
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct MacChatActionButtonStyle: ButtonStyle {
+    let foreground: Color
+    let fill: Color
+    let border: Color
+    let accent: Color
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(foreground)
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+                shape.fill(fill)
+                    .overlay(
+                        shape.fill(Color.white.opacity(isHovered ? 0.07 : 0))
+                    )
+                    .overlay(
+                        shape.fill(Color.black.opacity(configuration.isPressed ? 0.13 : 0))
+                    )
+                    .overlay(
+                        shape.strokeBorder(
+                            isHovered ? accent.opacity(0.68) : border,
+                            lineWidth: isHovered ? 1.2 : 1
+                        )
+                    )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .shadow(
+                color: isHovered ? accent.opacity(0.18) : .clear,
+                radius: isHovered ? 5 : 0,
+                y: isHovered ? 1 : 0
+            )
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 
