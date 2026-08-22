@@ -1993,6 +1993,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         prefetchNewerIfNeeded()
     }
 
+    #if DEBUG
+    /// Focus-free integration probe equivalent of the first real drag packet.
+    /// It changes only the production follow-state latch; pagination, sizing,
+    /// batch updates, and anchor correction still run through their normal paths.
+    func automationMarkUserScrolledAway() {
+        followingBottom = false
+    }
+    #endif
+
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
         codeHighlightSettleWork?.cancel()
@@ -2234,6 +2243,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Top up the newer buffer while approaching the bottom, until it can clear
     /// the band. Mirror of `prefetchOlderIfNeeded`.
     private func prefetchNewerIfNeeded() {
+        guard viewIfLoaded?.window != nil else { return }
         guard !suppressPagingForBottom else { return }
         guard pendingApply == nil else { return }
         guard !atNewest, !fetchingNewer, !measuringNewerPage, !scrollingToTop else { return }
@@ -2388,6 +2398,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     /// Top up the buffer while approaching the top, until it can clear the band.
     private func prefetchOlderIfNeeded() {
+        guard viewIfLoaded?.window != nil else { return }
         guard !suppressPagingForBottom else { return }
         guard pendingApply == nil else { return }
         guard !atOldest, !fetchingOlder, !measuringOlderPage,
