@@ -238,6 +238,7 @@ final class ProtocolEnumTests: XCTestCase {
         XCTAssertEqual(ReasoningEffort.medium.rawValue, "medium")
         XCTAssertEqual(ReasoningEffort.high.rawValue, "high")
         XCTAssertEqual(ReasoningEffort.xhigh.rawValue, "xhigh")
+        XCTAssertEqual(ReasoningEffort.max.rawValue, "max")
     }
 }
 
@@ -273,6 +274,7 @@ final class ProtocolStructTests: XCTestCase {
             id: "sess-1",
             agent: "claude",
             model: "claude-3",
+            reasoningEffort: .high,
             title: "My Session",
             autoTitle: "Auto Title",
             state: .active,
@@ -290,6 +292,7 @@ final class ProtocolStructTests: XCTestCase {
         XCTAssertEqual(decoded.id, "sess-1")
         XCTAssertEqual(decoded.agent, "claude")
         XCTAssertEqual(decoded.model, "claude-3")
+        XCTAssertEqual(decoded.reasoningEffort, .high)
         XCTAssertEqual(decoded.title, "My Session")
         XCTAssertEqual(decoded.autoTitle, "Auto Title")
         XCTAssertEqual(decoded.state, .active)

@@ -116,6 +116,7 @@ export interface SessionMeta {
   id: string;
   agent: string;
   model?: string;
+  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
   title?: string;
   autoTitle?: string;
   state: 'active' | 'idle' | 'ended' | 'disconnected';
@@ -398,7 +399,12 @@ export class SessionManager {
   /**
    * Create a new session. Returns the session ID.
    */
-  createSession(agent: string, model?: string, sessionId?: string): { sessionId: string; runId: string } {
+  createSession(
+    agent: string,
+    model?: string,
+    sessionId?: string,
+    reasoningEffort?: import('@kraki/protocol').ReasoningEffort,
+  ): { sessionId: string; runId: string } {
     const id = sessionId ?? `sess_${randomUUID().slice(0, 12)}`;
     const runId = 'run_001';
     const sessionDir = this.sessionDir(id);
@@ -408,6 +414,7 @@ export class SessionManager {
       id,
       agent,
       model,
+      reasoningEffort,
       state: 'active',
       mode: 'discuss',
       currentRunId: runId,
@@ -553,6 +560,7 @@ export class SessionManager {
       id: newId,
       agent: sourceMeta.agent,
       model: sourceMeta.model,
+      reasoningEffort: sourceMeta.reasoningEffort,
       title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
@@ -666,10 +674,15 @@ export class SessionManager {
   /**
    * Set session model.
    */
-  setModel(sessionId: string, model: string): void {
+  setModel(
+    sessionId: string,
+    model: string,
+    reasoningEffort?: import('@kraki/protocol').ReasoningEffort,
+  ): void {
     const meta = this.readMeta(sessionId);
     if (!meta) return;
     meta.model = model;
+    meta.reasoningEffort = reasoningEffort;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
   }
@@ -1259,6 +1272,7 @@ export class SessionManager {
     id: string;
     agent: string;
     model?: string;
+    reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
     title?: string;
     autoTitle?: string;
     state: 'active' | 'idle';
@@ -1286,6 +1300,7 @@ export class SessionManager {
         id: meta.id,
         agent: meta.agent,
         model: meta.model ? toWellFormedText(meta.model) : undefined,
+        reasoningEffort: meta.reasoningEffort,
         title: meta.title ? toWellFormedText(meta.title) : undefined,
         autoTitle: meta.autoTitle ? toWellFormedText(meta.autoTitle) : undefined,
         state,

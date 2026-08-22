@@ -324,7 +324,11 @@ final class CommandSender {
         send(["type": "set_session_model", "payload": payload], sessionId: sessionId)
 
         // Optimistic update
-        appState.sessionStore.setModel(sessionId, model)
+        appState.sessionStore.setModel(
+            sessionId,
+            model,
+            reasoningEffort: reasoningEffort
+        )
     }
 
     // MARK: - Session Lifecycle

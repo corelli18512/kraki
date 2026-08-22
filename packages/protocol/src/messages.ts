@@ -179,6 +179,7 @@ export interface SessionCreatedMessage extends BaseEnvelope {
   payload: {
     agent: string;
     model?: string;
+    reasoningEffort?: import('./devices.js').ReasoningEffort;
     /** Echoed from create_session for request tracking */
     requestId?: string;
     /** Current last message seq (0 for new sessions, >0 for forks) */

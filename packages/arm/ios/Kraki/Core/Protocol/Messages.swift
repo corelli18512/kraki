@@ -392,6 +392,7 @@ enum EnvelopeCodingKeys: String, CodingKey {
 struct SessionCreatedPayload: Codable, Sendable {
     let agent: String
     var model: String?
+    var reasoningEffort: ReasoningEffort?
     var requestId: String?
     var lastSeq: Int?
 }

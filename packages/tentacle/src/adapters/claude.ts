@@ -673,6 +673,7 @@ export class ClaudeAdapter extends AgentAdapter {
       sessionId,
       agent: 'claude',
       model: config.model,
+      reasoningEffort: config.reasoningEffort,
     });
 
     return { sessionId };
