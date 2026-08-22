@@ -600,40 +600,74 @@ private struct MacSidebarSessionRow: View {
     }
 }
 
-/// Compacting is a physical compression gesture rather than a color pulse:
-/// three cyan squares stand vertically, squeeze together, then expand again.
-/// The fill stays constant so the state reads through geometry, not flashing.
+/// Compacting keeps the original 3D square-stack language rather than
+/// introducing a new filled-block icon. Each mark is an isometric square
+/// drawn as a cyan wireframe; the three marks share a vertical axis and only
+/// their vertical separation changes during the compression cycle.
 struct MacCompactingStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let cycleDuration: TimeInterval = 1.6
+    private let cycleDuration: TimeInterval = 1.8
 
     var body: some View {
         if reduceMotion {
-            squares(compression: 0)
+            layers(compression: 0)
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 18.0)) { context in
                 let phase = context.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: cycleDuration)
                 let normalized = phase / cycleDuration
                 let compression = 0.5 - 0.5 * cos(normalized * 2 * .pi)
-                squares(compression: compression)
+                layers(compression: compression)
             }
         }
     }
 
-    private func squares(compression: Double) -> some View {
-        let spacing = 1.2 - 0.95 * compression
-        let scaleY = 1 - 0.28 * compression
-        return VStack(spacing: spacing) {
-            ForEach(0..<3, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 1.2, style: .continuous)
-                    .fill(Color(hex: 0x0891B2))
-                    .frame(width: 4.8, height: 4.8)
-                    .scaleEffect(x: 1 - 0.06 * compression, y: scaleY)
+    private func layers(compression: Double) -> some View {
+        // The 3D glyph remains vertically legible at the 16pt sidebar slot.
+        // Compression closes the gaps without scaling the symbol or flashing
+        // its color, matching the approved design preview.
+        let layerSpacing = 4.8 - 1.8 * compression
+        return ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                MacCompacting3DSquare()
+                    .stroke(Color(hex: 0x0891B2), style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round))
+                    .frame(width: 7.2, height: 5.0)
+                    .offset(y: CGFloat(index - 1) * layerSpacing)
             }
         }
         .frame(width: 16, height: 16)
         .accessibilityHidden(true)
+    }
+}
+
+private struct MacCompacting3DSquare: Shape {
+    func path(in rect: CGRect) -> Path {
+        // Isometric square face plus its short lower extrusion. At this size
+        // the resulting outline reads as the same 3D/rhombus-like symbol as
+        // square.stack.3d.down.right, while allowing vertical gap animation.
+        let width = rect.width
+        let faceHeight = rect.height * 0.77
+        let left = rect.minX + width * 0.02
+        let right = rect.maxX - width * 0.02
+        let centerX = rect.midX
+        let top = rect.minY
+        let faceMidY = top + faceHeight * 0.5
+        let faceBottom = top + faceHeight
+        let extrusion = rect.height * 0.23
+
+        var path = Path()
+        path.move(to: CGPoint(x: centerX, y: top))
+        path.addLine(to: CGPoint(x: right, y: faceMidY))
+        path.addLine(to: CGPoint(x: centerX, y: faceBottom))
+        path.addLine(to: CGPoint(x: left, y: faceMidY))
+        path.closeSubpath()
+
+        path.move(to: CGPoint(x: left, y: faceMidY))
+        path.addLine(to: CGPoint(x: left, y: faceMidY + extrusion))
+        path.addLine(to: CGPoint(x: centerX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: right, y: faceMidY + extrusion))
+        path.addLine(to: CGPoint(x: right, y: faceMidY))
+        return path
     }
 }
 
