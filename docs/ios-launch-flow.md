@@ -7,7 +7,7 @@ Kraki iOS uses two launch surfaces:
 
 ## Returning authenticated user
 
-1. `RootView` starts in `IOSLaunchCoordinator.Phase.launching` and paints a minimal entry gate containing only the current theme background and centered Kraki logo.
+1. `RootView` starts in `IOSLaunchCoordinator.Phase.launching` and paints a minimal entry gate containing only the current theme background and centered Kraki logo. iOS intentionally has no runtime Loading indicator: the system launch snapshot and this in-app continuation are meant to read as one calm Splash Screen.
 2. The initial Relay connection starts behind the gate. Network readiness does not control whether cached UI can eventually open.
 3. `MainTabView` mounts underneath the gate with notification/deep-link navigation disabled.
 4. `IOSLaunchPresentationReadyProbe` waits until the UIKit hierarchy is attached to a real `UIWindow`, forces its first layout pass, and reports on the following main-run-loop turn.
@@ -16,7 +16,7 @@ Kraki iOS uses two launch surfaces:
 
 ## Signed-out user
 
-The launch gate remains visible for the short visual floor, then routes to the existing iOS `LoginView`. The first WebSocket connection still starts behind the gate so `auth_info` can make GitHub sign-in available.
+The launch gate remains visible for the short visual floor, then routes to the existing iOS `LoginView`. The first WebSocket connection still starts behind the gate so `auth_info` can make GitHub sign-in available. The iOS cold-launch gate remains intentionally Logo-only; animated activity feedback is a macOS-only affordance.
 
 A successful login stages `MainTabView` through the same presentation boundary. Explicit logout returns directly to `LoginView` and does not replay the cold-launch animation.
 
