@@ -1617,12 +1617,14 @@ export class RelayClient {
         }
         case 'set_session_model': {
           const { model, reasoningEffort, contextTier } = msg.payload;
-          const previousModel = this.sessionManager.getMeta(sessionId)?.model;
+          const previousMeta = this.sessionManager.getMeta(sessionId);
+          const previousModel = previousMeta?.model;
+          const previousReasoningEffort = previousMeta?.reasoningEffort;
           // Persist the intent before adapter resume so adapters that rebuild a
-          // disconnected SDK session can restore the requested model. Roll it
-          // back if the adapter rejects the change; never acknowledge a model
-          // switch that did not reach the agent runtime.
-          this.sessionManager.setModel(sessionId, model);
+          // disconnected SDK session can restore the requested model and effort.
+          // Roll both back if the adapter rejects the change; never acknowledge
+          // configuration that did not reach the agent runtime.
+          this.sessionManager.setModel(sessionId, model, reasoningEffort);
           // Pi must see the explicit model before generic lazy resume: a retired
           // provider in pi.jsonl can otherwise make pi exit before set_model.
           // Other agents retain the established resume-then-set ordering.
@@ -1640,7 +1642,9 @@ export class RelayClient {
               });
             })
             .catch((err) => {
-              if (previousModel) this.sessionManager.setModel(sessionId, previousModel);
+              if (previousModel) {
+                this.sessionManager.setModel(sessionId, previousModel, previousReasoningEffort);
+              }
               logger.error({ err, sessionId }, 'setSessionModel failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
             });
@@ -1983,7 +1987,12 @@ export class RelayClient {
     this.adapter.onSessionCreated = (event) => {
       // Track in SessionManager if not already tracked (from resume)
       if (!this.sessionManager.getMeta(event.sessionId)) {
-        this.sessionManager.createSession(event.agent, event.model, event.sessionId);
+        this.sessionManager.createSession(
+          event.agent,
+          event.model,
+          event.sessionId,
+          event.reasoningEffort,
+        );
       }
       // Look up requestId by sessionId (set in handleCreateSession before adapter call)
       const requestId = this.pendingRequestIds.get(event.sessionId);
@@ -1999,7 +2008,13 @@ export class RelayClient {
       this.send({
         type: 'session_created',
         sessionId: event.sessionId,
-        payload: { agent: event.agent, model: event.model ?? meta?.model, requestId, lastSeq: meta?.lastSeq ?? 0 },
+        payload: {
+          agent: event.agent,
+          model: event.model ?? meta?.model,
+          reasoningEffort: event.reasoningEffort ?? meta?.reasoningEffort,
+          requestId,
+          lastSeq: meta?.lastSeq ?? 0,
+        },
       });
     };
 

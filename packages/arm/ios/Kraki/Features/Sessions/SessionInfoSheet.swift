@@ -426,7 +426,8 @@ private struct ModelPickerScreen: View {
         self.session = session
         _selectedModel = State(initialValue: session.model ?? "")
         _reasoningEffort = State(
-            initialValue: session.model.flatMap { SessionPrefs.lastEffort(model: $0) }
+            initialValue: session.reasoningEffort
+                ?? session.model.flatMap { SessionPrefs.lastEffort(model: $0) }
         )
     }
 

@@ -1462,7 +1462,12 @@ export class PiAdapter extends AgentAdapter {
     mkdirSync(this.storeDir(sessionId), { recursive: true });
     const sess = this.spawn(sessionId, config.cwd ?? process.cwd(), model, MUTATING_DEFAULT_MODE, transcript, thinking);
     this.persistMeta(sessionId, sess);
-    this.onSessionCreated?.({ sessionId, agent: 'pi', model });
+    this.onSessionCreated?.({
+      sessionId,
+      agent: 'pi',
+      model,
+      reasoningEffort: config.reasoningEffort,
+    });
     return { sessionId };
   }
 

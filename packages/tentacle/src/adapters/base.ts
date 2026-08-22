@@ -17,6 +17,7 @@ export interface SessionCreatedEvent {
   sessionId: string;
   agent: string;
   model?: string;
+  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
 }
 
 export interface TurnLifecycleEvent {
@@ -97,7 +98,7 @@ export interface CreateSessionConfig {
   /** Agent-specific model identifier (e.g. "claude-opus-4.6-1m") */
   model?: string;
   /** Reasoning effort level (for models that support it) */
-  reasoningEffort?: string;
+  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
   /** Context tier (for models that support long_context) */
   contextTier?: string;
   /** Working directory for the session */

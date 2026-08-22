@@ -62,6 +62,8 @@ extension SessionDigest {
             id: id,
             agent: json["agent"] as? String ?? "",
             model: json["model"] as? String,
+            reasoningEffort: (json["reasoningEffort"] as? String)
+                .flatMap(ReasoningEffort.init(rawValue:)),
             title: json["title"] as? String,
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
@@ -545,7 +547,13 @@ final class MessageRouter {
 
         case "session_model_set":
             if let model = payload?["model"] as? String {
-                appState.sessionStore.setSessionModel(sessionId, model: model)
+                let effort = (payload?["reasoningEffort"] as? String)
+                    .flatMap(ReasoningEffort.init(rawValue:))
+                appState.sessionStore.setSessionModel(
+                    sessionId,
+                    model: model,
+                    reasoningEffort: effort
+                )
             }
 
         case "session_title_updated":
@@ -766,6 +774,8 @@ final class MessageRouter {
             deviceName: device?.name ?? deviceId,
             agent: payload?["agent"] as? String ?? "",
             model: payload?["model"] as? String,
+            reasoningEffort: (payload?["reasoningEffort"] as? String)
+                .flatMap(ReasoningEffort.init(rawValue:)),
             title: nil,
             autoTitle: nil,
             state: .active,

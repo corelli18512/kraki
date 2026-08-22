@@ -1023,6 +1023,7 @@ export class CopilotAdapter extends AgentAdapter {
       sessionId: sid,
       agent: 'copilot',
       model: config.model,
+      reasoningEffort: effort,
     });
 
     return { sessionId: sid };

@@ -238,8 +238,8 @@ describe('SessionManager', () => {
       expect(entry?.autoTitle).toBe('Working on tests');
     });
 
-    it('should copy autoTitle when forking', () => {
-      const { sessionId } = sm.createSession('copilot');
+    it('should copy autoTitle and reasoning effort when forking', () => {
+      const { sessionId } = sm.createSession('copilot', 'gpt-5', undefined, 'high');
       sm.setAutoTitle(sessionId, 'Original auto title');
       sm.setTitle(sessionId, 'Manual title');
 
@@ -247,18 +247,27 @@ describe('SessionManager', () => {
       const forkedMeta = sm.getMeta(forked.sessionId)!;
       expect(forkedMeta.autoTitle).toBe('Original auto title');
       expect(forkedMeta.title).toBe('Fork of Manual title');
+      expect(forkedMeta.reasoningEffort).toBe('high');
     });
   });
 
   // ── Model ──────────────────────────────────────────────
 
   describe('session model', () => {
-    it('should set and persist model', () => {
-      const { sessionId } = sm.createSession('copilot', 'claude-sonnet-4');
+    it('should set and persist model and reasoning effort', () => {
+      const { sessionId } = sm.createSession(
+        'copilot',
+        'claude-sonnet-4',
+        undefined,
+        'medium',
+      );
       expect(sm.getMeta(sessionId)!.model).toBe('claude-sonnet-4');
+      expect(sm.getMeta(sessionId)!.reasoningEffort).toBe('medium');
 
-      sm.setModel(sessionId, 'claude-opus-4');
+      sm.setModel(sessionId, 'claude-opus-4', 'xhigh');
       expect(sm.getMeta(sessionId)!.model).toBe('claude-opus-4');
+      expect(sm.getMeta(sessionId)!.reasoningEffort).toBe('xhigh');
+      expect(sm.getSessionList().find(s => s.id === sessionId)?.reasoningEffort).toBe('xhigh');
     });
 
     it('should no-op for non-existent session', () => {

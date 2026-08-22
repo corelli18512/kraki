@@ -25,6 +25,8 @@ export interface SessionSummary {
   deviceName: string;
   agent: import('./devices.js').AgentId;
   model?: string;
+  /** Active reasoning effort for the current model. */
+  reasoningEffort?: import('./devices.js').ReasoningEffort;
   title?: string;
   autoTitle?: string;
   state: SessionState;
@@ -53,6 +55,8 @@ export interface SessionDigest {
   id: string;
   agent: import('./devices.js').AgentId;
   model?: string;
+  /** Active reasoning effort for the current model. */
+  reasoningEffort?: import('./devices.js').ReasoningEffort;
   title?: string;
   autoTitle?: string;
   state: SessionState;

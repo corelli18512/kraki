@@ -599,8 +599,19 @@ private struct MacSessionInfoSheet: View {
     @State private var showDeleteConfirmation = false
     @State private var sessionIDCopied = false
     @State private var sessionIDCopyFeedbackTask: Task<Void, Never>?
+    @State private var selectedModel: String
+    @State private var reasoningEffort: ReasoningEffort?
     @FocusState private var titleFocused: Bool
 
+    init(session: SessionInfo) {
+        self.session = session
+        _selectedModel = State(initialValue: session.model ?? "")
+        _reasoningEffort = State(initialValue: session.reasoningEffort)
+    }
+
+    private var liveSession: SessionInfo {
+        appState.sessionStore.sessions[session.id] ?? session
+    }
     private var currentMode: SessionMode {
         appState.sessionStore.sessionModes[session.id] ?? session.mode
     }
@@ -616,11 +627,17 @@ private struct MacSessionInfoSheet: View {
     private var availableModels: [String] {
         appState.deviceStore.models(for: session.deviceId, agentId: session.agent)
     }
+    private var modelDetails: [ModelDetail] {
+        appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
+    }
+    private var supportedEfforts: [ReasoningEffort] {
+        guard let detail = modelDetails.first(where: { $0.id == selectedModel }),
+              detail.supportsReasoningEffort else { return [] }
+        return detail.supportedReasoningEfforts ?? []
+    }
     private var contextWindow: Int? {
-        guard let model = session.model else { return nil }
-        return appState.deviceStore
-            .modelDetails(for: session.deviceId, agentId: session.agent)
-            .first(where: { $0.id == model })?.contextWindow
+        guard let model = liveSession.model else { return nil }
+        return modelDetails.first(where: { $0.id == model })?.contextWindow
     }
 
     var body: some View {
@@ -649,6 +666,9 @@ private struct MacSessionInfoSheet: View {
         }
         .frame(width: 440, height: 580)
         .background(Color.surfacePrimary)
+        .onAppear { syncModelConfiguration() }
+        .onChange(of: liveSession.model) { _, _ in syncModelConfiguration() }
+        .onChange(of: liveSession.reasoningEffort) { _, _ in syncModelConfiguration() }
         .onDisappear {
             sessionIDCopyFeedbackTask?.cancel()
             sessionIDCopyFeedbackTask = nil
@@ -714,11 +734,11 @@ private struct MacSessionInfoSheet: View {
             infoRow("Agent", session.agent)
             infoRow(label: "Model") {
                 if availableModels.isEmpty {
-                    Text(session.model ?? "—")
+                    Text(liveSession.model ?? "—")
                 } else {
                     Picker("", selection: Binding(
-                        get: { session.model ?? availableModels.first ?? "" },
-                        set: { appState.commandSender?.setSessionModel(sessionId: session.id, model: $0) }
+                        get: { selectedModel },
+                        set: { applyModel($0) }
                     )) {
                         ForEach(availableModels, id: \.self) { Text($0).tag($0) }
                     }
@@ -726,7 +746,76 @@ private struct MacSessionInfoSheet: View {
                     .frame(maxWidth: 250, alignment: .trailing)
                 }
             }
+            if !supportedEfforts.isEmpty {
+                infoRow(label: "Thinking") {
+                    Picker("", selection: Binding(
+                        get: { reasoningEffort ?? supportedEfforts[0] },
+                        set: { applyReasoningEffort($0) }
+                    )) {
+                        ForEach(supportedEfforts, id: \.rawValue) { effort in
+                            Text(effortLabel(effort)).tag(effort)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 250, alignment: .trailing)
+                }
+            }
             infoRow("Created", session.createdAt.formatted(date: .abbreviated, time: .shortened))
+        }
+    }
+
+    private func syncModelConfiguration() {
+        selectedModel = liveSession.model ?? availableModels.first ?? ""
+        reasoningEffort = normalizedEffort(
+            for: selectedModel,
+            preferred: liveSession.reasoningEffort
+        )
+    }
+
+    private func normalizedEffort(
+        for model: String,
+        preferred: ReasoningEffort?
+    ) -> ReasoningEffort? {
+        guard let detail = modelDetails.first(where: { $0.id == model }),
+              detail.supportsReasoningEffort,
+              let efforts = detail.supportedReasoningEfforts,
+              !efforts.isEmpty else { return nil }
+        if let preferred, efforts.contains(preferred) { return preferred }
+        if let defaultEffort = detail.defaultReasoningEffort,
+           efforts.contains(defaultEffort) {
+            return defaultEffort
+        }
+        return efforts.first
+    }
+
+    private func applyModel(_ model: String) {
+        selectedModel = model
+        let effort = normalizedEffort(for: model, preferred: nil)
+        reasoningEffort = effort
+        appState.commandSender?.setSessionModel(
+            sessionId: session.id,
+            model: model,
+            reasoningEffort: effort
+        )
+    }
+
+    private func applyReasoningEffort(_ effort: ReasoningEffort) {
+        reasoningEffort = effort
+        appState.commandSender?.setSessionModel(
+            sessionId: session.id,
+            model: selectedModel,
+            reasoningEffort: effort
+        )
+    }
+
+    private func effortLabel(_ effort: ReasoningEffort) -> String {
+        switch effort {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .xhigh: return "XHigh"
+        case .max: return "Max"
         }
     }
 

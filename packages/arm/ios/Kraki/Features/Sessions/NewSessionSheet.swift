@@ -503,7 +503,8 @@ struct NewSessionSheet: View {
         case .low:    return "Low"
         case .medium: return "Medium"
         case .high:   return "High"
-        case .xhigh:  return "Max"
+        case .xhigh:  return "XHigh"
+        case .max:    return "Max"
         }
     }
 }
@@ -534,7 +535,8 @@ struct ModelPickerCard: View {
         case .low:    return "Low"
         case .medium: return "Medium"
         case .high:   return "High"
-        case .xhigh:  return "Max"
+        case .xhigh:  return "XHigh"
+        case .max:    return "Max"
         }
     }
 

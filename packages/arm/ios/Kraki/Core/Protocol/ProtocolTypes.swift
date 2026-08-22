@@ -189,6 +189,7 @@ enum ReasoningEffort: String, Codable, Sendable {
     case medium
     case high
     case xhigh
+    case max
 }
 
 // MARK: - Session Types
@@ -217,6 +218,7 @@ struct SessionDigest: Codable, Identifiable, Sendable {
     let id: String
     let agent: String
     var model: String? = nil
+    var reasoningEffort: ReasoningEffort? = nil
     var title: String? = nil
     var autoTitle: String? = nil
     var state: SessionState

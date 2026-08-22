@@ -14,6 +14,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
     var deviceName: String
     var agent: String
     var model: String?
+    var reasoningEffort: ReasoningEffort?
     var title: String?
     var autoTitle: String?
     var state: SessionState
@@ -48,7 +49,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
     // stream.
 
     private enum CodingKeys: String, CodingKey {
-        case id, deviceId, deviceName, agent, model, title, autoTitle
+        case id, deviceId, deviceName, agent, model, reasoningEffort, title, autoTitle
         case state, mode, lastSeq, readSeq
         case messageCount, createdAt, usage, pinned
     }
@@ -59,6 +60,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
         deviceName: String,
         agent: String,
         model: String? = nil,
+        reasoningEffort: ReasoningEffort? = nil,
         title: String? = nil,
         autoTitle: String? = nil,
         state: SessionState,
@@ -78,6 +80,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
         self.deviceName = deviceName
         self.agent = agent
         self.model = model
+        self.reasoningEffort = reasoningEffort
         self.title = title
         self.autoTitle = autoTitle
         self.state = state
@@ -100,6 +103,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
         self.deviceName = try c.decode(String.self, forKey: .deviceName)
         self.agent = try c.decode(String.self, forKey: .agent)
         self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.reasoningEffort = try c.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort)
         self.title = try c.decodeIfPresent(String.self, forKey: .title)
         self.autoTitle = try c.decodeIfPresent(String.self, forKey: .autoTitle)
         self.state = try c.decode(SessionState.self, forKey: .state)
@@ -123,6 +127,7 @@ struct SessionInfo: Identifiable, Equatable, Codable {
         try c.encode(deviceName, forKey: .deviceName)
         try c.encode(agent, forKey: .agent)
         try c.encodeIfPresent(model, forKey: .model)
+        try c.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try c.encodeIfPresent(title, forKey: .title)
         try c.encodeIfPresent(autoTitle, forKey: .autoTitle)
         try c.encode(state, forKey: .state)
@@ -519,6 +524,7 @@ final class SessionStore {
             existing.deviceName = deviceName
             existing.agent = digest.agent
             existing.model = digest.model
+            existing.reasoningEffort = digest.reasoningEffort
             existing.title = digest.title
             existing.autoTitle = digest.autoTitle
             existing.state = digest.state
@@ -543,6 +549,7 @@ final class SessionStore {
                 deviceName: deviceName,
                 agent: digest.agent,
                 model: digest.model,
+                reasoningEffort: digest.reasoningEffort,
                 title: digest.title,
                 autoTitle: digest.autoTitle,
                 state: digest.state,
@@ -634,6 +641,7 @@ final class SessionStore {
                 existing.deviceName = deviceName
                 existing.agent = digest.agent
                 existing.model = digest.model
+                existing.reasoningEffort = digest.reasoningEffort
                 existing.title = digest.title
                 existing.autoTitle = digest.autoTitle
                 existing.state = digest.state
@@ -657,6 +665,7 @@ final class SessionStore {
                     deviceName: deviceName,
                     agent: digest.agent,
                     model: digest.model,
+                    reasoningEffort: digest.reasoningEffort,
                     title: digest.title,
                     autoTitle: digest.autoTitle,
                     state: digest.state,
@@ -718,8 +727,13 @@ final class SessionStore {
         scheduleSave()
     }
 
-    func setModel(_ id: String, _ model: String) {
+    func setModel(
+        _ id: String,
+        _ model: String,
+        reasoningEffort: ReasoningEffort? = nil
+    ) {
         sessions[id]?.model = model
+        sessions[id]?.reasoningEffort = reasoningEffort
         scheduleSave()
     }
 
@@ -973,8 +987,12 @@ final class SessionStore {
     }
 
     /// Set session model (alias).
-    func setSessionModel(_ id: String, model: String) {
-        setModel(id, model)
+    func setSessionModel(
+        _ id: String,
+        model: String,
+        reasoningEffort: ReasoningEffort? = nil
+    ) {
+        setModel(id, model, reasoningEffort: reasoningEffort)
     }
 
     /// Set session pinned state (alias).

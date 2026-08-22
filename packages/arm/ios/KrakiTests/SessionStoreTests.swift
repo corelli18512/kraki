@@ -25,6 +25,7 @@ final class SessionStoreTests: XCTestCase {
         id: String = "sess-1",
         agent: String = "claude",
         model: String? = "claude-3",
+        reasoningEffort: ReasoningEffort? = nil,
         title: String? = nil,
         autoTitle: String? = nil,
         state: SessionState = .active,
@@ -35,7 +36,8 @@ final class SessionStoreTests: XCTestCase {
         pinned: Bool? = nil
     ) -> SessionDigest {
         SessionDigest(
-            id: id, agent: agent, model: model, title: title,
+            id: id, agent: agent, model: model,
+            reasoningEffort: reasoningEffort, title: title,
             autoTitle: autoTitle, state: state, mode: mode,
             lastSeq: lastSeq, readSeq: readSeq,
             messageCount: messageCount,
@@ -46,7 +48,7 @@ final class SessionStoreTests: XCTestCase {
     // MARK: - Upsert
 
     func testUpsertSession() {
-        let digest = makeDigest()
+        let digest = makeDigest(reasoningEffort: .high)
         store.upsertSession(digest, deviceId: "dev-1", deviceName: "MacBook")
 
         let session = store.sessions["sess-1"]
@@ -54,6 +56,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(session?.id, "sess-1")
         XCTAssertEqual(session?.agent, "claude")
         XCTAssertEqual(session?.model, "claude-3")
+        XCTAssertEqual(session?.reasoningEffort, .high)
         XCTAssertEqual(session?.state, .active)
         XCTAssertEqual(session?.mode, .execute)
         XCTAssertEqual(session?.deviceId, "dev-1")
@@ -185,8 +188,9 @@ final class SessionStoreTests: XCTestCase {
 
     func testSetModel() {
         store.upsertSession(makeDigest(), deviceId: "d", deviceName: "n")
-        store.setModel("sess-1", "gpt-4")
+        store.setModel("sess-1", "gpt-4", reasoningEffort: .max)
         XCTAssertEqual(store.sessions["sess-1"]?.model, "gpt-4")
+        XCTAssertEqual(store.sessions["sess-1"]?.reasoningEffort, .max)
     }
 
     func testSetTitle() {

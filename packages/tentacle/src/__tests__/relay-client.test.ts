@@ -680,7 +680,7 @@ describe('RelayClient set_session_model', () => {
     })));
 
     // sessionManager.setModel is called synchronously (persist + ack first)
-    expect(sm.setModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4');
+    expect(sm.setModel).toHaveBeenCalledWith('sess_1', 'claude-opus-4', undefined);
     // adapter.setSessionModel is chained behind ensureSessionResumed (which
     // resolves synchronously here because getMeta returns a non-disconnected
     // session, so the .then fires after a microtask).
@@ -689,7 +689,7 @@ describe('RelayClient set_session_model', () => {
   });
 
   it('broadcasts session_model_set only after the adapter confirms the change', async () => {
-    buildConnectedClient();
+    const { sm } = buildConnectedClient();
     const ws = sockets[0];
     ws.sent.length = 0;
 
@@ -704,6 +704,7 @@ describe('RelayClient set_session_model', () => {
 
     await vi.runAllTimersAsync();
 
+    expect(sm.setModel).toHaveBeenCalledWith('sess_1', 'gpt-5', 'high');
     // Find the session_model_set broadcast in sent messages
     const sent = decodePulseSends(ws.sent);
     const modelSet = sent.find(m => m.type === 'session_model_set');
@@ -715,6 +716,11 @@ describe('RelayClient set_session_model', () => {
 
   it('does not acknowledge a failed model change and rolls persisted metadata back', async () => {
     const { adapter, sm } = buildConnectedClient();
+    sm.getMeta.mockReturnValue({
+      id: 'sess_1',
+      model: 'old-model',
+      reasoningEffort: 'low',
+    });
     adapter.setSessionModel.mockRejectedValueOnce(new Error('unknown provider'));
     const ws = sockets[0];
     ws.sent.length = 0;
@@ -729,8 +735,8 @@ describe('RelayClient set_session_model', () => {
     })));
     await vi.runAllTimersAsync();
 
-    expect(sm.setModel).toHaveBeenNthCalledWith(1, 'sess_1', 'missing/model');
-    expect(sm.setModel).toHaveBeenNthCalledWith(2, 'sess_1', 'old-model');
+    expect(sm.setModel).toHaveBeenNthCalledWith(1, 'sess_1', 'missing/model', undefined);
+    expect(sm.setModel).toHaveBeenNthCalledWith(2, 'sess_1', 'old-model', 'low');
     const sent = decodePulseSends(ws.sent);
     expect(sent.find(m => m.type === 'session_model_set')).toBeUndefined();
     expect(sent.find(m => m.type === 'error')?.payload.message).toContain('unknown provider');
@@ -829,7 +835,7 @@ describe('RelayClient set_session_model', () => {
     })));
 
     // Persist + ack are synchronous.
-    expect(sm.setModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4');
+    expect(sm.setModel).toHaveBeenCalledWith('sess_d', 'claude-opus-4', undefined);
     // The adapter call is chained behind ensureSessionResumed.
     await vi.runAllTimersAsync();
     expect(adapter.resumeSession).toHaveBeenCalledWith('sess_d', expect.anything());
