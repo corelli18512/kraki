@@ -603,7 +603,7 @@ final class MacAutomationDriver {
     }
 
     private func compactingGlyphAnimationRegression(id: Any?, connection: Int32) {
-        let host = NSHostingView(rootView: CompactingStatusGlyph())
+        let host = NSHostingView(rootView: MacCompactingStatusGlyph())
         host.frame = NSRect(x: 0, y: 0, width: 16, height: 16)
         let window = NSWindow(
             contentRect: host.frame,

@@ -448,6 +448,10 @@ struct SessionsSidebarView: View {
 // digest-authoritative preview. The leading preview slot is reserved for
 // coarse state only; it never exposes a transient tool or narration.
 
+/// Muted enough for a dark sidebar, but clearly distinct from a sent human
+/// message. Draft text and its keyboard glyph share this reminder color.
+private let macDraftAccent = Color(hex: 0xC65D5D)
+
 private struct MacSidebarSessionRow: View {
     @Environment(AppState.self) private var appState
     let session: SessionInfo
@@ -581,7 +585,7 @@ private struct MacSidebarSessionRow: View {
             if let previewText = projection.previewText {
                 Text(previewText)
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.textSecondary)
+                    .foregroundStyle(projection.isDraft ? macDraftAccent : Color.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             } else {
@@ -593,6 +597,79 @@ private struct MacSidebarSessionRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Compacting keeps the original 3D square-stack language rather than
+/// introducing a new filled-block icon. Each mark is an isometric square
+/// drawn as a cyan wireframe; the three marks share a vertical axis and only
+/// their vertical separation changes during the compression cycle.
+struct MacCompactingStatusGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let cycleDuration: TimeInterval = 1.8
+
+    var body: some View {
+        if reduceMotion {
+            layers(compression: 0)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 18.0)) { context in
+                let phase = context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: cycleDuration)
+                let normalized = phase / cycleDuration
+                let compression = 0.5 - 0.5 * cos(normalized * 2 * .pi)
+                layers(compression: compression)
+            }
+        }
+    }
+
+    private func layers(compression: Double) -> some View {
+        // The 3D glyph remains vertically legible at the 16pt sidebar slot.
+        // Compression closes the gaps without scaling the symbol or flashing
+        // its color, matching the approved design preview.
+        // Each layer nearly fills the 16pt leading slot horizontally. The
+        // earlier 7.2pt face was too narrow beside the other status glyphs.
+        let layerSpacing = 4.2 - 1.6 * compression
+        return ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                MacCompacting3DSquare()
+                    .stroke(Color(hex: 0x0891B2), style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round))
+                    .frame(width: 14.4, height: 7.2)
+                    .offset(y: CGFloat(index - 1) * layerSpacing)
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct MacCompacting3DSquare: Shape {
+    func path(in rect: CGRect) -> Path {
+        // Isometric square face plus its short lower extrusion. At this size
+        // the resulting outline reads as the same 3D/rhombus-like symbol as
+        // square.stack.3d.down.right, while allowing vertical gap animation.
+        let width = rect.width
+        let faceHeight = rect.height * 0.77
+        let left = rect.minX + width * 0.02
+        let right = rect.maxX - width * 0.02
+        let centerX = rect.midX
+        let top = rect.minY
+        let faceMidY = top + faceHeight * 0.5
+        let faceBottom = top + faceHeight
+        let extrusion = rect.height * 0.23
+
+        var path = Path()
+        path.move(to: CGPoint(x: centerX, y: top))
+        path.addLine(to: CGPoint(x: right, y: faceMidY))
+        path.addLine(to: CGPoint(x: centerX, y: faceBottom))
+        path.addLine(to: CGPoint(x: left, y: faceMidY))
+        path.closeSubpath()
+
+        path.move(to: CGPoint(x: left, y: faceMidY))
+        path.addLine(to: CGPoint(x: left, y: faceMidY + extrusion))
+        path.addLine(to: CGPoint(x: centerX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: right, y: faceMidY + extrusion))
+        path.addLine(to: CGPoint(x: right, y: faceMidY))
+        return path
     }
 }
 
@@ -611,7 +688,7 @@ private struct MacSessionStatusGlyph: View {
             case .active:
                 activityDots
             case .compacting:
-                CompactingStatusGlyph()
+                MacCompactingStatusGlyph()
             case .waiting:
                 LucideIcon(.messageCircleQuestion,
                            size: 14,
@@ -641,7 +718,7 @@ private struct MacSessionStatusGlyph: View {
                     LucideIcon(.keyboard,
                                size: 14,
                                strokeWidth: 2,
-                               color: Color(hex: 0x4F8C86))
+                               color: macDraftAccent)
                 } else {
                     LucideIcon(.circleUser,
                                size: 13,
