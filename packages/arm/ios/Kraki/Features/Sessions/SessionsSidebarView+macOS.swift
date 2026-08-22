@@ -626,12 +626,14 @@ struct MacCompactingStatusGlyph: View {
         // The 3D glyph remains vertically legible at the 16pt sidebar slot.
         // Compression closes the gaps without scaling the symbol or flashing
         // its color, matching the approved design preview.
-        let layerSpacing = 4.8 - 1.8 * compression
+        // Each layer nearly fills the 16pt leading slot horizontally. The
+        // earlier 7.2pt face was too narrow beside the other status glyphs.
+        let layerSpacing = 4.2 - 1.6 * compression
         return ZStack {
             ForEach(0..<3, id: \.self) { index in
                 MacCompacting3DSquare()
                     .stroke(Color(hex: 0x0891B2), style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round))
-                    .frame(width: 7.2, height: 5.0)
+                    .frame(width: 14.4, height: 7.2)
                     .offset(y: CGFloat(index - 1) * layerSpacing)
             }
         }
