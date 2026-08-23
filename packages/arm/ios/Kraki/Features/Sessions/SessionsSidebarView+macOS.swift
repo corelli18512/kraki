@@ -600,9 +600,11 @@ private struct MacSidebarSessionRow: View {
     }
 }
 
-/// Compacting uses the original square-stack language in a smaller, flat
+/// Compacting uses the original square-stack language in a flat, native
 /// form: three outlined planes share a vertical axis and only their spacing
-/// changes during compression. The color matches the Agent Message glyph.
+/// changes during compression. The planes are intentionally 30% larger than
+/// the previous compact glyph while remaining inside the fixed 16pt slot.
+/// The color matches the Agent Message glyph.
 struct MacCompactingStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let cycleDuration: TimeInterval = 1.8
@@ -622,10 +624,11 @@ struct MacCompactingStatusGlyph: View {
     }
 
     private func layers(compression: Double) -> some View {
-        // Keep each plane compact inside the fixed 16pt status slot. The
-        // animation changes vertical separation only; size and color remain
+        // D geometry: 12.5 × 6.0pt rounded planes, with a 3.64pt expanded
+        // center spacing and a 1.69pt compressed center spacing. The animation
+        // changes vertical separation only; size, color, and corner radius stay
         // stable so the glyph reads as a calm compression gesture.
-        let layerSpacing = 4.0 - 2.2 * compression
+        let layerSpacing = 3.64 - 1.95 * compression
         return ZStack {
             ForEach(0..<3, id: \.self) { index in
                 MacCompactingPlane()
@@ -633,7 +636,7 @@ struct MacCompactingStatusGlyph: View {
                         Color.krakiPrimary,
                         style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round)
                     )
-                    .frame(width: 7.2, height: 4.4)
+                    .frame(width: 12.5, height: 6.0)
                     .offset(y: CGFloat(index - 1) * layerSpacing)
             }
         }
@@ -643,14 +646,45 @@ struct MacCompactingStatusGlyph: View {
 }
 
 private struct MacCompactingPlane: Shape {
+    private let cornerRadius: CGFloat = 0.85
+
     func path(in rect: CGRect) -> Path {
-        // A single flat isometric plane, without the extrusion used by the
-        // previous 3D treatment.
+        // A single flat isometric plane with a slight radius at each vertex.
+        // It remains a plane: there is no extrusion or 3D side wall.
+        let top = CGPoint(x: rect.midX, y: rect.minY)
+        let right = CGPoint(x: rect.maxX, y: rect.midY)
+        let bottom = CGPoint(x: rect.midX, y: rect.maxY)
+        let left = CGPoint(x: rect.minX, y: rect.midY)
+        let radius = min(cornerRadius, rect.width * 0.24, rect.height * 0.24)
+
+        func moved(from point: CGPoint, toward target: CGPoint) -> CGPoint {
+            let dx = target.x - point.x
+            let dy = target.y - point.y
+            let length = max((dx * dx + dy * dy).squareRoot(), 0.001)
+            return CGPoint(
+                x: point.x + dx / length * radius,
+                y: point.y + dy / length * radius
+            )
+        }
+
+        let topBefore = moved(from: top, toward: left)
+        let topAfter = moved(from: top, toward: right)
+        let rightBefore = moved(from: right, toward: top)
+        let rightAfter = moved(from: right, toward: bottom)
+        let bottomBefore = moved(from: bottom, toward: right)
+        let bottomAfter = moved(from: bottom, toward: left)
+        let leftBefore = moved(from: left, toward: bottom)
+        let leftAfter = moved(from: left, toward: top)
+
         var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.move(to: topBefore)
+        path.addQuadCurve(to: topAfter, control: top)
+        path.addLine(to: rightBefore)
+        path.addQuadCurve(to: rightAfter, control: right)
+        path.addLine(to: bottomBefore)
+        path.addQuadCurve(to: bottomAfter, control: bottom)
+        path.addLine(to: leftBefore)
+        path.addQuadCurve(to: leftAfter, control: left)
         path.closeSubpath()
         return path
     }
