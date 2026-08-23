@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.26</title>
+            <pubDate>Sun, 23 Aug 2026 02:24:58 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.26</sparkle:fullReleaseNotesLink>
+            <sparkle:version>28</sparkle:version>
+            <sparkle:shortVersionString>0.2.26</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(mac): restore composer voice placement and flatten compacting glyph by @corelli18512 in https://github.com/corelli18512/kraki/pull/271
+* chore(mac): prepare 0.2.26 build 28 by @corelli18512 in https://github.com/corelli18512/kraki/pull/272
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.25...mac-v0.2.26
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.26/Kraki.app.zip" length="8161137" type="application/octet-stream" sparkle:edSignature="eUtENkdEQZcCTnTbIqh57xNaVM6+c2hALQUVDJ+6TT1IstKL79RkCsbzdOjh9XB13rCNAw+wJTXeQe5v/Z27Cw=="/>
+        </item>
+        <item>
             <title>0.2.25</title>
             <pubDate>Sat, 22 Aug 2026 16:50:05 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -39,25 +56,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.24/Kraki.app.zip" length="8159070" type="application/octet-stream" sparkle:edSignature="DHGh6t8EMDNZ0oikFw3/jJ3MQeaObRIPkj0tdmUjUBPDsffWNGr2jH/fy4vJYnfxKQafVEQz8KMpnZHPeXk7Bw=="/>
         </item>
-        <item>
-            <title>0.2.23</title>
-            <pubDate>Sat, 22 Aug 2026 11:57:20 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.23</sparkle:fullReleaseNotesLink>
-            <sparkle:version>25</sparkle:version>
-            <sparkle:shortVersionString>0.2.23</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): keep launch gate visibly active while loading by @corelli18512 in https://github.com/corelli18512/kraki/pull/266
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.22...mac-v0.2.23
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.23/Kraki.app.zip" length="8153166" type="application/octet-stream" sparkle:edSignature="75qh4N9hGkdIP+TVQGZMjei5r+qqpKXLxosNQ6vBAzmHbt4yJ/hkG53vzoEDtB3Pb9fgYkvtquo1RgBPx1zNDg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: dzlyLciSTxUN31OC8Wz+mKfNMEPZgxFigcR0LFbuaEPtTeYQ3shkFnB8r3YgIDusB6DihufniQ31qVOL+gB4Bw==
-length: 3948
+edSignature: oy9HUDi6Zis9HwxMRJe+EGAJ9aSedTupGkprlEFLfOC25Nc+/ETkiqGvtMEs9AM/ulJSUdtqPd/RJtbAE9E5BQ==
+length: 4069
 -->
