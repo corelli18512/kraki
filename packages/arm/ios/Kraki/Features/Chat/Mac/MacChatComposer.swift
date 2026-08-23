@@ -243,9 +243,6 @@ struct MacChatComposer: View {
     private var inputRow: some View {
         HStack(spacing: 8) {
             imageAttachButton
-            if canShowVoice && !voiceOwnsComposer {
-                inlineVoiceButton
-            }
             inputBox
             if canShowAbort { abortButton }
         }
@@ -262,6 +259,7 @@ struct MacChatComposer: View {
             } else {
                 HStack(alignment: .center, spacing: 0) {
                     textFieldForMode
+                    if canShowVoice { inlineVoiceButton }
                     sendIconButton
                 }
             }

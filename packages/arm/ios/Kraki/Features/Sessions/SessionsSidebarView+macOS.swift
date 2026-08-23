@@ -600,10 +600,9 @@ private struct MacSidebarSessionRow: View {
     }
 }
 
-/// Compacting keeps the original 3D square-stack language rather than
-/// introducing a new filled-block icon. Each mark is an isometric square
-/// drawn as a cyan wireframe; the three marks share a vertical axis and only
-/// their vertical separation changes during the compression cycle.
+/// Compacting uses the original square-stack language in a smaller, flat
+/// form: three outlined planes share a vertical axis and only their spacing
+/// changes during compression. The color matches the Agent Message glyph.
 struct MacCompactingStatusGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let cycleDuration: TimeInterval = 1.8
@@ -623,17 +622,18 @@ struct MacCompactingStatusGlyph: View {
     }
 
     private func layers(compression: Double) -> some View {
-        // The 3D glyph remains vertically legible at the 16pt sidebar slot.
-        // Compression closes the gaps without scaling the symbol or flashing
-        // its color, matching the approved design preview.
-        // Each layer nearly fills the 16pt leading slot horizontally. The
-        // earlier 7.2pt face was too narrow beside the other status glyphs.
-        let layerSpacing = 4.2 - 1.6 * compression
+        // Keep each plane compact inside the fixed 16pt status slot. The
+        // animation changes vertical separation only; size and color remain
+        // stable so the glyph reads as a calm compression gesture.
+        let layerSpacing = 4.0 - 2.2 * compression
         return ZStack {
             ForEach(0..<3, id: \.self) { index in
-                MacCompacting3DSquare()
-                    .stroke(Color(hex: 0x0891B2), style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round))
-                    .frame(width: 14.4, height: 7.2)
+                MacCompactingPlane()
+                    .stroke(
+                        Color.krakiPrimary,
+                        style: StrokeStyle(lineWidth: 0.9, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: 7.2, height: 4.4)
                     .offset(y: CGFloat(index - 1) * layerSpacing)
             }
         }
@@ -642,33 +642,16 @@ struct MacCompactingStatusGlyph: View {
     }
 }
 
-private struct MacCompacting3DSquare: Shape {
+private struct MacCompactingPlane: Shape {
     func path(in rect: CGRect) -> Path {
-        // Isometric square face plus its short lower extrusion. At this size
-        // the resulting outline reads as the same 3D/rhombus-like symbol as
-        // square.stack.3d.down.right, while allowing vertical gap animation.
-        let width = rect.width
-        let faceHeight = rect.height * 0.77
-        let left = rect.minX + width * 0.02
-        let right = rect.maxX - width * 0.02
-        let centerX = rect.midX
-        let top = rect.minY
-        let faceMidY = top + faceHeight * 0.5
-        let faceBottom = top + faceHeight
-        let extrusion = rect.height * 0.23
-
+        // A single flat isometric plane, without the extrusion used by the
+        // previous 3D treatment.
         var path = Path()
-        path.move(to: CGPoint(x: centerX, y: top))
-        path.addLine(to: CGPoint(x: right, y: faceMidY))
-        path.addLine(to: CGPoint(x: centerX, y: faceBottom))
-        path.addLine(to: CGPoint(x: left, y: faceMidY))
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
         path.closeSubpath()
-
-        path.move(to: CGPoint(x: left, y: faceMidY))
-        path.addLine(to: CGPoint(x: left, y: faceMidY + extrusion))
-        path.addLine(to: CGPoint(x: centerX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: right, y: faceMidY + extrusion))
-        path.addLine(to: CGPoint(x: right, y: faceMidY))
         return path
     }
 }
