@@ -573,13 +573,18 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// animation-end / user touch / a safety timeout.
     private var suppressPagingForBottom = false
 
-    /// Floating "jump to latest" button, shown only when the user has scrolled
-    /// away from the live bottom. Tapping re-anchors at the chat's true newest
-    /// end and glides down. A UIKit sibling of the collection view (the SwiftUI
-    /// `ChatPerfListView` wrapper mounts the VC bare), tinted by the agent hue.
+    /// Two floating navigation controls share the same lower-right rail:
+    /// "latest message start" places the newest bubble below the top chrome,
+    /// while "latest" keeps the existing live-tail behavior. They are UIKit
+    /// siblings of the collection view so the SwiftUI wrapper stays simple.
     private let jumpButton = UIButton(type: .system)
+    private let latestMessageStartButton = UIButton(type: .system)
     private var jumpButtonBlur: UIVisualEffectView?
+    private var latestMessageStartButtonBlur: UIVisualEffectView?
     private var jumpButtonBottomConstraint: NSLayoutConstraint?
+    private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
+    private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
+    private static let latestMessageTopPadding: CGFloat = 118
 
     /// Flip to `true` for the spinner-free local-seamless experiment.
     /// `false` = the robust, production-style experience: show a loading
@@ -1077,8 +1082,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                             for: .normal)
         jumpButton.tintColor = agentTint()
         jumpButton.addTarget(self, action: #selector(onBottomTapped), for: .touchUpInside)
-        jumpButton.alpha = 0                 // hidden until scrolled up
+        jumpButton.alpha = 0
         jumpButton.isHidden = true
+        jumpButton.accessibilityLabel = "Jump to latest"
 
         view.addSubview(jumpButton)
         jumpButton.addSubview(blur)
@@ -1100,27 +1106,128 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             blur.topAnchor.constraint(equalTo: jumpButton.topAnchor),
             blur.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor),
         ])
+
+        let startBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        startBlur.translatesAutoresizingMaskIntoConstraints = false
+        startBlur.isUserInteractionEnabled = false
+        startBlur.layer.cornerRadius = 15
+        startBlur.layer.masksToBounds = true
+        startBlur.layer.borderWidth = 0.5
+        startBlur.layer.borderColor = agentTint().withAlphaComponent(0.25).cgColor
+
+        latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
+        latestMessageStartButton.setImage(
+            UIImage(
+                systemName: "arrow.up.to.line",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            ),
+            for: .normal
+        )
+        latestMessageStartButton.tintColor = agentTint()
+        latestMessageStartButton.addTarget(self, action: #selector(onLatestMessageStartTapped), for: .touchUpInside)
+        latestMessageStartButton.alpha = 0
+        latestMessageStartButton.isHidden = true
+        latestMessageStartButton.accessibilityLabel = "Jump to start of latest message"
+
+        view.addSubview(latestMessageStartButton)
+        latestMessageStartButton.addSubview(startBlur)
+        latestMessageStartButton.sendSubviewToBack(startBlur)
+        latestMessageStartButtonBlur = startBlur
+
+        NSLayoutConstraint.activate([
+            latestMessageStartButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
+            latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.topAnchor, constant: -8),
+            latestMessageStartButton.widthAnchor.constraint(equalTo: jumpButton.widthAnchor),
+            latestMessageStartButton.heightAnchor.constraint(equalTo: jumpButton.heightAnchor),
+            startBlur.leadingAnchor.constraint(equalTo: latestMessageStartButton.leadingAnchor),
+            startBlur.trailingAnchor.constraint(equalTo: latestMessageStartButton.trailingAnchor),
+            startBlur.topAnchor.constraint(equalTo: latestMessageStartButton.topAnchor),
+            startBlur.bottomAnchor.constraint(equalTo: latestMessageStartButton.bottomAnchor),
+        ])
     }
 
-    /// Show the jump button only when the user has scrolled away from the live
-    /// bottom (or newer history remains unloaded below). Animated fade so it
-    /// doesn't pop during the glide.
+    /// The newest bubble's start gets a stable reading position below the
+    /// navigation glass. Clamp to the scrollable range when the bubble is
+    /// shorter than the viewport or the conversation has little history.
+    private func latestMessageStartOffset() -> CGFloat? {
+        guard collectionView.numberOfSections > 0 else { return nil }
+        let lastItem = collectionView.numberOfItems(inSection: 0) - 1
+        guard lastItem >= 0 else { return nil }
+        let indexPath = IndexPath(item: lastItem, section: 0)
+        guard let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame else { return nil }
+
+        let minimumY = -collectionView.adjustedContentInset.top
+        let maximumY = max(
+            minimumY,
+            collectionView.contentSize.height
+                - collectionView.bounds.height
+                + collectionView.adjustedContentInset.bottom
+        )
+        let desired = frame.minY - Self.latestMessageTopPadding
+        return min(maximumY, max(minimumY, desired))
+    }
+
+    /// Show each control only when its own target is meaningfully away. This
+    /// keeps "latest" hidden at the tail while the start control remains
+    /// available for a long newest reply.
     private func updateJumpButtonVisibility() {
         guard collectionView != nil else { return }
         let farFromBottom = distanceToBottom() > 1.5 * collectionView.bounds.height
-        let shouldShow = !suppressPagingForBottom && (farFromBottom || !atNewest)
-        let isShown = !jumpButton.isHidden && jumpButton.alpha > 0.5
-        guard shouldShow != isShown else { return }
-        if shouldShow { jumpButton.isHidden = false }
-        UIView.animate(withDuration: 0.2) {
-            self.jumpButton.alpha = shouldShow ? 1 : 0
-        } completion: { _ in
-            if !shouldShow { self.jumpButton.isHidden = true }
+        let shouldShowBottom = !suppressPagingForBottom && (farFromBottom || !atNewest)
+        let shouldShowStart = !suppressPagingForBottom
+            && latestMessageStartOffset().map {
+                abs(collectionView.contentOffset.y - $0) > 24
+            } == true
+        setJumpButtonVisibility(jumpButton, shouldShow: shouldShowBottom)
+        setJumpButtonVisibility(latestMessageStartButton, shouldShow: shouldShowStart)
+    }
+
+    private func setJumpButtonVisibility(_ button: UIButton, shouldShow: Bool) {
+        let key = ObjectIdentifier(button)
+        guard jumpButtonVisibilityTargets[key] != shouldShow else { return }
+        jumpButtonVisibilityTargets[key] = shouldShow
+        let generation = (jumpButtonVisibilityGenerations[key] ?? 0) + 1
+        jumpButtonVisibilityGenerations[key] = generation
+        button.layer.removeAllAnimations()
+        if shouldShow { button.isHidden = false }
+        UIView.animate(withDuration: 0.2) { [weak button] in
+            button?.alpha = shouldShow ? 1 : 0
+        } completion: { [weak self, weak button] finished in
+            guard let self, let button,
+                  finished,
+                  self.jumpButtonVisibilityTargets[key] == shouldShow,
+                  self.jumpButtonVisibilityGenerations[key] == generation else { return }
+            if !shouldShow { button.isHidden = true }
         }
     }
 
     @objc private func onBottomTapped() {
         jumpToLiveBottom(animated: true)
+    }
+
+    @objc private func onLatestMessageStartTapped() {
+        jumpToLatestMessageStart(animated: true)
+    }
+
+    private func jumpToLatestMessageStart(animated: Bool) {
+        suppressPagingForBottom = true
+        if !atNewest {
+            reanchorNewest()
+        }
+        collectionView.layoutIfNeeded()
+        guard let target = latestMessageStartOffset() else {
+            endBottomGlide()
+            return
+        }
+        followingBottom = false
+        collectionView.setContentOffset(
+            CGPoint(x: collectionView.contentOffset.x, y: target),
+            animated: animated
+        )
+        updateJumpButtonVisibility()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.endBottomGlide()
+        }
     }
 
     /// Re-anchor at the chat's true newest end, then pin the viewport to the

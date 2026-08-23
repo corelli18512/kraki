@@ -513,6 +513,10 @@ final class MacChatDocumentView: NSView {
         return itemFrames[index]
     }
 
+    func latestItemFrame() -> NSRect? {
+        itemFrames.last
+    }
+
     /// Materialize only the viewport plus a small runway. A scrollbar-thumb
     /// drag may jump across the whole document in one event, so it never does
     /// cold Markdown/TextKit work synchronously; idle warming fills those
@@ -1876,6 +1880,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var lastPresentationLogSignature = ""
     private var presentationHealthWorkItem: DispatchWorkItem?
     private var geometryAnchorLock: (key: String, delta: CGFloat)?
+    private var latestStartJumpPending = false
     private var bubbleActionMouseMonitor: Any?
     private var pendingBubbleActionClick: (
         target: MacBubbleActionHitTarget?,
@@ -1886,8 +1891,15 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private let jumpMaterial = NSVisualEffectView()
     private let jumpButton = NSButton()
+    private let latestStartMaterial = NSVisualEffectView()
+    private let latestStartButton = NSButton()
+    private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
+    private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
+    private let latestMessageTopPadding: CGFloat = 72
 
     var onJumpToLatest: (() -> Void)?
+    var onRequestLatestTail: (() -> Void)?
+    var hasPendingLatestStartJump: Bool { latestStartJumpPending }
     var onScrolledNearTop: (() -> Void)?
     var onScrolledNearBottom: (() -> Void)?
     var onRenderedHeightsSettled: (() -> Void)?
@@ -1978,15 +1990,17 @@ final class MacChatScrollView: MacSmoothScrollView {
             self?.requestInitialTailTrimIfReady()
         }
 
-        jumpMaterial.material = .popover
-        jumpMaterial.blendingMode = .withinWindow
-        jumpMaterial.state = .active
-        jumpMaterial.wantsLayer = true
-        jumpMaterial.layer?.cornerRadius = 15
-        jumpMaterial.layer?.masksToBounds = true
-        jumpMaterial.layer?.borderWidth = 0.5
-        jumpMaterial.isHidden = true
-        addSubview(jumpMaterial)
+        for material in [jumpMaterial, latestStartMaterial] {
+            material.material = .popover
+            material.blendingMode = .withinWindow
+            material.state = .active
+            material.wantsLayer = true
+            material.layer?.cornerRadius = 15
+            material.layer?.masksToBounds = true
+            material.layer?.borderWidth = 0.5
+            material.isHidden = true
+            addSubview(material)
+        }
 
         jumpButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Jump to latest")
         jumpButton.imagePosition = .imageOnly
@@ -1996,6 +2010,18 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButton.isHidden = true
         jumpButton.setAccessibilityLabel("Jump to latest")
         addSubview(jumpButton)
+
+        latestStartButton.image = NSImage(
+            systemSymbolName: "arrow.up.to.line",
+            accessibilityDescription: "Jump to start of latest message"
+        )
+        latestStartButton.imagePosition = .imageOnly
+        latestStartButton.isBordered = false
+        latestStartButton.target = self
+        latestStartButton.action = #selector(latestStartTapped)
+        latestStartButton.isHidden = true
+        latestStartButton.setAccessibilityLabel("Jump to start of latest message")
+        addSubview(latestStartButton)
 
         bubbleActionMouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
@@ -2149,6 +2175,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         thumbViewportGeneration += 1
         thumbViewportUpdateScheduled = false
         pendingBubbleActionClick = nil
+        latestStartJumpPending = false
+        jumpButtonVisibilityTargets.removeAll(keepingCapacity: true)
+        jumpButtonVisibilityGenerations.removeAll(keepingCapacity: true)
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
         olderEdgeArmed = false
@@ -2372,7 +2401,9 @@ final class MacChatScrollView: MacSmoothScrollView {
             return NSColor(calibratedHue: hsb.0, saturation: hsb.1, brightness: hsb.2, alpha: 1)
         }
         jumpButton.contentTintColor = tint
+        latestStartButton.contentTintColor = tint
         jumpMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
+        latestStartMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
     }
 
     override func layout() {
@@ -2401,8 +2432,16 @@ final class MacChatScrollView: MacSmoothScrollView {
             width: 52,
             height: 30
         )
+        let latestStartFrame = NSRect(
+            x: jumpFrame.minX,
+            y: jumpFrame.minY - 8 - jumpFrame.height,
+            width: jumpFrame.width,
+            height: jumpFrame.height
+        )
         jumpMaterial.frame = jumpFrame
         jumpButton.frame = jumpFrame
+        latestStartMaterial.frame = latestStartFrame
+        latestStartButton.frame = latestStartFrame
     }
 
     @objc private func jumpTapped() {
@@ -2416,6 +2455,48 @@ final class MacChatScrollView: MacSmoothScrollView {
         onJumpToLatest?()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.suppressPagingForBottom = false
+        }
+    }
+
+    @objc private func latestStartTapped() {
+        geometryAnchorLock = nil
+        suppressNewerPagingAfterOlder = false
+        latestStartJumpPending = hasUnloadedNewer
+        suppressPagingForBottom = true
+        if hasUnloadedNewer {
+            // The true newest item may not be in the current sliding window.
+            // Ask the owner to re-anchor first; updateNSView completes this jump
+            // after the authoritative tail snapshot lands.
+            onRequestLatestTail?()
+        } else {
+            completeLatestStartJump()
+        }
+    }
+
+    func completeLatestStartJump() {
+        latestStartJumpPending = false
+        guard let frame = chatDocumentView.latestItemFrame() else {
+            suppressPagingForBottom = false
+            updateJumpButtonVisibility(animated: false)
+            return
+        }
+        let minimumY = -topContentInset
+        let maximumY = max(
+            minimumY,
+            chatDocumentView.frame.height - contentView.bounds.height
+        )
+        let target = min(maximumY, max(minimumY, frame.minY - latestMessageTopPadding))
+        followingBottom = false
+        let point = NSPoint(x: contentView.bounds.origin.x, y: target)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            contentView.animator().bounds.origin = point
+        }
+        updateJumpButtonVisibility(animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            self.suppressPagingForBottom = false
+            self.updateJumpButtonVisibility(animated: false)
         }
     }
 
@@ -2811,22 +2892,66 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
     var isEntryBottomLocked: Bool { entryBottomLocked }
 
+    private func latestMessageStartTarget() -> CGFloat? {
+        guard let frame = chatDocumentView.latestItemFrame() else { return nil }
+        let minimumY = -topContentInset
+        let maximumY = max(
+            minimumY,
+            chatDocumentView.frame.height - contentView.bounds.height
+        )
+        let desired = frame.minY - latestMessageTopPadding
+        return min(maximumY, max(minimumY, desired))
+    }
+
     private func updateJumpButtonVisibility(animated: Bool) {
         let farFromBottom = distanceToBottom > 1.5 * max(contentView.bounds.height, 1)
-        let shouldShow = farFromBottom || hasUnloadedNewer
-        guard shouldShow != !jumpButton.isHidden else { return }
+        let shouldShowBottom = !suppressPagingForBottom && (farFromBottom || hasUnloadedNewer)
+        let shouldShowStart = !suppressPagingForBottom
+            && latestMessageStartTarget().map {
+                abs(contentView.bounds.minY - $0) > 24
+            } == true
+        setJumpButtonVisibility(
+            jumpButton,
+            material: jumpMaterial,
+            shouldShow: shouldShowBottom,
+            animated: animated
+        )
+        setJumpButtonVisibility(
+            latestStartButton,
+            material: latestStartMaterial,
+            shouldShow: shouldShowStart,
+            animated: animated
+        )
+    }
+
+    private func setJumpButtonVisibility(
+        _ button: NSButton,
+        material: NSVisualEffectView,
+        shouldShow: Bool,
+        animated: Bool
+    ) {
+        let key = ObjectIdentifier(button)
+        guard jumpButtonVisibilityTargets[key] != shouldShow else { return }
+        jumpButtonVisibilityTargets[key] = shouldShow
+        let generation = (jumpButtonVisibilityGenerations[key] ?? 0) + 1
+        jumpButtonVisibilityGenerations[key] = generation
+        button.layer?.removeAllAnimations()
+        material.layer?.removeAllAnimations()
         if shouldShow {
-            jumpButton.isHidden = false
-            jumpMaterial.isHidden = false
+            button.isHidden = false
+            material.isHidden = false
         }
         let changes = {
-            self.jumpButton.alphaValue = shouldShow ? 1 : 0
-            self.jumpMaterial.alphaValue = shouldShow ? 1 : 0
+            button.alphaValue = shouldShow ? 1 : 0
+            material.alphaValue = shouldShow ? 1 : 0
         }
-        let completion = {
+        let completion = { [weak self, weak button, weak material] in
+            guard let self, let button, let material,
+                  self.jumpButtonVisibilityTargets[key] == shouldShow,
+                  self.jumpButtonVisibilityGenerations[key] == generation else { return }
             if !shouldShow {
-                self.jumpButton.isHidden = true
-                self.jumpMaterial.isHidden = true
+                button.isHidden = true
+                material.isHidden = true
             }
         }
         if animated {
@@ -2909,6 +3034,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let atOldest: Bool
     let atNewest: Bool
     let onJumpToLatest: () -> Void
+    let onRequestLatestTail: () -> Void
     let onLoadOlder: () -> Void
     let onLoadNewer: () -> Void
     let onOpenSteps: (Int, Bool) -> Void
@@ -2931,6 +3057,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             return documentView?.measuredHeight(forSeq: seq) ?? 0
         }
         MacChatPerf.log("make session=\(sessionId.prefix(12)) pxWindow=4800")
+        scrollView.onRequestLatestTail = onRequestLatestTail
         scrollView.onRenderedHeightsSettled = { [weak scrollView] in
             DispatchQueue.main.async { [weak scrollView] in
                 guard let scrollView,
@@ -2964,6 +3091,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
     static func dismantleNSView(_ scrollView: MacChatScrollView, coordinator: Coordinator) {
         scrollView.chatDocumentView.tearDown()
         scrollView.onJumpToLatest = nil
+        scrollView.onRequestLatestTail = nil
         scrollView.onScrolledNearTop = nil
         scrollView.onScrolledNearBottom = nil
         scrollView.onRenderedHeightsSettled = nil
@@ -2992,6 +3120,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             guard sid == sessionId else { return 0 }
             return documentView?.measuredHeight(forSeq: seq) ?? 0
         }
+        scrollView.onRequestLatestTail = onRequestLatestTail
         scrollView.onRenderedHeightsSettled = { [weak scrollView] in
             DispatchQueue.main.async { [weak scrollView] in
                 guard let scrollView,
@@ -3092,6 +3221,9 @@ struct MacChatListRepresentable: NSViewRepresentable {
             atOldest: atOldest,
             atNewest: atNewest
         )
+        if scrollView.hasPendingLatestStartJump, atNewest {
+            scrollView.completeLatestStartJump()
+        }
         let totalMs = (CACurrentMediaTime() - totalStarted) * 1_000
         if totalMs >= 16 {
             MacChatPerf.slow(

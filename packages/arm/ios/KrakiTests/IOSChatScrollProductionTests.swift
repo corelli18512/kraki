@@ -17,6 +17,40 @@ final class IOSChatScrollProductionTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testLatestMessageJumpControls() throws {
+        let fixture = try makeFixture(totalMessages: 80, lastMessageParagraphs: 60)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+
+        drainMainRunLoop(milliseconds: 900)
+        collectionView.layoutIfNeeded()
+        let initial = snapshot(collectionView)
+        XCTAssertLessThanOrEqual(abs(initial.distanceToBottom), 1.5)
+
+        let buttons = findButtons(in: viewController.view)
+        let startButton = try XCTUnwrap(
+            buttons.first { $0.accessibilityLabel == "Jump to start of latest message" }
+        )
+        let bottomButton = try XCTUnwrap(
+            buttons.first { $0.accessibilityLabel == "Jump to latest" }
+        )
+        XCTAssertFalse(startButton.isHidden, "long latest message should expose its start control at the tail")
+        XCTAssertTrue(bottomButton.isHidden, "latest-tail control is unnecessary while already at the tail")
+
+        startButton.sendActions(for: .touchUpInside)
+        drainMainRunLoop(milliseconds: 900)
+        collectionView.layoutIfNeeded()
+
+        let afterStart = snapshot(collectionView)
+        let latest = try XCTUnwrap(afterStart.visibleBubbles.last(where: { $0.id == "ios-scroll-gate:80" }))
+        XCTAssertGreaterThanOrEqual(latest.screenY, 100,
+                                    "latest message start must remain below the top navigation glass")
+        XCTAssertLessThanOrEqual(latest.screenY, 140,
+                                 "latest message start should land near the reading position")
+        XCTAssertGreaterThan(afterStart.distanceToBottom, 100,
+                             "latest-message-start must not pin the viewport to the tail")
+    }
+
     func testProductionScrollGate() throws {
         let fixture = try makeFixture(totalMessages: 240)
         let viewController = fixture.viewController
@@ -172,7 +206,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
         }
     }
 
-    private func makeFixture(totalMessages: Int) throws -> Fixture {
+    private func makeFixture(totalMessages: Int, lastMessageParagraphs: Int = 4) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-ios-scroll-gate-\(UUID().uuidString)", isDirectory: true)
         temporaryRoots.append(root)
@@ -181,7 +215,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
         let messages = (1...totalMessages).map { seq in
             let paragraph = String(
                 repeating: "Message \(seq): a realistic wrapped response keeps pagination anchored while the viewport moves. ",
-                count: 4
+                count: seq == totalMessages ? lastMessageParagraphs : 4
             )
             return ChatMessage(
                 type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
@@ -239,6 +273,15 @@ final class IOSChatScrollProductionTests: XCTestCase {
             if let collectionView = findCollectionView(in: child) { return collectionView }
         }
         return nil
+    }
+
+    private func findButtons(in view: UIView) -> [UIButton] {
+        var result: [UIButton] = []
+        if let button = view as? UIButton { result.append(button) }
+        for child in view.subviews {
+            result.append(contentsOf: findButtons(in: child))
+        }
+        return result
     }
 
     private func snapshot(_ collectionView: UICollectionView) -> ScrollSnapshot {

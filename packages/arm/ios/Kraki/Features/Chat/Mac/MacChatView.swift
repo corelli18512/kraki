@@ -466,6 +466,9 @@ struct MacChatView: View {
                 onJumpToLatest: {
                     reanchorNewest(viewModel)
                 },
+                onRequestLatestTail: {
+                    reanchorNewest(viewModel)
+                },
                 onLoadOlder: { viewModel.loadOlderIfPossible() },
                 onLoadNewer: {
                     if viewModel.pageNewerRaw() {
