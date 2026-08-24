@@ -1005,6 +1005,30 @@ final class TextKitPureSpineTests: XCTestCase {
         )
     }
 
+    func testLongQuestionTextExpandsActionHeightInsteadOfTruncating() {
+        let short = ChatMessage(
+            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
+            payload: [
+                "id": AnyCodable("short-question"),
+                "question": AnyCodable("Choose one"),
+                "choices": AnyCodable(["Wait"]),
+            ])
+        let long = ChatMessage(
+            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
+            payload: [
+                "id": AnyCodable("long-question"),
+                "question": AnyCodable(
+                    "This is a deliberately long pending question that must wrap across multiple lines inside the bubble before the answer choices begin, rather than being clipped at the bottom of the live card."
+                ),
+                "choices": AnyCodable(["Wait"]),
+            ])
+        let width: CGFloat = 280
+        XCTAssertGreaterThan(
+            TKActionMeasure.height(action: long, width: width),
+            TKActionMeasure.height(action: short, width: width) + 10
+        )
+    }
+
     func testDiscussWritePermissionUsesExecuteAction() {
         XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "write_file"))
         XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "create_file"))

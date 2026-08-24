@@ -40,6 +40,10 @@ private struct MacPermissionButtonFramePreferenceKey: PreferenceKey {
 struct MacBubbleActionSlot: View {
     private static let actionCoordinateSpace = "mac-bubble-action-space"
     let action: ChatMessage
+    /// `NSHostingView.fittingSize` otherwise measures the SwiftUI tree at its
+    /// unconstrained natural width. Supplying the bubble's content width makes
+    /// multiline questions wrap during both measurement and rendering.
+    var layoutWidth: CGFloat?
     var sessionMode: SessionMode = .discuss
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
@@ -68,6 +72,7 @@ struct MacBubbleActionSlot: View {
             default: EmptyView()
             }
         }
+        .frame(width: layoutWidth, alignment: .leading)
         .coordinateSpace(name: Self.actionCoordinateSpace)
         .onPreferenceChange(MacQuestionChoiceFramePreferenceKey.self) { frames in
             onQuestionChoiceFramesChanged(frames)
@@ -268,6 +273,11 @@ struct MacBubbleActionSlot: View {
                     Text(MacLiveMarkdown.attributed(question))
                         .font(.system(size: 14))
                         .foregroundStyle(Color.textPrimary)
+                        // The question sits above the choice stack inside a
+                        // self-sized AppKit hosting view. Keep its full
+                        // multiline height in the action measurement so the
+                        // bottom of the bubble cannot clip the last lines.
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
