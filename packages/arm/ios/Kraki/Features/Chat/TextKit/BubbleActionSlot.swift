@@ -182,6 +182,10 @@ struct BubbleActionSlot: View {
                     Text(LiveMarkdown.attributed(question))
                         .font(.system(size: 14))
                         .foregroundStyle(Color.textPrimary)
+                        // Keep multiline question text in the action host's
+                        // intrinsic height so the bottom of the bubble cannot
+                        // clip the final lines.
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }

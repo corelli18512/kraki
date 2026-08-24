@@ -1399,6 +1399,7 @@ final class MacChatBubbleCell: NSView {
         actionHost.rootView = content.action.map { action in
             MacBubbleActionSlot(
                 action: action,
+                layoutWidth: content.bodyTextWidth,
                 sessionMode: sessionMode,
                 onResolvePermission: { [weak self] id, tool, decision in
                     self?.onResolvePermission?(id, tool, decision)
@@ -1746,6 +1747,7 @@ final class MacChatBubbleCell: NSView {
         guard let action, action.type != "compaction" else { return 0 }
         let host = NSHostingView(rootView: MacBubbleActionSlot(
             action: action,
+            layoutWidth: width,
             sessionMode: sessionMode,
             onResolvePermission: onResolvePermission ?? { _, _, _ in },
             onAnswerQuestion: onAnswerQuestion ?? { _, _ in }
