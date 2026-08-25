@@ -97,6 +97,29 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         } else if ProcessInfo.processInfo.environment["KRAKI_CODE_HIGHLIGHT_UPGRADE_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runCodeHighlightUpgradeBenchmark() }
+        } else if ProcessInfo.processInfo.environment["KRAKI_VOICE_TRANSCRIPT_SCROLL_BENCH"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            DispatchQueue.main.async {
+                let result = MacComposerVoiceScrollRegression.run()
+                NSLog("[voice-scroll-regression] passed=%d scrollView=%d exceeds=%d fixedViewport=%d tailAttached=%d viewport=%.1f document=%.1f",
+                      result["passed"] as? Bool == true ? 1 : 0,
+                      result["scrollView"] as? Bool == true ? 1 : 0,
+                      result["contentExceedsViewport"] as? Bool == true ? 1 : 0,
+                      result["fixedViewport"] as? Bool == true ? 1 : 0,
+                      result["tailAttached"] as? Bool == true ? 1 : 0,
+                      result["viewportHeight"] as? CGFloat ?? 0,
+                      result["documentHeight"] as? CGFloat ?? 0)
+                NSLog("[voice-scroll-regression-content] length=%d",
+                      result["documentLength"] as? Int ?? 0)
+                NSLog("[voice-scroll-regression-layout] scrollWidth=%.1f clipWidth=%.1f measured=%.1f",
+                      result["scrollWidth"] as? CGFloat ?? 0,
+                      result["clipWidth"] as? CGFloat ?? 0,
+                      result["measuredHeight"] as? CGFloat ?? 0)
+                NSLog("[voice-scroll-regression-origin] originY=%.1f documentRect=%.1f",
+                      result["originY"] as? CGFloat ?? 0,
+                      result["documentRectHeight"] as? CGFloat ?? 0)
+                NSApp.terminate(nil)
+            }
         } else if ProcessInfo.processInfo.environment["KRAKI_VOICE_TRANSCRIPT_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
             DispatchQueue.main.async { [weak self] in self?.runVoiceTranscriptRegression() }
