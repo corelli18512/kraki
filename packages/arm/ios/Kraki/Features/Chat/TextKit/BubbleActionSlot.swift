@@ -20,24 +20,27 @@ struct BubbleActionSlot: View {
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
 
     var body: some View {
-        switch action.type {
-        case "tool_start": toolChip(action, running: true)
-        case "tool_complete": toolChip(action, running: false)
-        case "tool_batch":
-            let running = action.payload["running"]?.intValue ?? 0
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.mini)
-                Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
-                    .font(.system(size: 13)).foregroundStyle(Color.textSecondary)
-                Spacer(minLength: 0)
+        Group {
+            switch action.type {
+            case "tool_start": toolChip(action, running: true)
+            case "tool_complete": toolChip(action, running: false)
+            case "tool_batch":
+                let running = action.payload["running"]?.intValue ?? 0
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
+                        .font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            case "permission": permissionInput(action)
+            case "question": questionInput(action)
+            case "user_abort": terminalOutcome(action, failed: false)
+            case "failed": terminalOutcome(action, failed: true)
+            default: EmptyView()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case "permission": permissionInput(action)
-        case "question": questionInput(action)
-        case "user_abort": terminalOutcome(action, failed: false)
-        case "failed": terminalOutcome(action, failed: true)
-        default: EmptyView()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func terminalOutcome(_ m: ChatMessage, failed: Bool) -> some View {
@@ -202,6 +205,8 @@ struct BubbleActionSlot: View {
                     Text(LiveMarkdown.attributed(answer))
                         .font(.system(size: 13))
                         .foregroundStyle(Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -260,6 +265,7 @@ final class BubbleActionHostView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        clipsToBounds = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -280,10 +286,13 @@ final class BubbleActionHostView: UIView {
         if let existing = hostingController {
             existing.rootView = slot
             existing.view.invalidateIntrinsicContentSize()
+            existing.view.setNeedsLayout()
         } else if slot != nil {
             let host = UIHostingController(rootView: slot)
             host.view.backgroundColor = .clear
+            host.view.clipsToBounds = true
             host.view.translatesAutoresizingMaskIntoConstraints = false
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             host.view.frame = bounds
             addSubview(host.view)
             hostingController = host
@@ -313,7 +322,8 @@ final class BubbleActionHostView: UIView {
         super.layoutSubviews()
         guard let hv = hostingController?.view else { return }
         hv.frame = bounds
-        let target = CGSize(width: bounds.width, height: UIView.layoutFittingCompressedSize.height)
+        hv.setNeedsLayout()
+        let target = CGSize(width: max(1, bounds.width), height: UIView.layoutFittingCompressedSize.height)
         let fit = hv.systemLayoutSizeFitting(target,
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
@@ -325,11 +335,13 @@ final class BubbleActionHostView: UIView {
 
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         guard let hv = hostingController?.view else { return 0 }
-        hv.frame = CGRect(x: 0, y: 0, width: width, height: 1)
-        let fit = hv.systemLayoutSizeFitting(CGSize(width: width, height: .greatestFiniteMagnitude),
+        hv.frame = CGRect(x: 0, y: 0, width: max(1, width), height: 1)
+        hv.setNeedsLayout()
+        hv.layoutIfNeeded()
+        let fit = hv.systemLayoutSizeFitting(CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-        return fit.height
+        return max(1, fit.height)
     }
 }
 

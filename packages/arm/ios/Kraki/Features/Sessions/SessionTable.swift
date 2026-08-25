@@ -80,6 +80,13 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// has actually changed.
     private var lastAppliedIds: [String] = []
     private var lastAppliedScrollToTopSignal: Int = 0
+    /// Diffable applies are asynchronous. Relay preview updates can arrive
+    /// faster than UIKit finishes animating a reorder, so never overlap two
+    /// snapshots; retain only the latest request and apply it after the active
+    /// transaction completes.
+    private var snapshotApplyInFlight = false
+    private var pendingSnapshotApply = false
+    private var pendingSnapshotAnimated = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -149,6 +156,15 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
 
     func applySnapshot(animated: Bool) {
+        if snapshotApplyInFlight {
+            pendingSnapshotApply = true
+            pendingSnapshotAnimated = pendingSnapshotAnimated || animated
+            return
+        }
+        applySnapshotNow(animated: animated)
+    }
+
+    private func applySnapshotNow(animated: Bool) {
         guard isViewLoaded, let appState else {
             return
         }
@@ -229,7 +245,18 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         // First snapshot is non-animated; subsequent ones animate moves.
         let wasInitialSnapshot = !didApplyInitialSnapshot
         let shouldAnimate = animated && didApplyInitialSnapshot
-        dataSource.apply(snapshot, animatingDifferences: shouldAnimate)
+        snapshotApplyInFlight = true
+        dataSource.apply(snapshot, animatingDifferences: shouldAnimate) { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.snapshotApplyInFlight = false
+                guard self.pendingSnapshotApply else { return }
+                let nextAnimated = self.pendingSnapshotAnimated
+                self.pendingSnapshotApply = false
+                self.pendingSnapshotAnimated = false
+                self.applySnapshot(animated: nextAnimated)
+            }
+        }
         lastAppliedIds = ids
         lastAppliedScrollToTopSignal = scrollToTopSignal
         didApplyInitialSnapshot = true

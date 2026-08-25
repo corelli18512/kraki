@@ -61,6 +61,15 @@ enum IOSImageGalleryLayout {
         return CGSize(width: width, height: height)
     }
 
+    /// Width of each card in the offset stack. Never force a minimum wider
+    /// than the host: iPad split view / Stage Manager and narrow test windows
+    /// can make the bubble less than 120pt wide.
+    static func stackedCardWidth(maxWidth: CGFloat, visibleCount: Int) -> CGFloat {
+        let count = max(1, min(visibleCount, maximumStackDepth))
+        let offsets = CGFloat(count - 1) * multiStackOffset
+        return max(1, min(maxWidth - offsets, 360))
+    }
+
     static func sourceSize(for ref: ContentRef, fallbackWidth: CGFloat) -> CGSize {
         if let width = ref.width, let height = ref.height, width > 0, height > 0 {
             return CGSize(width: width, height: height)
@@ -92,6 +101,8 @@ struct BubbleImageGallery: View {
     let alignment: Alignment
     let attachmentStore: AttachmentStore?
     let onOpenImage: (IOSImagePreviewSelection) -> Void
+
+    private var boundedMaxWidth: CGFloat { max(1, maxWidth) }
 
     private var entries: [Entry] {
         images.enumerated().map { .image(id: "inline-\($0.offset)", $0.element) }
@@ -126,7 +137,8 @@ struct BubbleImageGallery: View {
                 stackedGallery
             }
         }
-        .frame(maxWidth: .infinity, alignment: alignment)
+        .frame(width: boundedMaxWidth, alignment: alignment)
+        .clipped()
         .onAppear {
             for ref in refs {
                 attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
@@ -170,7 +182,10 @@ struct BubbleImageGallery: View {
     private var stackedGallery: some View {
         let visible = Array(entries.prefix(IOSImageGalleryLayout.maximumStackDepth))
         let offsets = CGFloat(max(0, visible.count - 1)) * IOSImageGalleryLayout.multiStackOffset
-        let cardWidth = max(120, min(maxWidth - offsets, 360))
+        let cardWidth = IOSImageGalleryLayout.stackedCardWidth(
+            maxWidth: boundedMaxWidth,
+            visibleCount: visible.count
+        )
         return ZStack(alignment: .topLeading) {
             ForEach(Array(visible.indices.reversed()), id: \.self) { index in
                 stackedCard(visible[index], width: cardWidth)
@@ -324,7 +339,7 @@ final class BubbleImageHostView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        clipsToBounds = false
+        clipsToBounds = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -353,6 +368,9 @@ final class BubbleImageHostView: UIView {
         } else if let gallery {
             let host = UIHostingController(rootView: Optional(gallery))
             host.view.backgroundColor = .clear
+            host.view.clipsToBounds = true
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            host.view.frame = bounds
             addSubview(host.view)
             hostingController = host
         }
@@ -363,6 +381,7 @@ final class BubbleImageHostView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         hostingController?.view.frame = bounds
+        hostingController?.view.setNeedsLayout()
     }
 }
 

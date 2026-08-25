@@ -36,6 +36,10 @@ final class IOSChatScrollProductionTests: XCTestCase {
         )
         XCTAssertFalse(startButton.isHidden, "long latest message should expose its start control at the tail")
         XCTAssertTrue(bottomButton.isHidden, "latest-tail control is unnecessary while already at the tail")
+        XCTAssertNotNil(startButton.image(for: .normal), "latest-message-start helper must render an icon")
+        // The tail button is hidden at entry, but its image must already be
+        // installed so the first reveal cannot produce a blank control.
+        XCTAssertNotNil(bottomButton.image(for: .normal), "jump-to-latest helper must render an icon")
 
         startButton.sendActions(for: .touchUpInside)
         drainMainRunLoop(milliseconds: 900)

@@ -182,6 +182,13 @@ final class SessionStore {
     /// Monotonic event used to return the sidebar/table to its top as soon
     /// as a create/fork/import operation begins, before the real row exists.
     var sessionListScrollToTopSignal: Int = 0
+    /// Latest session-list snapshot timestamp received from each Tentacle.
+    /// `session_list` is a snapshot, not a per-session delta. A reconnect or
+    /// device-join can therefore deliver an older snapshot after a newer one
+    /// has already been applied. Keep this in-memory only: a new Tentacle
+    /// process starts a fresh timestamp sequence, and the first snapshot after
+    /// reconnect must remain acceptable.
+    private var lastSessionListSnapshotAt: [String: Date] = [:]
     /// Bumped when a session is deleted while it's being viewed.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the
@@ -499,7 +506,80 @@ final class SessionStore {
             let aDate = effective[a.id] ?? a.createdAt
             let bDate = effective[b.id] ?? b.createdAt
             if aDate != bDate { return aDate > bDate }
-            return a.createdAt > b.createdAt
+            if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+            // Dictionary value iteration is not a stable order. Without an
+            // explicit final key, equal-timestamp rows can swap whenever a
+            // websocket update rebuilds the projection.
+            return a.id < b.id
+        }
+    }
+
+    /// Accept a session-list snapshot only if it is not older than the last
+    /// snapshot from the same Tentacle. Legacy/manual messages without a
+    /// parseable timestamp remain accepted.
+    func acceptsSessionListSnapshot(deviceId: String, timestamp: String?) -> Bool {
+        guard let timestamp,
+              let receivedAt = ISO8601.parse(timestamp) else { return true }
+        if let previous = lastSessionListSnapshotAt[deviceId], receivedAt < previous {
+            return false
+        }
+        lastSessionListSnapshotAt[deviceId] = receivedAt
+        return true
+    }
+
+    private static let attentionPreviewTypes: Set<String> = ["question", "permission"]
+
+    /// Resolve one preview update without allowing an older websocket snapshot
+    /// to move a Session backwards. Authoritative snapshots may still clear a
+    /// resolved question/permission overlay and reveal the older stable message
+    /// beneath it; that is a semantic resolution, not a timestamp regression.
+    private static func mergedPreview(
+        existing: SessionPreview?,
+        incoming: SessionPreview?,
+        authoritative: Bool
+    ) -> SessionPreview? {
+        guard let incoming else {
+            if authoritative,
+               let existing,
+               attentionPreviewTypes.contains(existing.type) {
+                return nil
+            }
+            if let existing, ISO8601.parse(existing.timestamp) != nil {
+                return existing
+            }
+            return nil
+        }
+        guard let existing else { return incoming }
+        let oldDate = ISO8601.parse(existing.timestamp)
+        let newDate = ISO8601.parse(incoming.timestamp)
+        switch (oldDate, newDate) {
+        case let (old?, new?) where new < old:
+            let clearsResolvedAttention = authoritative
+                && attentionPreviewTypes.contains(existing.type)
+                && incoming.type != existing.type
+            return clearsResolvedAttention ? incoming : existing
+        case (.some, nil):
+            return existing
+        default:
+            // A newer/equal timestamp wins. If neither timestamp parses, the
+            // newest arrival is the only ordering evidence available.
+            return incoming
+        }
+    }
+
+    private func mergePreview(
+        _ id: String,
+        _ incoming: SessionPreview?,
+        authoritative: Bool = false
+    ) {
+        if let preview = Self.mergedPreview(
+            existing: sessionPreviews[id],
+            incoming: incoming,
+            authoritative: authoritative
+        ) {
+            sessionPreviews[id] = preview
+        } else {
+            sessionPreviews.removeValue(forKey: id)
         }
     }
 
@@ -576,15 +656,9 @@ final class SessionStore {
             sessionUsage[digest.id] = usage
         }
         // `session_list` is the durable sidebar-preview authority. Its preview
-        // is computed by the tentacle from the latest stable turn boundary and
-        // may be overlaid by an open question/permission. Replace the local
-        // value atomically, including clearing stale optimistic/cache-derived
-        // text when the digest intentionally carries no preview.
-        if let preview = digest.preview {
-            sessionPreviews[digest.id] = preview
-        } else {
-            sessionPreviews.removeValue(forKey: digest.id)
-        }
+        // may clear a resolved attention overlay, but a delayed snapshot may
+        // not regress a newer live preview.
+        mergePreview(digest.id, digest.preview, authoritative: true)
         if pinned {
             pinnedSessions.insert(digest.id)
         }
@@ -692,7 +766,13 @@ final class SessionStore {
             if let usage = digest.usage {
                 nextUsage[digest.id] = usage
             }
-            if let preview = digest.preview {
+            // Apply the same timestamp/attention policy inside the atomic
+            // transaction used by the complete session_list snapshot.
+            if let preview = Self.mergedPreview(
+                existing: nextPreviews[digest.id],
+                incoming: digest.preview,
+                authoritative: true
+            ) {
                 nextPreviews[digest.id] = preview
             } else {
                 nextPreviews.removeValue(forKey: digest.id)
@@ -915,7 +995,7 @@ final class SessionStore {
     // MARK: - Preview / Draft
 
     func setPreview(_ id: String, text: String, type: String = "message", timestamp: String = "") {
-        sessionPreviews[id] = SessionPreview(text: text, type: type, timestamp: timestamp)
+        mergePreview(id, SessionPreview(text: text, type: type, timestamp: timestamp))
         scheduleSave()
     }
 
@@ -945,6 +1025,7 @@ final class SessionStore {
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
+        lastSessionListSnapshotAt.removeAll()
         clearPersistentSnapshot()
     }
 
