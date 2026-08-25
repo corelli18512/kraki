@@ -962,6 +962,84 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertGreaterThan(cell.imageFrameForRegression.height, 0)
     }
 
+    func testNarrowStackedImagesAndInteractiveActionsStayInsideCellGeometry() {
+        let width: CGFloat = 100
+        XCTAssertLessThanOrEqual(
+            IOSImageGalleryLayout.stackedCardWidth(maxWidth: 71, visibleCount: 3)
+                + IOSImageGalleryLayout.multiStackOffset * 2,
+            71.5
+        )
+
+        let refs = (0..<3).map { index in
+            ContentRef(
+                type: "content_ref", id: "narrow-\(index)", mimeType: "image/png", size: 10,
+                caption: nil, name: nil, width: 200, height: 100
+            )
+        }
+        let base = message("agent_message", seq: 506, content: nil)
+        let imageContent = TKBubbleContent(
+            message: base,
+            kind: .agent,
+            hueSeed: "narrow-gallery",
+            body: nil,
+            imageRefs: refs
+        )
+        let imageCell = TKBubbleCell(frame: CGRect(
+            x: 0, y: 0, width: width, height: imageContent.cellHeight(cellWidth: width)
+        ))
+        imageCell.configure(imageContent, cellWidth: width)
+        imageCell.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(imageCell.imageFrameForRegression.minX, width)
+        XCTAssertLessThanOrEqual(imageCell.imageFrameForRegression.maxX, width + 0.5)
+
+        let question = ChatMessage(
+            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
+            payload: [
+                "id": AnyCodable("question-geometry"),
+                "question": AnyCodable("Choose a response that must remain wrapped inside the action area."),
+                "choices": AnyCodable(["A long choice that also wraps inside the button frame"]),
+            ]
+        )
+        let questionContent = TKBubbleContent(
+            message: base,
+            kind: .agent,
+            hueSeed: "question-geometry",
+            body: nil,
+            action: question
+        )
+        let questionCell = TKBubbleCell(frame: CGRect(
+            x: 0, y: 0, width: width, height: questionContent.cellHeight(cellWidth: width)
+        ))
+        questionCell.configure(questionContent, cellWidth: width)
+        questionCell.layoutIfNeeded()
+        XCTAssertTrue(questionCell.bubbleFrameForRegression.contains(questionCell.actionFrameForRegression))
+
+        var permissionPayload: [String: AnyCodable] = [
+            "id": AnyCodable("permission-geometry"),
+            "permissionId": AnyCodable("permission-geometry"),
+            "toolName": AnyCodable("shell"),
+            "description": AnyCodable("Run a command whose explanation wraps inside the permission bubble."),
+        ]
+        permissionPayload["args"] = AnyCodable(["command": "printf narrow"])
+        let permission = ChatMessage(
+            type: "permission", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
+            payload: permissionPayload
+        )
+        let permissionContent = TKBubbleContent(
+            message: base,
+            kind: .agent,
+            hueSeed: "permission-geometry",
+            body: nil,
+            action: permission
+        )
+        let permissionCell = TKBubbleCell(frame: CGRect(
+            x: 0, y: 0, width: width, height: permissionContent.cellHeight(cellWidth: width)
+        ))
+        permissionCell.configure(permissionContent, cellWidth: width)
+        permissionCell.layoutIfNeeded()
+        XCTAssertTrue(permissionCell.bubbleFrameForRegression.contains(permissionCell.actionFrameForRegression))
+    }
+
     func testImagePreviewBackdropClosesWithoutStealingImageTap() {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100))
         let image = renderer.image { context in

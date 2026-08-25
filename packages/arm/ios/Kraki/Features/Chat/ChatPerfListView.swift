@@ -1068,27 +1068,37 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func setupJumpButton() {
+        let tint = agentTint()
+        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.isUserInteractionEnabled = false
         blur.layer.cornerRadius = 15
         blur.layer.masksToBounds = true
         blur.layer.borderWidth = 0.5
-        blur.layer.borderColor = agentTint().withAlphaComponent(0.25).cgColor
+        blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
 
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
-        jumpButton.setImage(UIImage(systemName: "chevron.down",
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
-                            for: .normal)
-        jumpButton.tintColor = agentTint()
+        // Keep the material view OUTSIDE the UIButton. UIKit may reorder a
+        // button's internal image view during layout; when the blur is a
+        // button subview it can end up covering an otherwise valid symbol.
+        jumpButton.setImage(
+            UIImage(systemName: "chevron.down", withConfiguration: symbolConfiguration)
+                ?? UIImage(systemName: "arrow.down", withConfiguration: symbolConfiguration),
+            for: .normal
+        )
+        jumpButton.tintColor = tint
+        jumpButton.contentHorizontalAlignment = .center
+        jumpButton.contentVerticalAlignment = .center
+        jumpButton.imageView?.contentMode = .scaleAspectFit
         jumpButton.addTarget(self, action: #selector(onBottomTapped), for: .touchUpInside)
         jumpButton.alpha = 0
         jumpButton.isHidden = true
         jumpButton.accessibilityLabel = "Jump to latest"
 
+        view.addSubview(blur)
         view.addSubview(jumpButton)
-        jumpButton.addSubview(blur)
-        jumpButton.sendSubviewToBack(blur)
         jumpButtonBlur = blur
 
         let bottom = jumpButton.bottomAnchor.constraint(
@@ -1113,25 +1123,25 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         startBlur.layer.cornerRadius = 15
         startBlur.layer.masksToBounds = true
         startBlur.layer.borderWidth = 0.5
-        startBlur.layer.borderColor = agentTint().withAlphaComponent(0.25).cgColor
+        startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
 
         latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
         latestMessageStartButton.setImage(
-            UIImage(
-                systemName: "arrow.up.to.line",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
-            ),
+            UIImage(systemName: "arrow.up.to.line", withConfiguration: symbolConfiguration)
+                ?? UIImage(systemName: "arrow.up", withConfiguration: symbolConfiguration),
             for: .normal
         )
-        latestMessageStartButton.tintColor = agentTint()
+        latestMessageStartButton.tintColor = tint
+        latestMessageStartButton.contentHorizontalAlignment = .center
+        latestMessageStartButton.contentVerticalAlignment = .center
+        latestMessageStartButton.imageView?.contentMode = .scaleAspectFit
         latestMessageStartButton.addTarget(self, action: #selector(onLatestMessageStartTapped), for: .touchUpInside)
         latestMessageStartButton.alpha = 0
         latestMessageStartButton.isHidden = true
         latestMessageStartButton.accessibilityLabel = "Jump to start of latest message"
 
+        view.addSubview(startBlur)
         view.addSubview(latestMessageStartButton)
-        latestMessageStartButton.addSubview(startBlur)
-        latestMessageStartButton.sendSubviewToBack(startBlur)
         latestMessageStartButtonBlur = startBlur
 
         NSLayoutConstraint.activate([

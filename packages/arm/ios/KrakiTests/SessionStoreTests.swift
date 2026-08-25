@@ -461,6 +461,85 @@ final class SessionStoreTests: XCTestCase {
         )
     }
 
+    func testLateSessionListCannotRegressNewerPreviewOrdering() {
+        store.upsertSession(
+            makeDigest(id: "active", createdAt: "2024-01-01T00:00:00.000Z"),
+            deviceId: "dev-a",
+            deviceName: "MacBook"
+        )
+        store.upsertSession(
+            makeDigest(id: "other", createdAt: "2024-01-02T00:00:00.000Z"),
+            deviceId: "dev-a",
+            deviceName: "MacBook"
+        )
+        store.setPreview(
+            "active",
+            text: "new live preview",
+            timestamp: "2024-01-04T00:00:00.000Z"
+        )
+
+        var delayed = makeDigest(
+            id: "active",
+            createdAt: "2024-01-01T00:00:00.000Z"
+        )
+        delayed.preview = SessionPreview(
+            text: "old session-list preview",
+            type: "message",
+            timestamp: "2024-01-03T00:00:00.000Z"
+        )
+        store.reconcileSessionList(
+            [delayed, makeDigest(id: "other", createdAt: "2024-01-02T00:00:00.000Z")],
+            deviceId: "dev-a",
+            deviceName: "MacBook"
+        )
+
+        XCTAssertEqual(store.sessionPreviews["active"]?.text, "new live preview")
+        XCTAssertEqual(store.sortedSessions.map(\.id), ["active", "other"])
+    }
+
+    func testAuthoritativeSessionListCanClearResolvedAttentionPreview() {
+        store.upsertSession(
+            makeDigest(id: "attention"),
+            deviceId: "dev-a",
+            deviceName: "MacBook"
+        )
+        store.setPreview(
+            "attention",
+            text: "Approve write?",
+            type: "permission",
+            timestamp: "2024-01-04T00:00:00.000Z"
+        )
+        var resolved = makeDigest(id: "attention")
+        resolved.preview = SessionPreview(
+            text: "Earlier stable message",
+            type: "message",
+            timestamp: "2024-01-03T00:00:00.000Z"
+        )
+
+        store.reconcileSessionList(
+            [resolved],
+            deviceId: "dev-a",
+            deviceName: "MacBook"
+        )
+
+        XCTAssertEqual(store.sessionPreviews["attention"]?.text, "Earlier stable message")
+        XCTAssertEqual(store.sessionPreviews["attention"]?.type, "message")
+    }
+
+    func testSortedSessionsUsesStableIdTieBreak() {
+        store.upsertSession(
+            makeDigest(id: "z", createdAt: "2024-01-01T00:00:00.000Z"),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        store.upsertSession(
+            makeDigest(id: "a", createdAt: "2024-01-01T00:00:00.000Z"),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        XCTAssertEqual(store.sortedSessions.map(\.id), ["a", "z"])
+    }
+
     func testSessionPrefsRoundTripIsScopedByDeviceAndAgent() {
         let defaults = UserDefaults.standard
         let keys = ["kraki:last-device", "kraki:last-agent", "kraki:last-model", "kraki:last-effort"]

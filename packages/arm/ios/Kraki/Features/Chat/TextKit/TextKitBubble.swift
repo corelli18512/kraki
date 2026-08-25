@@ -1666,6 +1666,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     #if DEBUG
     var imageFrameForRegression: CGRect { imageHost.frame }
+    var actionFrameForRegression: CGRect { actionHost.frame }
     var bubbleFrameForRegression: CGRect { bubbleBG.frame }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
     #endif
@@ -1681,6 +1682,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var tableAttachmentIDs: [ObjectIdentifier] = []
     private var bodyHasLinks = false
     private var content: TKBubbleContent?
+    /// Action SwiftUI can finish a layout pass while UIKit is laying out the
+    /// reusable cell. Defer the collection-view invalidation to the next main
+    /// run-loop turn and fence it by reuse generation so a stale callback can
+    /// never resize a different bubble.
+    private var actionHeightNotificationScheduled = false
+    private var reuseGeneration = 0
 
     override init(frame: CGRect) {
         bodyView = TKBodyTextView(usingTextLayoutManager: true)
@@ -1725,8 +1732,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         // Action slot for streaming / frozen bubbles. Hidden on plain
         // completed bubbles (no action). Same cell as every other message.
         actionHost.backgroundColor = .clear
+        actionHost.clipsToBounds = true
         actionHost.translatesAutoresizingMaskIntoConstraints = false
-        actionHost.onHeightChange = { [weak self] _ in self?.onActionHeightChange?() }
+        actionHost.onHeightChange = { [weak self] _ in self?.scheduleActionHeightNotification() }
         renderClipView.addSubview(actionHost)
 
         imageHost.backgroundColor = .clear
@@ -1759,6 +1767,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        reuseGeneration &+= 1
+        actionHeightNotificationScheduled = false
         content = nil
         onOpenSteps = nil
         onResolvePermission = nil
@@ -1788,6 +1798,18 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         moreButton.isHidden = true
         bubbleBG.fillColor = .clear
         bubbleBG.frame = .zero
+    }
+
+    private func scheduleActionHeightNotification() {
+        guard !actionHeightNotificationScheduled else { return }
+        actionHeightNotificationScheduled = true
+        let generation = reuseGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.reuseGeneration == generation else { return }
+            self.actionHeightNotificationScheduled = false
+            self.onActionHeightChange?()
+        }
     }
 
     func setBodyInteractive(_ enabled: Bool) {
@@ -2009,13 +2031,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         // Action slot (streaming / frozen).
         if !actionHost.isHidden {
             if cursorY > y + TKMetrics.msgPadV { cursorY += 8 }
-            actionHost.frame = CGRect(x: innerX, y: cursorY, width: actionWidth, height: 60)
+            actionHost.frame = CGRect(x: innerX, y: cursorY, width: max(1, actionWidth), height: 1)
             actionHost.setNeedsLayout()
             actionHost.layoutIfNeeded()
-            let fit = actionHost.hostingController?.view.systemLayoutSizeFitting(
-                CGSize(width: actionWidth, height: .greatestFiniteMagnitude),
-                withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel).height ?? actionHost.frame.height
+            let fit = actionHost.measuredHeight(forWidth: actionWidth)
             actionHost.frame.size.height = max(1, fit)
             cursorY += actionHost.frame.height
         }

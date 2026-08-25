@@ -606,6 +606,17 @@ final class MessageRouter {
         }
 
         let tentacleDeviceId = dict["deviceId"] as? String ?? ""
+        let snapshotTimestamp = dict["timestamp"] as? String
+        guard appState.sessionStore.acceptsSessionListSnapshot(
+            deviceId: tentacleDeviceId,
+            timestamp: snapshotTimestamp
+        ) else {
+            KLog.chat(
+                "📋 [1/sessions] drop stale session_list device=\(tentacleDeviceId) "
+                    + "timestamp=\(snapshotTimestamp ?? "nil")"
+            )
+            return
+        }
         let device = appState.deviceStore.device(for: tentacleDeviceId)
         let deviceName = device?.name ?? tentacleDeviceId
 
