@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.29</title>
+            <pubDate>Tue, 25 Aug 2026 00:38:30 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.29</sparkle:fullReleaseNotesLink>
+            <sparkle:version>31</sparkle:version>
+            <sparkle:shortVersionString>0.2.29</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(chat): preserve multiline question bubble height by @corelli18512 in https://github.com/corelli18512/kraki/pull/277
+* chore(mac): bump version to 0.2.29 by @corelli18512 in https://github.com/corelli18512/kraki/pull/278
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.28...mac-v0.2.29
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.29/Kraki.app.zip" length="8174021" type="application/octet-stream" sparkle:edSignature="v45bjFQ13I45DDm754PuR36HRyKrD9AZKLAF5JjY5BtyqR74nKH3ORGhwm7III3IfXciOgP0A5N6BQcGicjlAQ=="/>
+        </item>
+        <item>
             <title>0.2.28</title>
             <pubDate>Sun, 23 Aug 2026 12:03:10 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -39,26 +56,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.27/Kraki.app.zip" length="8170999" type="application/octet-stream" sparkle:edSignature="IJyT96gUZ7R5VUgF5Ukc7RCrHtsB9RH2JLzqQopeDVmVWdSaFO9UbDGYyzK499Sdyi8vjZA06ZattqC6ersTDQ=="/>
         </item>
-        <item>
-            <title>0.2.26</title>
-            <pubDate>Sun, 23 Aug 2026 02:24:58 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.26</sparkle:fullReleaseNotesLink>
-            <sparkle:version>28</sparkle:version>
-            <sparkle:shortVersionString>0.2.26</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): restore composer voice placement and flatten compacting glyph by @corelli18512 in https://github.com/corelli18512/kraki/pull/271
-* chore(mac): prepare 0.2.26 build 28 by @corelli18512 in https://github.com/corelli18512/kraki/pull/272
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.25...mac-v0.2.26
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.26/Kraki.app.zip" length="8161137" type="application/octet-stream" sparkle:edSignature="eUtENkdEQZcCTnTbIqh57xNaVM6+c2hALQUVDJ+6TT1IstKL79RkCsbzdOjh9XB13rCNAw+wJTXeQe5v/Z27Cw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: pH7bsHXxeeiN2P6LI/r3gUT0xs2hSDapjltX5F4MEYe9kT9MI/WKqrKRNAdLXiVvxjlPfNt+/CN4VBJ7hXbpCg==
-length: 4043
+edSignature: 3xntMoeQ7/rk6k0IqnEZvzMpCCWMG7HhyueNssGcsopzX+yCzxL6WxrwNXMDAI40kptLOSMv2IRCl0OM4aDSAg==
+length: 4023
 -->
