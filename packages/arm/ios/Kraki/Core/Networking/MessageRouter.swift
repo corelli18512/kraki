@@ -768,6 +768,11 @@ final class MessageRouter {
         let device = appState.deviceStore.device(for: deviceId)
 
         let modeStr = payload?["mode"] as? String ?? "safe"
+        // `session_created` has no separate payload createdAt field; its
+        // envelope timestamp is the producer's creation acknowledgement.
+        // Use it instead of the receiver's wall clock so ordering remains
+        // stable and the metadata survives the first session_list reconcile.
+        let createdAt = (dict["timestamp"] as? String).flatMap(ISO8601.parse) ?? Date()
         let session = SessionInfo(
             id: sessionId,
             deviceId: deviceId,
@@ -783,7 +788,7 @@ final class MessageRouter {
             lastSeq: 0,
             readSeq: 0,
             messageCount: 0,
-            createdAt: Date(),
+            createdAt: createdAt,
             usage: nil,
             pinned: false
         )

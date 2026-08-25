@@ -58,6 +58,11 @@ struct NewSessionSheet: View {
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
+        .onChange(of: reasoningEffort) { _, effort in
+            if let effort, !selectedModel.isEmpty {
+                SessionPrefs.saveLastEffort(model: selectedModel, effort: effort)
+            }
+        }
     }
 
     // MARK: - Header
@@ -207,6 +212,16 @@ struct NewSessionSheet: View {
 
     private func submit() {
         guard canSubmit else { return }
+        SessionPrefs.saveLastDevice(selectedDeviceId)
+        SessionPrefs.saveLastAgent(deviceId: selectedDeviceId, agentId: selectedAgentId)
+        SessionPrefs.saveLastModel(
+            deviceId: selectedDeviceId,
+            agentId: selectedAgentId,
+            model: selectedModel
+        )
+        if let reasoningEffort {
+            SessionPrefs.saveLastEffort(model: selectedModel, effort: reasoningEffort)
+        }
         let trimmed = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.commandSender?.createSession(
             targetDeviceId: selectedDeviceId,
@@ -222,28 +237,63 @@ struct NewSessionSheet: View {
 
     private func selectDefaults() {
         if selectedDeviceId.isEmpty {
-            selectedDeviceId = onlineTentacles.first?.id ?? tentacles.first?.id ?? ""
+            let savedDevice = SessionPrefs.lastDeviceId()
+            selectedDeviceId = onlineTentacles.first(where: { $0.id == savedDevice })?.id
+                ?? onlineTentacles.first?.id
+                ?? tentacles.first?.id
+                ?? ""
         }
         onDeviceChanged()
     }
 
     private func onDeviceChanged() {
-        if !agents.contains(where: { $0.id == selectedAgentId }) {
+        guard !selectedDeviceId.isEmpty else { return }
+        SessionPrefs.saveLastDevice(selectedDeviceId)
+
+        if let savedAgent = SessionPrefs.lastAgentId(deviceId: selectedDeviceId),
+           agents.contains(where: { $0.id == savedAgent }) {
+            selectedAgentId = savedAgent
+        } else if !agents.contains(where: { $0.id == selectedAgentId }) {
             selectedAgentId = agents.first?.id ?? ""
         }
         onAgentChanged()
     }
 
     private func onAgentChanged() {
-        if !models.contains(selectedModel) {
+        guard !selectedAgentId.isEmpty else {
+            selectedModel = ""
+            reasoningEffort = nil
+            return
+        }
+        SessionPrefs.saveLastAgent(deviceId: selectedDeviceId, agentId: selectedAgentId)
+
+        if let savedModel = SessionPrefs.lastModel(
+            deviceId: selectedDeviceId,
+            agentId: selectedAgentId
+        ), models.contains(savedModel) {
+            selectedModel = savedModel
+        } else if !models.contains(selectedModel) {
             selectedModel = models.first ?? ""
         }
         onModelChanged()
     }
 
     private func onModelChanged() {
+        guard !selectedModel.isEmpty else {
+            reasoningEffort = nil
+            return
+        }
+        SessionPrefs.saveLastModel(
+            deviceId: selectedDeviceId,
+            agentId: selectedAgentId,
+            model: selectedModel
+        )
+
         if let efforts = supportedEfforts, !efforts.isEmpty {
-            if reasoningEffort == nil || !efforts.contains(reasoningEffort!) {
+            if let savedEffort = SessionPrefs.lastEffort(model: selectedModel),
+               efforts.contains(savedEffort) {
+                reasoningEffort = savedEffort
+            } else if reasoningEffort == nil || !efforts.contains(reasoningEffort!) {
                 reasoningEffort = efforts.first
             }
         } else {

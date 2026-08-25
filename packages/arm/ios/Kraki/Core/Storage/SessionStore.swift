@@ -174,6 +174,14 @@ final class SessionStore {
     var sessionPreviews: [String: SessionPreview] = [:]
     var drafts: [String: String] = [:]
     var navigateToSession: String?
+    /// Session id that should be revealed in the macOS sidebar after a
+    /// create/fork/import request resolves. This is separate from semantic
+    /// navigation so a selected row can be brought into view without making
+    /// every ordinary click jump the list.
+    var sessionListRevealId: String?
+    /// Monotonic event used to return the sidebar/table to its top as soon
+    /// as a create/fork/import operation begins, before the real row exists.
+    var sessionListScrollToTopSignal: Int = 0
     /// Bumped when a session is deleted while it's being viewed.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the
@@ -181,15 +189,12 @@ final class SessionStore {
     /// rapid deletes don't share the same value and get coalesced.
     var popToSessionListSignal: Int = 0
 
+    /// Navigation order must use the same parsed timestamp policy as the
+    /// visible session lists. The previous implementation compared preview
+    /// timestamps as raw strings, so a missing/malformed preview could outrank
+    /// a freshly-created Session even when its `createdAt` was newer.
     var navigationOrderedSessions: [SessionInfo] {
-        let previews = sessionPreviews
-        return sessions.values.sorted { a, b in
-            if a.pinned != b.pinned { return a.pinned }
-            let aTs = previews[a.id]?.timestamp ?? ""
-            let bTs = previews[b.id]?.timestamp ?? ""
-            if aTs != bTs { return bTs < aTs }
-            return a.createdAt > b.createdAt
-        }
+        sortedSessions
     }
 
     // MARK: - Disk snapshot
@@ -534,6 +539,7 @@ final class SessionStore {
             existing.lastSeq = max(0, digest.lastSeq)
             existing.readSeq = min(max(0, digest.readSeq), existing.lastSeq)
             existing.messageCount = digest.messageCount
+            existing.createdAt = ISO8601.parse(digest.createdAt) ?? existing.createdAt
             existing.usage = digest.usage
             existing.pinned = pinned
             sessions[digest.id] = existing
@@ -649,6 +655,7 @@ final class SessionStore {
                 existing.lastSeq = lastSeq
                 existing.readSeq = readSeq
                 existing.messageCount = digest.messageCount
+                existing.createdAt = ISO8601.parse(digest.createdAt) ?? existing.createdAt
                 existing.usage = digest.usage
                 existing.pinned = pinned
                 nextSessions[digest.id] = existing
@@ -709,6 +716,9 @@ final class SessionStore {
     }
 
     func removeSession(_ id: String) {
+        if sessionListRevealId == id {
+            sessionListRevealId = nil
+        }
         sessions.removeValue(forKey: id)
         pinnedSessions.remove(id)
         sessionModes.removeValue(forKey: id)
@@ -930,6 +940,8 @@ final class SessionStore {
         sessionPreviews.removeAll()
         drafts.removeAll()
         navigateToSession = nil
+        sessionListRevealId = nil
+        sessionListScrollToTopSignal = 0
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
@@ -951,6 +963,7 @@ final class SessionStore {
     func addPendingSession(_ id: String) {
         pendingSessions.insert(id)
         pendingSessionErrors.removeValue(forKey: id)
+        sessionListScrollToTopSignal &+= 1
     }
 
     /// Clear a pending entry without affecting any real session that

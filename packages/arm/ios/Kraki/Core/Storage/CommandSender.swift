@@ -628,6 +628,11 @@ final class CommandSender {
                 // pending mark now that the session exists for real.
                 appState.sessionStore.removePendingSession(sessionId)
             }
+            // The macOS sidebar may be scrolled away from the insertion
+            // point. Keep a one-shot reveal signal separate from navigation
+            // so it can scroll the newly-created row to the top without
+            // changing ordinary Session selection behavior.
+            appState.sessionStore.sessionListRevealId = sessionId
             appState.sessionStore.navigateToSession = sessionId
         }
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
