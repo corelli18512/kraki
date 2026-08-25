@@ -6,6 +6,7 @@
 /// Centralizing those here keeps the rest of `Shared/` free of `#if`
 /// pollution.
 
+import Foundation
 import SwiftUI
 
 #if os(iOS)
@@ -86,5 +87,74 @@ enum KrakiDevice {
         #else
         return "Unknown"
         #endif
+    }
+}
+
+/// Persists the user's last-used Device / Agent / Model / Reasoning-Effort
+/// choices for the New Session form on both iOS and macOS.
+///
+/// `lastModel` is keyed by `deviceId:agentId` so each agent can remember a
+/// different model. The device-only fallback preserves older single-agent
+/// preferences from before multi-agent support.
+enum SessionPrefs {
+    private static let lastDeviceKey = "kraki:last-device"
+    private static let lastAgentKey  = "kraki:last-agent"
+    private static let lastModelKey  = "kraki:last-model"
+    private static let lastEffortKey = "kraki:last-effort"
+
+    static func lastDeviceId() -> String? {
+        UserDefaults.standard.string(forKey: lastDeviceKey)
+    }
+
+    static func saveLastDevice(_ id: String) {
+        UserDefaults.standard.set(id, forKey: lastDeviceKey)
+    }
+
+    static func lastAgentId(deviceId: String) -> String? {
+        agentMap()[deviceId]
+    }
+
+    static func saveLastAgent(deviceId: String, agentId: String) {
+        var map = agentMap()
+        map[deviceId] = agentId
+        UserDefaults.standard.set(map, forKey: lastAgentKey)
+    }
+
+    static func lastModel(deviceId: String, agentId: String?) -> String? {
+        let map = modelMap()
+        if let agentId, let model = map["\(deviceId):\(agentId)"] {
+            return model
+        }
+        return map[deviceId]
+    }
+
+    static func saveLastModel(deviceId: String, agentId: String?, model: String) {
+        var map = modelMap()
+        let key = agentId.map { "\(deviceId):\($0)" } ?? deviceId
+        map[key] = model
+        UserDefaults.standard.set(map, forKey: lastModelKey)
+    }
+
+    static func lastEffort(model: String) -> ReasoningEffort? {
+        guard let raw = effortMap()[model] else { return nil }
+        return ReasoningEffort(rawValue: raw)
+    }
+
+    static func saveLastEffort(model: String, effort: ReasoningEffort) {
+        var map = effortMap()
+        map[model] = effort.rawValue
+        UserDefaults.standard.set(map, forKey: lastEffortKey)
+    }
+
+    private static func agentMap() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: lastAgentKey) as? [String: String] ?? [:]
+    }
+
+    private static func modelMap() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: lastModelKey) as? [String: String] ?? [:]
+    }
+
+    private static func effortMap() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: lastEffortKey) as? [String: String] ?? [:]
     }
 }

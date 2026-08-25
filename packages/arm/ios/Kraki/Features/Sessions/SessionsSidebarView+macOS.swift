@@ -307,18 +307,56 @@ struct SessionsSidebarView: View {
 
     // MARK: - Session list
 
+    private var filteredSessionIDs: [String] {
+        filteredSessions.map(\.id)
+    }
+
     private var sessionList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                ForEach(filteredSessions) { session in
-                    sidebarRow(for: session)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                    ForEach(filteredSessions) { session in
+                        sidebarRow(for: session)
+                            .id(session.id)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .onChange(of: appState.sessionStore.sessionListScrollToTopSignal) { _, _ in
+                DispatchQueue.main.async {
+                    guard let first = filteredSessionIDs.first else { return }
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        proxy.scrollTo(first, anchor: .top)
+                    }
+                    KLog.chat("📂 [session-list] scrolled to top for pending session")
                 }
             }
-            .padding(.vertical, 4)
+            .onChange(of: appState.sessionStore.sessionListRevealId) { _, _ in
+                revealRequestedSession(using: proxy)
+            }
+            .onChange(of: filteredSessionIDs) { _, _ in
+                // The create acknowledgement can arrive before SwiftUI has
+                // materialised the new row. Retry from the row-id change so
+                // the reveal is not lost during that transaction.
+                revealRequestedSession(using: proxy)
+            }
+            .overlay(alignment: .topLeading) {
+                MacSessionSmoothScrollProbe()
+                    .frame(width: 1, height: 1)
+            }
         }
-        .overlay(alignment: .topLeading) {
-            MacSessionSmoothScrollProbe()
-                .frame(width: 1, height: 1)
+    }
+
+    private func revealRequestedSession(using proxy: ScrollViewProxy) {
+        guard let target = appState.sessionStore.sessionListRevealId,
+              filteredSessionIDs.contains(target) else { return }
+        DispatchQueue.main.async {
+            guard appState.sessionStore.sessionListRevealId == target else { return }
+            withAnimation(.easeOut(duration: 0.22)) {
+                proxy.scrollTo(target, anchor: .top)
+            }
+            appState.sessionStore.sessionListRevealId = nil
+            KLog.chat("📂 [session-list] revealed new session at top id=\(target.prefix(12))")
         }
     }
 

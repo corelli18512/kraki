@@ -186,7 +186,12 @@ struct SessionListView: View {
         // for the tab bar height, which propagates to the UITableView
         // as `contentInset.bottom` so the last row is still
         // scroll-reachable.
-        SessionTable(appState: appState, deviceFilter: selectedDeviceFilter) { sessionId in
+        SessionTable(
+            appState: appState,
+            deviceFilter: selectedDeviceFilter,
+            revealSessionId: sessionStore.sessionListRevealId,
+            scrollToTopSignal: sessionStore.sessionListScrollToTopSignal
+        ) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
         .background(Color.surfacePrimary)

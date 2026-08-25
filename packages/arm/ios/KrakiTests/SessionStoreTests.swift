@@ -33,6 +33,7 @@ final class SessionStoreTests: XCTestCase {
         lastSeq: Int = 10,
         readSeq: Int = 5,
         messageCount: Int = 8,
+        createdAt: String = "2024-01-01T00:00:00.000Z",
         pinned: Bool? = nil
     ) -> SessionDigest {
         SessionDigest(
@@ -41,7 +42,7 @@ final class SessionStoreTests: XCTestCase {
             autoTitle: autoTitle, state: state, mode: mode,
             lastSeq: lastSeq, readSeq: readSeq,
             messageCount: messageCount,
-            createdAt: "2024-01-01T00:00:00.000Z", usage: nil, pinned: pinned
+            createdAt: createdAt, usage: nil, pinned: pinned
         )
     }
 
@@ -431,6 +432,70 @@ final class SessionStoreTests: XCTestCase {
         // Then s3 (later timestamp), then s1
         XCTAssertEqual(sorted[1].id, "s3")
         XCTAssertEqual(sorted[2].id, "s1")
+    }
+
+    func testNavigationOrderFallsBackToCreatedAtForInvalidPreviewTimestamp() {
+        store.upsertSession(
+            makeDigest(
+                id: "older",
+                createdAt: "2024-01-01T00:00:00.000Z"
+            ),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        store.upsertSession(
+            makeDigest(
+                id: "newer",
+                createdAt: "2024-01-02T00:00:00.000Z"
+            ),
+            deviceId: "d",
+            deviceName: "n"
+        )
+        // A malformed/missing preview timestamp must not make the new
+        // Session disappear from the top of the navigation order.
+        store.setPreview("newer", text: "Session created", timestamp: "")
+
+        XCTAssertEqual(
+            store.navigationOrderedSessions.map(\.id),
+            ["newer", "older"]
+        )
+    }
+
+    func testSessionPrefsRoundTripIsScopedByDeviceAndAgent() {
+        let defaults = UserDefaults.standard
+        let keys = ["kraki:last-device", "kraki:last-agent", "kraki:last-model", "kraki:last-effort"]
+        var original: [String: Any] = [:]
+        for key in keys {
+            if let value = defaults.object(forKey: key) {
+                original[key] = value
+            }
+        }
+        defer {
+            for key in keys {
+                if let value = original[key] {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        SessionPrefs.saveLastDevice("device-prefs")
+        SessionPrefs.saveLastAgent(deviceId: "device-prefs", agentId: "agent-prefs")
+        SessionPrefs.saveLastModel(
+            deviceId: "device-prefs",
+            agentId: "agent-prefs",
+            model: "model-prefs"
+        )
+        SessionPrefs.saveLastEffort(model: "model-prefs", effort: .xhigh)
+
+        XCTAssertEqual(SessionPrefs.lastDeviceId(), "device-prefs")
+        XCTAssertEqual(SessionPrefs.lastAgentId(deviceId: "device-prefs"), "agent-prefs")
+        XCTAssertEqual(
+            SessionPrefs.lastModel(deviceId: "device-prefs", agentId: "agent-prefs"),
+            "model-prefs"
+        )
+        XCTAssertEqual(SessionPrefs.lastEffort(model: "model-prefs"), .xhigh)
     }
 
     // MARK: - Total Unread
