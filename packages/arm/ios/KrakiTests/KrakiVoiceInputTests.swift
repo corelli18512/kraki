@@ -172,6 +172,33 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertNil(VoiceCapability(json: ["resource": "voice/doubao"]))
     }
 
+    func testVoiceTranscriptRevisionChangesWhenLatestTextChanges() {
+        let first = VoiceComposerPresentation.transcriptPieces(
+            prefix: "",
+            state: .recording,
+            rawText: "first line",
+            correctionSource: "",
+            correctionText: "",
+            correctionSourceOffset: 0
+        )
+        let second = VoiceComposerPresentation.transcriptPieces(
+            prefix: "",
+            state: .recording,
+            rawText: "first line and the newest words",
+            correctionSource: "",
+            correctionText: "",
+            correctionSourceOffset: 0
+        )
+        XCTAssertNotEqual(
+            VoiceComposerPresentation.transcriptRevision(first),
+            VoiceComposerPresentation.transcriptRevision(second)
+        )
+        XCTAssertEqual(
+            VoiceComposerPresentation.transcriptRevision(first),
+            VoiceComposerPresentation.transcriptRevision(first)
+        )
+    }
+
     func testVoiceComposerAccessAllowsSteeringAndStructuredAnswers() {
         XCTAssertTrue(VoiceComposerAccessPolicy.isVisible(capabilityAvailable: true))
         XCTAssertTrue(VoiceComposerAccessPolicy.canStart(

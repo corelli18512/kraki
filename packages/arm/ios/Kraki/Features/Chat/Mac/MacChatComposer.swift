@@ -1135,9 +1135,9 @@ private struct MacComposerVoiceSurface: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            MacComposerVoiceTranscript(pieces: displayedPieces, revision: revision)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
+                .frame(maxWidth: .infinity)
+                .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
             Button(action: onFinish) {
                 VoiceComposerStatusModule(state: controller.state)
                     .frame(width: 38, height: 32)
@@ -1182,6 +1182,8 @@ final class MacComposerVoiceTranscriptView: NSView {
     private var framesetter: CTFramesetter?
     private var measuredWidth: CGFloat = 0
     private var measuredHeight: CGFloat = lineHeight
+    private(set) var contentHeight: CGFloat = lineHeight
+    var preservesContentHeight = false
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
@@ -1199,9 +1201,11 @@ final class MacComposerVoiceTranscriptView: NSView {
         setAccessibilityValue(value.string)
         if width > 1 {
             measuredWidth = width
-            measuredHeight = min(Self.measure(value, width: width), Self.lineHeight * Self.maxVisibleLines)
+            contentHeight = Self.measure(value, width: width)
+            measuredHeight = min(contentHeight, Self.lineHeight * Self.maxVisibleLines)
         } else {
             measuredWidth = 0
+            contentHeight = Self.lineHeight
             measuredHeight = Self.lineHeight
         }
         invalidateIntrinsicContentSize()
@@ -1267,8 +1271,17 @@ final class MacComposerVoiceTranscriptView: NSView {
         guard bounds.width > 1,
               abs(bounds.width - measuredWidth) > 0.5 else { return }
         measuredWidth = bounds.width
-        let height = min(Self.measure(value, width: bounds.width), Self.lineHeight * Self.maxVisibleLines)
-        guard abs(height - measuredHeight) > 0.5 else { return }
+        let fullHeight = Self.measure(value, width: bounds.width)
+        contentHeight = fullHeight
+        if preservesContentHeight,
+           bounds.height < fullHeight - 0.5 {
+            setFrameSize(NSSize(width: bounds.width, height: fullHeight))
+        }
+        let height = min(fullHeight, Self.lineHeight * Self.maxVisibleLines)
+        guard abs(height - measuredHeight) > 0.5 else {
+            needsDisplay = true
+            return
+        }
         measuredHeight = height
         invalidateIntrinsicContentSize()
         needsDisplay = true
@@ -1278,7 +1291,9 @@ final class MacComposerVoiceTranscriptView: NSView {
         guard let context = NSGraphicsContext.current?.cgContext,
               let framesetter,
               value.length > 0 else { return }
-        let visibleRange = visibleSuffixRange(width: bounds.width, height: bounds.height)
+        let visibleRange = contentHeight <= bounds.height + 0.5
+            ? CFRange(location: 0, length: value.length)
+            : visibleSuffixRange(width: bounds.width, height: bounds.height)
         context.saveGState()
         context.textMatrix = .identity
         context.translateBy(x: 0, y: bounds.height)
@@ -1361,7 +1376,7 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
                 || abs(context.coordinator.width - width) > 0.5 else { return }
         context.coordinator.revision = revision
         context.coordinator.width = width
-        transcriptView.update(pieces: pieces, width: width)
+        _ = transcriptView.update(pieces: pieces, width: width)
     }
 
     func sizeThatFits(
@@ -1378,6 +1393,201 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
         )
     }
 }
+
+/// Keeps the live voice transcript at its newest line after AppKit finishes
+/// a document-frame/layout pass. The scroll view still accepts normal wheel
+/// and trackpad input between recognition updates.
+private final class MacComposerVoiceScrollView: NSScrollView {
+    var followsTail = true
+
+    override func layout() {
+        super.layout()
+        guard followsTail,
+              let documentView,
+              documentView.frame.height > contentView.bounds.height + 0.5 else { return }
+        let maximumY = max(0, documentView.frame.height - contentView.bounds.height)
+        guard abs(contentView.bounds.origin.y - maximumY) > 0.5 else { return }
+        contentView.bounds.origin.y = maximumY
+        super.reflectScrolledClipView(contentView)
+    }
+}
+
+/// A fixed-height native scroll surface for the live voice transcript. The
+/// document keeps the complete CoreText layout while the clip view follows
+/// its bottom edge after every recognition update, so long dictation remains
+/// readable and the newest words never disappear below the composer.
+private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
+    let pieces: [MacComposerVoiceTranscriptView.Piece]
+    let revision: String
+
+    final class Coordinator {
+        var revision = ""
+        var width: CGFloat = 0
+        var proposedWidth: CGFloat = 0
+        weak var documentView: MacComposerVoiceTranscriptView?
+
+        func apply(
+            pieces: [MacComposerVoiceTranscriptView.Piece],
+            revision: String,
+            to scrollView: NSScrollView
+        ) {
+            guard let documentView else { return }
+            let clipWidth = scrollView.contentView.bounds.width
+            let viewWidth = scrollView.bounds.width
+            let width = max(1, clipWidth > 1 ? clipWidth : (viewWidth > 1 ? viewWidth : proposedWidth))
+            let changed = self.revision != revision || abs(self.width - width) > 0.5
+            guard changed else { return }
+            self.revision = revision
+            self.width = width
+            _ = documentView.update(pieces: pieces, width: width)
+            let documentHeight = max(documentView.contentHeight, scrollView.contentView.bounds.height)
+            documentView.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: width,
+                height: documentHeight
+            )
+            documentView.needsLayout = true
+            scrollView.layoutSubtreeIfNeeded()
+            // NSScrollView may perform an internal clip-view layout after the
+            // representable update. Reassert the document extent after that
+            // pass so AppKit cannot collapse the document back to its
+            // intrinsic two-line viewport height.
+            documentView.setFrameSize(NSSize(width: width, height: documentHeight))
+            documentView.setFrameOrigin(.zero)
+            scrollToTail(scrollView)
+            DispatchQueue.main.async { [weak self, weak scrollView] in
+                guard let self, let scrollView else { return }
+                self.scrollToTail(scrollView)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self, weak scrollView] in
+                    guard let self, let scrollView else { return }
+                    self.scrollToTail(scrollView)
+                }
+            }
+        }
+
+        func scrollToTail(_ scrollView: NSScrollView) {
+            let clipView = scrollView.contentView
+            let maxY = max(0, clipView.documentRect.height - clipView.bounds.height)
+            clipView.bounds.origin.y = maxY
+            scrollView.reflectScrolledClipView(clipView)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = MacComposerVoiceScrollView(frame: .zero)
+        scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasHorizontalScroller = false
+        // Keep the viewport visually scrollbar-free while allowing native
+        // trackpad/wheel packets to move the clip view.
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.verticalScrollElasticity = .automatic
+        scrollView.horizontalScrollElasticity = .none
+
+        let documentView = MacComposerVoiceTranscriptView(frame: .zero)
+        documentView.autoresizingMask = [.width]
+        documentView.preservesContentHeight = true
+        documentView.wantsLayer = true
+        documentView.layer?.masksToBounds = false
+        scrollView.documentView = documentView
+        scrollView.followsTail = true
+        context.coordinator.documentView = documentView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.apply(pieces: pieces, revision: revision, to: scrollView)
+        // SwiftUI may deliver the first update before the representable has
+        // its final width. Re-apply after AppKit has committed that layout.
+        DispatchQueue.main.async { [weak scrollView] in
+            guard let scrollView else { return }
+            context.coordinator.apply(pieces: pieces, revision: revision, to: scrollView)
+        }
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: NSScrollView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, width > 1 else { return nil }
+        context.coordinator.proposedWidth = width
+        return CGSize(
+            width: width,
+            height: MacComposerVoiceTranscriptView.lineHeight * 2
+        )
+    }
+}
+
+#if DEBUG
+/// Debug-only production-shaped probe for the fixed-height voice transcript
+/// scroll surface. It is intentionally isolated from Relay and AppState.
+enum MacComposerVoiceScrollRegression {
+    static func run() -> [String: Any] {
+        let text = String(repeating: "Long voice transcript keeps appending so the newest words remain visible. ", count: 18)
+        let host = NSHostingView(
+            rootView: AnyView(
+                MacComposerScrollableVoiceTranscript(
+                    pieces: [(text: text, opacity: 1)],
+                    revision: "long"
+                )
+                .frame(width: 280, height: MacComposerVoiceTranscriptView.lineHeight * 2)
+            )
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: -20_000, y: -20_000, width: 280, height: 44),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        host.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 280, height: 44)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+        host.layoutSubtreeIfNeeded()
+
+        func descendants(of view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants(of: $0) }
+        }
+        guard let scrollView = descendants(of: host).compactMap({ $0 as? NSScrollView }).first,
+              let documentView = scrollView.documentView as? MacComposerVoiceTranscriptView else {
+            return ["passed": false, "scrollView": false]
+        }
+
+        let viewportHeight = scrollView.contentView.bounds.height
+        let documentHeight = documentView.frame.height
+        let maxY = max(0, documentHeight - viewportHeight)
+        let tailAttached = abs(scrollView.contentView.bounds.origin.y - maxY) < 1.0
+        let measuredHeight = MacComposerVoiceTranscriptView.measure(
+            [(text: text, opacity: 1)],
+            width: max(1, scrollView.contentView.bounds.width)
+        )
+        let contentExceedsViewport = documentHeight > viewportHeight + 1.0
+        let fixedViewport = abs(viewportHeight - MacComposerVoiceTranscriptView.lineHeight * 2) < 1.0
+        let passed = contentExceedsViewport && fixedViewport && tailAttached
+        return [
+            "passed": passed,
+            "scrollView": true,
+            "contentExceedsViewport": contentExceedsViewport,
+            "fixedViewport": fixedViewport,
+            "tailAttached": tailAttached,
+            "viewportHeight": viewportHeight,
+            "documentHeight": documentHeight,
+            "documentLength": documentView.debugAttributedText.length,
+            "measuredHeight": measuredHeight,
+            "scrollWidth": scrollView.bounds.width,
+            "clipWidth": scrollView.contentView.bounds.width,
+            "originY": scrollView.contentView.bounds.origin.y,
+            "documentRectHeight": scrollView.contentView.documentRect.height,
+        ]
+    }
+}
+#endif
 
 private struct MacComposerWaveform: View {
     let levels: [Float]

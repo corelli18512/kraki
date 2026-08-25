@@ -118,6 +118,17 @@ enum VoiceComposerPresentation {
         return merged
     }
 
+    static func transcriptRevision(
+        _ pieces: [(text: String, opacity: Double)]
+    ) -> Int {
+        var hasher = Hasher()
+        for piece in pieces {
+            hasher.combine(piece.text)
+            hasher.combine(piece.opacity)
+        }
+        return hasher.finalize()
+    }
+
     static func attributedTranscript(
         prefix: String,
         state: KrakiVoiceInputController.State,
@@ -250,8 +261,11 @@ struct IOSVoiceComposerSurface: View {
             .accessibilityLabel("Cancel voice input")
             .accessibilityHint("Keeps the current draft and returns to the keyboard")
 
-            IOSVoiceTranscriptText(pieces: pieces)
-                .layoutPriority(1)
+            IOSVoiceTranscriptText(
+                pieces: pieces,
+                revision: VoiceComposerPresentation.transcriptRevision(pieces)
+            )
+            .layoutPriority(1)
 
             Button {
                 if state == .recording { onFinish() }
@@ -277,15 +291,51 @@ struct IOSVoiceComposerSurface: View {
 }
 
 struct IOSVoiceTranscriptText: View {
+    private static let lineHeight: CGFloat = 18
+    private static let maxVisibleLines: CGFloat = 2
+    private static let tailID = "voice-transcript-tail"
+
     let pieces: [(text: String, opacity: Double)]
+    let revision: Int
 
     var body: some View {
-        Text(attributed)
-            .font(.system(size: 15))
-            .lineLimit(2)
-            .truncationMode(.head)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    Text(attributed)
+                        .font(.system(size: 15))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.tailID)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: Self.lineHeight * Self.maxVisibleLines)
+            .clipped()
+            .onAppear {
+                scrollToTail(proxy)
+            }
+            .onChange(of: revision) { _, _ in
+                scrollToTail(proxy)
+            }
+        }
+        .accessibilityLabel("Voice transcript")
+    }
+
+    private func scrollToTail(_ proxy: ScrollViewProxy) {
+        // The transcript changes on every partial recognition packet. Defer
+        // until SwiftUI has committed the new text height, otherwise the
+        // proxy can target the previous content extent and leave the newest
+        // words below the viewport.
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(Self.tailID, anchor: .bottom)
+            }
+        }
     }
 
     private var attributed: AttributedString {
