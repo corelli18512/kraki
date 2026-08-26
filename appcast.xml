@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.31</title>
+            <pubDate>Wed, 26 Aug 2026 01:40:56 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.31</sparkle:fullReleaseNotesLink>
+            <sparkle:version>33</sparkle:version>
+            <sparkle:shortVersionString>0.2.31</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(tentacle): settle conversational turns before background compaction by @corelli18512 in https://github.com/corelli18512/kraki/pull/283
+* chore(mac): bump version to 0.2.31 by @corelli18512 in https://github.com/corelli18512/kraki/pull/284
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.30...mac-v0.2.31
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.31/Kraki.app.zip" length="8204856" type="application/octet-stream" sparkle:edSignature="MtO+8Wy9xYcqaj145Q/2+XXRuos9lBsS/nOQD3CYweGNeWeAXZZ7GxxyW4q+l7e7CpgmMM6DhBLFwcqyNLBiCQ=="/>
+        </item>
+        <item>
             <title>0.2.30</title>
             <pubDate>Tue, 25 Aug 2026 22:58:30 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -41,26 +58,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.29/Kraki.app.zip" length="8174021" type="application/octet-stream" sparkle:edSignature="v45bjFQ13I45DDm754PuR36HRyKrD9AZKLAF5JjY5BtyqR74nKH3ORGhwm7III3IfXciOgP0A5N6BQcGicjlAQ=="/>
         </item>
-        <item>
-            <title>0.2.28</title>
-            <pubDate>Sun, 23 Aug 2026 12:03:10 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.28</sparkle:fullReleaseNotesLink>
-            <sparkle:version>30</sparkle:version>
-            <sparkle:shortVersionString>0.2.28</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): enlarge and round compacting glyph by @corelli18512 in https://github.com/corelli18512/kraki/pull/275
-* chore(mac): prepare 0.2.28 build 30 by @corelli18512 in https://github.com/corelli18512/kraki/pull/276
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.27...mac-v0.2.28
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.28/Kraki.app.zip" length="8173217" type="application/octet-stream" sparkle:edSignature="zoLeftSsrvrs0vjxq3yZ99/fesbACWMLqSSqWyMd7I1ZHKOnbE0oOu5rA4vhmVyZ1ejLR/vSjBPHwD0kADaZCw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: tJlkisA5E4WzrDhZ+sAXEfnejcCcc21I9Ht5dDOJ6dNruN1ZstkOE5f0tAhfJlxSxyugIrHvo96LFMpdraxWCA==
-length: 4286
+edSignature: vqwMSYe39XR3PmRPkCM0yEt5v/+JW8dvc3Wvdq8CpRRkcpd9mk/Pzr8ULaYx4PPMFUpLsNezhRbqsgF320F4DA==
+length: 4312
 -->
