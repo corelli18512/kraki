@@ -367,6 +367,9 @@ interface PiSession {
   logicalTurn: number;
   /** The logical turn whose terminal callbacks have been emitted, if any. */
   settledTurn: number | undefined;
+  /** Pi emitted a non-retrying agent_end, so a following non-retry compaction
+   *  may settle the conversational answer before agent_settled. */
+  pendingMaintenanceIdle: boolean;
   /** The most recent narration segment whose TRACE mirror is still DEFERRED —
    *  not yet emitted as an `agent_narration` step because it might still
    *  graduate verbatim into the concluding bubble (skip-finalize / finalize
@@ -779,7 +782,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => this.handleProcessExit(sessionId, sess);
     proc.start();
@@ -885,6 +888,36 @@ export class PiAdapter extends AgentAdapter {
     else this.onIdle?.(sessionId);
   }
 
+  /**
+   * Settle the user-visible answer once Pi has confirmed a non-retrying run and
+   * either maintenance has started or the fully-settled fallback is reached.
+   * Compaction remains a separate maintenance callback and can continue after
+   * this idle.
+   */
+  private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
+    if (willRetry || s.aborting || s.settledTurn === s.logicalTurn) return;
+
+    if (s.finalizing) {
+      if (!s.finalizeResolved) {
+        const fallback = s.finalizeNarration.trim() || s.lastNarration.trim();
+        s.pendingNarration = '';
+        if (fallback) this.emitMessage(sessionId, s, fallback);
+        else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
+      }
+      s.finalizing = false;
+      this.emitIdleOnce(sessionId, s);
+      return;
+    }
+
+    if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') return;
+    const reply = s.lastNarration.trim();
+    if (s.toolSinceLastNarration || !reply) return;
+
+    s.pendingNarration = '';
+    this.emitMessage(sessionId, s, reply);
+    this.emitIdleOnce(sessionId, s);
+  }
+
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
@@ -907,6 +940,7 @@ export class PiAdapter extends AgentAdapter {
     s.lastNarration = '';
     s.lastStopReason = undefined;
     s.pendingError = undefined;
+    s.pendingMaintenanceIdle = false;
     s.pendingNarration = '';
     s.aborting = false;
     s.finalizing = false;
@@ -989,9 +1023,19 @@ export class PiAdapter extends AgentAdapter {
   private async handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
     this.touch(sessionId);
     switch (e.type) {
-      case 'compaction_start':
-        this.setCompacting(sessionId, true, { reason: this.normalizeCompactionReason(e.reason) });
+      case 'compaction_start': {
+        const reason = this.normalizeCompactionReason(e.reason);
+        this.setCompacting(sessionId, true, { reason });
+        const s = this.sessions.get(sessionId);
+        // The start event closes the tiny ordering gap between the final
+        // provider answer and background maintenance. Publish compaction first,
+        // then settle the conversational turn while maintenance remains active.
+        if (s && s.pendingMaintenanceIdle && (reason === 'threshold' || reason === 'overflow')) {
+          s.pendingMaintenanceIdle = false;
+          this.settleConversationalTurnAtAgentEnd(sessionId, s, false);
+        }
         break;
+      }
       case 'compaction_end':
         this.setCompacting(sessionId, false, {
           reason: this.normalizeCompactionReason(e.reason),
@@ -1002,7 +1046,10 @@ export class PiAdapter extends AgentAdapter {
         break;
       case 'agent_start': {
         const s = this.sessions.get(sessionId);
-        if (s) s.eventTurnId = s.relayTurnId;
+        if (s) {
+          s.eventTurnId = s.relayTurnId;
+          s.pendingMaintenanceIdle = false;
+        }
         // Streaming proves any preceding compaction is over even if its end
         // event was missed during resume/reconciliation.
         this.setCompacting(sessionId, false);
@@ -1228,7 +1275,7 @@ export class PiAdapter extends AgentAdapter {
         // into a single turn. Idle is only the run boundary (agent_end).
         void this.refreshUsage(sessionId);
         break;
-      case 'agent_end':
+      case 'agent_end': {
         void this.refreshUsage(sessionId);
         logger.info({
           sessionId,
@@ -1237,10 +1284,16 @@ export class PiAdapter extends AgentAdapter {
           attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
           willRetry: e.willRetry === true,
         }, 'pi agent lifecycle');
-        // agent_end only closes one low-level provider run. Pi may still perform
-        // retry, compaction recovery, or queued continuation work. Terminal
-        // Kraki callbacks are handled exclusively by agent_settled below.
+        const s = this.sessions.get(sessionId);
+        // Pi emits willRetry=false before non-retry threshold/overflow
+        // compaction. Remember that the conversational answer may settle at
+        // compaction_start; keep agent_settled as the fully-drained runtime
+        // boundary when no maintenance event follows.
+        if (s && e.willRetry === false) {
+          s.pendingMaintenanceIdle = true;
+        }
         break;
+      }
       case 'agent_settled': {
         void this.refreshUsage(sessionId);
         logger.info({
@@ -1255,6 +1308,7 @@ export class PiAdapter extends AgentAdapter {
           this.onIdle?.(sessionId);
           break;
         }
+        s.pendingMaintenanceIdle = false;
         // A duplicate settled callback must not crystallize the same logical turn
         // twice. The identity is reset only when a new prompt is accepted.
         if (s.settledTurn === s.logicalTurn) break;

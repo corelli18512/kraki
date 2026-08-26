@@ -2224,7 +2224,76 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenCalledWith(
       'sess_1', 'new work during maintenance', undefined, { delivery: 'follow_up' },
     );
+    expect(smMock.markActive).not.toHaveBeenCalled();
+    (adapter.onCompaction as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+      phase: 'end', reason: 'threshold',
+    });
     expect(smMock.markActive).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('keeps the maintenance lifecycle across idle, follow-up queueing, and the next active turn', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      let state: 'active' | 'idle' = 'active';
+      smMock.getMeta.mockImplementation(() => ({ id: 'sess_1', state }));
+      smMock.markActive.mockImplementation(() => { state = 'active'; });
+      smMock.markIdle.mockImplementation(() => { state = 'idle'; });
+
+      const oldTurnId = 'sess_1:maintenance-owner';
+      (client as unknown as { beginAdapterTurn: (sid: string, turnId: string) => void })
+        .beginAdapterTurn('sess_1', oldTurnId);
+      (adapter.onMessage as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+        content: 'the answer before compaction', turnId: oldTurnId,
+      });
+      expect(smMock.appendMessage.mock.calls.some((call) => call[1] === 'agent_message')).toBe(true);
+
+      (adapter.onCompaction as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+        phase: 'start', reason: 'threshold', turnId: oldTurnId,
+      });
+      (adapter.onIdle as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+        turnId: oldTurnId,
+      });
+      expect(state).toBe('idle');
+
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 602,
+        timestamp: new Date().toISOString(), payload: { text: 'continue after the answer', delivery: 'steer' },
+      })));
+
+      await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+      expect(adapter.sendMessage).toHaveBeenCalledWith(
+        'sess_1', 'continue after the answer', undefined, { delivery: 'follow_up' },
+      );
+      const persistedUser = smMock.appendMessage.mock.calls.find((call) => call[1] === 'user_message');
+      expect(persistedUser).toBeDefined();
+      expect((JSON.parse(String(persistedUser?.[2])) as { payload?: { delivery?: string } }).payload?.delivery)
+        .toBeUndefined();
+      // The follow-up is accepted, but the user-visible state remains idle
+      // while the maintenance operation is still running.
+      expect(state).toBe('idle');
+
+      const nextTurnId = (client as unknown as { activeInputTurnIds: Map<string, string> })
+        .activeInputTurnIds.get('sess_1');
+      expect(nextTurnId).toBeDefined();
+      expect(nextTurnId).not.toBe(oldTurnId);
+
+      // The maintenance belongs to the old turn, but it must still be cleared
+      // after the follow-up has claimed the session as active.
+      (adapter.onCompaction as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+        phase: 'end', reason: 'threshold', turnId: oldTurnId,
+      });
+      expect((client as unknown as { compactingSessions: Map<string, unknown> })
+        .compactingSessions.has('sess_1')).toBe(false);
+      expect(state).toBe('active');
+
+      (adapter.onIdle as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+        turnId: nextTurnId,
+      });
+      expect(state).toBe('idle');
+    } finally {
+      // The shared test socket is reset by beforeEach; no production resource is used.
+    }
   });
 
   it('serializes distinct composer prompts until the preceding turn idles', async () => {
