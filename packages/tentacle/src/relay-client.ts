@@ -572,6 +572,13 @@ export class RelayClient {
    *  determines whether new user work may queue behind it: threshold/manual
    *  compaction is maintenance; overflow compaction remains part of recovery. */
   private compactingSessions = new Map<string, 'manual' | 'threshold' | 'overflow' | undefined>();
+  /** Turn identity that started the currently active maintenance compaction.
+   *  Compaction may finish after a queued follow-up has opened a newer logical
+   *  turn, so its end callback must not be fenced against that newer turn. */
+  private compactionTurnIds = new Map<string, string | undefined>();
+  /** Follow-up inputs accepted while maintenance is active. They remain
+   *  conversationally idle until compaction ends, then become active. */
+  private maintenanceFollowUps = new Map<string, { accepted: boolean }>();
 
   /** Enter/leave transient compaction maintenance. This no longer overwrites
    *  the conversational session state: a completed turn may stay `idle` while
@@ -583,9 +590,28 @@ export class RelayClient {
         this.send({ type: 'compacting', sessionId, payload: { phase: 'start', ...(reason && { reason }) } });
       }
     } else if (this.compactingSessions.delete(sessionId)) {
+      this.compactionTurnIds.delete(sessionId);
+      const queued = this.maintenanceFollowUps.get(sessionId);
+      const activate = queued?.accepted === true;
       const metaState = this.sessionManager.getMeta(sessionId)?.state;
-      const nextState = metaState === 'active' ? 'active' : 'idle';
+      const nextState = activate || metaState === 'active' ? 'active' : 'idle';
+      if (activate) {
+        this.maintenanceFollowUps.delete(sessionId);
+        this.sessionManager.markActive(sessionId);
+      }
       this.send({ type: 'compacting', sessionId, payload: { phase: 'end', nextState } });
+      if (activate) this.send({ type: 'active', sessionId, payload: {} });
+    }
+  }
+
+  private acceptMaintenanceFollowUp(sessionId: string): void {
+    const queued = this.maintenanceFollowUps.get(sessionId);
+    if (!queued) return;
+    queued.accepted = true;
+    if (!this.compactingSessions.has(sessionId)) {
+      this.maintenanceFollowUps.delete(sessionId);
+      this.sessionManager.markActive(sessionId);
+      this.send({ type: 'active', sessionId, payload: {} });
     }
   }
 
@@ -988,6 +1014,9 @@ export class RelayClient {
     this.intentionalDisconnect = true;
     this.stopStaleCheck();
     this.clearAllDeltaTimers();
+    this.compactingSessions.clear();
+    this.compactionTurnIds.clear();
+    this.maintenanceFollowUps.clear();
     if (this.eventsWatcher) {
       this.eventsWatcher.close();
       this.eventsWatcher = null;
@@ -1414,15 +1443,20 @@ export class RelayClient {
                 const compactionReason = this.compactingSessions.get(sessionId);
                 const queueBehindMaintenance = this.sessionManager.getMeta(sessionId)?.state === 'idle'
                   && (compactionReason === 'threshold' || compactionReason === 'manual');
-                this.send({ type: 'active', sessionId, payload: {} });
+                if (queueBehindMaintenance) {
+                  this.maintenanceFollowUps.set(sessionId, { accepted: false });
+                } else {
+                  this.send({ type: 'active', sessionId, payload: {} });
+                  this.sessionManager.markActive(sessionId);
+                }
                 this.beginAdapterTurn(sessionId, reservation.turnId);
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
-                this.sessionManager.markActive(sessionId);
                 this.updateInputLedger(sessionId, clientId, 'dispatching');
                 const delivery = queueBehindMaintenance
                   ? this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
                   : this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
                 await delivery;
+                if (queueBehindMaintenance) this.acceptMaintenanceFollowUp(sessionId);
                 this.updateInputLedger(sessionId, clientId, 'delivered');
                 traceLog.info({
                   ns: process.hrtime.bigint().toString(),
@@ -1443,6 +1477,7 @@ export class RelayClient {
           };
           const next = (previous ? previous.catch(() => {}).then(deliver) : deliver())
             .catch((err) => {
+              this.maintenanceFollowUps.delete(sessionId);
               this.updateInputLedger(sessionId, clientId, 'rejected');
               logger.error({ err, sessionId }, 'send input failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
@@ -2262,9 +2297,21 @@ export class RelayClient {
     };
 
     this.adapter.onCompaction = (sessionId, event) => {
-      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
-      if (event.phase === 'start') this.setCompacting(sessionId, true, event.reason);
-      else this.setCompacting(sessionId, false);
+      // Compaction is maintenance, not a turn-scoped terminal callback. Its
+      // end may arrive after a follow-up has opened a newer logical turn, so
+      // retain the owner identity from start and fence against that identity
+      // rather than against the current active turn.
+      if (event.phase === 'start') {
+        if (!this.acceptsAdapterTurn(sessionId, event.turnId)) return;
+        if (!this.compactingSessions.has(sessionId)) {
+          this.compactionTurnIds.set(sessionId, event.turnId);
+        }
+        this.setCompacting(sessionId, true, event.reason);
+        return;
+      }
+      const ownerTurnId = this.compactionTurnIds.get(sessionId);
+      if (event.turnId && ownerTurnId && event.turnId !== ownerTurnId) return;
+      this.setCompacting(sessionId, false);
     };
 
     this.adapter.onError = (sessionId, event) => {

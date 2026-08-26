@@ -68,6 +68,7 @@ function makeAdapter(promptWatchdog?: {
     pendingError: undefined,
     logicalTurn: 1,
     settledTurn: undefined,
+    pendingMaintenanceIdle: false,
     aborting: false,
     finalizing: false,
     finalizeAttempt: 0,
@@ -694,6 +695,52 @@ describe('pi outbound images (tool result → attachment store)', () => {
 });
 
 describe('pi skip-finalize rule (one trailing narration → direct reply)', () => {
+  it('settles a clean answer at agent_end before maintenance and queues the next turn', async () => {
+    const { adapter, proc, session, emit, narrate } = makeAdapter();
+    const timeline: string[] = [];
+    const onMessage = vi.fn(() => { timeline.push('agent_message'); });
+    const onIdle = vi.fn(() => { timeline.push('idle'); });
+    const onCompaction = vi.fn((_sid: string, event: { phase: string }) => {
+      timeline.push(`compaction:${event.phase}`);
+    });
+    adapter.onMessage = onMessage;
+    adapter.onIdle = onIdle;
+    adapter.onCompaction = onCompaction;
+
+    narrate('The first answer is complete.');
+    await emit({ type: 'agent_end', willRetry: false });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onIdle).not.toHaveBeenCalled();
+    expect(session.pendingMaintenanceIdle).toBe(true);
+
+    await emit({ type: 'compaction_start', reason: 'threshold' });
+    expect(onCompaction).toHaveBeenCalledWith('s1', { phase: 'start', reason: 'threshold' });
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'The first answer is complete.' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    expect(session.settledTurn).toBe(session.logicalTurn);
+
+    await adapter.sendMessage('s1', 'continue after compaction', undefined, { delivery: 'follow_up' });
+    expect(proc.request).toHaveBeenCalledWith(
+      'prompt',
+      { message: 'continue after compaction', streamingBehavior: 'followUp' },
+      { timeoutMs: null },
+    );
+    expect(session.settledTurn).not.toBe(session.logicalTurn);
+
+    await emit({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false });
+    narrate('The queued follow-up is now active.');
+    await emit({ type: 'agent_end', willRetry: false });
+    await emit({ type: 'agent_settled' });
+
+    expect(onMessage).toHaveBeenLastCalledWith('s1', { content: 'The queued follow-up is now active.' });
+    expect(onIdle).toHaveBeenCalledTimes(2);
+    expect(timeline).toEqual([
+      'compaction:start', 'agent_message', 'idle',
+      'compaction:end', 'agent_message', 'idle',
+    ]);
+  });
+
   it('exactly one narration, no tool after → crystallize directly, NO finalize round', () => {
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
