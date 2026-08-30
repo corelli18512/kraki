@@ -2312,6 +2312,80 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'second', undefined);
   });
 
+  it('releases a stale preflight dispatch after explicit abort instead of showing false idle', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    let state: 'active' | 'idle' = 'active';
+    smMock.getMeta.mockImplementation(() => ({ id: 'sess_1', state }));
+    smMock.markActive.mockImplementation(() => { state = 'active'; });
+    smMock.markIdle.mockImplementation(() => { state = 'idle'; });
+    const ledger = new Map<string, { clientId: string; status: string; turnId?: string }>();
+    smMock.getInputLedgerEntry.mockImplementation((_sid: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sid: string, entry: { clientId: string; status: string; turnId?: string }) => {
+      ledger.set(entry.clientId, { ...entry });
+    });
+    smMock.markInputLedgerSettled.mockImplementation((_sid: string, turnId: string) => {
+      for (const [clientId, entry] of ledger) {
+        if (entry.turnId === turnId) ledger.set(clientId, { ...entry, status: 'settled' });
+      }
+    });
+
+    let releaseStalePrompt!: () => void;
+    const stalePrompt = new Promise<void>((resolve) => { releaseStalePrompt = resolve; });
+    (adapter.sendMessage as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => stalePrompt)
+      .mockResolvedValueOnce(undefined);
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 603,
+      timestamp: new Date().toISOString(), payload: {
+        text: 'prompt entering preflight compaction', clientId: 'preflight-stale',
+      },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+
+    const abortedTurnId = (client as unknown as { activeInputTurnIds: Map<string, string> })
+      .activeInputTurnIds.get('sess_1');
+    expect(abortedTurnId).toBeDefined();
+    (adapter.onCompaction as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
+      phase: 'start', reason: 'threshold', turnId: abortedTurnId,
+    });
+
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 604,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    await vi.waitFor(() => expect(adapter.abortSession).toHaveBeenCalledWith('sess_1'));
+    await vi.waitFor(() => expect(state).toBe('idle'));
+    expect(ledger.get('preflight-stale')?.status).toBe('settled');
+
+    let staleReleased = false;
+    try {
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 605,
+        timestamp: new Date().toISOString(), payload: {
+          text: 'next prompt after abort', clientId: 'post-abort-next',
+        },
+      })));
+
+      await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2), { timeout: 100 });
+      expect(adapter.sendMessage).toHaveBeenNthCalledWith(2, 'sess_1', 'next prompt after abort', undefined);
+      await vi.waitFor(() => expect(ledger.get('post-abort-next')?.status).toBe('delivered'));
+
+      releaseStalePrompt();
+      staleReleased = true;
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ledger.get('preflight-stale')?.status).toBe('settled');
+      expect(smMock.recordInputLedger.mock.calls.some((call) =>
+        call[1]?.clientId === 'preflight-stale' && call[1]?.status === 'delivered')).toBe(false);
+    } finally {
+      if (!staleReleased) releaseStalePrompt();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+  });
+
   it('fails closed and releases the prompt queue when an active adapter session is evicted', async () => {
     const { adapter, ws, sm } = buildClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;

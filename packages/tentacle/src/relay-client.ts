@@ -436,6 +436,12 @@ export class RelayClient {
   }
 
   private resolveTurnIdle(sessionId: string): void {
+    // A terminal turn boundary also retires its transport-acceptance gate. Pi
+    // can acknowledge abort while an older prompt RPC is still waiting behind
+    // preflight compaction; that stale Promise must not serialize later input.
+    // The underlying task remains observed and is fenced by its turn identity
+    // if it ever completes, while a new dispatch may start immediately.
+    this.inputDispatches.delete(sessionId);
     const waiter = this.turnIdleWaiters.get(sessionId);
     if (!waiter) return;
     this.turnIdleWaiters.delete(sessionId);
@@ -1438,7 +1444,7 @@ export class RelayClient {
           const deliver = async () => {
             const idle = this.waitForTurnIdle(sessionId);
             try {
-              await this.dispatchInput(sessionId, async () => {
+              const dispatch = this.dispatchInput(sessionId, async () => {
                 await this.ensureSessionResumed(sessionId);
                 const compactionReason = this.compactingSessions.get(sessionId);
                 const queueBehindMaintenance = this.sessionManager.getMeta(sessionId)?.state === 'idle'
@@ -1456,6 +1462,11 @@ export class RelayClient {
                   ? this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
                   : this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
                 await delivery;
+                // Abort/process-loss may terminalize this turn while its adapter
+                // submission is still unresolved. Never let a late completion
+                // regress a settled ledger row or activate stale maintenance.
+                if (!this.acceptsAdapterEvent(sessionId, reservation.turnId)
+                  || this.adapter.isTurnSettled(sessionId)) return;
                 if (queueBehindMaintenance) this.acceptMaintenanceFollowUp(sessionId);
                 this.updateInputLedger(sessionId, clientId, 'delivered');
                 traceLog.info({
@@ -1469,6 +1480,15 @@ export class RelayClient {
                 });
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-DONE', sessionId, clientId, turnId: reservation.turnId });
               });
+              // Usually transport acceptance wins and we then wait for provider
+              // idle. Explicit abort is the inverse: idle is authoritative even
+              // if a preflight prompt RPC never ACKs, so release the input chain
+              // without waiting for that stale transport Promise.
+              const firstBoundary = await Promise.race([
+                dispatch.then(() => 'accepted' as const),
+                idle.then(() => 'idle' as const),
+              ]);
+              if (firstBoundary === 'idle') return;
               await idle;
             } catch (err) {
               this.resolveTurnIdle(sessionId);
