@@ -7,6 +7,8 @@ DB-first `MessageProvider` against a temporary simulator database.
 It validates:
 
 - entry at the newest tail with valid content geometry;
+- programmatic entry scroll callbacks cannot page older history before the first user gesture;
+- explicit first-upward intent survives a late Composer inset even inside the bottom-follow tolerance;
 - first upward history pagination and exact prepend anchoring;
 - materialized visible cells while asynchronous page measurement settles;
 - repeated continuous upward packets without duplicate spine identities;
