@@ -335,28 +335,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private let sessionId: String
     private let agentName: String
     private var bottomContentInset: CGFloat
-    /// Explicit tail-follow state. Geometry cannot reliably infer this from a
-    /// 2pt distance sample while SwiftUI, the keyboard and safe-area insets are
-    /// changing in separate layout passes. We follow from initial open until
-    /// the user actually drags away; composer/keyboard/viewport changes then
-    /// repin the exact UIScrollView bottom on every settled layout.
-    private var followingBottom = true
-    /// Keep the entry tail authoritative until the first real user gesture.
-    /// UIKit emits programmatic `didScroll` callbacks while the collection view
-    /// attaches and resolves its initial insets; those callbacks must not page
-    /// history or weaken the initial bottom anchor.
-    private var entryBottomLocked = true
-    private var allowsEdgePaging = false
-    /// A short movement away from the tail can remain inside the 24pt geometry
-    /// tolerance. Preserve the user's explicit older-history intent so a late
-    /// Composer inset or exact-height correction cannot pull that first gesture
-    /// back to the live tail.
-    private var scrollingTowardOlder = false
-    private var lastUserScrollOffsetY: CGFloat?
+    /// Shared product policy. UIKit still owns gesture delivery, geometry,
+    /// anchoring, and animation; entry/follow/intent/paging rules are identical
+    /// to the AppKit adapter through this platform-neutral state machine.
+    private var scrollPolicy = ChatScrollPolicy()
+    private var followingBottom: Bool { scrollPolicy.followingTail }
+    private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
+    private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
+    private var scrollingTowardOlder: Bool { scrollPolicy.scrollingTowardOlder }
     private var lastPinnedViewportSize: CGSize = .zero
     private var lastPinnedAdjustedInsets: UIEdgeInsets = .zero
     private var isPinningBottom = false
-    private static let bottomFollowTolerance: CGFloat = 24
     private static let liveCardID = "__live_card__"
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
@@ -578,12 +567,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// reset; this token guards the grouping/flush that follows.)
     private var pagingGeneration = 0
 
-    /// While the ↓-to-latest glide is animating, edge paging is suppressed:
-    /// right after the re-anchor's `reloadData` the offset sits at the tail
-    /// window's TOP (y≈0), and an older-fetch fired there would slide the
-    /// window back up before the animation reaches the bottom. Cleared on
-    /// animation-end / user touch / a safety timeout.
-    private var suppressPagingForBottom = false
+    /// Animated user navigation is owned by the shared policy. UIKit only
+    /// executes the offset animation and reports its end/cancellation.
+    private var suppressPagingForBottom: Bool { scrollPolicy.suppressesEdgePaging }
 
     /// Two floating navigation controls share the same lower-right rail:
     /// "latest message start" places the newest bubble below the top chrome,
@@ -769,7 +755,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private let spinnerRowHeight: CGFloat = 44
     /// Headroom (pt from the top edge) that defines the "near top" reveal line
     /// for older pagination. Mirrors the test page's `pageTriggerHeadroom`.
-    private let pageTriggerHeadroom: CGFloat = 320
+    private let pageTriggerHeadroom = ChatScrollPolicy.edgeTriggerDistance
 
     // MARK: Data source (manual)
 
@@ -1094,6 +1080,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         blur.layer.masksToBounds = true
         blur.layer.borderWidth = 0.5
         blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
+        blur.alpha = 0
+        blur.isHidden = true
 
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
         // Keep the material view OUTSIDE the UIButton. UIKit may reorder a
@@ -1140,6 +1128,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         startBlur.layer.masksToBounds = true
         startBlur.layer.borderWidth = 0.5
         startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
+        startBlur.alpha = 0
+        startBlur.isHidden = true
 
         latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
         latestMessageStartButton.setImage(
@@ -1198,32 +1188,55 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// available for a long newest reply.
     private func updateJumpButtonVisibility() {
         guard collectionView != nil else { return }
-        let farFromBottom = distanceToBottom() > 1.5 * collectionView.bounds.height
-        let shouldShowBottom = !suppressPagingForBottom && (farFromBottom || !atNewest)
-        let shouldShowStart = !suppressPagingForBottom
-            && latestMessageStartOffset().map {
-                abs(collectionView.contentOffset.y - $0) > 24
-            } == true
-        setJumpButtonVisibility(jumpButton, shouldShow: shouldShowBottom)
-        setJumpButtonVisibility(latestMessageStartButton, shouldShow: shouldShowStart)
+        let visibility = scrollPolicy.navigationControlVisibility(
+            distanceToBottom: distanceToBottom(),
+            viewportLength: collectionView.bounds.height,
+            hasUnloadedNewer: !atNewest,
+            currentOffset: collectionView.contentOffset.y,
+            latestMessageStartOffset: latestMessageStartOffset()
+        )
+        setJumpButtonVisibility(
+            jumpButton,
+            material: jumpButtonBlur,
+            shouldShow: visibility.showTail
+        )
+        setJumpButtonVisibility(
+            latestMessageStartButton,
+            material: latestMessageStartButtonBlur,
+            shouldShow: visibility.showLatestMessageStart
+        )
     }
 
-    private func setJumpButtonVisibility(_ button: UIButton, shouldShow: Bool) {
+    private func setJumpButtonVisibility(
+        _ button: UIButton,
+        material: UIVisualEffectView?,
+        shouldShow: Bool
+    ) {
         let key = ObjectIdentifier(button)
         guard jumpButtonVisibilityTargets[key] != shouldShow else { return }
         jumpButtonVisibilityTargets[key] = shouldShow
         let generation = (jumpButtonVisibilityGenerations[key] ?? 0) + 1
         jumpButtonVisibilityGenerations[key] = generation
         button.layer.removeAllAnimations()
-        if shouldShow { button.isHidden = false }
-        UIView.animate(withDuration: 0.2) { [weak button] in
+        material?.layer.removeAllAnimations()
+        if shouldShow {
+            material?.isHidden = false
+            button.isHidden = false
+        }
+        UIView.animate(
+            withDuration: ChatScrollPolicy.navigationControlAnimationDurationSeconds
+        ) { [weak button, weak material] in
             button?.alpha = shouldShow ? 1 : 0
-        } completion: { [weak self, weak button] finished in
+            material?.alpha = shouldShow ? 1 : 0
+        } completion: { [weak self, weak button, weak material] finished in
             guard let self, let button,
                   finished,
                   self.jumpButtonVisibilityTargets[key] == shouldShow,
                   self.jumpButtonVisibilityGenerations[key] == generation else { return }
-            if !shouldShow { button.isHidden = true }
+            if !shouldShow {
+                button.isHidden = true
+                material?.isHidden = true
+            }
         }
     }
 
@@ -1236,11 +1249,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func jumpToLatestMessageStart(animated: Bool) {
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        scrollingTowardOlder = true
-        lastUserScrollOffsetY = nil
-        suppressPagingForBottom = true
+        scrollPolicy.beginLatestMessageStartNavigation()
         if !atNewest {
             reanchorNewest()
         }
@@ -1249,13 +1258,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             endBottomGlide()
             return
         }
-        followingBottom = false
         collectionView.setContentOffset(
             CGPoint(x: collectionView.contentOffset.x, y: target),
             animated: animated
         )
         updateJumpButtonVisibility()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + ChatScrollPolicy.navigationSafetyTimeoutSeconds
+        ) { [weak self] in
             self?.endBottomGlide()
         }
     }
@@ -1308,10 +1318,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func jumpToLiveBottom(animated: Bool) {
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        scrollingTowardOlder = false
-        lastUserScrollOffsetY = nil
+        scrollPolicy.beginTailNavigation(
+            offset: collectionView.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
         // Suppress edge paging for the duration of the glide: right after the
         // reanchor's reloadData the offset is 0 (tail window's TOP), and any
         // scroll callback there would fire an older-fetch that drags the window
@@ -1323,16 +1333,18 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[bottom] already-newest scroll")
         }
         if animated {
-            suppressPagingForBottom = true
             updateJumpButtonVisibility()
             scrollToBottom(animated: true)
             // Guarantee the gate lifts even if no didEndScrollingAnimation fires
             // (e.g. the target was already visible so UIKit skipped the anim).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + ChatScrollPolicy.navigationSafetyTimeoutSeconds
+            ) { [weak self] in
                 self?.endBottomGlide()
             }
         } else {
             scrollToBottom(animated: false)
+            scrollPolicy.endNavigation()
             updateJumpButtonVisibility()
         }
     }
@@ -1340,7 +1352,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Lift the ↓Bottom paging gate and resume normal edge paging at rest.
     private func endBottomGlide() {
         guard suppressPagingForBottom else { return }
-        suppressPagingForBottom = false
+        scrollPolicy.endNavigation()
         chatPerfLog.log("[bottom] glide-end win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] off=\(Int(collectionView.contentOffset.y))")
         settleEdges()
         updateOverlay()
@@ -1439,7 +1451,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         collectionView.layoutIfNeeded()
         didInitialScroll = true
-        followingBottom = true
         pinToBottom(reason: "initial")
         lastReason = "initial"
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -1707,10 +1718,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// the user is already at the newest edge, preserve that bottom anchor as
     /// the input changes height; otherwise leave their reading position alone.
     private var shouldFollowLiveTail: Bool {
-        entryBottomLocked
-            || followingBottom
-            || (!scrollingTowardOlder
-                && distanceToBottom() <= Self.bottomFollowTolerance)
+        scrollPolicy.shouldFollowTail(distanceToBottom: distanceToBottom())
     }
 
     func updateBottomContentInset(_ value: CGFloat) {
@@ -1723,7 +1731,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         collectionView.verticalScrollIndicatorInsets.bottom = value
         jumpButtonBottomConstraint?.constant = -(value + 16)
         collectionView.layoutIfNeeded()
-        followingBottom = shouldFollow
+        scrollPolicy.setFollowingTail(shouldFollow)
         if shouldFollow {
             pinToBottom(reason: "composer-inset")
         }
@@ -1781,7 +1789,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                         + self.collectionView.adjustedContentInset.bottom
                 )
                 self.collectionView.contentOffset.y = maxY
-                self.followingBottom = true
+                self.scrollPolicy.pinToTail(observedOffset: maxY)
             }
         }
         guard animated, collectionView.window != nil else {
@@ -1860,7 +1868,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             collectionView.reloadData()
             collectionView.layoutIfNeeded()
             if !items.isEmpty, !didInitialScroll || wasAtBottom {
-                followingBottom = true
                 pinToBottom(reason: "live-update", animated: didInitialScroll && !wasAtBottom)
             }
             // If the controller was created while its DB window was still
@@ -2034,8 +2041,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     private func pinToBottom(reason: String, animated: Bool = false) {
         guard collectionView.numberOfItems(inSection: 0) > 0 else { return }
-        scrollingTowardOlder = false
-        lastUserScrollOffsetY = nil
         isPinningBottom = true
         collectionView.layoutIfNeeded()
         let minY = -collectionView.adjustedContentInset.top
@@ -2045,7 +2050,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                        + collectionView.adjustedContentInset.bottom)
         lastPinnedViewportSize = collectionView.bounds.size
         lastPinnedAdjustedInsets = collectionView.adjustedContentInset
-        followingBottom = true
+        scrollPolicy.pinToTail(observedOffset: maxY)
         let targetText = String(format: "%.1f", maxY)
         let currentText = String(format: "%.1f", collectionView.contentOffset.y)
         let contentText = String(format: "%.1f", collectionView.contentSize.height)
@@ -2065,40 +2070,19 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // MARK: Scroll-driven pagination
 
     private func noteUserScrollOffset(_ offsetY: CGFloat) {
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        defer { lastUserScrollOffsetY = offsetY }
-
-        guard let previous = lastUserScrollOffsetY else {
-            followingBottom = distanceToBottom() <= Self.bottomFollowTolerance
-            return
-        }
-        if offsetY < previous - 0.5 {
-            scrollingTowardOlder = true
-            followingBottom = false
-        } else if offsetY > previous + 0.5 {
-            scrollingTowardOlder = false
-            followingBottom = distanceToBottom() <= Self.bottomFollowTolerance
-        } else if !scrollingTowardOlder {
-            followingBottom = distanceToBottom() <= Self.bottomFollowTolerance
-        }
+        scrollPolicy.observeUserOffset(
+            offsetY,
+            distanceToBottom: distanceToBottom()
+        )
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if scrollView.isDragging || scrollView.isTracking {
             noteUserScrollOffset(scrollView.contentOffset.y)
         }
-        // EVENT-BASED RE-ARM (no position hysteresis band): an edge is free to
-        // fire whenever the viewport is in its trigger zone and no load for that
-        // edge is in flight. `fetchingOlder`/`fetchingNewer` serialize the loads
-        // (one at a time) and reset to false only AFTER the page is fetched, so
-        // the next eligible frame re-fires automatically. Both edges are driven
-        // symmetrically — `driveEdges` prefetches into a buffer while
-        // APPROACHING an edge and flushes the whole buffer in ONE coalesced
-        // batch when it's deep enough / at rest. The far edge is naturally a
-        // no-op (its distance exceeds the prefetch runway). `scrollingToTop`
-        // still suppresses the status-bar-tap glide so it does not cascade
-        // reveals while the animation chases contentOffset 0.
+        // The shared policy carries macOS's one-older-page-per-continuous-
+        // interaction contract. UIKit still owns fetch buffering, exact-height
+        // barriers, and anchored batch application.
         driveEdges()
     }
 
@@ -2109,12 +2093,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         guard allowsEdgePaging, !scrollingToTop else { return }
         updateJumpButtonVisibility()
         guard !suppressPagingForBottom else { return }
-        let y = collectionView.contentOffset.y
-        if y < olderPrefetchStart(), !atOldest {
+        if !atOldest {
             prefetchOlderIfNeeded()
             maybeFlushOlder(reason: "scroll")
         }
-        if distanceToBottom() < olderPrefetchStart(), !atNewest {
+        if !atNewest {
             prefetchNewerIfNeeded()
             maybeFlushNewer(reason: "scroll")
         }
@@ -2135,6 +2118,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmWindow()
         pager.resume()
         setVisibleBodiesInteractive(true)
+        scrollPolicy.endUserInteraction()
         settleEdges()
     }
 
@@ -2148,6 +2132,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             warmWindow()
             pager.resume()
             setVisibleBodiesInteractive(true)
+            scrollPolicy.endUserInteraction()
             settleEdges()
         }
     }
@@ -2166,19 +2151,36 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// It changes only the production follow-state latch; pagination, sizing,
     /// batch updates, and anchor correction still run through their normal paths.
     func automationMarkUserScrolledAway() {
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        scrollingTowardOlder = true
-        followingBottom = false
-        lastUserScrollOffsetY = collectionView?.contentOffset.y
+        scrollPolicy.beginUserInteraction(
+            offset: collectionView?.contentOffset.y ?? 0,
+            distanceToBottom: distanceToBottom()
+        )
+        scrollPolicy.recordUserIntent(
+            .older,
+            offset: collectionView?.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
+    }
+
+    func automationMarkUserScrollingTowardNewer() {
+        scrollPolicy.beginUserInteraction(
+            offset: collectionView?.contentOffset.y ?? 0,
+            distanceToBottom: distanceToBottom()
+        )
+        scrollPolicy.recordUserIntent(
+            .newer,
+            offset: collectionView?.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
     }
     #endif
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        lastUserScrollOffsetY = scrollView.contentOffset.y
+        scrollPolicy.beginUserInteraction(
+            offset: scrollView.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
         codeHighlightSettleWork?.cancel()
         // NOTE: we deliberately do NOT flush a pending page here. The pending
         // work is the heavy STEP-2 snapshot refresh+apply; running it at the instant the
@@ -2188,12 +2190,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // User touched the list → any in-flight scroll-to-top is cancelled,
         // so re-enable pagination (safety net if didScrollToTop never fires).
         scrollingToTop = false
-        // User grabbed the list → cancel any ↓-to-latest glide gate too.
-        suppressPagingForBottom = false
-        // Keep following until movement actually carries the viewport away;
-        // scrollViewDidScroll owns that transition so a harmless tap/grab at
-        // the bottom does not disable composer/keyboard anchoring.
-        followingBottom = distanceToBottom() <= Self.bottomFollowTolerance
+        // `beginUserInteraction` also cancels any active navigation glide.
+        // Re-sample after cancelling programmatic glide state. The shared
+        // policy preserves a harmless tail grab until movement establishes
+        // explicit older/newer intent.
+        scrollPolicy.refreshFollowingTail(distanceToBottom: distanceToBottom())
         // Stand down warming AND page measurement for the duration of the
         // gesture/fling so no expensive self-size competes with scroll frames.
         // Discard stale visible-height jobs from the old viewport; the new visible
@@ -2214,16 +2215,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // it glides to the top of the loaded content instead of triggering an
     // endless prepend cascade as the animation chases contentOffset 0.
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-        entryBottomLocked = false
-        allowsEdgePaging = true
-        scrollingTowardOlder = true
-        followingBottom = false
+        scrollPolicy.beginUserInteraction(
+            offset: scrollView.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
+        scrollPolicy.recordUserIntent(
+            .older,
+            offset: scrollView.contentOffset.y,
+            distanceToBottom: distanceToBottom()
+        )
         scrollingToTop = true
         return true
     }
 
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         scrollingToTop = false
+        scrollPolicy.endUserInteraction()
         KLog.chat("📜 [scroll] to-top session=\(sessionId.prefix(12))")
         // The animation has parked at the top of the loaded content; reveal any
         // pending/buffered older page (jump-free, at rest) then top up.
@@ -2422,12 +2429,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Top up the newer buffer while approaching the bottom, until it can clear
     /// the band. Mirror of `prefetchOlderIfNeeded`.
     private func prefetchNewerIfNeeded() {
-        guard allowsEdgePaging, viewIfLoaded?.window != nil else { return }
-        guard !suppressPagingForBottom else { return }
-        guard pendingApply == nil else { return }
-        guard !atNewest, !fetchingNewer, !measuringNewerPage, !scrollingToTop else { return }
-        guard distanceToBottom() < olderPrefetchStart() else { return }
-        guard bufferedNewerHeight() < olderBufferTargetHeight else { return }
+        guard viewIfLoaded?.window != nil,
+              pendingApply == nil,
+              bufferedNewerHeight() < olderBufferTargetHeight else { return }
+        let isLoading = fetchingNewer || measuringNewerPage
+        guard scrollPolicy.shouldRequestNewerPage(
+            distanceToNewerEdge: distanceToBottom(),
+            hasNewer: !atNewest,
+            isLoading: isLoading,
+            externallySuppressed: scrollingToTop
+        ) else { return }
         fetchNewer()
     }
 
@@ -2519,12 +2530,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Keep filling the buffer until it can cover this much content above the
     /// viewport — enough to clear the trigger band in one reveal (+ margin).
     private var olderBufferTargetHeight: CGFloat { pageTriggerHeadroom + 600 }
-    /// Start prefetching this far from the top so the round trip + snapshot refresh hide
-    /// behind the approach (fetch latency × scroll speed needs a few screens).
-    private func olderPrefetchStart() -> CGFloat {
-        max(pageTriggerHeadroom + 200, 3.0 * collectionView.bounds.height)
-    }
-
     /// Fire one page fetch into the buffer (serialized). On return it refreshes the snapshot
     /// (advances the model), measures the buffered page off-frame, then
     /// re-evaluates flush + prefetch.
@@ -2577,15 +2582,21 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     /// Top up the buffer while approaching the top, until it can clear the band.
     private func prefetchOlderIfNeeded() {
-        guard allowsEdgePaging, viewIfLoaded?.window != nil else { return }
-        guard !suppressPagingForBottom else { return }
-        guard pendingApply == nil else { return }
-        guard !atOldest, !fetchingOlder, !measuringOlderPage,
-              !vm.isLoadingOlder, !scrollingToTop else { return }
-        let y = collectionView.contentOffset.y
-        guard y < olderPrefetchStart() else { return }
-        // Buffer already deep enough to clear the band → hold (don't over-fetch).
-        guard bufferedOlderHeight() < olderBufferTargetHeight else { return }
+        guard viewIfLoaded?.window != nil,
+              pendingApply == nil,
+              bufferedOlderHeight() < olderBufferTargetHeight else { return }
+        let isLoading = fetchingOlder || measuringOlderPage || vm.isLoadingOlder
+        let distanceToOlderEdge = max(
+            0,
+            collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        )
+        guard scrollPolicy.shouldRequestOlderPage(
+            distanceToOlderEdge: distanceToOlderEdge,
+            viewportLength: collectionView.bounds.height,
+            hasOlder: !atOldest,
+            isLoading: isLoading,
+            externallySuppressed: scrollingToTop
+        ) else { return }
         fetchOlder()
     }
 

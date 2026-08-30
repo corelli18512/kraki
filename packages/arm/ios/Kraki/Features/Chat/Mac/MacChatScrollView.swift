@@ -1833,19 +1833,23 @@ final class MacChatScrollView: MacSmoothScrollView {
         set { super.scrollerStyle = .overlay }
     }
 
-    private(set) var followingBottom = true
+    /// Shared product policy. AppKit still owns native event delivery,
+    /// virtualization, anchor restoration, and animation.
+    private var scrollPolicy = ChatScrollPolicy()
+    var followingBottom: Bool { scrollPolicy.followingTail }
+    private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
+    private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0
     private let topContentInset: CGFloat = 0
     private var loadingOlder = false
     private var loadingNewer = false
     private var hasUnloadedNewer = false
-    private var suppressPagingForBottom = false
-    private var suppressNewerPagingAfterOlder = false
+    private var suppressNewerPagingAfterOlder: Bool {
+        scrollPolicy.suppressesNewerPagingAfterOlder
+    }
     /// Programmatic initial layout / reanchoring must not masquerade as a user
-    /// scroll at the top edge. Paging is enabled only after the first usable
-    /// viewport has been laid out and the run loop has settled.
-    private var allowsEdgePaging = false
-    private var entryBottomLocked = true
+    /// scroll at the top edge. The shared policy enables paging only after a
+    /// real user interaction or navigation command.
     private var lastDocumentWidth: CGFloat = 0
     private var liveScrollObserver: NSObjectProtocol?
     private var liveScrollEndObserver: NSObjectProtocol?
@@ -1861,12 +1865,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var thumbViewportGeneration = 0
     private var snapshotApplyActive = false
     private var suppressRunwayForNextReflect = false
-    private var olderEdgeArmed = false
-    /// A short document can place both the top and bottom inside the 24pt
-    /// bottom-follow tolerance. Preserve an explicit upward gesture so an
-    /// older prepend cannot reclassify that gesture as bottom-following.
-    private var scrollingTowardOlder = false
-    private var lastReflectedOffset: CGFloat?
+    private var olderEdgeArmed: Bool { scrollPolicy.olderPageArmed }
     private(set) var hasUserScrolled = false
     private var initialTailTrimRequested = false
     private(set) var representedSessionId: String?
@@ -1925,10 +1924,6 @@ final class MacChatScrollView: MacSmoothScrollView {
         let chatScroller = MacChatScroller()
         chatScroller.onKnobTrackingChanged = { [weak self] tracking in
             if tracking {
-                self?.entryBottomLocked = false
-                self?.allowsEdgePaging = true
-                self?.olderEdgeArmed = true
-                self?.lastReflectedOffset = self?.contentView.bounds.minY
                 self?.beginScrollInteraction(scrollerKnob: true)
             } else {
                 self?.endScrollInteraction(scrollerKnob: true)
@@ -1943,8 +1938,10 @@ final class MacChatScrollView: MacSmoothScrollView {
             guard let self else { return }
             self.discreteWheelActive = active
             if active {
-                self.entryBottomLocked = false
-                self.allowsEdgePaging = true
+                self.scrollPolicy.beginUserInteraction(
+                    offset: self.contentView.bounds.minY,
+                    distanceToBottom: self.distanceToBottom
+                )
                 self.chatDocumentView.beginScrollInteraction(scrollerKnob: self.knobScrollActive)
             } else {
                 self.settleScrollInteractionIfIdle()
@@ -2180,19 +2177,12 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButtonVisibilityGenerations.removeAll(keepingCapacity: true)
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
-        olderEdgeArmed = false
-        scrollingTowardOlder = false
-        lastReflectedOffset = nil
+        scrollPolicy.resetForEntry()
         hasUserScrolled = false
         initialTailTrimRequested = false
-        allowsEdgePaging = false
-        entryBottomLocked = true
         loadingOlder = false
         loadingNewer = false
         hasUnloadedNewer = false
-        suppressPagingForBottom = false
-        suppressNewerPagingAfterOlder = false
-        followingBottom = true
         canTrimTailWindow = false
         geometryAnchorLock = nil
         onFirstUsableLayout = nil
@@ -2245,9 +2235,10 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollSettlePending = false
         geometryAnchorLock = nil
         hasUserScrolled = true
-        entryBottomLocked = false
-        followingBottom = false
-        allowsEdgePaging = true
+        scrollPolicy.beginUserInteraction(
+            offset: contentView.bounds.minY,
+            distanceToBottom: distanceToBottom
+        )
         if scrollerKnob {
             knobScrollActive = true
         } else {
@@ -2340,6 +2331,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             deferredEdgePaging = false
             driveEdgePagingIfNeeded(in: contentView)
         }
+        scrollPolicy.endUserInteraction()
     }
 
     private func commitWarmedHeightsPreservingViewport(restartWarmup: Bool = false) {
@@ -2423,7 +2415,7 @@ final class MacChatScrollView: MacSmoothScrollView {
                 chatDocumentView.frame.height - contentView.bounds.height
             )
             contentView.bounds.origin.y = bottom
-            followingBottom = true
+            scrollPolicy.pinToTail(observedOffset: bottom)
         }
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds)
         let jumpFrame = NSRect(
@@ -2446,23 +2438,28 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     @objc private func jumpTapped() {
         geometryAnchorLock = nil
-        suppressNewerPagingAfterOlder = false
-        suppressPagingForBottom = true
+        scrollPolicy.beginTailNavigation(
+            offset: contentView.bounds.minY,
+            distanceToBottom: distanceToBottom
+        )
         // Always act on the live AppKit list immediately. Previously the button
         // only set a flag for the next SwiftUI update; when the model was already
         // at authoritative head no update occurred, so the button did nothing.
         scrollToBottom(animated: true)
         onJumpToLatest?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.suppressPagingForBottom = false
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + ChatScrollPolicy.navigationSafetyTimeoutSeconds
+        ) { [weak self] in
+            guard let self else { return }
+            self.scrollPolicy.endNavigation()
+            self.updateJumpButtonVisibility(animated: false)
         }
     }
 
     @objc private func latestStartTapped() {
         geometryAnchorLock = nil
-        suppressNewerPagingAfterOlder = false
+        scrollPolicy.beginLatestMessageStartNavigation()
         latestStartJumpPending = hasUnloadedNewer
-        suppressPagingForBottom = true
         if hasUnloadedNewer {
             // The true newest item may not be in the current sliding window.
             // Ask the owner to re-anchor first; updateNSView completes this jump
@@ -2476,7 +2473,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     func completeLatestStartJump() {
         latestStartJumpPending = false
         guard let frame = chatDocumentView.latestItemFrame() else {
-            suppressPagingForBottom = false
+            scrollPolicy.endNavigation()
             updateJumpButtonVisibility(animated: false)
             return
         }
@@ -2486,16 +2483,17 @@ final class MacChatScrollView: MacSmoothScrollView {
             chatDocumentView.frame.height - contentView.bounds.height
         )
         let target = min(maximumY, max(minimumY, frame.minY - latestMessageTopPadding))
-        followingBottom = false
         let point = NSPoint(x: contentView.bounds.origin.x, y: target)
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
+            context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
             contentView.animator().bounds.origin = point
         }
         updateJumpButtonVisibility(animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + ChatScrollPolicy.navigationSafetyTimeoutSeconds
+        ) { [weak self] in
             guard let self else { return }
-            self.suppressPagingForBottom = false
+            self.scrollPolicy.endNavigation()
             self.updateJumpButtonVisibility(animated: false)
         }
     }
@@ -2615,13 +2613,26 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 116 || event.keyCode == 115 || event.keyCode == 126 {
+        let scrollsOlder = event.keyCode == 116 || event.keyCode == 115 || event.keyCode == 126
+        if scrollsOlder {
             geometryAnchorLock = nil
-            entryBottomLocked = false
-            allowsEdgePaging = true
-            olderEdgeArmed = true
+            scrollPolicy.beginUserInteraction(
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
+            scrollPolicy.recordUserIntent(
+                .older,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
         }
         super.keyDown(with: event)
+        if scrollsOlder {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isScrollInteractionActive else { return }
+                self.scrollPolicy.endUserInteraction()
+            }
+        }
     }
 
     #if DEBUG
@@ -2639,18 +2650,20 @@ final class MacChatScrollView: MacSmoothScrollView {
     private func preparePreciseScrollDelta(_ deltaY: CGFloat) {
         geometryAnchorLock = nil
         hasUserScrolled = true
-        let startsDirectGesture = !isScrollInteractionActive
-        if deltaY > 0.01 {
-            if startsDirectGesture { olderEdgeArmed = true }
-            scrollingTowardOlder = true
-        } else if deltaY < -0.01 {
-            suppressNewerPagingAfterOlder = false
-            scrollingTowardOlder = false
-        }
-        entryBottomLocked = false
-        followingBottom = false
-        allowsEdgePaging = true
         if !liveScrollActive { beginScrollInteraction(scrollerKnob: false) }
+        if deltaY > 0.01 {
+            scrollPolicy.recordUserIntent(
+                .older,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
+        } else if deltaY < -0.01 {
+            scrollPolicy.recordUserIntent(
+                .newer,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
+        }
         notePreciseScrollActivity()
     }
 
@@ -2683,9 +2696,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         geometryAnchorLock = nil
         hasUserScrolled = true
         resetSmoothWheelAnimation()
-        entryBottomLocked = false
-        followingBottom = false
-        allowsEdgePaging = true
+        scrollPolicy.leaveTailForUserNavigation(offset: contentView.bounds.minY)
         let minimumY = -contentInsets.top
         let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
         contentView.bounds.origin.y = min(maximumY, max(minimumY, frame.minY - screenY))
@@ -2697,17 +2708,25 @@ final class MacChatScrollView: MacSmoothScrollView {
     func automationScroll(direction: String, ticks: Int) -> (before: CGFloat, after: CGFloat) {
         geometryAnchorLock = nil
         hasUserScrolled = true
+        scrollPolicy.beginUserInteraction(
+            offset: contentView.bounds.minY,
+            distanceToBottom: distanceToBottom
+        )
         if direction == "up" {
-            olderEdgeArmed = true
-            scrollingTowardOlder = true
+            scrollPolicy.recordUserIntent(
+                .older,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
         }
         if direction == "down" {
-            suppressNewerPagingAfterOlder = false
-            scrollingTowardOlder = false
+            scrollPolicy.recordUserIntent(
+                .newer,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
         }
         resetSmoothWheelAnimation()
-        entryBottomLocked = false
-        allowsEdgePaging = true
         let before = contentView.bounds.minY
         let minimumY = -contentInsets.top
         let maximumY = max(
@@ -2729,34 +2748,38 @@ final class MacChatScrollView: MacSmoothScrollView {
     override func scrollWheel(with event: NSEvent) {
         geometryAnchorLock = nil
         hasUserScrolled = true
-        // Arm older pagination once per gesture, not once per momentum packet.
-        // Re-arming every precise delta lets one fast trackpad flick consume
-        // page after page as each prepend completes, which looks like the Chat
-        // jumped straight to the top after entering a Session.
-        let startsDirectGesture = !isScrollInteractionActive
-        if event.scrollingDeltaY > 0.01 {
-            if startsDirectGesture { olderEdgeArmed = true }
-            scrollingTowardOlder = true
-        } else if event.scrollingDeltaY < -0.01 {
-            suppressNewerPagingAfterOlder = false
-            scrollingTowardOlder = false
+        let hasScrollDelta = abs(event.scrollingDeltaY) > 0.01
+            || abs(event.scrollingDeltaX) > 0.01
+        if hasScrollDelta {
+            scrollPolicy.beginUserInteraction(
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
         }
-        entryBottomLocked = false
-        followingBottom = false
-        allowsEdgePaging = true
-        if event.hasPreciseScrollingDeltas,
-           abs(event.scrollingDeltaY) > 0.01 || abs(event.scrollingDeltaX) > 0.01 {
+        if event.hasPreciseScrollingDeltas, hasScrollDelta {
             preparePreciseScrollDelta(event.scrollingDeltaY)
+        } else if event.scrollingDeltaY > 0.01 {
+            scrollPolicy.recordUserIntent(
+                .older,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
+        } else if event.scrollingDeltaY < -0.01 {
+            scrollPolicy.recordUserIntent(
+                .newer,
+                offset: contentView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
         }
         super.scrollWheel(with: event)
     }
 
     override func reflectScrolledClipView(_ clipView: NSClipView) {
         let started = CACurrentMediaTime()
-        let previousReflectedOffset = lastReflectedOffset
         if NSApp.currentEvent?.type == .leftMouseDragged {
-            entryBottomLocked = false
-            allowsEdgePaging = true
+            // Knob-start captured the comparison baseline. Reflection may run
+            // once per drag packet, so only release entry protection here.
+            scrollPolicy.unlockForUserInteraction()
         }
         super.reflectScrolledClipView(clipView)
         // `MacChatDocumentView.apply` changes the document frame before the
@@ -2765,18 +2788,13 @@ final class MacChatScrollView: MacSmoothScrollView {
         // one final reflect after the anchor and cells are settled.
         if snapshotApplyActive { return }
         if chatDocumentView.scrollerKnobTracking {
-            if let previousReflectedOffset {
-                if clipView.bounds.minY < previousReflectedOffset - 0.5 {
-                    scrollingTowardOlder = true
-                } else if clipView.bounds.minY > previousReflectedOffset + 0.5 {
-                    scrollingTowardOlder = false
-                }
-            }
-            lastReflectedOffset = clipView.bounds.minY
+            scrollPolicy.observeUserOffset(
+                clipView.bounds.minY,
+                distanceToBottom: distanceToBottom
+            )
             scheduleThumbViewportUpdate()
             deferredEdgePaging = true
-            followingBottom = isEntryBottomLocked
-                || (!scrollingTowardOlder && distanceToBottom <= 24)
+            scrollPolicy.refreshFollowingTail(distanceToBottom: distanceToBottom)
             updateJumpButtonVisibility(animated: false)
             return
         }
@@ -2806,9 +2824,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         } else {
             driveEdgePagingIfNeeded(in: clipView)
         }
-        lastReflectedOffset = clipView.bounds.minY
-        followingBottom = isEntryBottomLocked
-            || (!scrollingTowardOlder && distanceToBottom <= 24)
+        scrollPolicy.rememberOffset(clipView.bounds.minY)
+        scrollPolicy.refreshFollowingTail(distanceToBottom: distanceToBottom)
         updateJumpButtonVisibility(animated: true)
         let elapsedMs = (CACurrentMediaTime() - started) * 1_000
         if elapsedMs >= 8 {
@@ -2834,13 +2851,13 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     private func prefetchOlderIfNeeded(proposedY: CGFloat) {
-        if allowsEdgePaging,
-           olderEdgeArmed,
-           !suppressPagingForBottom,
-           proposedY <= max(320, contentView.bounds.height * 2),
-           !loadingOlder {
-            olderEdgeArmed = false
-            suppressNewerPagingAfterOlder = true
+        let distanceToOlderEdge = max(0, proposedY + contentInsets.top)
+        if scrollPolicy.shouldRequestOlderPage(
+            distanceToOlderEdge: distanceToOlderEdge,
+            viewportLength: contentView.bounds.height,
+            hasOlder: !diagnosticAtOldest,
+            isLoading: loadingOlder
+        ) {
             onScrolledNearTop?()
         }
     }
@@ -2851,20 +2868,35 @@ final class MacChatScrollView: MacSmoothScrollView {
         // fire; this prevents store expansion from releasing its single-flight
         // guard and immediately loading a second page against stale geometry.
         prefetchOlderIfNeeded(proposedY: clipView.bounds.minY)
-        if allowsEdgePaging,
-           !suppressPagingForBottom,
-           !suppressNewerPagingAfterOlder,
-           distanceToBottom <= 320,
-           hasUnloadedNewer,
-           !loadingNewer {
+        if scrollPolicy.shouldRequestNewerPage(
+            distanceToNewerEdge: distanceToBottom,
+            hasNewer: hasUnloadedNewer,
+            isLoading: loadingNewer
+        ) {
             onScrolledNearBottom?()
         }
     }
 
+    #if DEBUG
+    var automationWindowRange: (top: Int, bottom: Int)? {
+        guard diagnosticWindowTop > 0,
+              diagnosticWindowBottom >= diagnosticWindowTop else { return nil }
+        return (diagnosticWindowTop, diagnosticWindowBottom)
+    }
+    #endif
+
     var edgePagingDiagnostics: [String: Any] {
         var result: [String: Any] = [
             "allowsEdgePaging": allowsEdgePaging,
+            "windowTop": diagnosticWindowTop,
+            "windowBottom": diagnosticWindowBottom,
+            "atOldest": diagnosticAtOldest,
+            "atNewest": diagnosticAtNewest,
             "olderEdgeArmed": olderEdgeArmed,
+            "olderPageConsumed": scrollPolicy.olderPageConsumed,
+            "policyInteractionActive": scrollPolicy.interactionActive,
+            "policyInteractionGeneration": scrollPolicy.interactionGeneration,
+            "navigationActive": scrollPolicy.navigationActive,
             "loadingOlder": loadingOlder,
             "loadingNewer": loadingNewer,
             "hasUnloadedNewer": hasUnloadedNewer,
@@ -2888,7 +2920,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     var isPinnedToBottom: Bool {
-        followingBottom || (!scrollingTowardOlder && distanceToBottom <= 24)
+        scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
     }
     var isEntryBottomLocked: Bool { entryBottomLocked }
 
@@ -2904,22 +2936,23 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     private func updateJumpButtonVisibility(animated: Bool) {
-        let farFromBottom = distanceToBottom > 1.5 * max(contentView.bounds.height, 1)
-        let shouldShowBottom = !suppressPagingForBottom && (farFromBottom || hasUnloadedNewer)
-        let shouldShowStart = !suppressPagingForBottom
-            && latestMessageStartTarget().map {
-                abs(contentView.bounds.minY - $0) > 24
-            } == true
+        let visibility = scrollPolicy.navigationControlVisibility(
+            distanceToBottom: distanceToBottom,
+            viewportLength: contentView.bounds.height,
+            hasUnloadedNewer: hasUnloadedNewer,
+            currentOffset: contentView.bounds.minY,
+            latestMessageStartOffset: latestMessageStartTarget()
+        )
         setJumpButtonVisibility(
             jumpButton,
             material: jumpMaterial,
-            shouldShow: shouldShowBottom,
+            shouldShow: visibility.showTail,
             animated: animated
         )
         setJumpButtonVisibility(
             latestStartButton,
             material: latestStartMaterial,
-            shouldShow: shouldShowStart,
+            shouldShow: visibility.showLatestMessageStart,
             animated: animated
         )
     }
@@ -2956,7 +2989,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
+                context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
                 changes()
             } completionHandler: { completion() }
         } else {
@@ -3002,15 +3035,13 @@ final class MacChatScrollView: MacSmoothScrollView {
         let point = NSPoint(x: 0, y: bottom)
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
+                context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
                 contentView.animator().bounds.origin = point
             }
         } else {
             contentView.bounds.origin = point
         }
-        scrollingTowardOlder = false
-        lastReflectedOffset = contentView.bounds.minY
-        followingBottom = true
+        scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
         updateJumpButtonVisibility(animated: animated)
         reflectScrolledClipView(contentView)
     }

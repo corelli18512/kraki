@@ -1344,6 +1344,54 @@ private extension MacChatScenarioHarness {
             )]
         )
 
+        let scrollGateID = "history-scroll-production-gate"
+        var scrollGateHistory: [ChatMessage] = []
+        var scrollGateSeq = 1
+        for turn in 1...75 {
+            scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "user_message", [
+                "content": "Scroll gate prompt \(turn): preserve the native viewport while older history arrives."
+            ]))
+            scrollGateSeq += 1
+            scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "agent_message", [
+                "content": """
+                Scroll gate response \(turn) keeps production CoreText geometry deterministic.
+
+                - preserve the visible anchor while older rows prepend
+                - keep native virtualization bounded to the viewport runway
+                - retain explicit older-history intent near the live tail
+                """
+            ]))
+            scrollGateSeq += 1
+            scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "idle"))
+            scrollGateSeq += 1
+        }
+        // The Mac initial raw tail is 15 rows: 13 off-spine lifecycle rows
+        // plus the final user/agent pair. The rendered entry is therefore a
+        // compact tail, while the immediately preceding DB page contains
+        // visible history for the first upward gesture.
+        for _ in 0..<13 {
+            scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "idle"))
+            scrollGateSeq += 1
+        }
+        scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "user_message", [
+            "content": "Newest compact-tail prompt."
+        ]))
+        scrollGateSeq += 1
+        scrollGateHistory.append(message(scrollGateID, scrollGateSeq, "agent_message", [
+            "content": "Newest compact-tail response."
+        ]))
+        add(
+            scrollGateID,
+            category: "History & virtualization",
+            title: "07b · History · Native scroll production gate",
+            summary: "Compact rendered tail over deep synthetic DB history for the cross-platform scroll-policy gate.",
+            phases: [phase(
+                "Compact tail",
+                messages: scrollGateHistory,
+                preview: preview("Newest compact-tail response", "agent_message")
+            )]
+        )
+
         let sparseID = "history-sparse-seq"
         var sparseMessages: [ChatMessage] = []
         var sparseSeq = 1

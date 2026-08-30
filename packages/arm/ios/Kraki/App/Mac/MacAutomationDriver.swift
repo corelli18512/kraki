@@ -24,6 +24,7 @@ final class MacAutomationDriver {
     static let defaultSocketPath = "/tmp/kraki-native-automation-\(getuid()).sock"
 
     private weak var appState: AppState?
+    private var isolatedScenarioHostWindow: NSWindow?
     private var serverFD: Int32 = -1
     private var clientFDs: Set<Int32> = []
     private(set) var selectedSessionId: String?
@@ -49,6 +50,35 @@ final class MacAutomationDriver {
         }
         return ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_SOCKET"]
             ?? Self.defaultSocketPath
+    }
+
+    /// Mounts the isolated Scenario Test Page when activationPolicy=prohibited.
+    /// SwiftUI does not instantiate Window scenes for a prohibited process, so
+    /// unattended native gates opt into this off-screen, temporary host.
+    func startIsolatedScenarioHost(appState: AppState) {
+        guard enabled else { return }
+        start(appState: appState)
+        guard ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST"] == "1",
+              isolatedScenarioHostWindow == nil else { return }
+
+        let size = NSSize(width: 1_100, height: 720)
+        let root = MacChatScenarioTestView(selectionScope: "native-automation-host")
+            .environment(appState)
+        let host = NSHostingView(rootView: root)
+        host.frame = NSRect(origin: .zero, size: size)
+
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderBack(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        isolatedScenarioHostWindow = window
     }
 
     func start(appState: AppState) {
@@ -96,6 +126,8 @@ final class MacAutomationDriver {
     }
 
     func stop() {
+        isolatedScenarioHostWindow?.close()
+        isolatedScenarioHostWindow = nil
         let fd = serverFD
         serverFD = -1
         if fd >= 0 { Darwin.close(fd) }
@@ -1364,11 +1396,17 @@ final class MacAutomationDriver {
                 let sessionId = chat.representedSessionId
                     ?? self.selectedSessionId
                     ?? appState.sessionStore.activeSessionId
-                guard let sessionId,
-                      let state = appState.messageStore.windowState(sessionId) else {
-                    return nil
+                guard let sessionId else { return nil }
+                if let state = appState.messageStore.windowState(sessionId) {
+                    return (sessionId, state.topSeq, state.bottomSeq)
                 }
-                return (sessionId, state.topSeq, state.bottomSeq)
+                // Scenario Test Page owns a deliberately separate temporary
+                // AppState. Read the mounted production list's already-sanitized
+                // range diagnostics instead of reaching into that fixture.
+                if let range = chat.automationWindowRange {
+                    return (sessionId, range.top, range.bottom)
+                }
+                return nil
             }
 
             @MainActor
@@ -1651,9 +1689,20 @@ final class MacAutomationDriver {
                 .filter({ $0.contentView != nil && $0.frame.width > 700 && $0.frame.height > 500 })
                 .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) {
                 let beforeResizeState = layout()
-                let stableSeq = beforeResizeState["stableAnchorSeq"] as? Int
-                    ?? beforeResizeState["anchorSeq"] as? Int
-                let beforeResizeY = stableSeq.flatMap { screenY(for: $0, in: beforeResizeState) }
+                let stableCandidate = beforeResizeState["stableAnchorSeq"] as? Int
+                let visibleCandidate = beforeResizeState["anchorSeq"] as? Int
+                let stableSeq: Int?
+                let beforeResizeY: CGFloat?
+                if let stableCandidate,
+                   let stableScreenY = screenY(for: stableCandidate, in: beforeResizeState) {
+                    stableSeq = stableCandidate
+                    beforeResizeY = stableScreenY
+                } else {
+                    stableSeq = visibleCandidate
+                    beforeResizeY = visibleCandidate.flatMap {
+                        screenY(for: $0, in: beforeResizeState)
+                    }
+                }
                 let originalSize = window.contentLayoutRect.size
                 let targetWidth = max(CGFloat(760), originalSize.width - 180)
                 window.setContentSize(NSSize(width: targetWidth, height: originalSize.height))

@@ -131,11 +131,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
-        if ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1" {
-            // A native automation host is a background rendering/control
-            // process, not a foreground desktop app. Prohibited prevents it
-            // from becoming active or owning the menu bar/Dock while its
-            // SwiftUI view tree remains available for semantic automation.
+        if ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1",
+           ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_VISIBLE"] != "1" {
+            // An ordinary native automation host is a background rendering /
+            // control process. Explicit visible validation instead keeps the
+            // isolated Debug app regular so a human can watch the same gate.
             NSApp.setActivationPolicy(.prohibited)
         }
         #endif
@@ -162,9 +162,10 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         }
         #if DEBUG
         let environmentAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
+        let visibleAutomation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION_VISIBLE"] == "1"
         let argumentAutomation = CommandLine.arguments.contains("--kraki-native-automation")
         let nativeAutomation = environmentAutomation || argumentAutomation
-        if !environmentAutomation {
+        if visibleAutomation || !environmentAutomation {
             // LaunchServices command-line automation keeps a normal app
             // policy so WindowGroup creates its real layout, while `open -g`
             // still prevents activation and focus theft.
@@ -193,7 +194,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         #if DEBUG
-        if nativeAutomation {
+        if nativeAutomation && !visibleAutomation {
             ensureMainWindowLaidOutOffscreen()
         }
         // Headless screenshot affordance (dev-local only). We do NOT try
@@ -236,7 +237,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 "KRAKI_MAC_CHAT_PERF_PAGE",
                 "KRAKI_MAC_CHAT_SCENARIO_PAGE",
             ].contains { environment[$0] == "1" }
-            if !automatedWindowMode {
+            if visibleAutomation {
+                // Human-observed validation uses the same isolated fixture and
+                // semantic automation socket, but intentionally centers and
+                // activates the Debug window instead of parking it off-screen.
+                inflateAndCenterMainWindowOnce()
+            } else if !automatedWindowMode {
                 // Any ordinary foreground Debug launch may start with the
                 // tiny SwiftUI placeholder surface. Inflate only when needed;
                 // this covers both production-relay Dev and local-relay Dev.
