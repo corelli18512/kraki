@@ -41,6 +41,14 @@ final class IOSChatScrollProductionTests: XCTestCase {
         // installed so the first reveal cannot produce a blank control.
         XCTAssertNotNil(bottomButton.image(for: .normal), "jump-to-latest helper must render an icon")
 
+        let materials = findVisualEffectViews(in: viewController.view)
+        let startMaterial = try XCTUnwrap(materials.first { $0.frame.equalTo(startButton.frame) })
+        let bottomMaterial = try XCTUnwrap(materials.first { $0.frame.equalTo(bottomButton.frame) })
+        XCTAssertFalse(startMaterial.isHidden, "visible helper must reveal its material background")
+        XCTAssertGreaterThan(startMaterial.alpha, 0.99)
+        XCTAssertTrue(bottomMaterial.isHidden, "hidden helper must not leave an empty material pill")
+        XCTAssertLessThan(bottomMaterial.alpha, 0.01)
+
         startButton.sendActions(for: .touchUpInside)
         drainMainRunLoop(milliseconds: 900)
         collectionView.layoutIfNeeded()
@@ -53,6 +61,109 @@ final class IOSChatScrollProductionTests: XCTestCase {
                                  "latest message start should land near the reading position")
         XCTAssertGreaterThan(afterStart.distanceToBottom, 100,
                              "latest-message-start must not pin the viewport to the tail")
+    }
+
+    func testEntryCallbacksDoNotPageBeforeUserInteraction() throws {
+        let fixture = try makeFixture(totalMessages: 240, bodyRepeats: 1)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+        let entryRawTop = fixture.entryRawTopSeq
+
+        XCTAssertGreaterThan(entryRawTop, 1)
+        for _ in 0..<4 {
+            viewController.scrollViewDidScroll(collectionView)
+            drainMainRunLoop(milliseconds: 40)
+        }
+        drainMainRunLoop(milliseconds: 1_200)
+
+        let rawTopAfterCallbacks = fixture.appState.messageStore
+            .windowState(fixture.sessionId)?.topSeq ?? 0
+        XCTAssertEqual(
+            rawTopAfterCallbacks,
+            entryRawTop,
+            "programmatic entry scroll callbacks must not start older pagination before the first user gesture"
+        )
+    }
+
+    func testFirstUpwardIntentSurvivesLateComposerInset() throws {
+        let fixture = try makeFixture(totalMessages: 80)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+
+        drainMainRunLoop(milliseconds: 700)
+        collectionView.layoutIfNeeded()
+        let entry = snapshot(collectionView)
+        XCTAssertLessThanOrEqual(abs(entry.distanceToBottom), 1.5)
+
+        viewController.automationMarkUserScrolledAway()
+        collectionView.setContentOffset(
+            CGPoint(
+                x: collectionView.contentOffset.x,
+                y: max(-collectionView.adjustedContentInset.top, entry.maximumOffsetY - 12)
+            ),
+            animated: false
+        )
+        collectionView.layoutIfNeeded()
+        let beforeInset = snapshot(collectionView)
+        XCTAssertGreaterThan(beforeInset.distanceToBottom, 1)
+        XCTAssertLessThan(beforeInset.distanceToBottom, 24)
+
+        viewController.updateBottomContentInset(86)
+        collectionView.layoutIfNeeded()
+        let afterInset = snapshot(collectionView)
+
+        XCTAssertEqual(
+            afterInset.contentOffsetY,
+            beforeInset.contentOffsetY,
+            accuracy: 1,
+            "a late Composer inset must preserve the first upward reading position"
+        )
+        XCTAssertGreaterThan(
+            afterInset.distanceToBottom,
+            24,
+            "explicit upward intent inside the bottom tolerance must not be reclassified as bottom-following"
+        )
+    }
+
+    func testOneOlderPagePerContinuousGesture() throws {
+        let fixture = try makeFixture(totalMessages: 240, bodyRepeats: 1)
+        let viewController = fixture.viewController
+        let collectionView = fixture.collectionView
+        let minimumOffset = -collectionView.adjustedContentInset.top
+
+        drainMainRunLoop(milliseconds: 700)
+        collectionView.setContentOffset(
+            CGPoint(x: collectionView.contentOffset.x, y: minimumOffset),
+            animated: false
+        )
+        collectionView.layoutIfNeeded()
+        viewController.automationMarkUserScrolledAway()
+        viewController.scrollViewDidScroll(collectionView)
+        drainMainRunLoop(milliseconds: 1_500)
+
+        let topAfterFirstRequest = fixture.appState.messageStore
+            .windowState(fixture.sessionId)?.topSeq ?? 0
+        XCTAssertLessThan(topAfterFirstRequest, fixture.entryRawTopSeq)
+
+        // Repeated packets from the same continuous interaction cannot consume
+        // another older page after the first async request settles.
+        for _ in 0..<6 {
+            viewController.scrollViewDidScroll(collectionView)
+            drainMainRunLoop(milliseconds: 250)
+        }
+        let topAfterSameGesture = fixture.appState.messageStore
+            .windowState(fixture.sessionId)?.topSeq ?? 0
+        XCTAssertEqual(topAfterSameGesture, topAfterFirstRequest)
+
+        viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
+        viewController.automationMarkUserScrolledAway()
+        viewController.scrollViewDidScroll(collectionView)
+        viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
+        drainMainRunLoop(milliseconds: 1_500)
+
+        let topAfterNextGesture = fixture.appState.messageStore
+            .windowState(fixture.sessionId)?.topSeq ?? 0
+        XCTAssertLessThan(topAfterNextGesture, topAfterSameGesture)
     }
 
     func testProductionScrollGate() throws {
@@ -108,12 +219,13 @@ final class IOSChatScrollProductionTests: XCTestCase {
             }
         }
 
-        // A continuous upward approach must not expose blank cells while the
-        // async DB-first page and the exact-height barrier are settling.
+        // Repeated distinct upward approaches must not expose blank cells while
+        // each one-page DB-first request and exact-height barrier settles.
         let duringFlingOffsets = stride(from: afterOlder.maximumOffsetY,
                                          through: minimumOffset,
                                          by: -120).map { CGFloat($0) }
         for offset in duringFlingOffsets {
+            viewController.automationMarkUserScrolledAway()
             collectionView.setContentOffset(
                 CGPoint(x: collectionView.contentOffset.x, y: max(minimumOffset, offset)),
                 animated: false
@@ -135,6 +247,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
                 CGPoint(x: collectionView.contentOffset.x, y: minimumOffset),
                 animated: false
             )
+            viewController.automationMarkUserScrolledAway()
             viewController.scrollViewDidScroll(collectionView)
             viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
             drainMainRunLoop(milliseconds: 450)
@@ -154,6 +267,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
             CGPoint(x: collectionView.contentOffset.x, y: final.maximumOffsetY),
             animated: false
         )
+        viewController.automationMarkUserScrollingTowardNewer()
         viewController.scrollViewDidScroll(collectionView)
         viewController.scrollViewDidEndDragging(collectionView, willDecelerate: false)
         drainMainRunLoop(milliseconds: 3_500)
@@ -210,7 +324,11 @@ final class IOSChatScrollProductionTests: XCTestCase {
         }
     }
 
-    private func makeFixture(totalMessages: Int, lastMessageParagraphs: Int = 4) throws -> Fixture {
+    private func makeFixture(
+        totalMessages: Int,
+        lastMessageParagraphs: Int = 4,
+        bodyRepeats: Int = 4
+    ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-ios-scroll-gate-\(UUID().uuidString)", isDirectory: true)
         temporaryRoots.append(root)
@@ -219,7 +337,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
         let messages = (1...totalMessages).map { seq in
             let paragraph = String(
                 repeating: "Message \(seq): a realistic wrapped response keeps pagination anchored while the viewport moves. ",
-                count: seq == totalMessages ? lastMessageParagraphs : 4
+                count: seq == totalMessages ? lastMessageParagraphs : bodyRepeats
             )
             return ChatMessage(
                 type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
@@ -284,6 +402,15 @@ final class IOSChatScrollProductionTests: XCTestCase {
         if let button = view as? UIButton { result.append(button) }
         for child in view.subviews {
             result.append(contentsOf: findButtons(in: child))
+        }
+        return result
+    }
+
+    private func findVisualEffectViews(in view: UIView) -> [UIVisualEffectView] {
+        var result: [UIVisualEffectView] = []
+        if let material = view as? UIVisualEffectView { result.append(material) }
+        for child in view.subviews {
+            result.append(contentsOf: findVisualEffectViews(in: child))
         }
         return result
     }

@@ -24,10 +24,10 @@ KRAKI_MAC_CHAT_SCENARIO_PHASE=1 \
 
 ## Catalog
 
-The sidebar enumerates 47 production-shaped cases across:
+The sidebar enumerates 48 production-shaped cases across:
 
 - entry, online/offline cache, and initial-head loading;
-- compact and sparse-sequence history pagination;
+- compact and sparse-sequence history pagination, including an isolated native scroll-production gate fixture;
 - live drafts, partial Markdown/code, tools, and parallel tools;
 - pending and resolved Permission variants;
 - choice, long-choice, free-form, answered, and cancelled Questions;

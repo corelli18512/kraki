@@ -10,19 +10,25 @@ struct KrakiApp: App {
     @Environment(\.scenePhase) private var scenePhase
     private let alignmentPreviewEnabled: Bool
     private let clientAlignmentPreviewEnabled: Bool
+    private let visibleScrollScenarioEnabled: Bool
 
     init() {
         #if DEBUG
         let alignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW"] == "1"
         let clientAlignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CLIENT_ALIGNMENT_PREVIEW"] == "1"
+        let visibleScrollScenarioEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_VISIBLE_SCROLL_SCENARIO"] == "1"
         self.alignmentPreviewEnabled = alignmentPreviewEnabled
         self.clientAlignmentPreviewEnabled = clientAlignmentPreviewEnabled
-        _appState = State(initialValue: alignmentPreviewEnabled || clientAlignmentPreviewEnabled
-            ? IOSChatAlignmentPreviewFixture.makeAppState()
-            : AppState())
+        self.visibleScrollScenarioEnabled = visibleScrollScenarioEnabled
+        _appState = State(initialValue: visibleScrollScenarioEnabled
+            ? IOSChatScrollScenarioFixture.makeAppState()
+            : alignmentPreviewEnabled || clientAlignmentPreviewEnabled
+                ? IOSChatAlignmentPreviewFixture.makeAppState()
+                : AppState())
         #else
         self.alignmentPreviewEnabled = false
         self.clientAlignmentPreviewEnabled = false
+        self.visibleScrollScenarioEnabled = false
         _appState = State(initialValue: AppState())
         #endif
         TKMarkdown.prewarmSyntaxHighlighter()
@@ -34,7 +40,9 @@ struct KrakiApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if alignmentPreviewEnabled {
+                if visibleScrollScenarioEnabled {
+                    IOSChatScrollScenarioView()
+                } else if alignmentPreviewEnabled {
                     IOSChatAlignmentPreview()
                 } else if clientAlignmentPreviewEnabled {
                     IOSClientAlignmentPreview()

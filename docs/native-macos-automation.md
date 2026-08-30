@@ -17,7 +17,7 @@ adapters. It does not simulate mouse or keyboard input.
 
 ## Safety contract
 
-The driver:
+In its default focus-safe mode, the driver:
 
 - is compiled only in `DEBUG` builds;
 - starts only when `KRAKI_NATIVE_AUTOMATION=1` is present at process launch;
@@ -52,8 +52,41 @@ Starting a native GUI app can itself affect the current desktop. For unattended
 validation, start it in a dedicated macOS VM or ask the user to start it. Once
 the socket is available, semantic commands do not require activation.
 
+The isolated Scenario Test Page additionally supports an explicit off-screen
+host for native gates. It uses the scenario harness's temporary SQLite database,
+does not construct Relay credentials, and remains under
+`activationPolicy=prohibited`:
+
+```bash
+KRAKI_NATIVE_AUTOMATION=1 \
+KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST=1 \
+KRAKI_MAC_CHAT_SCENARIO_PAGE=1 \
+KRAKI_MAC_CHAT_SCENARIO_ID=history-scroll-production-gate \
+KRAKI_NATIVE_AUTOMATION_SOCKET=/tmp/kraki-native-scenario-$UID.sock \
+"/path/to/Kraki Dev.app/Contents/MacOS/Kraki Dev"
+```
+
 Do not use `open`, `open -g`, `NSApp.activate`, XCTest/Appium launch commands, or
 AX raise actions as part of a claimed focus-safe workflow.
+
+### Visible human-observed validation
+
+When a human explicitly wants to watch the isolated gate, add
+`KRAKI_NATIVE_AUTOMATION_VISIBLE=1`. This is intentionally **not** focus-safe:
+it gives the Debug app a regular activation policy, centers its real Scenario
+Test Page window, and activates it. The temporary SQLite fixture and lack of
+Relay credentials remain unchanged.
+
+```bash
+KRAKI_NATIVE_AUTOMATION=1 \
+KRAKI_NATIVE_AUTOMATION_VISIBLE=1 \
+KRAKI_MAC_CHAT_SCENARIO_PAGE=1 \
+KRAKI_MAC_CHAT_SCENARIO_ID=history-scroll-production-gate \
+KRAKI_NATIVE_AUTOMATION_SOCKET=/tmp/kraki-native-visible-$UID.sock \
+"/path/to/Kraki Dev.app/Contents/MacOS/Kraki Dev"
+```
+
+Never describe this opt-in visible mode as an unattended or focus-safe run.
 
 ## CLI
 

@@ -346,6 +346,13 @@ struct MacApp: App {
         let state = AppState()
         #endif
         _appState = State(initialValue: state)
+        #if DEBUG
+        if environment["KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST"] == "1" {
+            Task { @MainActor in
+                MacAutomationDriver.shared.startIsolatedScenarioHost(appState: state)
+            }
+        }
+        #endif
     }
 
     var body: some Scene {
