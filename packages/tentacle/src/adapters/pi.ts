@@ -378,6 +378,12 @@ interface PiSession {
    *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
    *  never shows twice (last Step + bubble). Empty when nothing is pending. */
   pendingNarration: string;
+  /** Cancellation handle for a normal prompt whose RPC ACK is still waiting on
+   *  Pi preflight (most notably auto-compaction). Pi's generic abort RPC does
+   *  not cancel compaction or that queued prompt, so explicit user abort must
+   *  retire this transport attempt and terminate the child before it can start
+   *  later as a ghost turn. */
+  promptAcceptanceAbort?: AbortController;
   /** True from sending an abort RPC until pi acknowledges that the agent is idle.
    *  Prevents the aborted agent_end from injecting a new finalize prompt. */
   aborting: boolean;
@@ -958,6 +964,8 @@ export class PiAdapter extends AgentAdapter {
     s: PiSession,
     promptPayload: Record<string, unknown>,
   ): Promise<void> {
+    const cancellation = new AbortController();
+    s.promptAcceptanceAbort = cancellation;
     const ack = s.proc.request('prompt', promptPayload, { timeoutMs: null });
     // Attach exactly one terminal observer so returning early on authoritative
     // isStreaming cannot produce an unhandled rejection when the late ACK lands.
@@ -965,57 +973,67 @@ export class PiAdapter extends AgentAdapter {
       () => ({ kind: 'ack' as const }),
       (error: unknown) => ({ kind: 'error' as const, error: error as Error }),
     );
+    const cancelled = new Promise<{ kind: 'cancelled' }>((resolve) => {
+      cancellation.signal.addEventListener('abort', () => resolve({ kind: 'cancelled' }), { once: true });
+    });
     let delayMs = this.promptWatchdog.ackGraceMs;
     let idleSince: number | null = null;
     let consecutiveProbeFailures = 0;
 
-    while (true) {
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      const tick = new Promise<{ kind: 'tick' }>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: 'tick' }), delayMs);
-      });
-      const outcome = await Promise.race([ackOutcome, tick]);
-      if (timer) clearTimeout(timer);
-      if (outcome.kind === 'ack') return;
-      if (outcome.kind === 'error') throw outcome.error;
-      if (!s.proc.alive) throw new Error('pi process exited before prompt acceptance');
+    try {
+      while (true) {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const tick = new Promise<{ kind: 'tick' }>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: 'tick' }), delayMs);
+        });
+        const outcome = await Promise.race([ackOutcome, cancelled, tick]);
+        if (timer) clearTimeout(timer);
+        if (outcome.kind === 'cancelled') return;
+        if (outcome.kind === 'ack') return;
+        if (outcome.kind === 'error') throw outcome.error;
+        if (!s.proc.alive) throw new Error('pi process exited before prompt acceptance');
 
-      delayMs = this.promptWatchdog.intervalMs;
-      try {
-        const state = await s.proc.request<{
-          isStreaming?: boolean;
-          isCompacting?: boolean;
-        }>('get_state');
-        consecutiveProbeFailures = 0;
+        delayMs = this.promptWatchdog.intervalMs;
+        try {
+          const state = await s.proc.request<{
+            isStreaming?: boolean;
+            isCompacting?: boolean;
+          }>('get_state');
+          if (cancellation.signal.aborted) return;
+          consecutiveProbeFailures = 0;
 
-        if (state.isCompacting) {
-          idleSince = null;
-          this.setCompacting(sessionId, true);
-          logger.debug({ sessionId }, 'pi prompt ACK delayed by compaction; continuing to wait');
-          continue;
-        }
+          if (state.isCompacting) {
+            idleSince = null;
+            this.setCompacting(sessionId, true);
+            logger.debug({ sessionId }, 'pi prompt ACK delayed by compaction; continuing to wait');
+            continue;
+          }
 
-        // A missed native compaction_end must not leave stale UI once Pi reports
-        // real streaming or a settled non-compacting state.
-        this.setCompacting(sessionId, false);
-        if (state.isStreaming) {
-          logger.debug({ sessionId }, 'pi prompt accepted before ACK; watchdog reconciled active state');
-          return;
-        }
+          // A missed native compaction_end must not leave stale UI once Pi reports
+          // real streaming or a settled non-compacting state.
+          this.setCompacting(sessionId, false);
+          if (state.isStreaming) {
+            logger.debug({ sessionId }, 'pi prompt accepted before ACK; watchdog reconciled active state');
+            return;
+          }
 
-        idleSince ??= Date.now();
-        if (Date.now() - idleSince >= this.promptWatchdog.idleStallMs) {
-          throw new Error('pi prompt was not acknowledged and pi reported neither streaming nor compaction');
-        }
-      } catch (err) {
-        const message = (err as Error).message;
-        if (message === 'pi prompt was not acknowledged and pi reported neither streaming nor compaction') throw err;
-        consecutiveProbeFailures += 1;
-        logger.warn({ sessionId, err: message, consecutiveProbeFailures }, 'pi prompt watchdog state probe failed');
-        if (!s.proc.alive || consecutiveProbeFailures >= this.promptWatchdog.probeFailureLimit) {
-          throw new Error(`pi prompt acknowledgement could not be reconciled: ${message}`);
+          idleSince ??= Date.now();
+          if (Date.now() - idleSince >= this.promptWatchdog.idleStallMs) {
+            throw new Error('pi prompt was not acknowledged and pi reported neither streaming nor compaction');
+          }
+        } catch (err) {
+          if (cancellation.signal.aborted) return;
+          const message = (err as Error).message;
+          if (message === 'pi prompt was not acknowledged and pi reported neither streaming nor compaction') throw err;
+          consecutiveProbeFailures += 1;
+          logger.warn({ sessionId, err: message, consecutiveProbeFailures }, 'pi prompt watchdog state probe failed');
+          if (!s.proc.alive || consecutiveProbeFailures >= this.promptWatchdog.probeFailureLimit) {
+            throw new Error(`pi prompt acknowledgement could not be reconciled: ${message}`);
+          }
         }
       }
+    } finally {
+      if (s.promptAcceptanceAbort === cancellation) s.promptAcceptanceAbort = undefined;
     }
   }
 
@@ -1694,6 +1712,18 @@ export class PiAdapter extends AgentAdapter {
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.
       s.settledTurn = s.logicalTurn;
+
+      const pendingAcceptance = s.promptAcceptanceAbort;
+      if (pendingAcceptance) {
+        // AgentSession.abort() does not call abortCompaction(), and Pi RPC does
+        // not expose a separate compaction cancellation command. Leaving this
+        // request alive would let the supposedly-aborted prompt start after a
+        // long preflight compaction. Retire the local waiter first, then stop the
+        // child; the next input lazy-resumes the intact on-disk transcript.
+        pendingAcceptance.abort();
+        this.compactingSessions.delete(sessionId);
+        s.proc.kill();
+      }
     } finally {
       s.aborting = false;
     }

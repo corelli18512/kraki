@@ -258,7 +258,9 @@ export abstract class AgentAdapter {
   /** Kill / disconnect a session. */
   abstract killSession(sessionId: string): Promise<void>;
 
-  /** Abort the current turn (session stays alive). Override in concrete adapters. */
+  /** Abort the current turn (session stays resumable). Resolution is a terminal
+   *  transport boundary: an outstanding sendMessage for that turn must no longer
+   *  prevent later input from being accepted. Override in concrete adapters. */
   async abortSession(_sessionId: string): Promise<void> { /* no-op by default */ }
 
   /** List known sessions. */

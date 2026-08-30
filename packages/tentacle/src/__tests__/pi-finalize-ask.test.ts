@@ -222,6 +222,7 @@ describe('pi abort', () => {
     await aborting;
     expect(resolved).toBe(true);
     expect(session.settledTurn).toBe(session.logicalTurn);
+    expect(proc.kill).not.toHaveBeenCalled();
   });
 
   it('cancels pending question and permission UI requests before aborting', async () => {
@@ -254,6 +255,62 @@ describe('pi abort', () => {
 
     acknowledge();
     await aborting;
+  });
+
+  it('cancels a prompt still waiting for preflight compaction when abort is acknowledged', async () => {
+    const { adapter, sid, proc, session } = makeAdapter({ ackGraceMs: 1, intervalMs: 1, idleStallMs: 100 });
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+
+    let acknowledgePrompt!: () => void;
+    const promptAck = new Promise<void>((resolve) => { acknowledgePrompt = resolve; });
+    proc.request.mockImplementation((type: string) => {
+      if (type === 'prompt') return promptAck;
+      if (type === 'get_state') return Promise.resolve({ isCompacting: true, isStreaming: false });
+      return Promise.resolve({});
+    });
+
+    proc.kill.mockImplementation(() => { proc.alive = false; });
+    const sending = adapter.sendMessage(sid, 'wait behind preflight compaction');
+    try {
+      await vi.waitFor(() => expect(proc.request.mock.calls.some(call => call[0] === 'get_state')).toBe(true));
+      await adapter.abortSession(sid);
+
+      const outcome = await Promise.race([
+        sending.then(() => 'settled' as const),
+        new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 30)),
+      ]);
+      expect(outcome).toBe('settled');
+      expect(proc.kill).toHaveBeenCalledTimes(1);
+      expect(onError).not.toHaveBeenCalled();
+      expect(onIdle).not.toHaveBeenCalled();
+
+      const resumedProc: StubProc = {
+        alive: true,
+        send: vi.fn(),
+        sendRaw: vi.fn(),
+        request: vi.fn().mockResolvedValue({}),
+        kill: vi.fn(),
+      };
+      const resumedSession = { ...session, proc: resumedProc, promptAcceptanceAbort: undefined };
+      const resume = vi.spyOn(adapter, 'resumeSession').mockImplementation(async () => {
+        (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, resumedSession);
+        return { sessionId: sid };
+      });
+
+      await adapter.sendMessage(sid, 'next prompt after abort');
+      expect(resume).toHaveBeenCalledWith(sid);
+      expect(resumedProc.request).toHaveBeenCalledWith(
+        'prompt', { message: 'next prompt after abort' }, { timeoutMs: null },
+      );
+    } finally {
+      // Let the baseline implementation's intentionally-stuck request unwind so
+      // the red test does not leave a watchdog timer behind after its assertion.
+      acknowledgePrompt();
+      await sending.catch(() => undefined);
+    }
   });
 
   it('does not send abort to an already-dead pi process', async () => {
