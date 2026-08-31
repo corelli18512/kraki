@@ -63,6 +63,59 @@ final class IOSChatScrollProductionTests: XCTestCase {
                              "latest-message-start must not pin the viewport to the tail")
     }
 
+    func testSessionTableCatchesUpAfterReturningFromChat() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-ios-session-list-\(UUID().uuidString)", isDirectory: true)
+        temporaryRoots.append(root)
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let appState = AppState(testDatabase: database)
+        appStates.append(appState)
+        appState.sessionStore.upsertSession(makeSessionInfo(id: "existing"))
+
+        let controller = SessionTableController()
+        controller.appState = appState
+        controller.deviceFilter = nil
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        windows.append(window)
+        controller.view.frame = window.bounds
+        controller.loadViewIfNeeded()
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        drainMainRunLoop(milliseconds: 200)
+
+        let tableView = try XCTUnwrap(findTableView(in: controller.view))
+        XCTAssertEqual(tableView.numberOfRows(inSection: 0), 1)
+
+        // Match the real navigation transition: the list is detached while
+        // Chat is pushed, and the SessionStore changes while it is hidden.
+        window.rootViewController = nil
+        appState.sessionStore.upsertSession(makeSessionInfo(id: "new-session"))
+        // SwiftUI may still drive updateUIViewController while the list is
+        // detached; this is the path that records a deferred refresh.
+        controller.applySnapshot(animated: true)
+        XCTAssertEqual(
+            tableView.numberOfRows(inSection: 0),
+            1,
+            "detached SessionTable must defer the update until it is visible"
+        )
+
+        // UIKit may call viewWillAppear before the controller is attached to
+        // a window. viewDidAppear is the first reliable window-backed point
+        // at which a deferred diffable snapshot can be applied safely.
+        window.rootViewController = controller
+        controller.view.frame = window.bounds
+        controller.viewDidAppear(false)
+        drainMainRunLoop(milliseconds: 300)
+
+        XCTAssertEqual(
+            tableView.numberOfRows(inSection: 0),
+            2,
+            "a newly-created Session must appear immediately when returning from Chat"
+        )
+    }
+
     func testEntryCallbacksDoNotPageBeforeUserInteraction() throws {
         let fixture = try makeFixture(totalMessages: 240, bodyRepeats: 1)
         let viewController = fixture.viewController
@@ -395,6 +448,31 @@ final class IOSChatScrollProductionTests: XCTestCase {
             if let collectionView = findCollectionView(in: child) { return collectionView }
         }
         return nil
+    }
+
+    private func findTableView(in view: UIView) -> UITableView? {
+        if let tableView = view as? UITableView { return tableView }
+        for child in view.subviews {
+            if let tableView = findTableView(in: child) { return tableView }
+        }
+        return nil
+    }
+
+    private func makeSessionInfo(id: String) -> SessionInfo {
+        SessionInfo(
+            id: id,
+            deviceId: "ios-session-list-device",
+            deviceName: "Test Device",
+            agent: "copilot",
+            model: "test-model",
+            state: .idle,
+            mode: .safe,
+            lastSeq: 0,
+            readSeq: 0,
+            messageCount: 0,
+            createdAt: Date(),
+            pinned: false
+        )
     }
 
     private func findButtons(in view: UIView) -> [UIButton] {
