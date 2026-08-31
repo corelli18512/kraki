@@ -114,6 +114,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // UIKit can call viewWillAppear before the controller is attached to
+        // a window. In that case applySnapshot intentionally defers the
+        // diffable update, but SwiftUI may not issue another
+        // updateUIViewController call after the list becomes visible again.
+        // Always reconcile once more at the first window-backed lifecycle
+        // point; the normal id/fingerprint early-out keeps this cheap when
+        // nothing changed.
+        needsApplyOnAppear = false
+        applySnapshot(animated: false)
+    }
+
     private func setupTableView() {
         tableView = UITableView(frame: view.bounds, style: .plain)
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
