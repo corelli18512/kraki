@@ -493,14 +493,14 @@ final class AppState {
     /// Called when the app returns to foreground. Reset backoff and
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
-    func handleForegroundRehydrate() {
+    func handleForegroundRehydrate(forceReconnect: Bool = false) {
         updateReadVisibility(appForeground: true, conversationVisible: true)
         #if os(iOS)
         Task { await pushManager?.handleForeground() }
         #endif
         voiceInputController.resumeWarmConnection()
         guard hasCompletedInitialConnect else { return }
-        guard connectionStatus != .connected else { return }
+        guard forceReconnect || connectionStatus != .connected else { return }
         wsClient?.resetBackoffAndReconnect()
     }
 

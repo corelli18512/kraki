@@ -443,7 +443,12 @@ struct MacApp: App {
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(
                     for: NSWorkspace.didWakeNotification
                 )) { _ in
-                    appState.handleForegroundRehydrate()
+                    // A URLSession WebSocket can remain optimistically
+                    // `.connected` across system sleep while its peer-side
+                    // connection and presence lease have expired. Force a
+                    // complete transport/auth/presence rehydrate on wake;
+                    // the normal guard is intentionally bypassed here.
+                    appState.handleForegroundRehydrate(forceReconnect: true)
                 }
                 .task {
                     #if DEBUG
