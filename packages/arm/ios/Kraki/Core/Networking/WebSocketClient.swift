@@ -3,7 +3,7 @@
 /// Mirrors the behaviour of `transport.ts`:
 /// - Connects to the relay URL over WebSocket
 /// - Auto-reconnects with exponential back-off (1 s base, 30 s cap, 5 attempts)
-/// - Sends a JSON `{"type":"ping"}` every 10 seconds
+/// - Sends protocol-level pings and actively detects half-open sockets
 /// - Exposes an `isAuthenticated` gate: `send(_:)` is blocked until auth
 ///   succeeds, while `sendRaw(_:)` bypasses the gate for the auth handshake.
 
@@ -33,6 +33,12 @@ final class WebSocketClient: NSObject {
     // do. Users get an ambient indicator while we keep trying rather
     // than a blocking "we gave up" dialog.
     private static let pingInterval: TimeInterval = 10.0
+    /// The liveness check is intentionally shorter than the relay's roughly
+    /// 30-second presence cadence. It catches a sleep/proxy half-open before
+    /// the relay has to evict the stale connection.
+    private static let livenessCheckInterval: TimeInterval = 5.0
+    private static let livenessPingTimeout: TimeInterval = 15.0
+    private static let livenessTimeout: TimeInterval = 45.0
     private static let stableConnectionInterval: TimeInterval = 15.0
 
     // MARK: Observable state
@@ -63,6 +69,9 @@ final class WebSocketClient: NSObject {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var pingTimer: Timer?
+    private var livenessTimer: Timer?
+    private var lastLivenessAt: Date?
+    private var livenessPingStartedAt: Date?
     private var stableConnectionWorkItem: DispatchWorkItem?
     private var reconnectWorkItem: DispatchWorkItem?
     private var reconnectDelay: TimeInterval
@@ -118,8 +127,16 @@ final class WebSocketClient: NSObject {
         session = nil
         previousTask?.cancel(with: .goingAway, reason: nil)
         previousSession?.invalidateAndCancel()
+        let hadTransport = task != nil || previousTask != nil || state != .disconnected || isAuthenticated
         cleanup()
         intentionalClose = false
+        // A forced replacement can start while AppState still says
+        // `.connected` (the exact sleep/wake half-open case). Publish a real
+        // disconnect first so Pulse and session subscriptions retire the old
+        // connection epoch before the new auth handshake starts.
+        if hadTransport {
+            state = .disconnected
+        }
         state = .connecting
 
         let configuration = URLSessionConfiguration.default
@@ -339,6 +356,7 @@ final class WebSocketClient: NSObject {
             }
             switch result {
             case .success(let message):
+                self.recordInboundActivity()
                 switch message {
                 case .string(let text):
                     if let data = text.data(using: .utf8) {
@@ -358,8 +376,71 @@ final class WebSocketClient: NSObject {
         }
     }
 
-    // MARK: - Ping
+    // MARK: - Liveness
 
+    private func startLivenessMonitoring() {
+        stopLivenessMonitoring()
+        lastLivenessAt = Date()
+        livenessPingStartedAt = nil
+        livenessTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.livenessCheckInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.checkLiveness()
+        }
+    }
+
+    private func stopLivenessMonitoring() {
+        livenessTimer?.invalidate()
+        livenessTimer = nil
+        lastLivenessAt = nil
+        livenessPingStartedAt = nil
+    }
+
+    private func recordInboundActivity() {
+        lastLivenessAt = Date()
+        livenessPingStartedAt = nil
+    }
+
+    private func checkLiveness() {
+        guard state == .connected,
+              let livenessTask = task else { return }
+        let now = Date()
+
+        if let pingStarted = livenessPingStartedAt,
+           now.timeIntervalSince(pingStarted) > Self.livenessPingTimeout {
+            KLog.d("⚠️ WebSocket liveness ping timed out — replacing stale connection")
+            resetBackoffAndReconnect()
+            return
+        }
+
+        if let lastLivenessAt,
+           now.timeIntervalSince(lastLivenessAt) > Self.livenessTimeout {
+            KLog.d("⚠️ WebSocket has been silent for too long — replacing stale connection")
+            resetBackoffAndReconnect()
+            return
+        }
+
+        guard livenessPingStartedAt == nil else { return }
+        livenessPingStartedAt = now
+        livenessTask.sendPing { [weak self, weak livenessTask] error in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.task === livenessTask else { return }
+                self.livenessPingStartedAt = nil
+                if let error {
+                    KLog.d("⚠️ WebSocket liveness ping failed: \(error)")
+                    self.resetBackoffAndReconnect()
+                } else {
+                    self.lastLivenessAt = Date()
+                }
+            }
+        }
+    }
+
+    /// Keep the application-level JSON heartbeat for relay compatibility. The
+    /// protocol-level ping above is the actual client-side liveness proof;
+    /// successful local writes must never count as proof of connectivity.
     private func startPing() {
         stopPing()
         pingTimer = Timer.scheduledTimer(
@@ -369,9 +450,6 @@ final class WebSocketClient: NSObject {
             guard let self,
                   self.state == .connected,
                   self.isAuthenticated else { return }
-            // Pings are not retryable — the next ping fires on its
-            // own timer 25s later, and replaying a stale heartbeat
-            // adds no value.
             self.writeString("{\"type\":\"ping\"}", retryOnSendError: false)
         }
     }
@@ -418,6 +496,7 @@ final class WebSocketClient: NSObject {
     private func cleanup() {
         isAuthenticated = false
         stopPing()
+        stopLivenessMonitoring()
         stableConnectionWorkItem?.cancel()
         stableConnectionWorkItem = nil
         cancelReconnect()
@@ -446,6 +525,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         onReconnectAttempt?(0)
         state = .connected
         startPing()
+        startLivenessMonitoring()
         listenForMessages()
     }
 
