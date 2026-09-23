@@ -500,9 +500,11 @@ export function getProcessBundleIdentity(pid: number): string | null {
       // identity variable it is trying to measure.
       env: safeEnv,
     });
-    // Present:  "CFBundleIdentifier"="chat.kraki.cli"
-    // Absent:   "CFBundleIdentifier"=[ NULL ]
-    const m = out.match(/"CFBundleIdentifier"\s*=\s*"([^"]+)"/);
+    // Older macOS: "CFBundleIdentifier"="chat.kraki.cli"
+    // macOS 27:    bundleID="chat.kraki.cli" (in a multi-line app summary).
+    // Both formats use [ NULL ] for absent values. Match only a complete
+    // field line so an app name/path cannot masquerade as a bundle identity.
+    const m = out.match(/^\s*(?:"CFBundleIdentifier"|bundleID)\s*=\s*"([^"\r\n]+)"[ \t]*\r?$/m);
     return m ? m[1] : null;
   } catch {
     return null;
