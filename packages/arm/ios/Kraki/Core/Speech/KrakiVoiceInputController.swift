@@ -42,12 +42,15 @@ enum VoiceMicrophonePermission: Equatable {
 
 protocol VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission { get }
+    var hasInputDevice: Bool { get }
     func requestPermission() async -> Bool
     func activate() -> Bool
     func deactivate()
 }
 
 struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
+    var hasInputDevice: Bool { VoiceAudioInputAvailability.isAvailable }
+
     var permission: VoiceMicrophonePermission {
         #if os(macOS)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -117,6 +120,21 @@ enum VoiceDraftMerger {
     }
 }
 
+extension SessionStore {
+    /// Own the result independently of a Composer's lifetime. Read the current
+    /// draft at commit time so a late result cannot restore an obsolete snapshot
+    /// over edits made after switching away and back. Never resurrect a session.
+    func voiceDraftCommitHandler(for sessionID: String) -> (String) -> Void {
+        { [weak self] final in
+            guard let self, self.sessions[sessionID] != nil else { return }
+            self.setDraft(
+                sessionID,
+                VoiceDraftMerger.merge(existing: self.drafts[sessionID] ?? "", final: final)
+            )
+        }
+    }
+}
+
 enum VoiceComposerAccessPolicy {
     static func isVisible(capabilityAvailable: Bool) -> Bool {
         capabilityAvailable
@@ -173,6 +191,7 @@ final class KrakiVoiceInputController {
     private var context: VoiceSessionContext?
     private var recordingStartedHandler: (() -> Void)?
     private var finalHandler: ((String) -> Void)?
+    private var preserveDraftOnDeparture = false
     private var leaseTimeoutTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
@@ -334,6 +353,10 @@ final class KrakiVoiceInputController {
                 return
             }
         }
+        guard audioPolicy.hasInputDevice else {
+            failRecording(VoiceInputError.microphoneUnavailable, closeTransport: false)
+            return
+        }
         guard audioPolicy.activate(), recordingGeneration == currentRecording else {
             if recordingGeneration == currentRecording {
                 failRecording(
@@ -363,6 +386,29 @@ final class KrakiVoiceInputController {
         correctionDisplayTask = nil
         state = .finishing
         session?.stopCapture()
+    }
+
+    /// Leaving a conversation is not an explicit discard. Keep the original
+    /// owner and callback alive while ASR/correction finish on the warm socket.
+    /// Both old-view disappearance and new-view appearance may call this.
+    func finishForSessionDeparture(_ sessionID: String) {
+        guard activeSessionID == sessionID else { return }
+        switch state {
+        case .recording:
+            preserveDraftOnDeparture = true
+            finish()
+        case .finishing:
+            preserveDraftOnDeparture = true
+        case .requestingPermission, .obtainingLease:
+            // Do not start the microphone later in an invisible conversation.
+            // Lease rollover may already hold speech from the prior segment.
+            let recoveredText = rawText
+            let handler = finalHandler
+            cancel()
+            if !recoveredText.isEmpty { handler?(recoveredText) }
+        case .idle, .failed:
+            break
+        }
     }
 
     func cancel() {
@@ -480,7 +526,9 @@ final class KrakiVoiceInputController {
         case .correctionDelta(let text):
             setCorrectionDelta(text)
         case .final(let text, let gatewayRawText):
-            let finalText = resolvedFinalText(text, gatewayRawText: gatewayRawText)
+            guard state == .recording || state == .finishing else { return }
+            let finalText = preserveDraftOnDeparture && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? rawText : resolvedFinalText(text, gatewayRawText: gatewayRawText)
             let handler = finalHandler
             recordingCleanup(clearHandlers: true)
             state = .idle
@@ -500,8 +548,13 @@ final class KrakiVoiceInputController {
         closeConnection(keepLease: !requiresFreshLease)
         if isBusy {
             let message = Self.userFacingGatewayError(reason)
+            // A partial correction is not a complete transcript. On failure,
+            // preserve all received ASR instead, and retire the callback once.
+            let recoveredText = preserveDraftOnDeparture ? rawText : ""
+            let handler = finalHandler
             recordingCleanup(clearHandlers: true)
             state = .failed(message)
+            if !recoveredText.isEmpty { handler?(recoveredText) }
         }
         if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
     }
@@ -780,6 +833,7 @@ final class KrakiVoiceInputController {
     }
 
     private func recordingCleanup(clearHandlers: Bool) {
+        preserveDraftOnDeparture = false
         recordingGeneration = UUID()
         leaseRolloverAttempt = 0
         correctionDisplayTask?.cancel()
@@ -811,6 +865,9 @@ final class KrakiVoiceInputController {
     private static func userFacingGatewayError(_ reason: String) -> String {
         let lower = reason.lowercased()
         if lower.contains("permission") { return VoiceInputError.microphoneDenied.localizedDescription }
+        if lower.contains("audio input unavailable") {
+            return VoiceInputError.microphoneUnavailable.localizedDescription
+        }
         if lower.contains("quota") {
             return "The voice session couldn't be renewed. Please try again."
         }

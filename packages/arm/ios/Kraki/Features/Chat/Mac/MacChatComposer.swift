@@ -37,7 +37,7 @@ struct MacChatComposer: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
-    @State private var voiceDraftPrefix = ""
+    @State private var voiceStartTask: Task<Void, Never>?
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
@@ -167,7 +167,7 @@ struct MacChatComposer: View {
             .task(id: sessionId) {
                 if let activeVoiceSession = voiceController.activeSessionID,
                    activeVoiceSession != sessionId {
-                    voiceController.cancel()
+                    voiceController.finishForSessionDeparture(activeVoiceSession)
                 }
                 // Session selection should land ready to type, but never steal
                 // focus from another application during a background restart or
@@ -186,8 +186,14 @@ struct MacChatComposer: View {
                 }
             }
             .onDisappear {
-                if voiceController.activeSessionID == sessionId {
-                    voiceController.cancel()
+                voiceStartTask?.cancel()
+                voiceStartTask = nil
+                voiceController.finishForSessionDeparture(sessionId)
+            }
+            .onChange(of: voiceOwnsComposer) { wasOwned, ownsComposer in
+                guard wasOwned, !ownsComposer else { return }
+                if NSApp.isActive, NSApp.keyWindow?.isKeyWindow == true {
+                    isFocused = true
                 }
             }
             .background {
@@ -253,7 +259,7 @@ struct MacChatComposer: View {
             if voiceOwnsComposer {
                 MacComposerVoiceSurface(
                     controller: voiceController,
-                    draftPrefix: voiceDraftPrefix,
+                    draftPrefix: text,
                     onFinish: { voiceController.finish() }
                 )
             } else {
@@ -473,28 +479,19 @@ struct MacChatComposer: View {
         guard canStartVoice, let session else { return }
         Self.playVoiceStartCue()
         voiceController.clearFailure()
-        let existingDraft = text
-        voiceDraftPrefix = existingDraft
         isFocused = false
         let voiceContext = VoiceSessionContextBuilder.build(
             session: session,
             recentMessages: appState.messageStore.recentFromDB(sessionId, limit: 20)
         )
-        Task { @MainActor in
+        let commitDraft = sessionStore.voiceDraftCommitHandler(for: sessionId)
+        voiceStartTask = Task { @MainActor in
+            // Disappearance can precede this task's first actor turn.
+            guard !Task.isCancelled, sessionStore.activeSessionId == sessionId else { return }
             await voiceController.begin(
                 sessionID: sessionId,
                 context: voiceContext,
-                onFinal: { final in
-                    guard appState.sessionStore.sessions[sessionId] != nil else { return }
-                    appState.sessionStore.setDraft(
-                        sessionId,
-                        VoiceDraftMerger.merge(existing: existingDraft, final: final)
-                    )
-                    voiceDraftPrefix = ""
-                    if NSApp.isActive, NSApp.keyWindow?.isKeyWindow == true {
-                        isFocused = true
-                    }
-                }
+                onFinal: commitDraft
             )
         }
     }

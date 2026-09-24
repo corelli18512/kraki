@@ -12,12 +12,24 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "VoiceAudioSafety",
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreAudio", .when(platforms: [.macOS])),
+            ]
+        ),
+        .target(
             name: "VoiceInputCore",
+            dependencies: ["VoiceAudioSafety"],
             linkerSettings: [.linkedFramework("AVFoundation")]
+        ),
+        .target(
+            name: "VoiceAudioSafetyTestSupport",
+            path: "Tests/VoiceAudioSafetyTestSupport"
         ),
         .testTarget(
             name: "VoiceInputCoreTests",
-            dependencies: ["VoiceInputCore"]
+            dependencies: ["VoiceInputCore", "VoiceAudioSafety", "VoiceAudioSafetyTestSupport"]
         ),
     ],
     swiftLanguageModes: [.v5]

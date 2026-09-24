@@ -75,6 +75,7 @@ private final class FakeVoiceFactory: VoiceInputSessionFactory {
 @MainActor
 private final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission = .granted
+    var hasInputDevice = true
     var permissionRequestSucceeds = true
     var activationSucceeds = true
     private(set) var permissionRequestCount = 0
@@ -102,6 +103,7 @@ private final class FakeVoiceAudioPolicy: VoiceInputAudioPolicy {
 @MainActor
 private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission = .undetermined
+    var hasInputDevice = true
     private(set) var activationCount = 0
     private(set) var requestStarted = false
     private var continuation: CheckedContinuation<Bool, Never>?
@@ -156,6 +158,208 @@ final class KrakiVoiceInputTests: XCTestCase {
             fields: ["sessionId": .string("session-1")],
             vocabulary: ["Kraki"]
         )
+    }
+
+    private func draftStore() -> SessionStore {
+        let store = SessionStore(persistenceEnabled: false)
+        for id in ["session-1", "session-2"] {
+            store.sessions[id] = SessionInfo(
+                id: id, deviceId: "device-1", deviceName: "Test", agent: "pi",
+                state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0,
+                messageCount: 0, createdAt: Date(), pinned: false
+            )
+        }
+        return store
+    }
+
+    private func departureFixture(onFinal: @escaping (String) -> Void) async -> (
+        host: FakeVoiceHost, factory: FakeVoiceFactory, controller: KrakiVoiceInputController
+    ) {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory, audioPolicy: FakeVoiceAudioPolicy()
+        )
+        await controller.begin(sessionID: "session-1", context: context(), onFinal: onFinal)
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+        return (host, factory, controller)
+    }
+
+    func testSessionDepartureFinishesOnceAndCommitsToOriginalDraftAfterSwitch() async {
+        let store = draftStore()
+        store.setDraft("session-1", "existing")
+        store.setDraft("session-2", "other conversation")
+        let fixture = await departureFixture(onFinal: store.voiceDraftCommitHandler(for: "session-1"))
+        let session = fixture.factory.sessions[0]
+        session.emit(.partial("raw speech"))
+        await Task.yield()
+
+        // Old view disappears, new view appears, then the user switches again.
+        fixture.controller.finishForSessionDeparture("session-1")
+        fixture.controller.finishForSessionDeparture("session-1")
+        fixture.controller.finishForSessionDeparture("session-2")
+        XCTAssertEqual(fixture.controller.state, .finishing)
+        XCTAssertEqual(fixture.controller.activeSessionID, "session-1")
+        XCTAssertEqual(session.stopCount, 1)
+        XCTAssertEqual(session.closeCount, 0)
+        XCTAssertEqual(store.drafts["session-1"], "existing")
+        await fixture.controller.begin(sessionID: "session-2", context: context()) { _ in
+            XCTFail("A second recording cannot take over pending correction")
+        }
+        session.emit(.correctionDelta("corrected"))
+        await Task.yield()
+        XCTAssertEqual(store.drafts["session-1"], "existing")
+        session.emit(.final("corrected speech", rawText: "raw speech"))
+        await Task.yield()
+        XCTAssertEqual(store.drafts["session-1"], "existing corrected speech")
+        XCTAssertEqual(store.drafts["session-2"], "other conversation")
+        XCTAssertEqual(fixture.controller.state, .idle)
+        XCTAssertNil(fixture.controller.activeSessionID)
+        session.emit(.final("duplicate", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(store.drafts["session-1"], "existing corrected speech")
+    }
+
+    func testDepartureDuringCorrectionPreservesLatestDraftEdits() async {
+        let store = draftStore()
+        store.setDraft("session-1", "obsolete prefix")
+        let fixture = await departureFixture(onFinal: store.voiceDraftCommitHandler(for: "session-1"))
+        let session = fixture.factory.sessions[0]
+        fixture.controller.finish()
+        fixture.controller.finishForSessionDeparture("session-1")
+        // Returning to the conversation or another editor may replace the draft.
+        store.setDraft("session-1", "edited prefix")
+        session.emit(.final("voice result", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(session.stopCount, 1)
+        XCTAssertEqual(store.drafts["session-1"], "edited prefix voice result")
+    }
+
+    func testDepartureFailurePreservesCompleteRawNotPartialCorrection() async {
+        for reason in ["timed out waiting for transcript", "socket disconnected"] {
+            var finals: [String] = []
+            let fixture = await departureFixture { finals.append($0) }
+            let session = fixture.factory.sessions[0]
+            session.emit(.partial("complete raw transcript with important tail"))
+            await Task.yield()
+            fixture.controller.finishForSessionDeparture("session-1")
+            session.emit(.correctionDelta("short correction"))
+            session.emit(.failed(reason))
+            await Task.yield()
+            XCTAssertEqual(finals, ["complete raw transcript with important tail"])
+            XCTAssertFalse(fixture.controller.isBusy)
+            session.emit(.final("late corrected result", rawText: nil))
+            await Task.yield()
+            XCTAssertEqual(finals.count, 1)
+            fixture.controller.suspendWarmConnection()
+        }
+    }
+
+    func testDepartureEmptyFinalUsesReceivedRaw() async {
+        var finals: [String] = []
+        let fixture = await departureFixture { finals.append($0) }
+        let session = fixture.factory.sessions[0]
+        session.emit(.partial("received speech"))
+        await Task.yield()
+        fixture.controller.finishForSessionDeparture("session-1")
+        session.emit(.final("", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(finals, ["received speech"])
+    }
+
+    func testDepartureBeforeAnyTranscriptDoesNotCreateDraftOnFailure() async {
+        let store = draftStore()
+        let fixture = await departureFixture(onFinal: store.voiceDraftCommitHandler(for: "session-1"))
+        fixture.controller.finishForSessionDeparture("session-1")
+        fixture.factory.sessions[0].emit(.failed("timed out waiting for transcript"))
+        await Task.yield()
+        XCTAssertNil(store.drafts["session-1"])
+        fixture.controller.suspendWarmConnection()
+    }
+
+    func testDepartureWhileObtainingLeaseDoesNotStartInvisibleRecording() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory, audioPolicy: FakeVoiceAudioPolicy()
+        )
+        await controller.begin(sessionID: "session-1", context: context()) { _ in XCTFail("No speech") }
+        controller.finishForSessionDeparture("session-1")
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertTrue(factory.sessions[0].starts.isEmpty)
+    }
+
+    func testDepartureWhilePermissionPendingCannotResumeCapture() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let audio = SuspendedVoiceAudioPolicy()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: audio)
+        let start = Task { @MainActor in
+            await controller.begin(sessionID: "session-1", context: context()) { _ in XCTFail("No speech") }
+        }
+        while !audio.requestStarted { await Task.yield() }
+        controller.finishForSessionDeparture("session-1")
+        audio.resolvePermission(granted: true)
+        await start.value
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(audio.activationCount, 0)
+        XCTAssertTrue(factory.sessions.isEmpty)
+    }
+
+    func testDepartureDuringLeaseRolloverPreservesEarlierSpeechWithoutRestart() async {
+        var finals: [String] = []
+        let fixture = await departureFixture { finals.append($0) }
+        let old = fixture.factory.sessions[0]
+        old.emit(.partial("speech from prior lease"))
+        await Task.yield()
+        old.emit(.failed("quota_exhausted"))
+        await Task.yield()
+        XCTAssertEqual(fixture.controller.state, .obtainingLease)
+        fixture.controller.finishForSessionDeparture("session-1")
+        XCTAssertEqual(finals, ["speech from prior lease"])
+        XCTAssertEqual(fixture.controller.state, .idle)
+        old.emit(.final("stale result", rawText: nil))
+        await Task.yield()
+        XCTAssertEqual(finals.count, 1)
+        fixture.controller.suspendWarmConnection()
+    }
+
+    func testExplicitCancelAndIdentityTeardownStillDiscardPendingDeparture() async {
+        for identityTeardown in [false, true] {
+            var finals: [String] = []
+            let fixture = await departureFixture { finals.append($0) }
+            let session = fixture.factory.sessions[0]
+            session.emit(.partial("do not restore after explicit discard"))
+            await Task.yield()
+            fixture.controller.finishForSessionDeparture("session-1")
+            if identityTeardown { fixture.controller.suspendWarmConnection() }
+            else { fixture.controller.cancel() }
+            session.emit(.final("late result", rawText: nil))
+            session.emit(.failed("late failure"))
+            await Task.yield()
+            XCTAssertTrue(finals.isEmpty)
+            XCTAssertEqual(fixture.controller.state, .idle)
+            fixture.controller.suspendWarmConnection()
+        }
+    }
+
+    func testVoiceDraftCommitCannotResurrectDeletedSessionOrOldDraft() {
+        let store = draftStore()
+        store.setDraft("session-1", "obsolete")
+        let commit = store.voiceDraftCommitHandler(for: "session-1")
+        store.setDraft("session-1", "")
+        commit("new voice")
+        XCTAssertEqual(store.drafts["session-1"], "new voice")
+        store.sessions.removeValue(forKey: "session-1")
+        store.setDraft("session-1", "")
+        commit("late voice")
+        XCTAssertNil(store.drafts["session-1"])
     }
 
     func testCapabilityJSONDecodesAndInvalidShapeIsAbsent() {
@@ -259,6 +463,47 @@ final class KrakiVoiceInputTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(factory.sessions[0].starts.count, 1)
+    }
+
+    func testMissingMicrophoneShowsActionableFailureWithoutStartingOrLosingDraft() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let audio = FakeVoiceAudioPolicy()
+        audio.hasInputDevice = false
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: audio)
+        var draft = "existing synthetic draft"
+        await controller.begin(sessionID: "session-1", context: context(), onRecordingStarted: {
+            draft = ""
+        }) { draft = $0 }
+        XCTAssertEqual(controller.state, .failed(VoiceInputError.microphoneUnavailable.localizedDescription))
+        XCTAssertEqual(draft, "existing synthetic draft")
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertEqual(audio.activationCount, 0)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+        XCTAssertTrue(factory.sessions.isEmpty)
+        // A newly connected device can be retried; failure is not sticky.
+        audio.hasInputDevice = true
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertEqual(controller.state, .obtainingLease)
+        XCTAssertEqual(audio.activationCount, 1)
+    }
+
+    func testMicrophoneDisappearingAfterPreflightUsesTheSameActionableFailure() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: FakeVoiceAudioPolicy())
+        var draft = "existing synthetic draft"
+        await controller.begin(sessionID: "session-1", context: context(), onRecordingStarted: {
+            draft = ""
+        }) { draft = $0 }
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        factory.sessions[0].emit(.failed("audio input unavailable; connect a microphone"))
+        await Task.yield()
+        XCTAssertEqual(controller.state, .failed(VoiceInputError.microphoneUnavailable.localizedDescription))
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertEqual(draft, "existing synthetic draft")
     }
 
     func testDeniedPermissionFailsWithoutRequestingItAgain() async {

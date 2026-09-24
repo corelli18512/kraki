@@ -1,7 +1,62 @@
 import XCTest
+import VoiceAudioSafety
+import VoiceAudioSafetyTestSupport
 @testable import VoiceInputCore
 
 final class VoiceInputCoreTests: XCTestCase {
+    func testAudioGraphExceptionsBecomeRecoverableErrors() {
+        // Input getter, format getter, installTap, prepare and start can raise
+        // NSException. In particular stage 3 models the reported native crash.
+        for stage in 1...5 {
+            let engine = VICMakeTestAudioEngine(stage)
+            var error: NSError?
+            XCTAssertFalse(VICStartAudioEngine(engine, 16_000, { _, _ in }, &error))
+            XCTAssertTrue(error?.localizedDescription.contains("audio input unavailable") == true)
+            XCTAssertEqual(VICTestEngineStops(engine), 1)
+            XCTAssertEqual(VICTestTapRemovals(engine), stage >= 3 ? 1 : 0)
+        }
+    }
+
+    func testAudioStartErrorCleansInstalledTapEvenThoughEngineNeverRan() {
+        let engine = VICMakeTestAudioEngine(6)
+        var error: NSError?
+        XCTAssertFalse(VICStartAudioEngine(engine, 16_000, { _, _ in }, &error))
+        XCTAssertEqual(error?.code, 42)
+        XCTAssertEqual(VICTestTapRemovals(engine), 1)
+        XCTAssertEqual(VICTestEngineStops(engine), 1)
+    }
+
+    func testUnavailableInputDoesNotInstallTapOrStart() {
+        // Nil format, zero rate, zero channels, NaN rate and unsupported 8kHz.
+        for stage in [7, 9, 10, 11, 12] {
+            let engine = VICMakeTestAudioEngine(stage)
+            var error: NSError?
+            XCTAssertFalse(VICStartAudioEngine(engine, 16_000, { _, _ in }, &error))
+            XCTAssertNotNil(error)
+            XCTAssertEqual(VICTestEngineStarts(engine), 0)
+            XCTAssertEqual(VICTestTapRemovals(engine), 0)
+        }
+    }
+
+    func testCaptureSuccessAndCleanupAreHardwareIndependent() {
+        let engine = VICMakeTestAudioEngine(0)
+        var error: NSError?
+        XCTAssertTrue(VICStartAudioEngine(engine, 16_000, { _, _ in }, &error))
+        XCTAssertNil(error)
+        VICStopAudioEngine(engine)
+        XCTAssertEqual(VICTestTapRemovals(engine), 1)
+        XCTAssertEqual(VICTestEngineStops(engine), 1)
+    }
+
+    func testDeviceLossDuringCleanupDoesNotEscapeAsException() {
+        let engine = VICMakeTestAudioEngine(8)
+        var error: NSError?
+        XCTAssertTrue(VICStartAudioEngine(engine, 16_000, { _, _ in }, &error))
+        VICStopAudioEngine(engine)
+        XCTAssertEqual(VICTestTapRemovals(engine), 1)
+        XCTAssertEqual(VICTestEngineStops(engine), 1)
+    }
+
     func testGatewayStartMessageKeepsHostContextOpaque() throws {
         let configuration = VoiceInputConfiguration(
             gatewayURL: try XCTUnwrap(URL(string: "wss://voice.example.test/voice")),
