@@ -192,6 +192,7 @@ final class KrakiVoiceInputController {
     private var recordingStartedHandler: (() -> Void)?
     private var finalHandler: ((String) -> Void)?
     private var preserveDraftOnDeparture = false
+    private var failedSessionID: String?
     private var leaseTimeoutTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
@@ -418,8 +419,14 @@ final class KrakiVoiceInputController {
         if warmConnectionDesired { scheduleReconnect(immediate: true) }
     }
 
+    func hasFailure(for sessionID: String) -> Bool {
+        guard case .failed = state else { return false }
+        return failedSessionID == nil || failedSessionID == sessionID
+    }
+
     func clearFailure() {
         guard case .failed = state else { return }
+        failedSessionID = nil
         state = .idle
     }
 
@@ -552,7 +559,9 @@ final class KrakiVoiceInputController {
             // preserve all received ASR instead, and retire the callback once.
             let recoveredText = preserveDraftOnDeparture ? rawText : ""
             let handler = finalHandler
+            let owner = activeSessionID
             recordingCleanup(clearHandlers: true)
+            failedSessionID = owner
             state = .failed(message)
             if !recoveredText.isEmpty { handler?(recoveredText) }
         }
@@ -828,7 +837,9 @@ final class KrakiVoiceInputController {
     private func failRecording(_ error: VoiceInputError, closeTransport: Bool) {
         KLog.d("🎙️ [voice] stage=failed reason=\(error.localizedDescription)")
         if closeTransport { closeConnection(keepLease: true) }
+        let owner = activeSessionID
         recordingCleanup(clearHandlers: true)
+        failedSessionID = owner
         state = .failed(error.localizedDescription)
     }
 
@@ -851,6 +862,7 @@ final class KrakiVoiceInputController {
     }
 
     private func resetPresentation() {
+        failedSessionID = nil
         rawText = ""
         stableRawPrefix = ""
         currentRawSegment = ""

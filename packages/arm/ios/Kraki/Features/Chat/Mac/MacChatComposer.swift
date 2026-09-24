@@ -118,8 +118,7 @@ struct MacChatComposer: View {
     }
     private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
     private var isVoiceFailure: Bool {
-        if case .failed = voiceController.state { return true }
-        return false
+        voiceController.hasFailure(for: sessionId)
     }
 
     private var currentSessionMode: SessionMode {

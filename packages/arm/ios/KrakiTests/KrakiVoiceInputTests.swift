@@ -251,11 +251,31 @@ final class KrakiVoiceInputTests: XCTestCase {
             await Task.yield()
             XCTAssertEqual(finals, ["complete raw transcript with important tail"])
             XCTAssertFalse(fixture.controller.isBusy)
+            XCTAssertTrue(fixture.controller.hasFailure(for: "session-1"))
+            XCTAssertFalse(fixture.controller.hasFailure(for: "session-2"))
             session.emit(.final("late corrected result", rawText: nil))
             await Task.yield()
             XCTAssertEqual(finals.count, 1)
+            fixture.controller.clearFailure()
+            XCTAssertFalse(fixture.controller.hasFailure(for: "session-1"))
             fixture.controller.suspendWarmConnection()
         }
+    }
+
+    func testFailureOwnershipResetsForNextConversation() async {
+        let fixture = await departureFixture { _ in }
+        fixture.controller.finishForSessionDeparture("session-1")
+        fixture.factory.sessions[0].emit(.failed("socket disconnected"))
+        await Task.yield()
+        XCTAssertTrue(fixture.controller.hasFailure(for: "session-1"))
+        await fixture.controller.begin(sessionID: "session-2", context: context()) { _ in }
+        XCTAssertFalse(fixture.controller.hasFailure(for: "session-1"))
+        fixture.factory.sessions.last?.emit(.failed("socket disconnected"))
+        await Task.yield()
+        XCTAssertTrue(fixture.controller.hasFailure(for: "session-2"))
+        XCTAssertFalse(fixture.controller.hasFailure(for: "session-1"))
+        fixture.controller.suspendWarmConnection()
+        XCTAssertFalse(fixture.controller.hasFailure(for: "session-2"))
     }
 
     func testDepartureEmptyFinalUsesReceivedRaw() async {
