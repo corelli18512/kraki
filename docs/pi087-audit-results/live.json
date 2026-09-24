@@ -1,0 +1,132 @@
+{
+  "numTotalTests": 31,
+  "numPassedTests": 25,
+  "numFailedTests": 6,
+  "success": false,
+  "cases": [
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) executes actual installed 0.87.x and discovers models/thinking levels",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) streams text including Unicode separators, acknowledges before completion, and settles once",
+      "status": "failed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) streams ordinary text, keeps the turn identity, and acknowledges without waiting for completion",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) preserves Kraki tool prompt guidelines as complete sentences",
+      "status": "failed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) switches model and thinking while alive",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) runs read/write/edit/bash and maps usage from real RPC",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) gates a discuss-mode write with approve",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) gates a discuss-mode write with deny",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) changes permission mode without respawning and exposes kraki_get_mode",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) round-trips ask_user (choices=false)",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) round-trips ask_user (choices=true)",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) sends an image input and a question image answer through real Pi normalization",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) maps show_image and show_html results to persisted attachment refs",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) finalizes an ends-on-tool turn without losing the final reply",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) streams finalize_reply argument text with Pi 0.87 delta-only records",
+      "status": "failed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) aborts an active stream and accepts the next prompt",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) aborts while waiting for a human answer without dangling UI",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) aborts a running bash process and prevents its deferred file write",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) aborts a pending permission without executing the denied write",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) queues a steer during a tool call without a duplicate idle",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) clears queued follow-up messages on explicit abort",
+      "status": "failed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) survives process eviction/lazy resume with context and exact session file",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) forks without changing the original transcript",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) switches model after eviction and persists thinking level",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) accepts slash-containing model IDs returned by the same catalog",
+      "status": "failed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) retries a transient provider failure without premature error or idle",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) reports exhausted retry once and still accepts a later prompt",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) compacts manually and resumes without leaking summaries into chat",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) queues a new turn during background compaction and preserves turn identities",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) waits for overflow compaction/retry before settling the turn",
+      "status": "passed"
+    },
+    {
+      "name": "Pi 0.87 live RPC compatibility (unmodified release adapter) does not settle a truncated length response before its recovery continuation",
+      "status": "failed"
+    }
+  ]
+}

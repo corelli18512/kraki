@@ -1,0 +1,7 @@
+{
+  "numTotalTests": 918,
+  "numPassedTests": 918,
+  "numFailedTests": 0,
+  "success": true,
+  "command": "pnpm exec vitest run --config vitest.config.ts (packages/tentacle)"
+}
