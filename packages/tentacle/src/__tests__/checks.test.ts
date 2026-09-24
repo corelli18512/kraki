@@ -592,6 +592,28 @@ describe('daemon TCC identity proof', () => {
     }
   });
 
+  it('parses the macOS 27 lsappinfo summary format', () => {
+    mockExecFileSync.mockReturnValue(
+      '[ NULL ]  ASN:0x0-0x100100: \n' +
+      '    bundleID="chat.kraki.cli"\n' +
+      '    bundle path=[ NULL ] \n' +
+      '    executable path=[ NULL ] \n',
+    );
+    expect(getProcessBundleIdentity(123)).toBe('chat.kraki.cli');
+  });
+
+  it.each([
+    '"CFBundleIdentifier"=[ NULL ]\n',
+    '    bundleID=[ NULL ]\n',
+    '',
+    'app name: bundleID="chat.kraki.cli"\n',
+    '    bundle path="/tmp/bundleID=chat.kraki.cli"\n',
+    '    bundleID=""\n',
+  ])('does not infer an identity from absent or unrelated output: %j', (output) => {
+    mockExecFileSync.mockReturnValue(output);
+    expect(getProcessBundleIdentity(123)).toBeNull();
+  });
+
   it('prefers a matching PID-bound proof over a later unstable lsappinfo lookup', () => {
     mockExecFileSync.mockReturnValue('"CFBundleIdentifier"=[ NULL ]\n');
     const result = getDaemonTccIdentity(123, { pid: 123, bundleId: 'chat.kraki.cli' });

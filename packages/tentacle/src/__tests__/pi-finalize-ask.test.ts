@@ -209,13 +209,14 @@ describe('pi abort', () => {
   it('waits for the pi abort acknowledgement before resolving', async () => {
     const { adapter, sid, proc, session } = makeAdapter();
     let acknowledge!: () => void;
-    proc.request.mockReturnValueOnce(new Promise<void>((resolve) => { acknowledge = resolve; }));
+    const ack = new Promise<void>((resolve) => { acknowledge = resolve; });
+    proc.request.mockImplementation((type) => type === 'clear_queue' ? Promise.resolve({ steering: [], followUp: [] }) : ack);
 
     let resolved = false;
     const aborting = adapter.abortSession(sid).then(() => { resolved = true; });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(proc.request).toHaveBeenCalledWith('abort'));
 
-    expect(proc.request).toHaveBeenCalledWith('abort');
+    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['clear_queue', 'abort']);
     expect(resolved).toBe(false);
 
     acknowledge();
@@ -225,6 +226,17 @@ describe('pi abort', () => {
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
+  it('does not claim successful cancellation or discard dialogs if queue clearing fails', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    session.pendingQuestions.set('q1', 'q1');
+    proc.request.mockRejectedValueOnce(new Error('queue unavailable'));
+    await expect(adapter.abortSession(sid)).rejects.toThrow('queue unavailable');
+    expect(proc.sendRaw).not.toHaveBeenCalled();
+    expect(session.pendingQuestions.has('q1')).toBe(true);
+    expect(session.settledTurn).not.toBe(session.logicalTurn);
+    expect(session.aborting).toBe(false);
+  });
+
   it('cancels pending question and permission UI requests before aborting', async () => {
     const { adapter, sid, proc, session } = makeAdapter();
     session.pendingQuestions.set('q1', 'q1');
@@ -232,6 +244,8 @@ describe('pi abort', () => {
 
     await adapter.abortSession(sid);
 
+    expect(proc.request.mock.calls.map(call => call[0])).toEqual(['clear_queue', 'abort']);
+    expect(proc.request.mock.invocationCallOrder[0]).toBeLessThan(proc.sendRaw.mock.invocationCallOrder[0]);
     expect(proc.sendRaw).toHaveBeenNthCalledWith(1, { type: 'extension_ui_response', id: 'q1', cancelled: true });
     expect(proc.sendRaw).toHaveBeenNthCalledWith(2, { type: 'extension_ui_response', id: 'p1', confirmed: false });
     expect(proc.request).toHaveBeenCalledWith('abort');
@@ -1149,6 +1163,22 @@ describe('pi finalize_reply crystallization', () => {
     adapter.onIdle = vi.fn();
     emit({ type: 'agent_settled' });
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'drafted closing line' });
+  });
+});
+
+describe('pi early maintenance settlement', () => {
+  it.each(['length', 'error', 'aborted', 'deferred'])('does not promote a %s response before recovery settles', async stopReason => {
+    const { adapter, emit } = makeAdapter();
+    adapter.onMessage = vi.fn(); adapter.onIdle = vi.fn();
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'not final' }], stopReason } });
+    await emit({ type: 'agent_end', willRetry: false });
+    await emit({ type: 'compaction_start', reason: 'overflow' });
+    expect(adapter.onMessage).not.toHaveBeenCalled(); expect(adapter.onIdle).not.toHaveBeenCalled();
+    await emit({ type: 'compaction_end', reason: 'overflow', willRetry: true });
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop' } });
+    await emit({ type: 'agent_settled' });
+    expect(adapter.onMessage).toHaveBeenCalledWith('s1', { content: 'recovered' });
+    expect(adapter.onIdle).toHaveBeenCalledTimes(1);
   });
 });
 

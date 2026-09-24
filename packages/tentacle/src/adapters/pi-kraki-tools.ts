@@ -50,9 +50,10 @@ export default function krakiTools(pi) {
       "Ask the human operator a question and BLOCK until they answer. Returns the " +
       "user's answer as the tool result. Provide 'choices' for a multiple-choice " +
       "question, or omit them for a free-form answer.",
-    promptGuidelines:
+    promptGuidelines: [
       "Use ask_user whenever you need a decision, clarification, or missing " +
       "information from the user. The return value is their literal answer.",
+    ],
     parameters: {
       type: "object",
       properties: {
@@ -113,10 +114,11 @@ export default function krakiTools(pi) {
       "resummarize: true, text: \"<a short, self-contained, plain-text final " +
       "message>\" }). Only call this when the runtime asks you to finalize \u2014 " +
       "your ordinary prose already reaches the user as the reply.",
-    promptGuidelines:
+    promptGuidelines: [
       "Do NOT call finalize_reply on your own initiative. It is invoked only in " +
       "response to the runtime's finalize prompt, exactly once, to keep or rewrite " +
       "the turn's closing message.",
+    ],
     parameters: {
       type: "object",
       properties: {
@@ -139,10 +141,11 @@ export default function krakiTools(pi) {
       "something the user cannot already see \u2014 a screenshot, diagram, chart, or " +
       "generated graphic. Provide the path to an image file on disk (PNG, JPEG, WebP, " +
       "GIF). For images you only need to inspect yourself, use the read tool instead.",
-    promptGuidelines:
+    promptGuidelines: [
       "Only call show_image when the user would gain new information from seeing the " +
       "image (e.g. a chart or diagram you just generated). Do NOT echo back an image " +
       "the user just sent you \u2014 they can already see it.",
+    ],
     parameters: {
       type: "object",
       properties: {
@@ -156,7 +159,7 @@ export default function krakiTools(pi) {
       const p = String((params && params.path) || "");
       const caption = params && params.caption ? String(params.caption) : "";
       if (!p) {
-        return { content: [{ type: "text", text: "show_image: no path provided" }], isError: true, details: {} };
+        throw new Error("show_image: no path provided");
       }
       const abs = isAbsolute(p) ? p : join(process.cwd(), p);
       let bytes;
@@ -164,7 +167,7 @@ export default function krakiTools(pi) {
         bytes = readFileSync(abs);
       } catch (err) {
         const msg = (err && err.message) || String(err);
-        return { content: [{ type: "text", text: "show_image: cannot read " + abs + " \u2014 " + msg }], isError: true, details: {} };
+        throw new Error("show_image: cannot read " + abs + " \u2014 " + msg);
       }
       const ext = (abs.split(".").pop() || "").toLowerCase();
       const mimeType =
@@ -185,9 +188,10 @@ export default function krakiTools(pi) {
       "Display a self-contained HTML report to the user in the Kraki preview panel. " +
       "Use this for documents, architecture reports, diagrams, and technical analysis. " +
       "The file must be a local .html or .htm file and is rendered locally in a sandbox.",
-    promptGuidelines:
+    promptGuidelines: [
       "Use show_html when the user would benefit from reading a generated HTML report. " +
       "Prefer a self-contained HTML file with inline CSS, inline SVG, and no external resources.",
+    ],
     parameters: {
       type: "object",
       properties: {
@@ -200,21 +204,21 @@ export default function krakiTools(pi) {
     async execute(_id, params) {
       const p = String((params && params.path) || "");
       const requestedTitle = params && params.title ? String(params.title).trim() : "";
-      if (!p) return { content: [{ type: "text", text: "show_html: no path provided" }], isError: true, details: {} };
+      if (!p) throw new Error("show_html: no path provided");
       const abs = isAbsolute(p) ? p : join(process.cwd(), p);
       const lower = abs.toLowerCase();
       if (!lower.endsWith(".html") && !lower.endsWith(".htm")) {
-        return { content: [{ type: "text", text: "show_html: path must end in .html or .htm" }], isError: true, details: {} };
+        throw new Error("show_html: path must end in .html or .htm");
       }
       let bytes;
       try {
         bytes = readFileSync(abs);
       } catch (err) {
         const msg = (err && err.message) || String(err);
-        return { content: [{ type: "text", text: "show_html: cannot read " + abs + " — " + msg }], isError: true, details: {} };
+        throw new Error("show_html: cannot read " + abs + " — " + msg);
       }
       if (bytes.length > 10 * 1024 * 1024) {
-        return { content: [{ type: "text", text: "show_html: file is larger than the 10 MB limit" }], isError: true, details: {} };
+        throw new Error("show_html: file is larger than the 10 MB limit");
       }
       return {
         content: [{ type: "text", text: "HTML report ready for preview." }],
@@ -233,10 +237,11 @@ export default function krakiTools(pi) {
       "safe = every tool needs operator approval; discuss = only file writes need " +
       "approval (reads/shell run freely, writes to plan.md are allowed); execute/" +
       "delegate = all tools run without approval. Call this before irreversible actions.",
-    promptGuidelines:
+    promptGuidelines: [
       "Call kraki_get_mode before irreversible or destructive actions (deleting " +
       "files, force-pushing, destructive shell) to confirm the operator has " +
       "granted you permission to act.",
+    ],
     parameters: {
       type: "object",
       properties: {
