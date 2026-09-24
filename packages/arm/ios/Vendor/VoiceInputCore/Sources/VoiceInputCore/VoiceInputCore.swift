@@ -1,5 +1,11 @@
 import AVFoundation
 import Foundation
+import VoiceAudioSafety
+
+public enum VoiceAudioInputAvailability {
+    /// This never opens the input or requests permission.
+    public static var isAvailable: Bool { VICHasDefaultInputDevice() }
+}
 
 /// Sendable JSON value used for opaque product-owned gateway fields.
 public enum VoiceInputJSONValue: Sendable, Equatable {
@@ -217,6 +223,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private let partialObserved: PartialObservedHandler
     private let task: URLSessionWebSocketTask
     private let engine = AVAudioEngine()
+    private var inputTapInstalled = false
 
     private var receiveLoopRunning = true
     private var connectionAuthorized = false
@@ -336,6 +343,10 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             return
         }
 
+        guard VoiceAudioInputAvailability.isAvailable else {
+            fail("audio input unavailable; connect a microphone and select it as the input device, then try again")
+            return
+        }
         resetRecordingState()
         recordingActive = true
         send(json: configuration.gatewayStartMessage(context: context, vocabulary: vocabulary))
@@ -382,28 +393,29 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             dumpHandle = FileHandle(forWritingAtPath: path)
         }
 
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        logger("input format: \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch")
-        guard inputFormat.sampleRate >= configuration.targetSampleRate,
-              inputFormat.channelCount > 0 else {
-            fail("audio input unavailable (format \(inputFormat.sampleRate) Hz / \(inputFormat.channelCount) ch); check input device")
+        // Device availability can change after preflight. AVAudioEngine's
+        // graph setup can throw NSException, which Swift do/catch cannot catch.
+        var error: NSError?
+        let started = VICStartAudioEngine(engine, configuration.targetSampleRate, { [weak self] buffer, _ in
+            self?.handleBuffer(buffer)
+        }, &error)
+        guard started else {
+            fail(error?.localizedDescription ?? "audio input unavailable; check your microphone")
             return
         }
+        inputTapInstalled = true
+        firstSendTimestamp = Date()
+        lastStatTimestamp = Date()
+        metricHandler(.engineStarted)
+        logger("audio engine started (buffering until recording ready)")
+    }
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.handleBuffer(buffer)
-        }
-        do {
-            engine.prepare()
-            try engine.start()
-            firstSendTimestamp = Date()
-            lastStatTimestamp = Date()
-            metricHandler(.engineStarted)
-            logger("audio engine started (buffering until recording ready)")
-        } catch {
-            fail("engine start failed: \(error.localizedDescription)")
-        }
+    private func stopEngine() {
+        guard inputTapInstalled else { return }
+        inputTapInstalled = false
+        // A lost device can stop the engine while leaving a tap attached.
+        // Cleanup follows tap ownership, not engine.isRunning.
+        VICStopAudioEngine(engine)
     }
 
     private func flushPending() {
@@ -448,10 +460,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
 
     public func stopCapture() {
         guard recordingActive else { return }
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+        stopEngine()
         DispatchQueue.main.async { [weak self] in self?.onCaptureEOF() }
     }
 
@@ -565,10 +574,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         readyTimeoutWork = nil
         dumpHandle?.closeFile()
         dumpHandle = nil
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+        stopEngine()
         recordingActive = false
         gatewayReady = false
         captureEnded = false
@@ -594,10 +600,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         pingWork = nil
         dumpHandle?.closeFile()
         dumpHandle = nil
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+        stopEngine()
         task.cancel(with: closeCode, reason: nil)
     }
 

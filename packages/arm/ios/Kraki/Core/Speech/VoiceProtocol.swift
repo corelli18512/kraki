@@ -89,6 +89,7 @@ enum VoiceInputError: LocalizedError, Equatable {
     case invalidBrokerURL
     case offline
     case microphoneDenied
+    case microphoneUnavailable
     case leaseInFlight
     case leaseTimedOut
     case leaseDenied(VoiceLeaseDeniedReason, String?)
@@ -107,6 +108,12 @@ enum VoiceInputError: LocalizedError, Equatable {
             return "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone."
             #else
             return "Microphone access is required. Enable it in System Settings → Privacy & Security → Microphone."
+            #endif
+        case .microphoneUnavailable:
+            #if os(macOS)
+            return "No microphone is available. Connect a microphone and select it in System Settings → Sound → Input, then try again."
+            #else
+            return "No microphone is available. Connect a microphone and try again."
             #endif
         case .leaseInFlight:
             return "A previous voice request is still finishing. Try again in a moment."
