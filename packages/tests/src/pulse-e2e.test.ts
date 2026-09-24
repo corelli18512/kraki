@@ -76,13 +76,20 @@ interface PulseApp {
   close: () => void;
 }
 
-async function connectPulseApp(port: number): Promise<PulseApp> {
-  const kp: KeyPair = generateKeyPair();
-  const deviceId = `app_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+async function connectPulseApp(
+  port: number,
+  options?: { keyPair?: KeyPair; deviceId?: string; epoch?: string; suppressHello?: boolean },
+): Promise<PulseApp> {
+  const kp: KeyPair = options?.keyPair ?? generateKeyPair();
+  const deviceId = options?.deviceId ?? `app_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const compactPubKey = exportPublicKey(kp.publicKey);
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   const received: Record<string, unknown>[] = [];
-  const endpoint = new Endpoint({ epoch: `app:${deviceId}`, random: () => 0.5, durable: { supported: false } });
+  const endpoint = new Endpoint({
+    epoch: options?.epoch ?? `app:${deviceId}`,
+    random: () => 0.5,
+    durable: { supported: false },
+  });
   let currentTo = '';
   const enc = new TextEncoder();
   const dec = new TextDecoder();
@@ -116,7 +123,8 @@ async function connectPulseApp(port: number): Promise<PulseApp> {
       return;
     }
     if (raw.type === 'auth_ok') {
-      run(endpoint.onConnected(Date.now()));
+      const effects = endpoint.onConnected(Date.now());
+      if (!options?.suppressHello) run(effects);
       return;
     }
     if ((raw.type === 'unicast' || raw.type === 'broadcast') && typeof raw.pulse === 'string') {
@@ -218,7 +226,80 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
     app.close();
   });
 
-  it('recovers reliable messages produced while the app is briefly offline', async () => {
+  it('does not replay an unacked live tail when a fresh App process replaces the old socket', async () => {
+    const identity = {
+      keyPair: generateKeyPair(),
+      deviceId: `app-reconnect-${Date.now()}`,
+    };
+    const first = await connectPulseApp(env.port, {
+      ...identity,
+      epoch: 'app-process-1',
+    });
+    await connectTentacle();
+    await waitMs(400);
+
+    adapter.onSessionCreated?.({ sessionId: 's-preview', agent: 'mock', model: 'm' });
+    adapter.onMessage?.('s-preview', { content: 'previous-process-tail' });
+
+    const firstDeadline = Date.now() + 5_000;
+    while (!first.received.some((message) => message.type === 'agent_message') && Date.now() < firstDeadline) {
+      await waitMs(25);
+    }
+    expect(first.received.some((message) => message.type === 'agent_message')).toBe(true);
+
+    // Do not close first: this exercises the same-device socket replacement
+    // path, including the reconnect guard that suppresses the old close callback.
+    // The first process has delivered the message but has not reached its 15 s
+    // heartbeat ACK, so pre-fix Head replays that tail into the new epoch.
+    const second = await connectPulseApp(env.port, {
+      ...identity,
+      epoch: 'app-process-2',
+    });
+
+    const authorityDeadline = Date.now() + 5_000;
+    while (!second.received.some((message) => message.type === 'session_list') && Date.now() < authorityDeadline) {
+      await waitMs(25);
+    }
+
+    expect(second.received.some((message) => message.type === 'session_list')).toBe(true);
+    expect(second.received.some((message) => message.type === 'agent_message')).toBe(false);
+    first.close();
+    second.close();
+  });
+
+  it('fences encrypted data queued after auth when the prior socket never sent HELLO', async () => {
+    const identity = { keyPair: generateKeyPair(), deviceId: `app-no-hello-${Date.now()}` };
+    const first = await connectPulseApp(env.port, { ...identity, epoch: 'unseen-epoch', suppressHello: true });
+    await connectTentacle();
+    await waitMs(400);
+    // Observe only sequence metadata, never inspect retained ciphertext.
+    const hub = (env.head as unknown as {
+      pulseHub: { devices: Map<string, { live: { sendSeqValue: bigint } }> };
+    }).pulseHub;
+    const live = hub.devices.get(identity.deviceId)!.live;
+    const before = live.sendSeqValue;
+    adapter.onSessionCreated?.({ sessionId: 's-prehello', agent: 'mock', model: 'm' });
+    adapter.onMessage?.('s-prehello', { content: 'synthetic-prehello-tail' });
+    const deadline = Date.now() + 5_000;
+    while (live.sendSeqValue <= before + 1n && Date.now() < deadline) await waitMs(25);
+    expect(live.sendSeqValue).toBeGreaterThan(before + 1n);
+    expect(first.received).toEqual([]);
+
+    const second = await connectPulseApp(env.port, { ...identity, epoch: 'fresh-epoch' });
+    try {
+      const authorityDeadline = Date.now() + 5_000;
+      while (!second.received.some((m) => m.type === 'session_list') && Date.now() < authorityDeadline) {
+        await waitMs(25);
+      }
+      expect(second.received.some((m) => m.type === 'session_list')).toBe(true);
+      expect(second.received.some((m) => m.type === 'agent_message')).toBe(false);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  it('does not queue generic broadcasts produced while the App is offline', async () => {
     const app = await connectPulseApp(env.port);
     await connectTentacle();
     await waitMs(400);
@@ -227,20 +308,15 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
     await waitMs(300);
     expect(app.received.filter((m) => m.type === 'agent_message').length).toBe(1);
 
-    // App drops; tentacle keeps producing. Head (hub) holds the messages in the
-    // app-endpoint's outbox and resends when the app reconnects.
+    // App drops; Tentacle keeps producing. Generic broadcasts target only Apps
+    // that are online at send time, so these frames are not accumulated for a
+    // later replay. Reconnect authorities recover current state instead.
     app.ws.close();
     await waitMs(200);
     adapter.onMessage?.('s1', { content: 'msg-2' });
     adapter.onMessage?.('s1', { content: 'msg-3' });
     await waitMs(200);
 
-    // Reconnect a fresh app socket for the SAME device would need key reuse;
-    // instead assert head buffered them (hub has them queued for the device).
-    // A full reconnect-same-device path is covered by the pulse-hub unit test;
-    // here we assert the tentacle→head hop delivered + head holds for the app.
-    // (End-to-end reconnect with identical device keys is exercised in the
-    // browser Playwright pass.)
     expect(app.received.filter((m) => m.type === 'agent_message').length).toBe(1);
     app.close();
   });

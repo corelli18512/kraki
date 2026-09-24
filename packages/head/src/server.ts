@@ -1274,7 +1274,17 @@ export class HeadServer {
     // empty and making a later relay restart indistinguishable from the first
     // connection. That stale recvCursor then drops the restarted seq=1..N as
     // duplicates. Keep this ordering centralized for every auth path.
-    this.pulseHub.onDeviceConnected(params.deviceId);
+    //
+    // Apps have explicit reconnect authorities (fresh session_list,
+    // subscription snapshot, and history ranges). If their HELLO carries a new
+    // process epoch, fence the preceding process's non-durable downlink so the
+    // new UI cannot animate through old live events. Tentacle downlinks carry
+    // commands and retain ordinary Pulse resume semantics across process epochs.
+    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
+      ?? this.storage.getDevice(params.deviceId)?.role;
+    this.pulseHub.onDeviceConnected(params.deviceId, {
+      discardPreviousProcessNonDurable: deviceRole === 'app',
+    });
     this.broadcastDeviceJoined(params.userId, params.deviceId);
   }
 
@@ -1284,7 +1294,8 @@ export class HeadServer {
    * the map entry its close handler hits the reconnect-guard and skips cleanup,
    * and the ping timer (which only walks `connections`) never visits it again.
    * It would sit in `clients` holding its ClientState until TCP finally gives
-   * up. Terminate it explicitly.
+   * up. Retire both the WebSocket and its Pulse link explicitly before the new
+   * connection is installed.
    *
    * Must be called BEFORE `connections.set(deviceId, ws)`.
    */
@@ -1292,6 +1303,10 @@ export class HeadServer {
     const previous = this.connections.get(deviceId);
     if (!previous || previous === ws) return;
     getLogger().info('Replacing existing connection for device', { deviceId });
+    // The old close callback will see the replacement in `connections` and skip
+    // its guarded cleanup. Publish the Pulse disconnect here so capability and
+    // connection-scoped state cannot leak across the replacement boundary.
+    this.pulseHub.onDeviceDisconnected(deviceId);
     this.clients.delete(previous);
     try { previous.terminate(); } catch { /* best effort */ }
   }

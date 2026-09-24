@@ -61,6 +61,21 @@ export interface PulseHubGcConfig {
   intervalMs?: number;
 }
 
+/** Per-connection resume policy supplied by the authenticated WebSocket host. */
+export interface PulseDeviceConnectionOptions {
+  /**
+   * If the peer's first HELLO advertises a different process epoch, discard the
+   * preceding process's non-durable downlink before handling that HELLO. Apps
+   * recover those ephemeral updates from session_list/subscription/history
+   * authorities; replaying the old tail makes cached Session previews animate
+   * through historical intermediate states. Durable entries still resume.
+   *
+   * A reconnect from the SAME process keeps its epoch and receives ordinary
+   * Pulse resume, preserving transient-network recovery.
+   */
+  discardPreviousProcessNonDurable?: boolean;
+}
+
 const DEFAULT_GC: Required<PulseHubGcConfig> = {
   purgeNonDurableAfterMs: 5 * 60_000,
   evictEndpointAfterMs: 24 * 3600_000,
@@ -111,6 +126,14 @@ export class PulseHub {
    *  closed before capability negotiation completed. */
   private readonly pulseSeenNow = new Set<string>();
   private readonly connectedDevices = new Set<string>();
+  /** Last HELLO epoch observed for each device+stream. This is intentionally
+   *  process-local: after a Head restart no non-durable outbox survives. */
+  private readonly peerEpochs = new Map<string, Map<number, string>>();
+  /** App connections waiting for their first HELLO. Each stream records the
+   *  send-seq boundary that existed at authentication: a cold process drops
+   *  non-durable entries at/below it, while new-generation authorities queued
+   *  after authentication remain eligible for delivery. */
+  private readonly previousProcessFenceBounds = new Map<string, Map<number, bigint>>();
   private readonly gc: Required<PulseHubGcConfig>;
   /** Unique even when two hub processes start in the same millisecond. */
   private readonly processEpoch = randomUUID();
@@ -247,6 +270,8 @@ export class PulseHub {
     this.bulkCapableEver.delete(deviceId);
     this.bulkCapableNow.delete(deviceId);
     this.pulseSeenNow.delete(deviceId);
+    this.peerEpochs.delete(deviceId);
+    this.previousProcessFenceBounds.delete(deviceId);
     if (this.closed || !this.db.open) return;
     this.db.prepare('DELETE FROM pulse_outbox WHERE device = ?').run(deviceId);
     this.db.prepare('DELETE FROM pulse_meta WHERE device = ?').run(deviceId);
@@ -254,12 +279,20 @@ export class PulseHub {
   }
 
   /** A device connected — bring up its stream set (resume any persisted outbox). */
-  onDeviceConnected(deviceId: string): void {
+  onDeviceConnected(deviceId: string, options?: PulseDeviceConnectionOptions): void {
     if (this.closed || !this.db.open) return;
     this.connectedDevices.add(deviceId);
     this.bulkCapableNow.delete(deviceId);
     this.pulseSeenNow.delete(deviceId);
     const d = this.ep(deviceId);
+    if (options?.discardPreviousProcessNonDurable) {
+      this.previousProcessFenceBounds.set(deviceId, new Map([
+        [STREAM_LIVE, d.live.sendSeqValue],
+        [STREAM_BULK, d.bulk.sendSeqValue],
+      ]));
+    } else {
+      this.previousProcessFenceBounds.delete(deviceId);
+    }
     this.run(deviceId, d.streams.onConnected(this.host.now()));
     this.saveSnapshot(deviceId);
   }
@@ -268,6 +301,7 @@ export class PulseHub {
   onDeviceDisconnected(deviceId: string): void {
     if (this.closed || !this.db.open) return;
     this.connectedDevices.delete(deviceId);
+    this.previousProcessFenceBounds.delete(deviceId);
     // A v2 StreamSet advertises stream 1 on every connection. If this complete
     // connection exchanged valid Pulse frames but never advertised stream 1,
     // the device was rolled back (or is a stale v1 client). Forget historical
@@ -317,6 +351,9 @@ export class PulseHub {
     const bytes = b64decode(env.pulse);
     const decoded = decodeFrameWithStream(bytes);
     if (decoded) this.pulseSeenNow.add(fromDevice);
+    if (decoded?.frame.t === 'hello') {
+      this.handlePeerHelloEpoch(fromDevice, d, decoded.streamId, decoded.frame.epoch);
+    }
     if (decoded?.streamId === STREAM_BULK) {
       if (!this.bulkCapableEver.has(fromDevice)) {
         this.bulkCapableEver.add(fromDevice);
@@ -345,16 +382,80 @@ export class PulseHub {
     if (willSnapshot) this.saveSnapshot(fromDevice);
   }
 
+  /**
+   * Apply the App process-generation fence before Endpoint.onHello can resend
+   * its retained suffix. A same-epoch HELLO is an ordinary network resume and
+   * keeps all entries. A changed epoch is a cold App process: its authoritative
+   * reconnect flows supersede old non-durable events, while durable entries
+   * remain in the outbox and continue through normal Pulse gap repair.
+   */
+  private handlePeerHelloEpoch(
+    deviceId: string,
+    d: PerDevice,
+    streamId: number,
+    epoch: string,
+  ): void {
+    let byStream = this.peerEpochs.get(deviceId);
+    if (!byStream) {
+      byStream = new Map<number, string>();
+      this.peerEpochs.set(deviceId, byStream);
+    }
+    const previous = byStream.get(streamId);
+    byStream.set(streamId, epoch);
+
+    const fenceBounds = this.previousProcessFenceBounds.get(deviceId);
+    if (!fenceBounds) return;
+    // The first HELLO fully identifies this concrete App process. Both streams
+    // are minted from one process-scoped base epoch, so one comparison fences
+    // the whole downlink before either stream can resume payloads.
+    this.previousProcessFenceBounds.delete(deviceId);
+    // Only a positively matched epoch proves same-process resume. Unknown can
+    // also mean the preceding socket authenticated and queued DATA but died
+    // before its first HELLO. That pre-auth tail is not a fresh authority for
+    // this connection; keep only durable entries and post-boundary messages.
+    if (previous === epoch) return;
+
+    let dropped = 0;
+    for (const endpoint of [d.live, d.bulk]) {
+      const boundary = fenceBounds.get(endpoint.stream) ?? 0n;
+      const result = endpoint.purge(
+        (entry) => !entry.durable && entry.seq <= boundary,
+        'fresh-app-process',
+      );
+      dropped += result.droppedSeqs.length;
+      this.run(deviceId, result.effects);
+    }
+    trace('FRESH-APP-EPOCH-FENCE', { device: deviceId, triggerStream: streamId, dropped });
+    if (dropped > 0) {
+      getLogger().info('pulse-hub fenced previous App process tail', {
+        deviceId,
+        droppedSeqs: dropped,
+      });
+    }
+  }
+
   // ── Effect execution ────────────────────────────────────────────────────────
 
   private run(deviceId: string, effects: Effect[], dests?: string[], selfBound = false): void {
     for (const e of effects) {
       switch (e.t) {
-        case 'transmit':
+        case 'transmit': {
+          const decoded = this.previousProcessFenceBounds.has(deviceId)
+            ? decodeFrameWithStream(e.bytes)
+            : null;
+          if (decoded?.frame.t === 'data') {
+            // The new socket is authenticated, but its first HELLO has not yet
+            // told us whether this is the same App process. Keep DATA retained
+            // in the outbox until that generation boundary is resolved. HELLO,
+            // ACK, RESET and heartbeat control frames remain free to pass.
+            trace('HUB-TX-FENCED', { to: deviceId, stream: decoded.streamId });
+            break;
+          }
           trace('HUB-TX', { to: deviceId, len: e.bytes.length });
           // Control/resend bytes go back to this device.
           this.host.sendPulseTo(deviceId, b64encode(e.bytes));
           break;
+        }
         case 'deliver':
           if (selfBound) {
             trace('HUB-DELIVER-SELF', { from: deviceId, seq: String(e.seq), len: e.payload.length });
@@ -382,6 +483,9 @@ export class PulseHub {
         case 'unstore':
           trace('HUB-UNSTORE', { device: deviceId, stream: e.streamId ?? 0, seqUpTo: String(e.seqUpTo) });
           this.unstoreOutbox(deviceId, e.streamId ?? STREAM_LIVE, e.seqUpTo);
+          break;
+        case 'purged':
+          trace('HUB-PURGED', { device: deviceId, stream: e.streamId ?? 0, dropped: e.droppedSeqs.length, reason: e.reason });
           break;
         // reset-inbound / acked / open / close: nothing for the hub to do —
         // acked pruning already emits unstore; open/close are driven by the WS.
@@ -554,6 +658,8 @@ export class PulseHub {
         // L2: release the whole per-device set. Durable state stays in pulse_meta.
         trace('GC-EVICT', { device: deviceId, offlineMs });
         this.devices.delete(deviceId);
+        this.peerEpochs.delete(deviceId);
+        this.previousProcessFenceBounds.delete(deviceId);
         evicted += 1;
         continue;
       }

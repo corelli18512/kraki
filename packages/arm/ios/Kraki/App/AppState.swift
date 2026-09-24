@@ -97,7 +97,7 @@ final class AppState {
     #if DEBUG
     /// Fully isolated app graph for native Chat snapshot/alignment harnesses.
     /// It uses the real stores/provider/command/subscription objects but omits
-    /// Keychain, auth, WebSocket and Pulse setup, so production UI can run
+    /// Keychain access, auth and WebSocket setup, so production UI can run
     /// unchanged against a static temporary database without side effects.
     init(testDatabase: MessageDatabase, loadPersistedState: Bool = false) {
         self.sessionStore = SessionStore(persistenceEnabled: loadPersistedState)
@@ -109,6 +109,8 @@ final class AppState {
         self.attachmentStore = AttachmentStore { _, _ in }
         self.commandSender = CommandSender(appState: self)
         self.messageProvider = MessageProvider(appState: self)
+        self.messageRouter = MessageRouter(appState: self)
+        self.pulseManager = PulseManager(host: self)
         self.sessionSubscriptionController = SessionSubscriptionController(host: self)
         self.hasStoredCredentials = true
         self.hasCompletedInitialConnect = true
@@ -467,6 +469,13 @@ final class AppState {
     /// back to the login screen.
     func logout() {
         wsClient?.disconnect()
+        pulseManager?.resetForIdentityChange()
+        // The old decrypt pipeline may already have queued main-actor work.
+        // Retire its router as well as the transport before clearing stores.
+        messageRouter?.retireIdentity()
+        let router = MessageRouter(appState: self)
+        messageRouter = router
+        wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
         clearStoredRelayURL()
         deviceId = nil
@@ -486,8 +495,8 @@ final class AppState {
         deviceStore.reset()
         messageStore.reset()
         commandSender?.reset()
-        sessionSubscriptionController?.setDesired(nil)
-        sessionSubscriptionController?.onDisconnected()
+        messageProvider?.clear()
+        sessionSubscriptionController = SessionSubscriptionController(host: self)
     }
 
     /// Called when the app returns to foreground. Reset backoff and
@@ -720,6 +729,10 @@ extension AppState: SessionSubscriptionHost {
         sessionStore.sessions[sessionId]?.deviceId
     }
 
+    func isTentacleOnline(_ tentacleId: String) -> Bool {
+        deviceStore.devices[tentacleId]?.online == true
+    }
+
     func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool {
         var payload: [String: Any] = [:]
         payload["sessionId"] = sessionId ?? NSNull()
@@ -729,7 +742,7 @@ extension AppState: SessionSubscriptionHost {
             "seq": 0,
             "timestamp": ISO8601.now(),
             "payload": payload,
-        ], routingTarget: tentacleId)
+        ], routingTarget: tentacleId, connectionScoped: true)
     }
 
     func applySessionSubscriptionSnapshot(_ ack: SessionSubscriptionAck) {

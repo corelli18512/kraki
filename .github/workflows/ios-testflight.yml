@@ -130,8 +130,32 @@ jobs:
           test -d "$APP"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "$VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$BUILD_NUMBER"
+          # Keep both shipped bundles iPhone-only until a dedicated iPad layout exists.
+          for BUNDLE in "$APP" "$APP/PlugIns/KrakiNotification.appex"; do
+            test "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$BUNDLE/Info.plist")" = "1"
+            if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$BUNDLE/Info.plist" >/dev/null 2>&1; then
+              echo "Unexpected additional device family in $BUNDLE" >&2
+              exit 1
+            fi
+          done
           codesign --verify --strict --verbose=2 "$APP"
           codesign --verify --strict --verbose=2 "$APP/PlugIns/KrakiNotification.appex"
+
+      - name: Verify matching debug symbols
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/Kraki.xcarchive"
+          APP="$ARCHIVE/Products/Applications/Kraki.app"
+          : > "$RUNNER_TEMP/ios-symbol-uuids.txt"
+          for BUNDLE in "$APP" "$APP/PlugIns/KrakiNotification.appex"; do
+            EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$BUNDLE/Info.plist")"
+            DSYM="$ARCHIVE/dSYMs/$(basename "$BUNDLE").dSYM"
+            BINARY_UUIDS="$(xcrun dwarfdump --uuid "$BUNDLE/$EXECUTABLE" | awk '{print $2, $3}' | sort)"
+            SYMBOL_UUIDS="$(xcrun dwarfdump --uuid "$DSYM" | awk '{print $2, $3}' | sort)"
+            test -n "$BINARY_UUIDS"
+            test "$BINARY_UUIDS" = "$SYMBOL_UUIDS"
+            printf '%s: %s\n' "$EXECUTABLE" "$BINARY_UUIDS" | tee -a "$RUNNER_TEMP/ios-symbol-uuids.txt"
+          done
 
       - name: Export IPA
         run: |
@@ -163,6 +187,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-export
             ${{ runner.temp }}/Kraki.xcarchive/Info.plist
+            ${{ runner.temp }}/Kraki.xcarchive/dSYMs
+            ${{ runner.temp }}/ios-symbol-uuids.txt
             ${{ runner.temp }}/DerivedData-iOS/Logs
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 90

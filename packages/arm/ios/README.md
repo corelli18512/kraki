@@ -7,6 +7,18 @@ the web client's functionality (sessions, devices, settings, push) over
 the same encrypted relay transport, with on-device speech-to-text and
 APNs push (via a Notification Service Extension for decrypted previews).
 
+## Supported devices
+
+The iOS app and its notification extension currently target **iPhone only**
+(`TARGETED_DEVICE_FAMILY = 1`). Native iPad support is intentionally disabled;
+a future iPad UI should follow the macOS layout rather than reuse the iPhone
+layout. The separate native macOS target is unchanged.
+
+Apple may still offer an iPhone-only app in iPhone compatibility mode on iPad;
+this configuration removes native iPad support, not that OS-managed mode.
+The hosted bundle-metadata test and TestFlight archive validation enforce the
+shipped device family for both the app and extension.
+
 Source layout:
 
 - `Kraki/App` — entry point, `AppState`, scene hookup.

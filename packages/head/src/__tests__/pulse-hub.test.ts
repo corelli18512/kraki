@@ -27,6 +27,8 @@ class World {
   tentacle: Endpoint;
   armOnline = false;
   tentOnline = false;
+  /** What the Arm application finally received (payload markers). */
+  armReceived: number[] = [];
   /** What the tentacle application finally received (payload markers). */
   tentReceived: number[] = [];
   /** acked seqs the arm observed (i.e. head confirmed receipt). */
@@ -67,6 +69,7 @@ class World {
   // device endpoint effects → back into the hub (as if the device sent them)
   private pumpArm(effects: ReturnType<Endpoint['onTick']>): void {
     for (const e of effects) {
+      if (e.t === 'deliver') this.armReceived.push(e.payload[0] ?? -1);
       if (e.t === 'acked') this.armAcked.push(e.seqUpTo);
       if (e.t === 'transmit' && this.armOnline) {
         // arm → hub, addressed to the tentacle
@@ -84,10 +87,23 @@ class World {
     }
   }
 
-  connectArm(): void {
+  connectArm(discardPreviousProcessNonDurable = false): void {
     this.armOnline = true;
-    this.hub.onDeviceConnected(ARM);
+    this.hub.onDeviceConnected(ARM, { discardPreviousProcessNonDurable });
     this.pumpArm(this.arm.onConnected(this.now));
+  }
+
+  /** Attach the socket but hold the App HELLO so a new-generation authority can
+   *  race in between auth completion and Pulse resume. */
+  connectArmWithPreHello(
+    beforeHello: () => void,
+    discardPreviousProcessNonDurable = false,
+  ): void {
+    this.armOnline = true;
+    const hello = this.arm.onConnected(this.now);
+    this.hub.onDeviceConnected(ARM, { discardPreviousProcessNonDurable });
+    beforeHello();
+    this.pumpArm(hello);
   }
   connectTentacle(): void {
     this.tentOnline = true;
@@ -108,6 +124,17 @@ class World {
   /** arm sends an app payload (opaque marker) toward the tentacle, durable? */
   armSend(marker: number, durable: boolean): void {
     this.pumpArm(this.arm.send(new Uint8Array([marker]), { durable }).effects);
+  }
+
+  /** tentacle sends a producer payload (opaque marker) toward the Arm. */
+  tentacleSend(marker: number, durable: boolean): void {
+    this.pumpTent(this.tentacle.send(new Uint8Array([marker]), { durable }).effects);
+  }
+
+  /** Simulate iOS being relaunched: process-local Pulse cursor and epoch vanish. */
+  replaceArmProcess(epoch: string): void {
+    this.arm = new Endpoint({ epoch, random: () => 0.5 });
+    this.armReceived = [];
   }
 
   /** arm sends a HEAD-terminated control payload (addressed to '@head'). The
@@ -152,6 +179,107 @@ describe('PulseHub: head as per-hop bridge', () => {
     expect(w.tentReceived).toContain(7);
     // arm learned head received it (hop-A ack)
     expect(w.armAcked.length).toBeGreaterThan(0);
+  });
+
+  it('does not replay the previous App process non-durable tail into a fresh epoch', () => {
+    const w = new World(db);
+    w.connectArm(true);
+    w.connectTentacle();
+
+    w.tentacleSend(11, false);
+    w.tentacleSend(12, false);
+    expect(w.armReceived).toEqual([11, 12]);
+
+    // The App process dies before its 15 s heartbeat can ACK either frame.
+    w.disconnectArm();
+    w.replaceArmProcess('arm-process-2');
+    w.connectArm(true);
+
+    // A fresh process must converge through current authorities, not replay the
+    // prior process's already-visible live tail.
+    expect(w.armReceived).toEqual([]);
+  });
+
+  it('fences the old tail when a fresh App process replaces a still-connected socket', () => {
+    const w = new World(db);
+    w.connectArm(true);
+    w.connectTentacle();
+
+    w.tentacleSend(13, false);
+    expect(w.armReceived).toEqual([13]);
+
+    // Head has not observed a disconnect yet; authentication replaces the old
+    // same-device socket and immediately attaches the fresh process.
+    w.replaceArmProcess('arm-process-2');
+    w.connectArm(true);
+
+    expect(w.armReceived).toEqual([]);
+  });
+
+  it('preserves a new-generation authority that arrives before the fresh App HELLO', () => {
+    const w = new World(db);
+    w.connectArm(true);
+    w.connectTentacle();
+
+    w.tentacleSend(14, false);
+    expect(w.armReceived).toEqual([14]);
+
+    w.disconnectArm();
+    w.replaceArmProcess('arm-process-2');
+    w.connectArmWithPreHello(() => {
+      // This represents the fresh session_list triggered by device_joined for
+      // the new connection. It is newer than the fence boundary and must live.
+      w.tentacleSend(15, false);
+    }, true);
+
+    expect(w.armReceived).toEqual([15]);
+  });
+
+  it('fences a pre-HELLO connection tail even when no previous peer epoch was learned', () => {
+    const w = new World(db);
+    w.connectTentacle();
+    w.connectArmWithPreHello(() => {
+      w.tentacleSend(21, false);
+      w.tentacleSend(22, true);
+      // Auth completed but the first HELLO was lost with this connection.
+      expect(w.armReceived).toEqual([]);
+      w.disconnectArm();
+    }, true);
+
+    w.replaceArmProcess('arm-process-2');
+    w.connectArmWithPreHello(() => w.tentacleSend(23, false), true);
+    expect(w.armReceived).toEqual([22, 23]);
+  });
+
+  it('preserves durable downlink while fencing a fresh App process non-durable tail', () => {
+    const w = new World(db);
+    w.connectArm(true);
+    w.connectTentacle();
+
+    w.tentacleSend(21, false);
+    w.tentacleSend(22, true);
+    expect(w.armReceived).toEqual([21, 22]);
+
+    w.disconnectArm();
+    w.replaceArmProcess('arm-process-2');
+    w.connectArm(true);
+
+    expect(w.armReceived).toEqual([22]);
+  });
+
+  it('keeps non-durable resume for the same App process epoch after a transient disconnect', () => {
+    const w = new World(db);
+    w.connectArm(true);
+    w.connectTentacle();
+
+    w.disconnectArm();
+    w.tentacleSend(31, false);
+    expect(w.armReceived).toEqual([]);
+
+    // The process survived, so its Pulse epoch/cursor survived too. Normal
+    // reliable resume remains valid and must deliver the missed frame.
+    w.connectArm(true);
+    expect(w.armReceived).toEqual([31]);
   });
 
   it('deliver-to-self: a frame addressed to @head is consumed by head, NOT forwarded', () => {

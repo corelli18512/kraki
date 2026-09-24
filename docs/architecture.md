@@ -26,6 +26,7 @@ All application and control messages ride [`@coinfra/pulse`](https://github.com/
 - **Durable messages**: a message can be marked `durable: true` — the head persists it to SQLite so it survives both the receiver being offline AND a head restart. Currently only `delete_session` is durable; all streaming/event messages are non-durable and self-heal via session replay on reconnect.
 - **Send-time coalescing** (`coalesceKey`, pulse §12): state-covering streams like `agent_message_delta` and `card_action` declare a coalesce key. A new send with the same key drops earlier unacked entries from the outbox — a peer that was offline receives one current snapshot per key on reconnect instead of a burst of stale frames.
 - **Host-driven GC** (pulse §11): the head runs a periodic GC scan. L1: after 5 min disconnected, a device's non-durable outbox is purged. L2: after 24 h disconnected, the in-memory endpoint is evicted entirely (durable state survives in SQLite for the next reconnect).
+- **App process-generation fence**: after App authentication, Head records per-stream send-sequence boundaries and holds DATA until the first Pulse HELLO. Only a positively matched previous epoch keeps ordinary same-process resume. A changed **or unknown** epoch drops non-durable entries at/below those boundaries; unknown also covers a preceding socket that died after auth but before HELLO. Durable entries and fresh authorities queued after authentication survive. Fresh `session_list`, subscription snapshots, and history ranges rebuild current UI state without replaying historical Session-preview intermediates. Tentacle command downlinks keep their existing resume semantics. Socket replacement explicitly retires the previous Pulse connection.
 
 ## Core concepts
 
@@ -122,9 +123,10 @@ Its job is to:
 ### 4. Replay after reconnect
 
 1. A device reconnects to `head`.
-2. Pulse resumes the stream (epoch handshake + resend from outbox).
-3. For messages the arm missed while offline, `arm` sends `request_session_messages_range` — `tentacle` reads from its file-backed message log and replies with `session_messages_range_batch`.
-4. The client rebuilds session state from the replayed message stream.
+2. Pulse resumes the stream, subject to the App process-generation fence above.
+3. Fresh `session_list` reconciles Session metadata/previews; the visible Session receives a subscription snapshot. Missing history is fetched in batches/ranges and stored without replaying it into Session previews.
+4. Native subscription authority is connection-scoped. A cross-Tentacle switch confirms the old peer's null subscription while that peer is online. `device_left` / `device_removed` retire its barrier and in-flight request so an offline peer cannot block a live one; when it returns, a fresh barrier triggers replacement or null cleanup without clearing the current peer's live state.
+5. Native logout is an identity boundary, **not** a network reconnect: it replaces Pulse epochs/outboxes/targets and retires the old decrypt router and subscription controller. Ordinary backgrounding and network reconnect still preserve non-connection-scoped commands. This does not cancel commands already accepted by the remote side.
 
 ### 5. Push notifications (offline devices)
 

@@ -1,6 +1,6 @@
 # iOS Chat scroll production gate
 
-The iOS Debug test `IOSChatScrollProductionTests.testProductionScrollGate` mounts the
+The iOS Debug suite `IOSChatScrollProductionTests` mounts the
 real `ChatPerfListVC`, `UICollectionView`, TextKit bubble cells, `MessageStore`, and
 DB-first `MessageProvider` against a temporary simulator database. Entry,
 user-direction, tail-follow, and edge-paging eligibility are decided by the
@@ -19,7 +19,16 @@ It validates:
 - later upward approaches continuing to load older pages;
 - oldest-boundary clamping;
 - downward recovery of a px-trimmed newer page;
-- width/height reflow with valid offset bounds and visible cell materialization.
+- width/height reflow with valid offset bounds and visible cell materialization;
+- either active edge blocks a pending apply without synchronously measuring an already-warm opposite edge;
+- warm buffered pages settle after reappearance, with or without an existing pending apply;
+- a real async older-page DB completion while detached cannot leave an orphaned measurement flag;
+- zero-width layout defers settlement until usable geometry returns.
+
+Measurement ownership and page settlement are separate phases. `resumeBufferedPageMeasurements`
+starts only missing-height work, but also settles ready buffers. A rejected hidden/zero-width
+measurement owns no barrier; disappearance/re-anchor cancels both queued jobs and ownership flags.
+A post-layout retry runs outside UIKit layout/batch re-entry. All regression probes are DEBUG-only.
 
 Run the focused gate on an available iOS Simulator:
 
@@ -30,7 +39,7 @@ xcodebuild \
   -destination 'platform=iOS Simulator,id=<SIMULATOR_UDID>' \
   -derivedDataPath /tmp/kraki-ios-scroll-gate-derived \
   CODE_SIGNING_ALLOWED=NO \
-  test -only-testing:KrakiTests/IOSChatScrollProductionTests/testProductionScrollGate
+  test -only-testing:KrakiTests/IOSChatScrollProductionTests
 ```
 
 The fixture uses a temporary SQLite database and a test-only app graph. It does not

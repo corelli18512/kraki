@@ -16,7 +16,7 @@ function endpoints(epoch: string): { streams: StreamSet; live: Endpoint; bulk: E
 
 class MultiStreamWorld {
   now = 0;
-  readonly arm = endpoints('arm');
+  arm = endpoints('arm');
   readonly tentacle = endpoints('tentacle');
   readonly hub: PulseHub;
   armOnline = false;
@@ -36,13 +36,13 @@ class MultiStreamWorld {
     this.hub = new PulseHub(db, host, gc);
   }
 
-  connectArm(): void {
+  connectArm(discardPreviousProcessNonDurable = false): void {
     this.armOnline = true;
     // The WebSocket is usable by both peers before either HELLO is delivered.
     // Mark the client endpoints connected first, then attach the hub, and only
     // then put the client's HELLO effects on the wire.
     const effects = this.arm.streams.onConnected(this.now);
-    this.hub.onDeviceConnected(ARM);
+    this.hub.onDeviceConnected(ARM, { discardPreviousProcessNonDurable });
     this.pumpArm(effects);
   }
 
@@ -71,6 +71,11 @@ class MultiStreamWorld {
 
   tentacleSend(stream: number, marker: number, durable = false): void {
     this.pumpTentacle(this.tentacle.streams.send(stream, new Uint8Array([marker]), { durable }).effects);
+  }
+
+  replaceArmProcess(epoch: string): void {
+    this.arm = endpoints(epoch);
+    this.armReceived = [];
   }
 
   advance(ms: number): void {
@@ -195,6 +200,28 @@ describe('PulseHub multi-stream persistence and forwarding', () => {
       { stream: 0, marker: 20 },
       { stream: 1, marker: 21 },
     ]);
+    world.hub.close();
+  });
+
+  it('fences a fresh App process from previous non-durable live and bulk tails', () => {
+    const db = new Database(':memory:');
+    databases.push(db);
+    const world = new MultiStreamWorld(db);
+    world.connectArm(true);
+    world.connectTentacle();
+
+    world.tentacleSend(0, 31);
+    world.tentacleSend(1, 32);
+    expect(world.armReceived).toEqual([
+      { stream: 0, marker: 31 },
+      { stream: 1, marker: 32 },
+    ]);
+
+    world.disconnectArm();
+    world.replaceArmProcess('arm-process-2');
+    world.connectArm(true);
+
+    expect(world.armReceived).toEqual([]);
     world.hub.close();
   });
 

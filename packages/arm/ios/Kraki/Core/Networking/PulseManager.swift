@@ -16,8 +16,8 @@ final class PulseManager {
     static let liveStream: UInt8 = 0
     static let bulkStream: UInt8 = 1
 
-    private let streams: StreamSet
-    private let live: Endpoint
+    private var streams: StreamSet
+    private var live: Endpoint
     private weak var host: PulseHost?
 
     /// DATA delivery targets retained per stream and seq so repair/reconnect
@@ -42,6 +42,10 @@ final class PulseManager {
 
     init(host: PulseHost) {
         self.host = host
+        (self.live, self.streams) = Self.makeEndpoints()
+    }
+
+    private static func makeEndpoints() -> (Endpoint, StreamSet) {
         let base = UUID().uuidString
         let live = Endpoint(
             epoch: "\(base):live",
@@ -57,8 +61,17 @@ final class PulseManager {
             durable: nil,
             streamId: Self.bulkStream
         )
-        self.live = live
-        self.streams = StreamSet([live, bulk])
+        return (live, StreamSet([live, bulk]))
+    }
+
+    /// Logout is an identity boundary, unlike backgrounding/network loss.
+    /// Retire every queued command and cursor; the next login must advertise a
+    /// fresh epoch and must never resend ciphertext addressed by the old user.
+    func resetForIdentityChange() {
+        cancelTick()
+        targetByStream.removeAll()
+        connectionScopedLiveSeqs.removeAll()
+        (live, streams) = Self.makeEndpoints()
     }
 
     // MARK: - Send

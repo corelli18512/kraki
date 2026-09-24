@@ -555,6 +555,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// rows in the gap between fetch completion and the pager barrier.
     private var measuringOlderPage = false
     private var measuringNewerPage = false
+    private var paginationResumeScheduled = false
     /// The model snapshot has advanced past `items`, but those edge rows are
     /// intentionally buffered until measurement and a stable anchored apply.
     private var paginationSnapshotDeferred = false
@@ -680,9 +681,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmKickWork?.cancel()
         warmKickWork = nil
         cancelPendingWarm()
-        pager.cancelAll()
-        measuringOlderPage = false
-        measuringNewerPage = false
+        cancelPageMeasurements()
         chatPerfLog.log("[lifecycle] willDisappear movingFromParent=\(isMovingFromParent ? 1 : 0)")
         super.viewWillDisappear(animated)
     }
@@ -694,6 +693,18 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // A hidden/zero-width page may have deferred starting a barrier. Retry
+        // after layout, never re-enter a collection batch from inside layout.
+        if !isLeavingView, view.window != nil, collectionView.bounds.width > 0,
+           paginationSnapshotDeferred || pendingApply != nil,
+           !measuringOlderPage, !measuringNewerPage, !paginationResumeScheduled {
+            paginationResumeScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.paginationResumeScheduled = false
+                self.resumeBufferedPageMeasurements()
+            }
+        }
         logEntryState("layout")
         guard collectionView != nil,
               didInitialScroll,
@@ -1304,6 +1315,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // Drop any in-flight paging so the freshly-anchored window can't be
         // clobbered by a stale fetch/apply that targeted the old window.
         pagingGeneration += 1
+        cancelPageMeasurements()
         pendingApply = nil
         fetchingOlder = false
         fetchingNewer = false
@@ -1406,15 +1418,24 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func flushPendingApply() {
-        guard !collectionView.isDragging,
+        guard !isLeavingView, viewIfLoaded?.window != nil,
+              collectionView.bounds.width > 0,
+              !collectionView.isDragging,
               !collectionView.isDecelerating,
               !scrollingToTop,
               let work = pendingApply else { return }
+        sizer.prepare(width: collectionView.bounds.width)
         // A Relay history response can extend the buffered edge after this
         // apply was first deferred. Never let that larger, colder buffer slip
         // through the old barrier and synchronously self-size in applyEdges.
-        if measuringOlderPage || measuringNewerPage
-            || bufferedOlderNeedsMeasurement() || bufferedNewerNeedsMeasurement() {
+        //
+        // An in-flight edge owns the completion that will call us again. Do not
+        // ask the opposite, already-warm edge to install another barrier here:
+        // `measurePage` completes a warm page synchronously, which used to loop
+        // back through finish → flush while the first edge was still measuring
+        // and eventually overflow the main-thread stack.
+        if measuringOlderPage || measuringNewerPage { return }
+        if bufferedOlderNeedsMeasurement() || bufferedNewerNeedsMeasurement() {
             resumeBufferedPageMeasurements()
             return
         }
@@ -2173,6 +2194,75 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             distanceToBottom: distanceToBottom()
         )
     }
+
+    var automationPaginationState: (measuring: Bool, jobs: Int, deferred: Bool) {
+        (measuringOlderPage || measuringNewerPage, pager.pendingCount,
+         paginationSnapshotDeferred || pendingApply != nil)
+    }
+
+    /// Stage an already-measured buffered row using the real collection model.
+    /// Lifecycle recovery must reveal it even though no measurement is needed.
+    func automationStageWarmBufferedOlderPage(pending: Bool) {
+        guard let first = messages.first, messages.count > 1 else { return }
+        pager.cancelAll()
+        measuringOlderPage = false
+        measuringNewerPage = false
+        sizer.prime(first, width: collectionView.bounds.width, notify: false)
+        items = Array(ids.dropFirst())
+        paginationSnapshotDeferred = true
+        collectionView.delegate = nil
+        collectionView.reloadData()
+        collectionView.setContentOffset(
+            CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false
+        )
+        collectionView.layoutIfNeeded()
+        collectionView.delegate = self
+        pendingApply = pending ? { [weak self] in self?.flushOlder(reason: "warm-resume-probe") } : nil
+    }
+
+    /// Reproduces the build-24 crash state without synthetic scroll machinery:
+    /// a pending stable apply, one active edge measurement, and an already-warm
+    /// opposite buffer. The old implementation synchronously re-entered
+    /// flush → resume → measurePage → finish until stack overflow.
+    func automationProbeCrossEdgeMeasurementBarrier(olderActive: Bool = false)
+        -> (waitedForActiveEdge: Bool, appliedExactlyOnce: Bool) {
+        guard let warmRow = olderActive ? messages.last : messages.first,
+              messages.count > 1,
+              collectionView.bounds.width > 0 else { return (false, false) }
+
+        sizer.prime(warmRow, width: collectionView.bounds.width, notify: false)
+        let savedItems = items
+        let savedPendingApply = pendingApply
+        let savedMeasuringOlderPage = measuringOlderPage
+        let savedMeasuringNewerPage = measuringNewerPage
+        let savedPaginationSnapshotDeferred = paginationSnapshotDeferred
+        defer {
+            items = savedItems
+            pendingApply = savedPendingApply
+            measuringOlderPage = savedMeasuringOlderPage
+            measuringNewerPage = savedMeasuringNewerPage
+            paginationSnapshotDeferred = savedPaginationSnapshotDeferred
+        }
+
+        // Expose one warm older row without mutating the backing message
+        // snapshot or UICollectionView. The probe ends before another layout.
+        items = olderActive ? Array(ids.dropLast()) : Array(ids.dropFirst())
+        var applyCount = 0
+        pendingApply = { applyCount += 1 }
+        measuringOlderPage = olderActive
+        measuringNewerPage = !olderActive
+
+        flushPendingApply()
+        let waited = applyCount == 0
+            && pendingApply != nil
+            && (olderActive ? !measuringNewerPage : !measuringOlderPage)
+
+        measuringOlderPage = false
+        measuringNewerPage = false
+        flushPendingApply()
+        let applied = applyCount == 1 && pendingApply == nil
+        return (waited, applied)
+    }
     #endif
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -2239,12 +2329,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         prefetchOlderIfNeeded()
     }
 
-    /// Budget-slice the measurement of a soon-to-be-applied page on the
-    /// never-paused `pager`, then run `apply` once every height is cached.
-    /// If all heights are already warm (the common case, thanks to idle
-    /// look-ahead), `apply` runs on the next tick with nothing to measure —
-    /// so this adds no latency when warm and bounded latency when cold,
-    /// instead of a synchronous self-size storm inside `applyEdges`.
+    /// Check both buffered edges before applying. Cold pages are measured by
+    /// the pager at rest; ready pages settle without installing a new barrier.
     private func bufferedOlderNeedsMeasurement() -> Bool {
         let count = bufferedOlderCount()
         guard count > 0 else { return false }
@@ -2257,72 +2343,67 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         return messages.suffix(count).contains { sizer.cached($0.id) == nil }
     }
 
-    private func finishOlderPageMeasurement(reason: String) {
+    private func cancelPageMeasurements() {
+        pager.cancelAll()
         measuringOlderPage = false
-        // The store can grow again while the pager is budget-slicing the first
-        // response. Re-run the barrier over the current buffer before applying.
-        if bufferedOlderNeedsMeasurement() {
-            resumeBufferedPageMeasurements()
-            return
-        }
-        if pendingApply != nil {
-            flushPendingApply()
-            return
-        }
-        maybeFlushOlder(reason: reason)
-        prefetchOlderIfNeeded()
+        measuringNewerPage = false
     }
 
-    private func finishNewerPageMeasurement(reason: String) {
-        measuringNewerPage = false
-        if bufferedNewerNeedsMeasurement() {
-            resumeBufferedPageMeasurements()
-            return
-        }
-        if pendingApply != nil {
-            flushPendingApply()
-            return
-        }
-        maybeFlushNewer(reason: reason)
-        prefetchNewerIfNeeded()
+    private func finishPageMeasurement(older: Bool) {
+        if older { measuringOlderPage = false } else { measuringNewerPage = false }
+        // The buffer/width can change while jobs run. Re-evaluate both edges;
+        // an active opposite edge still owns its completion barrier.
+        resumeBufferedPageMeasurements()
     }
 
     private func resumeBufferedPageMeasurements() {
+        guard !isLeavingView, viewIfLoaded?.window != nil,
+              collectionView.bounds.width > 0 else { return }
+        sizer.prepare(width: collectionView.bounds.width)
         let older = bufferedOlderCount()
-        if older > 0, !measuringOlderPage {
+        if older > 0, !measuringOlderPage, bufferedOlderNeedsMeasurement() {
             paginationSnapshotDeferred = true
             measuringOlderPage = true
-            measurePage(messages.prefix(older)) { [weak self] in
-                guard let self else { return }
-                self.finishOlderPageMeasurement(reason: self.atOldest ? "atOldest" : "resume")
-            }
+            if !measurePage(messages.prefix(older), then: { [weak self] in
+                self?.finishPageMeasurement(older: true)
+            }) { measuringOlderPage = false }
         }
         let newer = bufferedNewerCount()
-        if newer > 0, !measuringNewerPage {
+        if newer > 0, !measuringNewerPage, bufferedNewerNeedsMeasurement() {
             paginationSnapshotDeferred = true
             measuringNewerPage = true
-            measurePage(messages.suffix(newer)) { [weak self] in
-                guard let self else { return }
-                self.finishNewerPageMeasurement(reason: self.atNewest ? "atNewest" : "resume")
-            }
+            if !measurePage(messages.suffix(newer), then: { [weak self] in
+                self?.finishPageMeasurement(older: false)
+            }) { measuringNewerPage = false }
         }
-        if older == 0, newer == 0, items == ids {
-            paginationSnapshotDeferred = false
+
+        // Readiness and measurement are separate phases. Warm pages (including
+        // a cancelled final barrier on navigation) still need to settle, but
+        // must not create another synchronous measure -> finish -> flush loop.
+        guard !measuringOlderPage, !measuringNewerPage,
+              !bufferedOlderNeedsMeasurement(), !bufferedNewerNeedsMeasurement() else { return }
+        if pendingApply != nil {
+            flushPendingApply()
+        } else if paginationSnapshotDeferred || older > 0 || newer > 0 {
+            settleEdges()
         }
+        if items == ids { paginationSnapshotDeferred = false }
     }
 
-    private func measurePage(_ page: ArraySlice<ChatMessage>, then apply: @escaping () -> Void) {
-        guard !isLeavingView, viewIfLoaded?.window != nil else { return }
+    /// Returns false if no barrier can be owned yet (hidden or zero width).
+    private func measurePage(_ page: ArraySlice<ChatMessage>, then apply: @escaping () -> Void) -> Bool {
+        guard !isLeavingView, viewIfLoaded?.window != nil else { return false }
         let width = collectionView.bounds.width
-        guard width > 0 else { apply(); return }
+        guard width > 0 else { return false }
         var jobs: [() -> Void] = []
         for t in page where sizer.cached(t.id) == nil {
             jobs.append { [weak self] in self?.sizer.prime(t, width: width) }
         }
-        if jobs.isEmpty { apply(); return }
+        if jobs.isEmpty { apply(); return true }
         chatPerfLog.log("[page] measure n=\(jobs.count)")
-        jobs.append(apply)            // barrier: apply after the page is warm
+        jobs.append(apply)
         pager.enqueue(jobs)
+        return true
     }
 
     /// Reconcile two window snapshots (old → new) into edge edits by diffing
@@ -2419,10 +2500,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let n = self.bufferedNewerCount()
             if self.items == self.ids { self.paginationSnapshotDeferred = false }
             chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
-            self.measuringNewerPage = true
-            self.measurePage(self.messages.suffix(n)) {
-                self.finishNewerPageMeasurement(reason: self.atNewest ? "atNewest" : "fetched")
-            }
+            self.resumeBufferedPageMeasurements()
         }
     }
 
@@ -2573,10 +2651,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
             // Warm the buffered turns off-frame; only THEN are their heights
             // known, so flush/prefetch decisions read a hot cache.
-            self.measuringOlderPage = true
-            self.measurePage(self.messages.prefix(n)) {
-                self.finishOlderPageMeasurement(reason: self.atOldest ? "atOldest" : "fetched")
-            }
+            self.resumeBufferedPageMeasurements()
         }
     }
 

@@ -86,6 +86,7 @@ extension SessionDigest {
 final class MessageRouter {
 
     private weak var appState: AppState?
+    private var retired = false
     let encryptionHandler: EncryptionHandler
 
     private static let previewMaxLength = 80
@@ -122,10 +123,17 @@ final class MessageRouter {
         }
     }
 
+    /// Late decrypt/MainActor deliveries can outlive the WebSocket. A retired
+    /// identity's router must not repopulate stores after logout/new login.
+    func retireIdentity() {
+        retired = true
+    }
+
     // MARK: - Raw Message Entry Point
 
     /// Called by `WebSocketClient.onMessage` with the raw text-frame data.
     func handleRawMessage(_ data: Data) {
+        guard !retired else { return }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else {
             KLog.d("⚠️ Failed to parse incoming message")
@@ -168,11 +176,13 @@ final class MessageRouter {
         case "device_left":
             if let deviceId = json["deviceId"] as? String {
                 appState?.deviceStore.setDeviceOnline(deviceId, online: false)
+                appState?.sessionSubscriptionController.onTentacleUnavailable(deviceId)
             }
 
         case "device_removed":
             if let deviceId = json["deviceId"] as? String {
                 appState?.deviceStore.removeDevice(deviceId)
+                appState?.sessionSubscriptionController.onTentacleUnavailable(deviceId)
             }
 
         case "device_pending":
@@ -265,7 +275,7 @@ final class MessageRouter {
     /// Route a decrypted inner message to the appropriate store(s).
     @MainActor
     func handleDataMessage(_ json: Data) {
-        guard let appState,
+        guard !retired, let appState,
               let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
               let type = dict["type"] as? String else {
             KLog.d("⚠️ Failed to parse decrypted inner message")
