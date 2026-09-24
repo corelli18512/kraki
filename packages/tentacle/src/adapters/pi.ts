@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
 import { readPiJsonLines } from './pi-jsonl.js';
+import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
 import { PiFinalizeStream, type AssistantStreamEvent } from './pi-finalize-stream.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1883,8 +1884,23 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private cachedModels: PiModelRow[] | null = null;
+  private modelScope: string[] | undefined;
+  private scopeLoaded = false;
 
   private fetchModels(): PiModelRow[] {
+    // Cache only the raw catalog: reread preferences for every capabilities
+    // request so an already-running adapter can pick up scope changes.
+    try {
+      this.modelScope = readPiModelScope();
+      this.scopeLoaded = true;
+    } catch {
+      logger.warn('Could not read Pi enabledModels; retaining last valid scope');
+      if (!this.scopeLoaded) return [];
+    }
+    return scopePiModels(this.fetchRawModels(), this.modelScope);
+  }
+
+  private fetchRawModels(): PiModelRow[] {
     if (this.cachedModels) return this.cachedModels;
     try {
       const stdout = execSync(`"${this.cliPath}" --list-models`, {
@@ -1902,7 +1918,12 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private getDefaultModel(): string {
-    return resolveDefaultModel(this.fetchModels());
+    const models = this.fetchModels();
+    if (this.modelScope?.length || !this.scopeLoaded) {
+      if (!models.length) throw new Error('No Pi models match enabledModels; check Pi settings');
+      return `${models[0].provider}/${models[0].model}`;
+    }
+    return resolveDefaultModel(models);
   }
 
   async listModels(): Promise<string[]> {
