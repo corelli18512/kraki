@@ -40,6 +40,17 @@ describe('queryPiCatalog — throwaway RPC lifecycle', () => {
     ]);
   });
 
+  it('preserves Unicode separators inside a valid catalog JSON record', async () => {
+    const model = { id: 'model', provider: 'test', name: 'line\u2028paragraph\u2029end' };
+    const cli = fakePi(`
+      process.stdin.once('data', chunk => {
+        const command = JSON.parse(String(chunk));
+        console.log(JSON.stringify({ id: command.id, type: 'response', command: 'get_available_models', success: true, data: { models: [${JSON.stringify(model)}] } }));
+      });
+    `);
+    await expect(queryPiCatalog(cli, 2000)).resolves.toEqual([model]);
+  });
+
   it('rejects an explicit RPC error instead of treating it as an empty catalog', async () => {
     const cli = fakePi(`
       process.stdin.once('data', chunk => {

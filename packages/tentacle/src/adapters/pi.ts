@@ -15,7 +15,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
-import { createInterface, type Interface } from 'node:readline';
+import { readPiJsonLines } from './pi-jsonl.js';
+import { PiFinalizeStream, type AssistantStreamEvent } from './pi-finalize-stream.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -96,7 +97,7 @@ const PROMPT_IDLE_STALL_MS = 120_000;
 
 class PiRpcProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
-  private rl: Interface | null = null;
+  private stopReading: (() => void) | null = null;
   private pending = new Map<string, Pending>();
   private seq = 0;
   private intentionalExit = false;
@@ -133,8 +134,7 @@ class PiRpcProcess {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    this.rl = createInterface({ input: this.child.stdout });
-    this.rl.on('line', (line) => this.handleLine(line));
+    this.stopReading = readPiJsonLines(this.child.stdout, line => this.handleLine(line));
     this.child.stderr.on('data', (d) => {
       const stderr = d.toString().trim();
       if (stderr) this.lastStderr = stderr;
@@ -217,7 +217,8 @@ class PiRpcProcess {
 
   kill(): void {
     this.intentionalExit = true;
-    this.rl?.close();
+    this.stopReading?.();
+    this.stopReading = null;
     if (this.child && !this.child.killed) this.child.kill('SIGTERM');
     this.child = null;
   }
@@ -405,6 +406,7 @@ interface PiSession {
    *  onFinalizeDelta deltas, so the resummarize streams into the draft bubble. */
   finalizeStreamId?: string;
   finalizeStreamLen: number;
+  finalizeStream?: PiFinalizeStream;
 }
 
 // ── Dynamic model discovery via `pi --list-models` ────────────────
@@ -513,23 +515,6 @@ export function defaultEffortFor(efforts: ReasoningEffort[]): ReasoningEffort | 
   return efforts[0];
 }
 
-/** Minimal shape of pi's streamed `assistantMessageEvent` (message_update RPC).
- *  `partial` carries the accumulating AssistantMessage; for a streaming tool
- *  call, pi incrementally parses `arguments` so `content[contentIndex]` exposes
- *  the tool name + partially-parsed args (e.g. finalize_reply's `text`). */
-interface AssistantStreamEvent {
-  type: string;
-  delta?: string;
-  contentIndex?: number;
-  partial?: {
-    content?: Array<{
-      type?: string;
-      id?: string;
-      name?: string;
-      arguments?: { text?: unknown };
-    }>;
-  };
-}
 const EVICTION_INTERVAL_MS = 5 * 60_000;
 const IDLE_TTL_MS = 30 * 60_000;
 
@@ -588,14 +573,14 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const rl = createInterface({ input: child.stdout });
+    let stopReading = () => {};
     let settled = false;
     let lastStderr = '';
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      rl.close();
+      stopReading();
       child.kill();
       fn();
     };
@@ -603,7 +588,7 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
       finish(() => reject(new Error(lastStderr ? `${reason}: ${lastStderr}` : reason)));
     const timer = setTimeout(() => fail('pi catalog query timed out'), timeoutMs);
 
-    rl.on('line', line => {
+    stopReading = readPiJsonLines(child.stdout, line => {
       let msg: { type?: string; command?: string; success?: boolean; error?: string; data?: { models?: PiCatalogModel[] } };
       try { msg = JSON.parse(line); } catch { return; }
       if (msg.type !== 'response' || msg.command !== 'get_available_models') return;
@@ -769,8 +754,15 @@ export class PiAdapter extends AgentAdapter {
     return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalCost: 0, totalDurationMs: 0 };
   }
 
+  private resolveModelId(model: string): [string, string] {
+    const separator = model.indexOf('/');
+    return separator < 0
+      ? [this.getDefaultModel().split('/')[0], model]
+      : [model.slice(0, separator), model.slice(separator + 1)];
+  }
+
   private spawn(sessionId: string, cwd: string, model: string, mode: Mode, sessionFile?: string, thinking?: string): PiSession {
-    const [provider, modelId] = model.includes('/') ? model.split('/') : [this.getDefaultModel().split('/')[0], model];
+    const [provider, modelId] = this.resolveModelId(model);
     // Export the meta sidecar path so the extension's kraki_get_mode reads the
     // live permission mode (the adapter, via persistMeta, is the source of truth).
     // The gate itself is loaded in every mode; the adapter decides silent-approve
@@ -901,7 +893,9 @@ export class PiAdapter extends AgentAdapter {
    * this idle.
    */
   private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
-    if (willRetry || s.aborting || s.settledTurn === s.logicalTurn) return;
+    // agent_end.willRetry covers transient retries, NOT every compaction
+    // recovery. Only a completed answer may settle before agent_settled.
+    if (willRetry || s.aborting || s.settledTurn === s.logicalTurn || s.lastStopReason !== 'stop') return;
 
     if (s.finalizing) {
       if (!s.finalizeResolved) {
@@ -915,7 +909,6 @@ export class PiAdapter extends AgentAdapter {
       return;
     }
 
-    if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') return;
     const reply = s.lastNarration.trim();
     if (s.toolSinceLastNarration || !reply) return;
 
@@ -947,6 +940,7 @@ export class PiAdapter extends AgentAdapter {
     s.lastStopReason = undefined;
     s.pendingError = undefined;
     s.pendingMaintenanceIdle = false;
+    s.finalizeStream?.clear();
     s.pendingNarration = '';
     s.aborting = false;
     s.finalizing = false;
@@ -1073,6 +1067,12 @@ export class PiAdapter extends AgentAdapter {
         this.setCompacting(sessionId, false);
         break;
       }
+      case 'message_start': {
+        if ((e.message as { role?: string } | undefined)?.role === 'assistant') {
+          this.sessions.get(sessionId)?.finalizeStream?.clear();
+        }
+        break;
+      }
       case 'message_update': {
         // Real model/tool activity also proves a stale compaction indicator is
         // no longer current. Clear only the adapter-owned compaction lifecycle;
@@ -1088,24 +1088,18 @@ export class PiAdapter extends AgentAdapter {
           if (!s?.finalizing) this.onMessageDelta?.(sessionId, { content: am.delta, ...this.lifecycleEvent(s) });
           break;
         }
-        // finalize_reply streams its `text` arg like prose: pi parses the partial
-        // tool args incrementally (arguments.text grows as a prefix), so we diff
-        // against what we've already emitted and forward the new suffix as an
-        // onFinalizeDelta. This streams the resummarized closing line live into
-        // the draft bubble (replacing the frozen narration) so it morphs
-        // seamlessly into the final reply instead of popping in whole.
-        if (am?.type === 'toolcall_delta' || am?.type === 'toolcall_start') {
-          const ci = am.contentIndex;
-          const tc = typeof ci === 'number' ? am.partial?.content?.[ci] : undefined;
-          if (tc && tc.type === 'toolCall' && tc.name === 'finalize_reply' && s) {
-            if (s.finalizeStreamId !== tc.id) {
-              s.finalizeStreamId = tc.id;
+        // Pi 0.87 sends delta-only RPC records, unlike SDK partial snapshots.
+        // Reconstruct finalize arguments per block and reconcile toolcall_end.
+        if (s && am && ['toolcall_start', 'toolcall_delta', 'toolcall_end'].includes(am.type)) {
+          const update = (s.finalizeStream ??= new PiFinalizeStream()).update(am);
+          if (update) {
+            if (s.finalizeStreamId !== update.id) {
+              s.finalizeStreamId = update.id;
               s.finalizeStreamLen = 0;
             }
-            const txt = typeof tc.arguments?.text === 'string' ? tc.arguments.text : '';
-            if (txt.length > s.finalizeStreamLen) {
-              const suffix = txt.slice(s.finalizeStreamLen);
-              s.finalizeStreamLen = txt.length;
+            if (update.text.length > s.finalizeStreamLen) {
+              const suffix = update.text.slice(s.finalizeStreamLen);
+              s.finalizeStreamLen = update.text.length;
               this.onFinalizeDelta?.(sessionId, { content: suffix, ...this.lifecycleEvent(s) });
             }
           }
@@ -1687,23 +1681,28 @@ export class PiAdapter extends AgentAdapter {
     const s = this.sessions.get(sessionId);
     if (!s?.proc.alive) return;
 
-    // First resolve any extension UI promises that ignore/precede the agent abort
-    // signal. The RelayClient already captured the visible card snapshot, so
-    // these transport cancellations cannot erase the durable abort history.
-    for (const questionId of s.pendingQuestions.keys()) {
-      s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, cancelled: true });
-    }
-    s.pendingQuestions.clear();
-    for (const permissionId of s.pendingPerms.keys()) {
-      s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: false });
-    }
-    s.pendingPerms.clear();
-
     // Pi emits agent_end before resolving this RPC. Keep that event from
     // entering the normal finalize flow, which would start a new model turn
     // immediately after the user aborted the previous one.
     s.aborting = true;
     try {
+      // Clear only inputs already handed to this Pi run. Relay retains their
+      // canonical history and marks the active input ledger aborted/settled;
+      // future inputs waiting in Relay's own chain are not touched. Otherwise
+      // Pi can retain a follow-up after the UI has announced this turn aborted.
+      const cleared = await s.proc.request<{ steering?: string[]; followUp?: string[] }>('clear_queue');
+      logger.debug({ sessionId, steering: cleared?.steering?.length ?? 0, followUp: cleared?.followUp?.length ?? 0 }, 'cleared Pi queue before explicit abort');
+      // Release dialogs only after clearing the queue, so resolving the last
+      // tool cannot begin a queued continuation in the cancellation window.
+      // Relay has already captured the visible card and retains abort history.
+      for (const questionId of s.pendingQuestions.keys()) {
+        s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, cancelled: true });
+      }
+      s.pendingQuestions.clear();
+      for (const permissionId of s.pendingPerms.keys()) {
+        s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: false });
+      }
+      s.pendingPerms.clear();
       // Pi resolves this RPC only after AgentSession.abort() has cancelled the
       // active tool process group and waitForIdle() has completed. Relay-client
       // must not announce `idle` before that acknowledgement arrives.
@@ -1715,11 +1714,10 @@ export class PiAdapter extends AgentAdapter {
 
       const pendingAcceptance = s.promptAcceptanceAbort;
       if (pendingAcceptance) {
-        // AgentSession.abort() does not call abortCompaction(), and Pi RPC does
-        // not expose a separate compaction cancellation command. Leaving this
-        // request alive would let the supposedly-aborted prompt start after a
-        // long preflight compaction. Retire the local waiter first, then stop the
-        // child; the next input lazy-resumes the intact on-disk transcript.
+        // Retire any still-unacknowledged preflight command as well as the
+        // active run. Pi 0.87 cancels compaction on abort, but an unresolved
+        // prompt command must never execute after Relay announces cancellation.
+        // The next input lazy-resumes the intact on-disk transcript.
         pendingAcceptance.abort();
         this.compactingSessions.delete(sessionId);
         s.proc.kill();
@@ -1827,7 +1825,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
-    const [provider, modelId] = model.includes('/') ? model.split('/') : [this.getDefaultModel().split('/')[0], model];
+    const [provider, modelId] = this.resolveModelId(model);
     const thinking = effortToThinking(reasoningEffort);
     let s = this.sessions.get(sessionId);
 
