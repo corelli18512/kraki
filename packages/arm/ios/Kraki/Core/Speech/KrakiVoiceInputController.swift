@@ -301,6 +301,17 @@ final class KrakiVoiceInputController {
         default:
             return
         }
+        let currentRecording = UUID()
+        recordingGeneration = currentRecording
+        leaseRolloverAttempt = 0
+        resetPresentation()
+        // Attribute even synchronous preflight failures to the initiating
+        // conversation, before any fallible capability/transport checks.
+        activeSessionID = sessionID
+        self.context = context
+        recordingStartedHandler = onRecordingStarted
+        finalHandler = onFinal
+
         guard let host, host.voiceCapability != nil else {
             failRecording(VoiceInputError.unavailable, closeTransport: false)
             return
@@ -309,15 +320,6 @@ final class KrakiVoiceInputController {
             failRecording(VoiceInputError.offline, closeTransport: false)
             return
         }
-
-        let currentRecording = UUID()
-        recordingGeneration = currentRecording
-        leaseRolloverAttempt = 0
-        resetPresentation()
-        activeSessionID = sessionID
-        self.context = context
-        recordingStartedHandler = onRecordingStarted
-        finalHandler = onFinal
 
         switch audioPolicy.permission {
         case .granted:

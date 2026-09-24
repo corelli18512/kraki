@@ -262,6 +262,24 @@ final class KrakiVoiceInputTests: XCTestCase {
         }
     }
 
+    func testSynchronousPreflightFailureBelongsToInitiatingConversation() async {
+        for unavailable in [false, true] {
+            let host = FakeVoiceHost()
+            if unavailable { host.voiceCapability = nil }
+            else { host.voiceTransportReady = false }
+            let factory = FakeVoiceFactory()
+            let audio = FakeVoiceAudioPolicy()
+            let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: audio)
+            for id in ["session-1", "session-2"] {
+                await controller.begin(sessionID: id, context: context()) { _ in XCTFail("No speech") }
+                XCTAssertTrue(controller.hasFailure(for: id))
+                XCTAssertFalse(controller.hasFailure(for: id == "session-1" ? "session-2" : "session-1"))
+            }
+            XCTAssertEqual(audio.activationCount, 0)
+            XCTAssertTrue(factory.sessions.isEmpty)
+        }
+    }
+
     func testFailureOwnershipResetsForNextConversation() async {
         let fixture = await departureFixture { _ in }
         fixture.controller.finishForSessionDeparture("session-1")
