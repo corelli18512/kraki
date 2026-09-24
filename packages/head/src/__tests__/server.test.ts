@@ -1,9 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { generateKeyPairSync, createSign } from 'crypto';
-import { decodeFrame } from '@coinfra/pulse';
+import { decodeFrame, Endpoint } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { HeadServer } from '../server.js';
 import { Storage } from '../storage.js';
@@ -152,6 +152,23 @@ async function authConnect(
   };
   ws.send(JSON.stringify(authMsg));
   const authOk = await waitForMessage(ws);
+  if (role === 'app' && authOk.type === 'auth_ok') {
+    // Real Apps start Pulse immediately after auth_ok. Server tests that use a
+    // bare WebSocket still need this HELLO to resolve the App process fence
+    // before asserting head-originated Pulse controls.
+    const endpoint = new Endpoint({
+      epoch: `server-test-app:${String(authOk.deviceId)}:${Math.random()}`,
+      random: () => 0.5,
+    });
+    for (const effect of endpoint.onConnected(Date.now())) {
+      if (effect.t !== 'transmit') continue;
+      ws.send(JSON.stringify({
+        type: 'unicast',
+        to: '',
+        pulse: Buffer.from(effect.bytes).toString('base64'),
+      }));
+    }
+  }
   return { ws, authOk };
 }
 
@@ -177,6 +194,28 @@ describe('HeadServer (thin relay)', () => {
       expect(authOk.user).toEqual({ id: 'local', login: 'local', provider: 'open' });
       expect(authOk.devices).toHaveLength(1);
       expect(authOk.devices[0].name).toBe('Laptop');
+    });
+
+    it('arms the previous-process non-durable fence for Apps but not Tentacles', async () => {
+      head = await createHead();
+      const pulseHub = (head.server as unknown as {
+        pulseHub: { onDeviceConnected: (deviceId: string, options?: unknown) => void };
+      }).pulseHub;
+      const connected = vi.spyOn(pulseHub, 'onDeviceConnected');
+
+      const app = await authConnect(head.port, 'Phone', 'app');
+      expect(connected).toHaveBeenCalledWith(app.authOk.deviceId, {
+        discardPreviousProcessNonDurable: true,
+      });
+
+      connected.mockClear();
+      const tentacle = await authConnect(head.port, 'Laptop', 'tentacle');
+      expect(connected).toHaveBeenCalledWith(tentacle.authOk.deviceId, {
+        discardPreviousProcessNonDurable: false,
+      });
+
+      app.ws.close();
+      tentacle.ws.close();
     });
 
     it('sends auth_ok before the initial Pulse hello', async () => {
@@ -663,11 +702,17 @@ describe('HeadServer (thin relay)', () => {
       // would linger in `clients` holding its ClientState until TCP gave up.
       head = await createHead();
       const { ws: first, authOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev_dup' });
+      const deviceId = authOk.deviceId as string;
       const closed = new Promise<void>((resolve) => first.on('close', () => resolve()));
+      const pulseHub = (head.server as unknown as {
+        pulseHub: { onDeviceDisconnected: (id: string) => void };
+      }).pulseHub;
+      const disconnected = vi.spyOn(pulseHub, 'onDeviceDisconnected');
 
-      await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: authOk.deviceId as string });
+      await authConnect(head.port, 'Laptop', 'tentacle', { deviceId });
       await closed; // the first socket must be terminated by the server
 
+      expect(disconnected).toHaveBeenCalledWith(deviceId);
       const clients = (head.server as unknown as { clients: Map<unknown, unknown> }).clients;
       expect(clients.size).toBe(1);
     });

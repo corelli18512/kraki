@@ -6,7 +6,7 @@
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
-import { decodeFrame } from '@coinfra/pulse';
+import { decodeFrame, Endpoint } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';
@@ -131,6 +131,23 @@ export async function connectDevice(
   ws.send(JSON.stringify(authMsg));
 
   const authOk = await waitFor('auth_ok');
+  if (role === 'app') {
+    // Production Apps resolve the process-generation fence immediately after
+    // auth_ok. Keep this bare-WebSocket helper faithful so head-originated
+    // Pulse controls are not intentionally held behind a missing HELLO.
+    const endpoint = new Endpoint({
+      epoch: `head-test-app:${String(authOk.deviceId)}:${Math.random()}`,
+      random: () => 0.5,
+    });
+    for (const effect of endpoint.onConnected(Date.now())) {
+      if (effect.t !== 'transmit') continue;
+      ws.send(JSON.stringify({
+        type: 'unicast',
+        to: '',
+        pulse: Buffer.from(effect.bytes).toString('base64'),
+      }));
+    }
+  }
 
   function waitFor(type: string, timeout = 5000): Promise<Record<string, unknown>> {
     for (let i = 0; i < messages.length; i++) {

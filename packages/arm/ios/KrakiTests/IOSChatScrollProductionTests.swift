@@ -12,6 +12,8 @@ final class IOSChatScrollProductionTests: XCTestCase {
         windows.forEach { $0.isHidden = true; $0.rootViewController = nil }
         windows.removeAll()
         appStates.removeAll()
+        // Let UIKit release detached controllers before unlinking their DBs.
+        drainMainRunLoop(milliseconds: 100)
         temporaryRoots.forEach { try? FileManager.default.removeItem(at: $0) }
         temporaryRoots.removeAll()
         try await super.tearDown()
@@ -217,6 +219,80 @@ final class IOSChatScrollProductionTests: XCTestCase {
         let topAfterNextGesture = fixture.appState.messageStore
             .windowState(fixture.sessionId)?.topSeq ?? 0
         XCTAssertLessThan(topAfterNextGesture, topAfterSameGesture)
+    }
+
+    func testPendingApplyWaitsForOppositeEdgeMeasurementWithoutRecursing() throws {
+        let fixture = try makeFixture(totalMessages: 80, bodyRepeats: 1)
+        drainMainRunLoop(milliseconds: 700)
+
+        for olderActive in [false, true] {
+            let result = fixture.viewController.automationProbeCrossEdgeMeasurementBarrier(olderActive: olderActive)
+            XCTAssertTrue(result.waitedForActiveEdge,
+                          "a pending apply must wait for either in-flight edge without measuring a warm opposite buffer")
+            XCTAssertTrue(result.appliedExactlyOnce,
+                          "the pending apply must run once after the owning barrier completes")
+        }
+    }
+
+    func testWarmBufferedPageSettlesOnReappearanceWithoutMeasurement() throws {
+        for pending in [false, true] {
+            let fixture = try makeFixture(totalMessages: 20, bodyRepeats: 1)
+            drainMainRunLoop(milliseconds: 500)
+            let expectedCount = fixture.collectionView.numberOfItems(inSection: 0)
+            fixture.viewController.automationStageWarmBufferedOlderPage(pending: pending)
+            XCTAssertEqual(fixture.collectionView.numberOfItems(inSection: 0), expectedCount - 1)
+            fixture.window.rootViewController = nil
+            drainMainRunLoop(milliseconds: 100)
+            fixture.window.rootViewController = fixture.viewController
+            drainMainRunLoop(milliseconds: 500)
+            XCTAssertEqual(fixture.collectionView.numberOfItems(inSection: 0), expectedCount)
+            XCTAssertFalse(fixture.viewController.automationPaginationState.deferred)
+            XCTAssertFalse(fixture.viewController.automationPaginationState.measuring)
+        }
+    }
+
+    func testOlderFetchCompletingWhileHiddenResumesWithoutOrphanedMeasurement() throws {
+        let fixture = try makeFixture(totalMessages: 240, bodyRepeats: 1)
+        let vc = fixture.viewController
+        let list = fixture.collectionView
+        drainMainRunLoop(milliseconds: 500)
+        list.setContentOffset(CGPoint(x: 0, y: -list.adjustedContentInset.top), animated: false)
+        vc.automationMarkUserScrolledAway()
+        vc.scrollViewDidScroll(list)
+        // The real async DB fetch is queued; hide before its completion runs.
+        fixture.window.rootViewController = nil
+        drainMainRunLoop(milliseconds: 800)
+        XCTAssertLessThan(fixture.appState.messageStore.windowState(fixture.sessionId)?.topSeq ?? 0,
+                          fixture.entryRawTopSeq, "the DB completion must have landed while hidden")
+        XCTAssertFalse(vc.automationPaginationState.measuring,
+                       "a rejected hidden measurement must not own a completion barrier")
+        XCTAssertEqual(vc.automationPaginationState.jobs, 0)
+        fixture.window.rootViewController = vc
+        vc.view.frame = fixture.window.bounds
+        drainMainRunLoop(milliseconds: 1_200)
+        XCTAssertFalse(vc.automationPaginationState.measuring)
+        XCTAssertFalse(vc.automationPaginationState.deferred)
+        XCTAssertTrue(snapshot(list).visibleCellsMaterialized)
+    }
+
+    func testZeroWidthBufferedPageWaitsForLayoutWithoutRecursiveCompletion() throws {
+        let fixture = try makeFixture(totalMessages: 20, bodyRepeats: 1)
+        drainMainRunLoop(milliseconds: 300)
+        let list = fixture.collectionView
+        let vc = fixture.viewController
+        let expected = list.numberOfItems(inSection: 0)
+        vc.automationStageWarmBufferedOlderPage(pending: true)
+        let oldBounds = list.bounds
+        list.bounds.size.width = 0
+        vc.scrollViewDidEndDecelerating(list)
+        XCTAssertEqual(list.numberOfItems(inSection: 0), expected - 1)
+        XCTAssertFalse(vc.automationPaginationState.measuring)
+        list.bounds = oldBounds
+        vc.view.setNeedsLayout()
+        vc.view.layoutIfNeeded()
+        drainMainRunLoop(milliseconds: 500)
+        XCTAssertEqual(list.numberOfItems(inSection: 0), expected)
+        XCTAssertFalse(vc.automationPaginationState.deferred)
     }
 
     func testProductionScrollGate() throws {

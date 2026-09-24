@@ -1,4 +1,5 @@
 import XCTest
+import Pulse
 @testable import Kraki
 
 final class AnyCodableTests: XCTestCase {
@@ -368,6 +369,22 @@ final class ProtocolStructTests: XCTestCase {
     }
 }
 
+#if os(iOS)
+final class IOSSupportedDeviceFamilyTests: XCTestCase {
+    func testApplicationAndNotificationExtensionAreIPhoneOnly() throws {
+        XCTAssertEqual(Bundle.main.infoDictionary?["UIDeviceFamily"] as? [Int], [1])
+        XCTAssertNil(Bundle.main.infoDictionary?["UISupportedInterfaceOrientations~ipad"])
+        let plugins = try XCTUnwrap(Bundle.main.builtInPlugInsURL)
+        let extensionURL = plugins.appendingPathComponent("KrakiNotification.appex/Info.plist")
+        let data = try Data(contentsOf: extensionURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(plist["UIDeviceFamily"] as? [Int], [1])
+    }
+}
+#endif
+
 private final class PulseManagerTestHost: PulseHost {
     var frames: [(String, String?)] = []
     func sendPulseFrame(_ b64: String, target: String?) { frames.append((b64, target)) }
@@ -379,6 +396,58 @@ private final class PulseManagerTestHost: PulseHost {
 }
 
 final class PulseManagerConnectionScopeTests: XCTestCase {
+    func testIdentityResetRetiresAllOutboxEntriesAndMintsNewEpoch() {
+        let host = PulseManagerTestHost()
+        let manager = PulseManager(host: host)
+        manager.onConnected()
+        let oldHello = host.frames.first?.0
+        manager.sendEncrypted(blob: "synthetic", keys: [:], target: "old-target")
+        manager.sendEncrypted(blob: "scoped", keys: [:], target: "old-target", connectionScoped: true)
+        manager.resetForIdentityChange()
+        XCTAssertEqual(manager.liveOutboxSizeForTesting, 0)
+        XCTAssertEqual(manager.connectionScopedCountForTesting, 0)
+        host.frames.removeAll()
+        manager.onConnected()
+        XCTAssertNotEqual(host.frames.first?.0, oldHello)
+        let head = Endpoint(epoch: "new-head", streamId: 0)
+        for effect in head.onConnected(0) {
+            if case .transmit(let bytes) = effect {
+                manager.onFrame(Data(bytes).base64EncodedString())
+            }
+        }
+        let dataFrames = host.frames.filter { b64, _ in
+            guard let data = Data(base64Encoded: b64),
+                  let decoded = decodeFrameWithStream(Array(data)) else { return false }
+            if case .data = decoded.frame { return true }
+            return false
+        }
+        XCTAssertTrue(dataFrames.isEmpty, "next login must not resend an old identity's commands")
+        manager.onDisconnected()
+    }
+
+    @MainActor
+    func testLogoutResetsPulseAndRejectsLateDecryptionFromRetiredRouter() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let db = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: db)
+        let manager = try XCTUnwrap(app.pulseManager)
+        let oldRouter = try XCTUnwrap(app.messageRouter)
+        manager.sendEncrypted(blob: "synthetic", keys: [:], target: "old-target")
+        XCTAssertEqual(manager.liveOutboxSizeForTesting, 1)
+        app.logout()
+        XCTAssertEqual(manager.liveOutboxSizeForTesting, 0)
+        XCTAssertFalse(oldRouter === app.messageRouter)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "type": "session_list", "deviceId": "test-tentacle",
+            "payload": ["sessions": [["id": "test-session", "agent": "pi", "lastSeq": 0]]],
+        ])
+        oldRouter.handleDataMessage(data)
+        XCTAssertTrue(app.sessionStore.sessions.isEmpty)
+        app.messageRouter?.handleDataMessage(data)
+        XCTAssertNotNil(app.sessionStore.sessions["test-session"], "the new identity router remains usable")
+    }
+
     func testDisconnectPurgesOnlyConnectionScopedCommands() {
         let host = PulseManagerTestHost()
         let manager = PulseManager(host: host)
