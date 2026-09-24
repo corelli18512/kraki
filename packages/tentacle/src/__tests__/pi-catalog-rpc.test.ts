@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { queryPiCatalog, PiAdapter } from '../adapters/pi.js';
 
 const tempDirs: string[] = [];
+let agentDir: string;
+beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), 'kraki-pi-settings-'));
+  tempDirs.push(agentDir);
+  vi.stubEnv('PI_CODING_AGENT_DIR', agentDir);
+});
 
 function fakePi(source: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-catalog-'));
@@ -16,6 +22,7 @@ function fakePi(source: string): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,6 +109,53 @@ describe('queryPiCatalog — throwaway RPC lifecycle', () => {
 
     const second = await adapter.listModelDetails();
     expect(second[0]?.supportedReasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('scopes both capability lists, rereads settings over a cached catalog, and chooses a scoped default', async () => {
+    const catalog = [
+      { provider: 'proxy', id: 'gpt-6-sol' },
+      { provider: 'openai-codex', id: 'gpt-6-astra' },
+      { provider: 'openai-codex', id: 'gpt-6-sol' },
+      { provider: 'deepseek', id: 'deepseek-flash' },
+      { provider: 'deepseek', id: 'deepseek-v4-pro' },
+    ];
+    const cli = fakePi(`
+      const models = ${JSON.stringify(catalog)};
+      if (process.argv.includes('--list-models')) {
+        const row = cols => cols.map(c => c.padEnd(24)).join('');
+        console.log(row(['provider', 'model', 'context', 'max-out', 'thinking', 'images']));
+        for (const m of models) console.log(row([m.provider, m.id, '200K', '32K', 'yes', 'no']));
+      } else {
+        process.stdin.once('data', chunk => {
+          const c = JSON.parse(String(chunk));
+          console.log(JSON.stringify({ id: c.id, type: 'response', command: c.type, success: true, data: { models } }));
+        });
+      }
+    `);
+    const settings = join(agentDir, 'settings.json');
+    const scope = ['openai-codex/gpt-6-astra', 'openai-codex/gpt-6-sol', 'deepseek/deepseek-flash'];
+    writeFileSync(settings, JSON.stringify({ enabledModels: scope }));
+    const adapter = new PiAdapter({ cliPath: cli });
+    const defaultModel = () => (adapter as unknown as { getDefaultModel(): string }).getDefaultModel();
+    expect(await adapter.listModels()).toEqual(scope);
+    expect((await adapter.listModelDetails()).map(m => m.id)).toEqual(scope);
+    expect(defaultModel()).toBe(scope[0]);
+
+    writeFileSync(settings, JSON.stringify({ enabledModels: [scope[2]] }));
+    expect(await adapter.listModels()).toEqual([scope[2]]);
+    expect((await adapter.listModelDetails()).map(m => m.id)).toEqual([scope[2]]);
+    expect(defaultModel()).toBe(scope[2]);
+    writeFileSync(settings, '{');
+    expect(await adapter.listModels()).toEqual([scope[2]]); // retain last valid preference
+
+    writeFileSync(settings, JSON.stringify({ enabledModels: ['missing/*'] }));
+    expect(await adapter.listModels()).toEqual([]);
+    expect(defaultModel).toThrow('No Pi models match');
+    writeFileSync(settings, '{}');
+    expect(await adapter.listModels()).toHaveLength(5);
+    expect(defaultModel()).toBe('deepseek/deepseek-v4-pro'); // legacy unscoped default
+    writeFileSync(settings, '{');
+    expect(await new PiAdapter({ cliPath: cli }).listModels()).toEqual([]);
   });
 
   it('times out and terminates a non-responsive child', async () => {
