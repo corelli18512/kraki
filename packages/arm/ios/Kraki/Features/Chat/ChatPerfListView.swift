@@ -601,6 +601,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Reading line for navigation landings: status bar (≈62) + chat header
     /// (54) + the same 8pt gap used above the first message.
     private static let latestMessageTopPadding: CGFloat = 124
+    /// Round navigation controls: iOS minimum comfortable tap target.
+    private static let jumpControlSize: CGFloat = 44
+    private let unseenBadge = UILabel()
     /// The chat header (back / title / more) is part of the page, drawn by
     /// SessionDetailView over the top glass band, not a system navigation
     /// bar; reserve its height plus breathing room under it.
@@ -1131,12 +1134,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     private func setupJumpButton() {
         let tint = agentTint()
-        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.isUserInteractionEnabled = false
-        blur.layer.cornerRadius = 15
+        blur.layer.cornerRadius = Self.jumpControlSize / 2
         blur.layer.masksToBounds = true
         blur.layer.borderWidth = 0.5
         blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
@@ -1148,8 +1151,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // button's internal image view during layout; when the blur is a
         // button subview it can end up covering an otherwise valid symbol.
         jumpButton.setImage(
-            UIImage(systemName: "chevron.down", withConfiguration: symbolConfiguration)
-                ?? UIImage(systemName: "arrow.down", withConfiguration: symbolConfiguration),
+            // Double chevron: "all the way to the newest", distinct from the
+            // single-step ↑ control above it.
+            UIImage(systemName: "chevron.down.2", withConfiguration: symbolConfiguration)
+                ?? UIImage(systemName: "chevron.down", withConfiguration: symbolConfiguration),
             for: .normal
         )
         jumpButton.tintColor = tint
@@ -1173,8 +1178,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         NSLayoutConstraint.activate([
             jumpButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             bottom,
-            jumpButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 52),
-            jumpButton.heightAnchor.constraint(equalToConstant: 30),
+            jumpButton.widthAnchor.constraint(equalToConstant: Self.jumpControlSize),
+            jumpButton.heightAnchor.constraint(equalToConstant: Self.jumpControlSize),
             blur.leadingAnchor.constraint(equalTo: jumpButton.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
             blur.topAnchor.constraint(equalTo: jumpButton.topAnchor),
@@ -1184,7 +1189,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let startBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
         startBlur.translatesAutoresizingMaskIntoConstraints = false
         startBlur.isUserInteractionEnabled = false
-        startBlur.layer.cornerRadius = 15
+        startBlur.layer.cornerRadius = Self.jumpControlSize / 2
         startBlur.layer.masksToBounds = true
         startBlur.layer.borderWidth = 0.5
         startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
@@ -1210,10 +1215,28 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         view.addSubview(latestMessageStartButton)
         latestMessageStartButtonBlur = startBlur
 
+        // Unseen-reply count: a corner badge on the round ↓ control.
+        unseenBadge.translatesAutoresizingMaskIntoConstraints = false
+        unseenBadge.font = .systemFont(ofSize: 11, weight: .bold)
+        unseenBadge.textColor = .white
+        unseenBadge.textAlignment = .center
+        unseenBadge.backgroundColor = tint
+        unseenBadge.layer.cornerRadius = 9
+        unseenBadge.layer.masksToBounds = true
+        unseenBadge.isHidden = true
+        unseenBadge.isAccessibilityElement = false
+        jumpButton.addSubview(unseenBadge)
+        NSLayoutConstraint.activate([
+            unseenBadge.heightAnchor.constraint(equalToConstant: 18),
+            unseenBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
+            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -5),
+            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 5),
+        ])
+
         NSLayoutConstraint.activate([
             latestMessageStartButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
             latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.topAnchor, constant: -8),
-            latestMessageStartButton.widthAnchor.constraint(equalToConstant: 52),
+            latestMessageStartButton.widthAnchor.constraint(equalToConstant: Self.jumpControlSize),
             latestMessageStartButton.heightAnchor.constraint(equalTo: jumpButton.heightAnchor),
             startBlur.leadingAnchor.constraint(equalTo: latestMessageStartButton.leadingAnchor),
             startBlur.trailingAnchor.constraint(equalTo: latestMessageStartButton.trailingAnchor),
@@ -1297,16 +1320,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private func refreshJumpButtonTitle() {
         if unseenArrivals > 0 {
             let title = unseenArrivals > 99 ? "99+" : "\(unseenArrivals)"
-            // Padding lives in the title (UIButton.contentEdgeInsets is
-            // deprecated); the rail keeps a 52pt minimum width.
-            jumpButton.setTitle("  " + title + "   ", for: .normal)
-            jumpButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            unseenBadge.text = title.count > 1 ? " \(title) " : title
+            unseenBadge.isHidden = false
             jumpButton.accessibilityValue = "\(unseenArrivals) new"
         } else {
-            jumpButton.setTitle(nil, for: .normal)
+            unseenBadge.isHidden = true
             jumpButton.accessibilityValue = nil
         }
-        view.layoutIfNeeded()
     }
 
     private func updateJumpButtonVisibility() {
@@ -1486,6 +1506,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
          jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true)
     }
     var automationUnseenArrivals: Int { unseenArrivals }
+    var automationJumpControlSizes: (up: CGSize, down: CGSize) {
+        view.layoutIfNeeded()
+        return (latestMessageStartButton.bounds.size, jumpButton.bounds.size)
+    }
+    var automationUnseenBadge: String? { unseenBadge.isHidden ? nil : unseenBadge.text?.trimmingCharacters(in: .whitespaces) }
     #endif
 
     /// Re-anchor at the chat's true newest end, then pin the viewport to the

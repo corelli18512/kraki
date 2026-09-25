@@ -471,6 +471,21 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(editorPixels, 0, "plain text retained the neutral code editor surface")
     }
 
+    /// Steps "···" rides the AI bubble's top-leading edge.
+    func testStepsButtonSitsAtBubbleTopLeft() throws {
+        let bubble = content("agent_message", seq: 498, body: "一段比较长的回复，用来撑开气泡宽度，确认按钮位置。", steps: 3)
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: 390,
+                                               height: bubble.cellHeight(cellWidth: 390)))
+        cell.configure(bubble, cellWidth: 390)
+        cell.layoutIfNeeded()
+        let button = try XCTUnwrap(descendants(of: cell.contentView, as: UIButton.self)
+            .first { $0.accessibilityLabel == "Show steps" })
+        XCTAssertFalse(button.isHidden)
+        XCTAssertLessThan(button.frame.minX, 40, "steps button is at the leading edge")
+        XCTAssertLessThan(button.frame.midX, 390 / 2)
+        XCTAssertLessThanOrEqual(button.frame.minY, 0, "rides the bubble's top edge")
+    }
+
     func testPlainBubbleTextViewCannotEnterEditorFocusState() {
         let bubble = content("agent_message", seq: 499, body: "hi")
         let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: 390,
