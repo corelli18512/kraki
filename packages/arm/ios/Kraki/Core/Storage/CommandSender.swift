@@ -42,10 +42,33 @@ final class CommandSender {
     /// disappears on the next render.
     private(set) var outbox: [String: [String: ChatMessage]] = [:]
 
+    /// Delivery state of an optimistic input, surfaced on its bubble.
+    enum PendingState: String {
+        /// Queued/sent, waiting for the Tentacle echo.
+        case sending
+        /// Not confirmed within the delivery window (while online), or restored
+        /// after the app was terminated before confirmation. Retry is safe:
+        /// Tentacle deduplicates inputs by clientId.
+        case failed
+    }
+
+    /// Wire payload of each optimistic input, kept for idempotent retry.
+    @ObservationIgnored private var outboundPayloads: [String: [String: Any]] = [:]
+    @ObservationIgnored private var nextLocalOrder = 1
+    @ObservationIgnored private var confirmationTasks: [String: Task<Void, Never>] = [:]
+    /// How long an input may stay unconfirmed while the transport and target
+    /// device are online before it is marked failed.
+    @ObservationIgnored var confirmationTimeout: Duration = .seconds(20)
+    /// Durable outbox (production only). Unconfirmed inputs survive process
+    /// death and come back as retryable instead of silently disappearing.
+    @ObservationIgnored private var outboxURL: URL?
+
     private weak var appState: AppState?
 
-    init(appState: AppState) {
+    init(appState: AppState, outboxURL: URL? = nil) {
         self.appState = appState
+        self.outboxURL = outboxURL
+        restoreOutbox()
     }
 
     // MARK: - Send Helpers
@@ -115,6 +138,9 @@ final class CommandSender {
             }
             pendingPayload["attachments"] = AnyCodable(encodedAttachments)
         }
+        pendingPayload["localState"] = AnyCodable(PendingState.sending.rawValue)
+        pendingPayload["localOrder"] = AnyCodable(nextLocalOrder)
+        nextLocalOrder += 1
         let pending = ChatMessage(
             type: "pending_input",
             seq: 0,
@@ -137,7 +163,84 @@ final class CommandSender {
         var bucket = outbox[sessionId] ?? [:]
         bucket[clientId] = pending
         outbox[sessionId] = bucket
+        outboundPayloads[clientId] = payload
+        armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
+        persistOutbox()
         return true
+    }
+
+    // MARK: - Delivery state
+
+    func pendingState(_ message: ChatMessage) -> PendingState {
+        message.payload["localState"]?.stringValue.flatMap(PendingState.init(rawValue:)) ?? .sending
+    }
+
+    private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState) {
+        guard var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
+        guard message.payload["localState"]?.stringValue != state.rawValue else { return }
+        message.payload["localState"] = AnyCodable(state.rawValue)
+        bucket[clientId] = message
+        outbox[sessionId] = bucket
+        persistOutbox()
+    }
+
+    /// Confirmation is the Tentacle echo. Time only counts while the Relay
+    /// connection and the target device are up: an offline device means the
+    /// input is legitimately queued ("will deliver when it reconnects").
+    private func armConfirmationTimeout(sessionId: String, clientId: String) {
+        confirmationTasks[clientId]?.cancel()
+        let timeout = confirmationTimeout
+        confirmationTasks[clientId] = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled, let self,
+                      self.outbox[sessionId]?[clientId] != nil else { return }
+                if self.isDeliveryPathUp(sessionId) {
+                    self.setPendingState(sessionId, clientId: clientId, .failed)
+                    self.confirmationTasks[clientId] = nil
+                    return
+                }
+            }
+        }
+    }
+
+    private func isDeliveryPathUp(_ sessionId: String) -> Bool {
+        guard let appState else { return false }
+        #if DEBUG
+        if appState.testOutboundMessageHandler != nil { return true }
+        #endif
+        guard appState.isFullyOnline,
+              let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId else { return false }
+        return appState.deviceStore.devices[deviceId]?.online == true
+    }
+
+    /// Resend an unconfirmed input with the SAME clientId (idempotent on the
+    /// Tentacle side). Returns false if it could not be handed to transport.
+    @discardableResult
+    func retryPending(sessionId: String, clientId: String) -> Bool {
+        guard let message = outbox[sessionId]?[clientId] else { return false }
+        var payload = outboundPayloads[clientId] ?? ["text": message.content ?? "", "clientId": clientId]
+        if payload["text"] == nil { payload["text"] = message.content ?? "" }
+        if outboundPayloads[clientId] == nil, message.payload["delivery"]?.stringValue == "steer" {
+            payload["delivery"] = "steer"
+        }
+        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+            setPendingState(sessionId, clientId: clientId, .failed)
+            return false
+        }
+        outboundPayloads[clientId] = payload
+        setPendingState(sessionId, clientId: clientId, .sending)
+        armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
+        return true
+    }
+
+    /// Remove an unconfirmed input. Returns its text so the caller can offer
+    /// it back for editing.
+    @discardableResult
+    func discardPending(sessionId: String, clientId: String) -> String? {
+        let text = outbox[sessionId]?[clientId]?.content
+        clearPending(sessionId, clientId: clientId)
+        return text
     }
 
     // MARK: - Outbox queries / mutators
@@ -147,7 +250,14 @@ final class CommandSender {
     /// render time.
     func pendingInputs(_ sessionId: String) -> [ChatMessage] {
         guard let bucket = outbox[sessionId], !bucket.isEmpty else { return [] }
-        return bucket.values.sorted { ($0.timestamp ?? "") < ($1.timestamp ?? "") }
+        // Send order is a local monotonic counter; millisecond timestamps
+        // alone tie for rapid sends and dictionary order is undefined.
+        return bucket.values.sorted {
+            let a = $0.payload["localOrder"]?.intValue ?? 0
+            let b = $1.payload["localOrder"]?.intValue ?? 0
+            if a != b { return a < b }
+            return ($0.timestamp ?? "") < ($1.timestamp ?? "")
+        }
     }
 
     /// Remove a single pending entry by clientId. Called by
@@ -163,12 +273,96 @@ final class CommandSender {
         } else {
             outbox[sessionId] = bucket
         }
+        confirmationTasks.removeValue(forKey: clientId)?.cancel()
+        outboundPayloads.removeValue(forKey: clientId)
+        persistOutbox()
     }
 
     /// Drop every pending entry for a session. Used on logout /
     /// session deletion / explicit cancel-all.
     func clearAllPending(_ sessionId: String) {
+        for clientId in (outbox[sessionId].map { Array($0.keys) } ?? []) {
+            confirmationTasks.removeValue(forKey: clientId)?.cancel()
+            outboundPayloads.removeValue(forKey: clientId)
+        }
         outbox.removeValue(forKey: sessionId)
+        persistOutbox()
+    }
+
+    // MARK: - Outbox persistence
+
+    private struct StoredPending: Codable {
+        let sessionId: String
+        let clientId: String
+        let timestamp: String?
+        let order: Int
+        let text: String
+        let delivery: String?
+        let attachments: [[String: String]]?
+    }
+
+    private func persistOutbox() {
+        guard let outboxURL else { return }
+        var stored: [StoredPending] = []
+        for (sessionId, bucket) in outbox {
+            for (clientId, message) in bucket {
+                let payload = outboundPayloads[clientId]
+                let attachments = payload?["attachments"] as? [[String: String]]
+                // Keep the durable file small: very large image payloads are
+                // retained in memory only.
+                let persistedAttachments = (attachments?.reduce(0) { $0 + ($1["data"]?.utf8.count ?? 0) } ?? 0) < 6_000_000
+                    ? attachments : nil
+                stored.append(StoredPending(
+                    sessionId: sessionId,
+                    clientId: clientId,
+                    timestamp: message.timestamp,
+                    order: message.payload["localOrder"]?.intValue ?? 0,
+                    text: message.content ?? "",
+                    delivery: message.payload["delivery"]?.stringValue,
+                    attachments: persistedAttachments
+                ))
+            }
+        }
+        let url = outboxURL
+        let data = try? JSONEncoder().encode(stored)
+        DispatchQueue.global(qos: .utility).async {
+            if stored.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else if let data {
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                         withIntermediateDirectories: true)
+                try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }
+        }
+    }
+
+    /// Unconfirmed inputs from a previous process return as `failed`: whether
+    /// they reached Tentacle is unknown, retry is idempotent, and ones that did
+    /// land are hidden as soon as the echoed message is in the loaded window.
+    private func restoreOutbox() {
+        guard let outboxURL,
+              let data = try? Data(contentsOf: outboxURL),
+              let stored = try? JSONDecoder().decode([StoredPending].self, from: data) else { return }
+        for item in stored {
+            var payload: [String: AnyCodable] = [
+                "content": AnyCodable(item.text),
+                "clientId": AnyCodable(item.clientId),
+                "localState": AnyCodable(PendingState.failed.rawValue),
+                "localOrder": AnyCodable(item.order),
+            ]
+            if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }
+            if let attachments = item.attachments { payload["attachments"] = AnyCodable(attachments) }
+            var bucket = outbox[item.sessionId] ?? [:]
+            bucket[item.clientId] = ChatMessage(
+                type: "pending_input", seq: 0, sessionId: item.sessionId, deviceId: nil,
+                timestamp: item.timestamp, payload: payload)
+            outbox[item.sessionId] = bucket
+            var wire: [String: Any] = ["text": item.text, "clientId": item.clientId]
+            if let delivery = item.delivery { wire["delivery"] = delivery }
+            if let attachments = item.attachments { wire["attachments"] = attachments }
+            outboundPayloads[item.clientId] = wire
+            nextLocalOrder = max(nextLocalOrder, item.order + 1)
+        }
     }
 
     // MARK: - Permissions
@@ -177,35 +371,76 @@ final class CommandSender {
     // tentacle's resolved event to refresh the corresponding live card.
     // Round-trip is ~100-300ms; future work could layer in optimistic UI via
     // the pending_input pattern (see the storage-refactor discussion).
-    func approve(sessionId: String, permissionId: String) {
-        send(["type": "approve", "payload": ["permissionId": permissionId]], sessionId: sessionId)
+    @discardableResult
+    func approve(sessionId: String, permissionId: String) -> Bool {
+        resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "approve") {
+            self.send(["type": "approve", "payload": ["permissionId": permissionId]], sessionId: sessionId)
+        }
     }
 
-    func deny(sessionId: String, permissionId: String, reason: String? = nil) {
+    @discardableResult
+    func deny(sessionId: String, permissionId: String, reason: String? = nil) -> Bool {
         var payload: [String: Any] = ["permissionId": permissionId]
         if let reason, !reason.isEmpty {
             payload["reason"] = reason
         }
-        send(["type": "deny", "payload": payload], sessionId: sessionId)
+        return resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "deny") {
+            self.send(["type": "deny", "payload": payload], sessionId: sessionId)
+        }
     }
 
-    func alwaysAllow(sessionId: String, permissionId: String, toolKind: String? = nil) {
+    @discardableResult
+    func alwaysAllow(sessionId: String, permissionId: String, toolKind: String? = nil) -> Bool {
         var payload: [String: Any] = ["permissionId": permissionId]
         if let toolKind { payload["toolKind"] = toolKind }
-        send(["type": "always_allow", "payload": payload], sessionId: sessionId)
+        return resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "always_allow") {
+            self.send(["type": "always_allow", "payload": payload], sessionId: sessionId)
+        }
+    }
+
+    /// Optimistic prompt resolution: show the answer/decision at once (the
+    /// bubble stays, its choices become read-only so a second tap cannot send
+    /// again), then either Tentacle's resolved card confirms it, or a transport
+    /// failure / missing confirmation reverts it with an explanation.
+    private func resolvePrompt(sessionId: String, promptId: String,
+                               answer: String? = nil, decision: String? = nil,
+                               transmit: () -> Bool) -> Bool {
+        guard let store = appState?.messageStore else { return transmit() }
+        store.applyLocalResolution(sessionId, promptId: promptId, answer: answer, decision: decision)
+        guard transmit() else {
+            store.revertLocalResolution(sessionId, promptId: promptId,
+                                        message: "Couldn't send. Try again.")
+            return false
+        }
+        let timeout = confirmationTimeout
+        Task { @MainActor [weak self] in
+            while true {
+                try? await Task.sleep(for: timeout)
+                guard let self, store.isLocalResolutionPending(sessionId, promptId: promptId) else { return }
+                if self.isDeliveryPathUp(sessionId) {
+                    store.revertLocalResolution(sessionId, promptId: promptId,
+                                                message: "Not confirmed by the agent. Try again.")
+                    return
+                }
+            }
+        }
+        return true
     }
 
     // MARK: - Questions
 
-    func answer(sessionId: String, questionId: String, answer: String, wasFreeform: Bool = false) {
-        send([
-            "type": "answer",
-            "payload": [
-                "questionId": questionId,
-                "answer": answer,
-                "wasFreeform": wasFreeform,
-            ] as [String: Any],
-        ], sessionId: sessionId)
+    @discardableResult
+    func answer(sessionId: String, questionId: String, answer: String, wasFreeform: Bool = false) -> Bool {
+        resolvePrompt(sessionId: sessionId, promptId: questionId, answer: answer) {
+            self.send([
+                "type": "answer",
+                "payload": [
+                    "questionId": questionId,
+                    "answer": answer,
+                    "wasFreeform": wasFreeform,
+                ] as [String: Any],
+            ], sessionId: sessionId)
+        }
     }
 
     // MARK: - Session Control
@@ -621,6 +856,10 @@ final class CommandSender {
         // real session into the store; we just need to retire the
         // placeholder entry and re-point navigation.
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            // The placeholder route removes its pending mark when the user
+            // backs out of "Starting session…". In that case the new Session
+            // only appears in the list; it must not pull the user back in.
+            let stillOnPlaceholder = appState.sessionStore.isPending(placeholderId)
             if placeholderId != sessionId {
                 appState.sessionStore.removePendingSession(placeholderId)
             } else {
@@ -633,7 +872,14 @@ final class CommandSender {
             // so it can scroll the newly-created row to the top without
             // changing ordinary Session selection behavior.
             appState.sessionStore.sessionListRevealId = sessionId
+            #if os(iOS)
+            if stillOnPlaceholder {
+                appState.sessionStore.navigationReplacesPlaceholder = true
+                appState.sessionStore.navigateToSession = sessionId
+            }
+            #else
             appState.sessionStore.navigateToSession = sessionId
+            #endif
         }
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
             // If we had a prompt, send it now
@@ -656,7 +902,11 @@ final class CommandSender {
     }
 
     func reset() {
+        confirmationTasks.values.forEach { $0.cancel() }
+        confirmationTasks.removeAll()
+        outboundPayloads.removeAll()
         outbox.removeAll()
+        persistOutbox()
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()

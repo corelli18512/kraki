@@ -16,6 +16,7 @@ struct SessionDetailView: View {
     let sessionId: String
 
     @State private var showInfoSheet = false
+    @State private var modePickerExpanded = HeaderModePicker.startsExpanded
     /// Tracks whether we've ever observed a live `SessionInfo` for
     /// this id. Used to distinguish the brand-new pending state
     /// (session never loaded yet) from a delete-after-load (session
@@ -34,11 +35,19 @@ struct SessionDetailView: View {
             if let session {
                 sessionContent(session)
             } else if sessionStore.isPending(sessionId) {
-                pendingView
+                pageWithHeader(title: "New Session", opensInfo: false) { pendingView }
             } else {
-                notFoundView
+                pageWithHeader(title: "", opensInfo: false) { notFoundView }
             }
         }
+        // The Session list hides the system navigation bar and draws its own
+        // header, so the chat does the same: its header is page content and
+        // slides with the page. A shared UINavigationBar that is shown here
+        // and hidden on the list animates its own background in and out
+        // DURING an interactive swipe-back (the chat's top brightened
+        // mid-gesture, and iOS 26's scroll-edge blur detached from the page).
+        .toolbar(.hidden, for: .navigationBar)
+        .enablesSwipeBack()
         // Hide the tab bar across all branches — pending placeholder,
         // not-found, and the live chat — so the optimistic landing
         // from "Create Session" doesn't briefly show the tab bar
@@ -114,42 +123,115 @@ struct SessionDetailView: View {
     // MARK: - Session Content
 
     private func sessionContent(_ session: SessionInfo) -> some View {
-        ChatView(sessionId: sessionId)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    toolbarTitle(session)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showInfoSheet = true
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .accessibilityLabel("More")
-                }
-            }
-            .sheet(isPresented: $showInfoSheet) {
-                SessionInfoSheet(session: session)
-                    .environment(appState)
-            }
+        // While the relay channel is broken we replace the session title with
+        // "Reconnecting…" so the user knows the chat is currently in a
+        // stale-read state. Wording matches the ambient indicator on the
+        // brand header.
+        let title = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
+        return pageWithHeader(title: title, opensInfo: true) {
+            ChatView(sessionId: sessionId)
+        }
+        .sheet(isPresented: $showInfoSheet) {
+            SessionInfoSheet(session: session)
+                .environment(appState)
+        }
     }
 
-    // MARK: - Toolbar Title
+    // MARK: - Header (page content, not a navigation bar)
 
-    private func toolbarTitle(_ session: SessionInfo) -> some View {
-        // While the relay channel is broken we replace the session
-        // title with "Reconnecting…" so the user knows the chat is
-        // currently in a stale-read state. Wording matches the
-        // ambient indicator on the brand header.
-        let displayTitle = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
+    private func pageWithHeader<Content: View>(
+        title: String,
+        opensInfo: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack(alignment: .top) {
+            content()
+            chatHeader(title: title, opensInfo: opensInfo)
+        }
+    }
 
-        return Text(displayTitle)
-            .font(.subheadline)
-            .fontWeight(.semibold)
+    /// Floating back button + a Liquid Glass title capsule that hugs its text,
+    /// centered in the remaining width. Tapping the title opens Session info;
+    /// there is no separate "more" button.
+    private func chatHeader(title: String, opensInfo: Bool) -> some View {
+        if opensInfo {
+            return AnyView(headerWithMode(title: title))
+        }
+        // Pending / not-found routes: back + title only.
+        return AnyView(HStack(spacing: 10) {
+            headerButton(systemName: "chevron.left", label: "Back") { dismiss() }
+            ZStack {
+                if !title.isEmpty {
+                    titleCapsule(title, opensInfo: false)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: ChatHeaderMetrics.height))
+    }
+
+    /// Back · title (centered in the space between back and mode) · mode
+    /// capsule, as on Mac. Expanding the mode picker replaces the title and
+    /// spreads the four modes across the full width right of the back button.
+    private func headerWithMode(title: String) -> some View {
+        HStack(spacing: 8) {
+            headerButton(systemName: "chevron.left", label: "Back") { dismiss() }
+            if !modePickerExpanded {
+                ZStack {
+                    if !title.isEmpty {
+                        titleCapsule(title, opensInfo: true)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
+            }
+            HeaderModePicker(sessionId: sessionId, expanded: $modePickerExpanded)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: ChatHeaderMetrics.height)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: modePickerExpanded)
+    }
+
+    @ViewBuilder
+    private func titleCapsule(_ title: String, opensInfo: Bool) -> some View {
+        let label = Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.primary)
             .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(.easeInOut(duration: 0.2), value: appState.isReconnecting)
+            .truncationMode(.tail)
+            .padding(.horizontal, 16)
+            .frame(height: ChatHeaderMetrics.buttonSize)
+            .contentShape(Capsule())
+        let button = Button { if opensInfo { showInfoSheet = true } } label: { label }
+            .buttonStyle(.plain)
+            .disabled(!opensInfo)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityHint(opensInfo ? "Shows session info" : "")
+            .animation(.easeInOut(duration: 0.2), value: title)
+        if #available(iOS 26.0, *) {
+            button.glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            button.background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    private func headerButton(systemName: String, label: String, action: @escaping () -> Void) -> some View {
+        let button = Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: ChatHeaderMetrics.buttonSize, height: ChatHeaderMetrics.buttonSize)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        if #available(iOS 26.0, *) {
+            button.glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            button.background(.ultraThinMaterial, in: Circle())
+        }
     }
 
     // MARK: - Pending placeholder
@@ -188,7 +270,6 @@ struct SessionDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Not Found
@@ -209,6 +290,133 @@ struct SessionDetailView: View {
         guard scenePhase == .active, session != nil else { return }
         appState.markSessionReadIfVisible(sessionId)
     }
+}
+
+/// Session mode control in the chat header (mirrors the Mac chat header).
+/// Collapsed: a glass capsule showing the current mode. Expanded: the same
+/// native tinted segmented control as the Session info sheet (drag or tap
+/// the thumb; it slides and recolors) spanning the width right of back.
+/// It closes only after 3s without any interaction; touching it pauses the
+/// countdown and every change restarts it.
+struct HeaderModePicker: View {
+    /// Debug-only: keep the picker expanded (for screenshots).
+    static var startsExpanded: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KRAKI_HEADER_MODE_EXPANDED"] == "1"
+        #else
+        false
+        #endif
+    }
+    static let idleCollapse: Duration = .seconds(3)
+    private static let modes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+
+    let sessionId: String
+    @Binding var expanded: Bool
+    @Environment(AppState.self) private var appState
+    /// Reference-typed so UIKit control callbacks (which capture a copy of
+    /// this view) always reach the one live countdown.
+    @State private var idle = IdleCountdown()
+
+    private var current: SessionMode { appState.sessionStore.sessionModes[sessionId] ?? .discuss }
+
+    var body: some View {
+        if expanded {
+            TintedSegmentedControl(
+                items: Self.modes.map { $0.rawValue.capitalized },
+                selection: Binding(
+                    get: { Self.modes.firstIndex(of: current) ?? 1 },
+                    set: { index in
+                        let mode = Self.modes[index]
+                        guard mode != current else { return }
+                        appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
+                    }
+                ),
+                tintColor: UIColor(Color.modeColor(current)),
+                onInteraction: { [idle, expanded = $expanded] touching in
+                    if touching {
+                        idle.cancel()
+                    } else {
+                        idle.restart(after: Self.idleCollapse) { expanded.wrappedValue = false }
+                    }
+                },
+                transparentTrack: true
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .padding(.horizontal, 5)
+            .frame(height: ChatHeaderMetrics.buttonSize)
+            // Same glass as the other header controls so scrolled content
+            // never shows through the segment labels.
+            .modifier(GlassCapsule())
+            .animation(.easeInOut(duration: 0.3), value: current)
+            .onAppear { scheduleCollapse() }
+            .onDisappear { idle.cancel() }
+            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+            .accessibilityIdentifier("chat.mode.picker")
+        } else {
+            Button {
+                expanded = true
+            } label: {
+                HStack(spacing: 6) {
+                    Circle().fill(Color.modeColor(current)).frame(width: 7, height: 7)
+                    Text(current.rawValue.capitalized)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: ChatHeaderMetrics.buttonSize)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .modifier(GlassCapsule())
+            .accessibilityLabel("Session mode, \(current.rawValue.capitalized)")
+            .accessibilityHint("Shows the session modes")
+            .accessibilityIdentifier("chat.mode.collapsed")
+            .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
+        }
+    }
+
+    private func scheduleCollapse() {
+        let expanded = $expanded
+        idle.restart(after: Self.idleCollapse) { expanded.wrappedValue = false }
+    }
+}
+
+/// A single restartable countdown.
+@MainActor
+final class IdleCountdown {
+    private var task: Task<Void, Never>?
+
+    func restart(after delay: Duration, _ fire: @escaping @MainActor () -> Void) {
+        guard !HeaderModePicker.startsExpanded else { return }
+        task?.cancel()
+        task = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            fire()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+}
+
+private struct GlassCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            content.background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+}
+
+enum ChatHeaderMetrics {
+    static let height: CGFloat = 54
+    static let buttonSize: CGFloat = 44
 }
 
 #endif

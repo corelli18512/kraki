@@ -51,7 +51,24 @@ final class ChatViewModel {
 
     /// Synthesised optimistic pending-input messages from the outbox.
     var pendingMessages: [ChatMessage] {
-        appState?.commandSender?.pendingInputs(sessionId) ?? []
+        let pending = appState?.commandSender?.pendingInputs(sessionId) ?? []
+        guard !pending.isEmpty else { return [] }
+        // A retried or restored input whose echo already landed (Tentacle
+        // deduplicates by clientId and may not re-echo) must not render twice.
+        let landed = Set(cachedMessages.compactMap { $0.payload["clientId"]?.stringValue })
+        guard !landed.isEmpty else { return pending }
+        return pending.filter { message in
+            guard let clientId = message.payload["clientId"]?.stringValue else { return true }
+            return !landed.contains(clientId)
+        }
+    }
+
+    /// Identity + delivery state of every optimistic input. Read by the view
+    /// so outbox changes (new send, failed, retried) always re-render.
+    var pendingSignature: String {
+        (appState?.commandSender?.pendingInputs(sessionId) ?? [])
+            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")" }
+            .joined(separator: ",")
     }
 
     /// Confirmed spine bubbles plus optimistic pending input.

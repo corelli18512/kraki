@@ -886,6 +886,11 @@ final class MessageStore {
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()
         card.text = reset ? content : card.text + content
+        if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
+            // Narration resumed: the retained resolved prompt is now superseded,
+            // exactly as Tentacle intended when it cleared the slot.
+            card.action = nil
+        }
         cards[sessionId] = card
     }
 
@@ -893,8 +898,88 @@ final class MessageStore {
     func setCardAction(_ sessionId: String, _ action: ChatMessage?) {
         guard !closedCardTurns.contains(sessionId) else { return }
         var card = cards[sessionId] ?? SessionCard()
+        if action == nil, let current = card.action, Self.isResolvedPrompt(current) {
+            // Tentacle retires a resolved prompt the instant narration resumes
+            // and sends the empty slot just BEFORE the first delta (which is
+            // usually a reset that replaces the pre-question narration).
+            // Applying it on its own either deletes the whole live bubble (no
+            // draft) or strips the question and briefly exposes only the
+            // previous segment's narration. Keep the answered prompt until the
+            // replacing narration arrives; a tool action or the turn end also
+            // supersedes it.
+            var retained = current
+            retained.payload["retained"] = AnyCodable(true)
+            // Tentacle only retires a prompt it has resolved, so the clear is
+            // itself confirmation. (Its resolved-state card_action may have been
+            // coalesced away in transit; without this a delivered answer would
+            // later be reverted as "not confirmed".)
+            retained.payload.removeValue(forKey: "localPending")
+            card.action = retained
+            cards[sessionId] = card
+            return
+        }
+        if let current = card.action, current.payload["localPending"]?.boolValue == true,
+           let action, Self.promptID(action) == Self.promptID(current), !Self.isResolvedPrompt(action) {
+            // A snapshot that predates our submitted answer must not flip the
+            // bubble back to unanswered while confirmation is in flight.
+            return
+        }
         card.action = action
         cards[sessionId] = card
+    }
+
+    // MARK: Optimistic prompt resolution
+
+    static func promptID(_ action: ChatMessage) -> String? {
+        switch action.type {
+        case "question": return action.questionId
+        case "permission": return action.permissionId
+        default: return nil
+        }
+    }
+
+    static func isResolvedPrompt(_ action: ChatMessage) -> Bool {
+        switch action.type {
+        case "question": return action.answer != nil || action.cancelled
+        case "permission": return action.payload["decision"]?.stringValue != nil
+        default: return false
+        }
+    }
+
+    /// Show the user's answer/decision immediately (confirmed shape, marked
+    /// `localPending`). Tentacle's resolved card replaces it; failure reverts.
+    func applyLocalResolution(_ sessionId: String, promptId: String,
+                              answer: String? = nil, decision: String? = nil) {
+        guard var card = cards[sessionId], var action = card.action,
+              Self.promptID(action) == promptId else { return }
+        if let answer {
+            action.payload["answer"] = AnyCodable(answer)
+            action.payload.removeValue(forKey: "cancelled")
+        }
+        if let decision { action.payload["decision"] = AnyCodable(decision) }
+        action.payload["localPending"] = AnyCodable(true)
+        action.payload.removeValue(forKey: "localError")
+        card.action = action
+        cards[sessionId] = card
+    }
+
+    /// Undo an unconfirmed local answer/decision and explain why, keeping the
+    /// prompt answerable.
+    func revertLocalResolution(_ sessionId: String, promptId: String, message: String) {
+        guard var card = cards[sessionId], var action = card.action,
+              Self.promptID(action) == promptId,
+              action.payload["localPending"]?.boolValue == true else { return }
+        action.payload.removeValue(forKey: "answer")
+        action.payload.removeValue(forKey: "decision")
+        action.payload.removeValue(forKey: "localPending")
+        action.payload["localError"] = AnyCodable(message)
+        card.action = action
+        cards[sessionId] = card
+    }
+
+    func isLocalResolutionPending(_ sessionId: String, promptId: String) -> Bool {
+        guard let action = cards[sessionId]?.action, Self.promptID(action) == promptId else { return false }
+        return action.payload["localPending"]?.boolValue == true
     }
 
     /// Atomically replace transient card state from a successful subscription

@@ -11,16 +11,21 @@ struct KrakiApp: App {
     private let alignmentPreviewEnabled: Bool
     private let clientAlignmentPreviewEnabled: Bool
     private let visibleScrollScenarioEnabled: Bool
+    private let newSessionScenarioEnabled: Bool
 
     init() {
         #if DEBUG
         let alignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW"] == "1"
         let clientAlignmentPreviewEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_CLIENT_ALIGNMENT_PREVIEW"] == "1"
         let visibleScrollScenarioEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_VISIBLE_SCROLL_SCENARIO"] == "1"
+        let newSessionScenarioEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_NEW_SESSION_SCENARIO"] == "1"
+        self.newSessionScenarioEnabled = newSessionScenarioEnabled
         self.alignmentPreviewEnabled = alignmentPreviewEnabled
         self.clientAlignmentPreviewEnabled = clientAlignmentPreviewEnabled
         self.visibleScrollScenarioEnabled = visibleScrollScenarioEnabled
-        _appState = State(initialValue: visibleScrollScenarioEnabled
+        _appState = State(initialValue: newSessionScenarioEnabled
+            ? IOSNewSessionScenario.makeAppState()
+            : visibleScrollScenarioEnabled
             ? IOSChatScrollScenarioFixture.makeAppState()
             : alignmentPreviewEnabled || clientAlignmentPreviewEnabled
                 ? IOSChatAlignmentPreviewFixture.makeAppState()
@@ -29,6 +34,7 @@ struct KrakiApp: App {
         self.alignmentPreviewEnabled = false
         self.clientAlignmentPreviewEnabled = false
         self.visibleScrollScenarioEnabled = false
+        self.newSessionScenarioEnabled = false
         _appState = State(initialValue: AppState())
         #endif
         TKMarkdown.prewarmSyntaxHighlighter()
@@ -40,7 +46,9 @@ struct KrakiApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if visibleScrollScenarioEnabled {
+                if newSessionScenarioEnabled {
+                    IOSNewSessionScenarioView()
+                } else if visibleScrollScenarioEnabled {
                     IOSChatScrollScenarioView()
                 } else if alignmentPreviewEnabled {
                     IOSChatAlignmentPreview()

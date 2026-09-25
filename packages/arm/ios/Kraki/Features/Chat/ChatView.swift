@@ -66,6 +66,7 @@ struct ChatView: View {
         let _ = viewModel?.windowBottomSeq
         let _ = viewModel?.card
         let _ = viewModel?.runtimeStatus
+        let _ = viewModel?.pendingSignature
         let providerWaitingForLatest = viewModel == nil
             || viewModel?.isWaitingForLatestBubble == true
         let waitingForInitialConnection = ChatEntryLoading.isInitialConnectionGateActive(
@@ -73,7 +74,13 @@ struct ChatView: View {
             hasCompletedInitialConnect: appState.hasCompletedInitialConnect,
             connectionStatus: appState.connectionStatus
         )
-        let entrySourceWaiting = providerWaitingForLatest || waitingForInitialConnection
+        // Cold start: while the first Relay connection is still being made,
+        // show cached history immediately (newer messages append at the tail
+        // when they arrive) instead of hiding it behind a spinner. The
+        // spinner remains only when there is nothing cached to show.
+        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
+        let entrySourceWaiting = providerWaitingForLatest
+            || (waitingForInitialConnection && !hasCachedHistory)
         let waitingForLatest = ChatEntryLoading.isEntryGateActive(
             providerWaitingForLatest: entrySourceWaiting,
             hasMaterializedLatest: hasMaterializedLatest
@@ -131,9 +138,9 @@ struct ChatView: View {
         // and the bottom input area so message cells visibly blur THROUGH
         // the navbar's glass band and the input's glass capsule.
         .ignoresSafeArea(.container, edges: [.top, .bottom])
-        // Top navbar glass band.
+        // Progressive blur under the status bar and floating header.
         .overlay(alignment: .top) {
-            if !waitingForLatest { topNavGlassBand }
+            if !waitingForLatest { topEdgeBlur }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Show the compose area whenever the tentacle device is on file
@@ -154,13 +161,6 @@ struct ChatView: View {
         // Painting `surfacePrimary` here restores the soft surface
         // that the glass strips visibly tint and blur.
         .background(Color.surfacePrimary)
-        // iOS 26's default navbar is fully transparent at the scroll-
-        // edge; the wrapping UICollectionView buries the scroll view
-        // from auto-detect, so the system can't switch to the
-        // materialised state on scroll either. Force the navbar to
-        // always render its glass material so the chat cells blur
-        // underneath instead of revealing RootView's solid bg.
-        .toolbarBackground(.visible, for: .navigationBar)
         .fullScreenCover(item: $selectedImagePreview) { selection in
             IOSImagePreviewGallery(selection: selection)
         }
@@ -218,31 +218,40 @@ struct ChatView: View {
     private static var autoSendFired = false
     #endif
 
-    // MARK: - Top navbar glass band
+    // MARK: - Top edge blur
 
     /// Soft glass fade under the top navbar. Lives in SwiftUI (outside
     /// the flipped UICollectionView), so its gradient direction is
     /// independent of the inverted list's `scaleY(-1)` transform:
     /// full material behind the status bar + title, fading to clear a
     /// little below the bar so message cells emerge sharp.
-    private var topNavGlassBand: some View {
-        Rectangle()
-            .fill(.bar)
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0.0),
-                        .init(color: .black, location: 0.62),
-                        .init(color: .clear, location: 1.0),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(height: 112)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .ignoresSafeArea(.container, edges: .top)
-            .allowsHitTesting(false)
+    /// Progressive blur: strongest under the status bar, easing to nothing a
+    /// little below the floating controls. Blur + a light page-color veil,
+    /// both masked with an eased curve so there is no visible band edge.
+    private var topEdgeBlur: some View {
+        // Strong only behind the status bar; already easing through the
+        // floating controls' row and gone right below it, so the first lines
+        // of content under the header stay readable.
+        let mask = LinearGradient(
+            stops: [
+                .init(color: .black, location: 0.0),
+                .init(color: .black.opacity(0.9), location: 0.42),
+                .init(color: .black.opacity(0.5), location: 0.68),
+                .init(color: .black.opacity(0.15), location: 0.86),
+                .init(color: .clear, location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        return ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            Color.surfacePrimary.opacity(0.55)
+        }
+        .mask(mask)
+        .frame(height: 112)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .ignoresSafeArea(.container, edges: .top)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Bottom Input Area

@@ -39,6 +39,15 @@ schemes:
       config: Debug
       targets:
         - KrakiTests
+  KrakiUITests:
+    build:
+      targets:
+        Kraki: all
+        KrakiUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - KrakiUITests
   KrakiMac:
     build:
       targets:
@@ -129,6 +138,20 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki"
         BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: Kraki
+
+  KrakiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: KrakiUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.uitests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Kraki
     dependencies:
       - target: Kraki
 

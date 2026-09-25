@@ -1,13 +1,25 @@
 #if os(iOS)
-/// TabBarHider — Hides the parent UITabBarController's tab bar while attached.
+/// TabBarHider — Hides the parent UITabBarController's tab bar while the page
+/// that carries it is the visible page of the selected tab.
 ///
-/// Workaround for iOS 26 where SwiftUI's `.toolbar(.hidden, for: .tabBar)`
-/// doesn't animate properly during NavigationStack push/pop transitions
-/// (Apple confirmed bug, FB18022139).
+/// Why not the platform options: SwiftUI's `.toolbar(.hidden, for: .tabBar)`
+/// on iOS 26 brings the bar back late and not with the page (FB18022139,
+/// re-verified on iOS 26.5), and UIKit's `hidesBottomBarWhenPushed` cannot be
+/// set on SwiftUI NavigationStack destinations before UIKit reads it at push
+/// time (verified: the bar stays over the chat).
 ///
-/// Uses UIKit's `setTabBarHidden(_:animated:)` (iOS 26+) when available,
-/// falls back to direct `UITabBar.isHidden` mutation. The UIKit transition
-/// coordinator drives the slide animation, including interactive swipe-back.
+/// Visibility is DERIVED, never toggled. Appearance callbacks only say "the
+/// navigation state may have changed"; the tab bar is then set from the truth:
+/// is the top page of the selected tab's navigation stack a hiding page?
+/// Toggling per callback broke in real gestures because SwiftUI child
+/// controllers see appearance callbacks in transition-dependent orders
+/// (a cancelled / long-held interactive swipe-back, a replacement route whose
+/// new page appears before the old one disappears, multi-level pops), and the
+/// last writer won — leaving the tab bar over the composer or missing on the
+/// root list. Hiding travels with a push. Showing never happens while a
+/// swipe-back is still under the finger: it starts the moment UIKit commits
+/// to completing the pop (finger lifted), alongside the page's settle
+/// animation; a cancelled swipe never shows it.
 
 import SwiftUI
 import UIKit
@@ -17,31 +29,146 @@ struct TabBarHider: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: Controller, context: Context) {}
 
     final class Controller: UIViewController {
+        private static let registry = NSHashTable<Controller>.weakObjects()
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            Self.registry.add(self)
+        }
+
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            setTabBarVisibility(hidden: true, animated: animated)
+            Self.registry.add(self)
+            reconcileAlongsideTransition(animated: animated)
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            Self.reconcile(tabBarController, animated: false)
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            setTabBarVisibility(hidden: false, animated: animated)
+            reconcileAlongsideTransition(animated: animated)
         }
 
-        private func setTabBarVisibility(hidden: Bool, animated: Bool) {
-            guard let tabBarController = self.tabBarController else { return }
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            Self.reconcile(tabBarController ?? Self.anyTabBarController, animated: true)
+        }
+
+        deinit {
+            // A replaced route can be torn down without a disappearance pass.
+            DispatchQueue.main.async { Self.reconcile(Self.anyTabBarController, animated: true) }
+        }
+
+        private func reconcileAlongsideTransition(animated: Bool) {
+            guard let tabBarController else { return }
+            // Hiding (entering a detail page) runs with the transition so the
+            // bar leaves together with the page. Showing never does: while a
+            // (possibly interactive) pop is in flight the bar stays hidden, and
+            // it slides in only after the pop has actually completed. A
+            // cancelled swipe therefore never flashes the bar.
+            Self.reconcile(tabBarController, animated: animated)
+            if let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator {
+                if coordinator.isInteractive {
+                    // Swipe-back: the moment the finger lifts and UIKit
+                    // commits to completing the pop, bring the bar in together
+                    // with the page's settle animation instead of waiting for
+                    // it to finish. A cancelled swipe never shows it.
+                    coordinator.notifyWhenInteractionChanges { [weak tabBarController] context in
+                        guard !context.isCancelled else { return }
+                        Self.reconcile(tabBarController, animated: true, ignoringTransition: true,
+                                       expectingPopTo: true)
+                    }
+                }
+                coordinator.animate(alongsideTransition: nil) { [weak tabBarController] context in
+                    Self.reconcile(tabBarController, animated: !context.isCancelled, ignoringTransition: true)
+                    // UIKit finalizes the navigation stack right after this
+                    // completion on some paths; verify once more.
+                    DispatchQueue.main.async {
+                        Self.reconcile(tabBarController, animated: true, ignoringTransition: true)
+                    }
+                }
+            }
+        }
+
+        // MARK: Truth
+
+        private static var anyTabBarController: UITabBarController? {
+            registry.allObjects.lazy.compactMap(\.tabBarController).first
+        }
+
+        /// True when this hider's page is the top page of its navigation stack
+        /// and that stack belongs to the selected tab of `tabBarController`.
+        fileprivate func isVisiblePage(in tabBarController: UITabBarController,
+                                       afterCommittedPop: Bool = false) -> Bool {
+            guard isViewLoaded,
+                  let navigation = navigationController,
+                  let top = navigation.topViewController else { return false }
+            // During a committed interactive pop, `topViewController` may still
+            // be the page being removed; judge by the destination instead.
+            var page = top
+            if afterCommittedPop,
+               let from = navigation.transitionCoordinator?.viewController(forKey: .from),
+               let to = navigation.transitionCoordinator?.viewController(forKey: .to),
+               from === top {
+                page = to
+            }
+            guard isDescendant(of: page) else { return false }
+            guard let selected = tabBarController.selectedViewController else { return false }
+            return navigation.isDescendant(of: selected)
+        }
+
+        static func shouldHide(_ tabBarController: UITabBarController,
+                               afterCommittedPop: Bool = false) -> Bool {
+            registry.allObjects.contains {
+                $0.isVisiblePage(in: tabBarController, afterCommittedPop: afterCommittedPop)
+            }
+        }
+
+        /// A navigation transition (push/pop, including an interactive swipe
+        /// that is still under the finger) is in progress in the selected tab.
+        private static func isTransitioning(_ tabBarController: UITabBarController) -> Bool {
+            if tabBarController.transitionCoordinator != nil { return true }
+            return registry.allObjects.contains {
+                $0.navigationController?.transitionCoordinator != nil
+            }
+        }
+
+        static func reconcile(_ tabBarController: UITabBarController?, animated: Bool,
+                              ignoringTransition: Bool = false,
+                              expectingPopTo: Bool = false) {
+            guard let tabBarController else { return }
+            let hidden = shouldHide(tabBarController, afterCommittedPop: expectingPopTo)
+            // Defer showing until the transition has finished; its completion
+            // reconciles again (see reconcileAlongsideTransition).
+            if !hidden, !ignoringTransition, isTransitioning(tabBarController) { return }
             if #available(iOS 26.0, *) {
-                tabBarController.setTabBarHidden(hidden, animated: animated)
-            } else {
+                if tabBarController.isTabBarHidden != hidden {
+                    tabBarController.setTabBarHidden(hidden, animated: animated)
+                }
+            } else if tabBarController.tabBar.isHidden != hidden {
                 tabBarController.tabBar.isHidden = hidden
             }
         }
     }
 }
 
+private extension UIViewController {
+    func isDescendant(of ancestor: UIViewController) -> Bool {
+        var current: UIViewController? = self
+        while let controller = current {
+            if controller === ancestor { return true }
+            current = controller.parent
+        }
+        return false
+    }
+}
+
 extension View {
-    /// Hides the parent UITabBarController's tab bar while this view is on screen.
-    /// The UIKit transition coordinator handles the slide animation, including
-    /// the interactive swipe-back gesture.
+    /// Hides the parent UITabBarController's tab bar while this view is the
+    /// visible page of the selected tab. Tracks interactive swipe-back.
     func hidesTabBar() -> some View {
         background(TabBarHider().frame(width: 0, height: 0))
     }

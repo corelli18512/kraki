@@ -145,6 +145,7 @@ struct DeviceDetailView: View {
         .hidesTabBar()
         .navigationDestination(for: SessionNavID.self) { nav in
             SessionDetailView(sessionId: nav.id)
+                .id(nav.id)
                 .environment(appState)
         }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
