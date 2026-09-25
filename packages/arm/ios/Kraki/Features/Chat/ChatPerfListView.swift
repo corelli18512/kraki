@@ -599,6 +599,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
     private static let latestMessageTopPadding: CGFloat = 118
+    private static let topContentPadding: CGFloat = 8
 
     /// Flip to `true` for the spinner-free local-seamless experiment.
     /// `false` = the robust, production-style experience: show a loading
@@ -782,6 +783,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         collectionView.keyboardDismissMode = .onDrag
         collectionView.contentInset.bottom = bottomContentInset
         collectionView.verticalScrollIndicatorInsets.bottom = bottomContentInset
+        // Breathing room under the navigation glass when a conversation is
+        // shorter than the screen (a new Session's first message otherwise
+        // sits flush against the bar).
+        collectionView.contentInset.top = Self.topContentPadding
         view.addSubview(collectionView)
 
         // Install the offscreen sizer container so its trait environment

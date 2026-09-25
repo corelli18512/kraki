@@ -174,6 +174,10 @@ final class SessionStore {
     var sessionPreviews: [String: SessionPreview] = [:]
     var drafts: [String: String] = [:]
     var navigateToSession: String?
+    /// Set with `navigateToSession` when the target replaces a still-visible
+    /// pending placeholder (create/fork/import resolved). The navigation layer
+    /// then swaps the top route in place instead of pop-to-root + push.
+    var navigationReplacesPlaceholder = false
     /// Session id that should be revealed in the macOS sidebar after a
     /// create/fork/import request resolves. This is separate from semantic
     /// navigation so a selected row can be brought into view without making
@@ -1020,6 +1024,7 @@ final class SessionStore {
         sessionPreviews.removeAll()
         drafts.removeAll()
         navigateToSession = nil
+        navigationReplacesPlaceholder = false
         sessionListRevealId = nil
         sessionListScrollToTopSignal = 0
         loadingSessions.removeAll()

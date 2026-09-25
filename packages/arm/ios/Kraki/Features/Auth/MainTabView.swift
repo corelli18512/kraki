@@ -76,10 +76,26 @@ struct MainTabView: View {
 
     private func consumePendingSessionNavigation() {
         guard let target = appState.sessionStore.navigateToSession else { return }
+        let replacesPlaceholder = appState.sessionStore.navigationReplacesPlaceholder
+        appState.sessionStore.navigationReplacesPlaceholder = false
+        appState.sessionStore.navigateToSession = nil
         selectedTab = 0
+        if replacesPlaceholder, sessionPath.count == 1 {
+            // "Starting session…" → the created Session: swap the top route in
+            // place, without a pop/push transition. The destination is keyed
+            // by id, so the real Session's page runs its own lifecycle
+            // (subscription, viewing state, read state) instead of inheriting
+            // the placeholder's.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                sessionPath.removeLast()
+                sessionPath.append(SessionNavID(id: target))
+            }
+            return
+        }
         sessionPath = NavigationPath()
         sessionPath.append(SessionNavID(id: target))
-        appState.sessionStore.navigateToSession = nil
     }
 
     private func consumePendingDeviceNavigation() {
@@ -100,7 +116,11 @@ struct MainTabView: View {
         NavigationStack(path: $sessionPath) {
             SessionListView(navigationPath: $sessionPath)
                 .navigationDestination(for: SessionNavID.self) { nav in
+                    // Identity per Session: when a route's id changes (pending
+                    // placeholder → created Session) the page must disappear
+                    // and appear again, not silently rebind its sessionId.
                     SessionDetailView(sessionId: nav.id)
+                        .id(nav.id)
                         .environment(appState)
                 }
         }

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Kraki
 
 #if os(iOS)
@@ -603,6 +604,39 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
         XCTAssertEqual(fx.vc.automationUnseenArrivals, 0)
         XCTAssertFalse(fx.vc.automationControlsVisible.down)
+    }
+}
+
+/// End-to-end gate for the new-Session journey through production
+/// MainTabView / NavigationStack / SessionDetailView / ChatView with a
+/// scripted offline Tentacle (see IOSNewSessionScenario).
+@MainActor
+final class NewSessionJourneyTests: XCTestCase {
+    func testNewSessionJourney() throws {
+        let app = IOSNewSessionScenario.makeAppState()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        IOSNewSessionScenario.forceAutorun = true
+        defer {
+            IOSNewSessionScenario.forceAutorun = false
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        window.rootViewController = UIHostingController(
+            rootView: IOSNewSessionScenarioView().environment(app))
+        window.makeKeyAndVisible()
+        let deadline = Date().addingTimeInterval(60)
+        repeat {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        } while !IOSNewSessionScenario.finished && Date() < deadline
+        XCTAssertTrue(IOSNewSessionScenario.finished, "journey did not finish")
+        let log = (try? String(contentsOf: IOSNewSessionScenario.logURL, encoding: .utf8)) ?? ""
+        let checks = log.split(separator: "\n").filter { $0.contains("CHECK") }
+        XCTAssertEqual(checks.count, 6, "expected all journey checks:\n\(log)")
+        for check in checks {
+            XCTAssertFalse(check.contains("BAD"), String(check))
+        }
     }
 }
 #endif

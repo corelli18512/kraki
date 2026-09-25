@@ -856,6 +856,10 @@ final class CommandSender {
         // real session into the store; we just need to retire the
         // placeholder entry and re-point navigation.
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            // The placeholder route removes its pending mark when the user
+            // backs out of "Starting session…". In that case the new Session
+            // only appears in the list; it must not pull the user back in.
+            let stillOnPlaceholder = appState.sessionStore.isPending(placeholderId)
             if placeholderId != sessionId {
                 appState.sessionStore.removePendingSession(placeholderId)
             } else {
@@ -868,7 +872,14 @@ final class CommandSender {
             // so it can scroll the newly-created row to the top without
             // changing ordinary Session selection behavior.
             appState.sessionStore.sessionListRevealId = sessionId
+            #if os(iOS)
+            if stillOnPlaceholder {
+                appState.sessionStore.navigationReplacesPlaceholder = true
+                appState.sessionStore.navigateToSession = sessionId
+            }
+            #else
             appState.sessionStore.navigateToSession = sessionId
+            #endif
         }
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
             // If we had a prompt, send it now
