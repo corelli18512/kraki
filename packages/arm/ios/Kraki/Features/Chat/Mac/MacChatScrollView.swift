@@ -2200,6 +2200,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
         scrollInteractionWatchdogWorkItem?.cancel()
         presentationHealthWorkItem?.cancel()
+        scrollAnimationTimer?.invalidate()
+        // Detach first: tearDown resizes the document, and a still-attached
+        // clip view would reflect into this deallocating scroll view (which
+        // then forms a weak reference to itself -> objc fatal abort).
+        documentView = nil
         chatDocumentView.tearDown()
         if let bubbleActionMouseMonitor {
             NSEvent.removeMonitor(bubbleActionMouseMonitor)

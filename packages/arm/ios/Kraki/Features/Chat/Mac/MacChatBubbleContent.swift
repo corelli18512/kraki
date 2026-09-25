@@ -174,7 +174,18 @@ enum MacChatBubbleContentBuilder {
             // HTML report cards intentionally retain the roomy maximum.
             guard !hasArtifacts else { return maximum }
             let bodyNatural = body.map(MacTextMeasure.naturalWidth) ?? 0
-            let natural = max(bodyNatural, naturalActionWidth(action))
+            // A table attachment reports a 1pt viewport before layout, so a
+            // table-only reply used to collapse into a ~35pt sliver. Tables
+            // contribute their content width (wider ones scroll horizontally).
+            var tableNatural: CGFloat = 0
+            if let body {
+                body.enumerateAttribute(.attachment, in: NSRange(location: 0, length: body.length)) { value, _, _ in
+                    if let table = value as? MacTableAttachment {
+                        tableNatural = max(tableNatural, table.tableLayout.contentSize.width)
+                    }
+                }
+            }
+            let natural = max(bodyNatural, tableNatural, naturalActionWidth(action))
             let fitted = ceil(natural) + MacChatBubbleLayout.msgPadH * 2
             return min(maximum, max(fitted, MacChatBubbleLayout.msgPadH * 2 + 1))
         case .error, .system:

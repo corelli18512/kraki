@@ -447,4 +447,68 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
                      st.jumps, st.worstJump, st.placeholderFrames, st.estimatedFrames, st.restJump, revisions.count, hb.worst, hb.over(33), hb.over(16.7)))
         st.log.forEach { print("UXPROBE   \($0)") }
     }
+
+    func render(_ fx: Fx, _ path: String) {
+        guard let view = fx.window.contentView else { return }
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    func testRenderVisualStates() throws {
+        let dir = "/tmp/kraki-mac-ux-shots"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            let tag = dark ? "dark" : "light"
+            // 1. navigation controls + unseen dot + steps button
+            let fx = try makeFixture(total: 40, size: NSSize(width: 820, height: 640))
+            fx.window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            drain(1_000)
+            for _ in 0..<14 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+            drain(900)
+            try startTurn(fx, seq: 41)
+            try ingest(fx, ["type": "agent_message", "seq": 42, "sessionId": sid, "deviceId": dev,
+                            "timestamp": "2026-09-01T00:00:02.000Z", "payload": ["content": Self.zh, "steps": 4]])
+            fx.app.messageStore.endCardTurn(sid)
+            drain(900)
+            render(fx, "\(dir)/\(tag)-nav.png")
+            // 2. failed + sending inputs at the bottom, steps on the last reply
+            fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
+            fx.sv.automationTapDown(); drain(600)
+            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条没有发出去")
+            drain(600)
+            fx.app.commandSender?.confirmationTimeout = .seconds(20)
+            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条正在发送")
+            NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+            drain(1_400)
+            render(fx, "\(dir)/\(tag)-pending.png")
+            // 3. answered question awaiting confirmation
+            try startTurn(fx, seq: 43)
+            var q = ChatMessage(type: "question", seq: 0, sessionId: sid, deviceId: dev, timestamp: "2026-09-01T00:00:03.000Z", payload: [:])
+            q.payload["questionId"] = AnyCodable("q1")
+            q.payload["question"] = AnyCodable("要不要顺便把旧接口也删掉？")
+            q.payload["choices"] = AnyCodable(["删掉", "先保留"])
+            fx.app.messageStore.applyCardAction(sid, q)
+            drain(600)
+            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+            drain(900)
+            render(fx, "\(dir)/\(tag)-answer.png")
+            windows.forEach { $0.orderOut(nil) }
+        }
+    }
+
+    func testProbeAnswerPinning() throws {
+        let fx = try makeFixture(total: 30)
+        drain(1_000)
+        try startTurn(fx, seq: 31)
+        var q = ChatMessage(type: "question", seq: 0, sessionId: sid, deviceId: dev, timestamp: "2026-09-01T00:00:03.000Z", payload: [:])
+        q.payload["questionId"] = AnyCodable("q1")
+        q.payload["question"] = AnyCodable("要不要顺便把旧接口也删掉？")
+        q.payload["choices"] = AnyCodable(["删掉", "先保留", "我自己来决定这个问题，先别动"])
+        fx.app.messageStore.applyCardAction(sid, q)
+        for t in 0..<8 { drain(60); print(String(format: "UXPROBE q t=%d dist=%.0f hidden=%.0f down=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N")) }
+        _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+        for t in 0..<12 { drain(60); print(String(format: "UXPROBE a t=%d dist=%.0f hidden=%.0f down=%@ live=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N", cells(fx).last.map { String(format: "h=%.0f cfg=%.0f", $0.h, $0.configured) } ?? "-")) }
+    }
 }

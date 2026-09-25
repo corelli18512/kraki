@@ -206,7 +206,53 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertFalse(fx.sv.automationControlsVisible.down, "↓ hides at the bottom")
     }
 
+    /// Releasing a scroll view that still holds laid-out content (without a
+    /// SwiftUI dismantle first) must not re-enter it from its own deinit
+    /// (objc weak-reference abort seen in tableWheelRegression teardown).
+    func testDeallocatingPopulatedScrollViewDoesNotReenter() throws {
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 420, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        weak var released: MacChatScrollView?
+        autoreleasepool {
+            let scrollView = MacChatScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 300))
+            released = scrollView
+            window.contentView = scrollView
+            scrollView.prepareForSession(sid)
+            let items = (1...30).map { seq -> MacChatItem in
+                let message = ChatMessage(type: seq.isMultiple(of: 2) ? "agent_message" : "user_message", seq: seq,
+                                          sessionId: sid, deviceId: dev, timestamp: "2026-09-01T00:00:00.000Z",
+                                          payload: ["content": AnyCodable(Self.zh)])
+                return MacChatItem(seq: seq, key: message.id, signature: "\(seq)", estimatedHeight: 120,
+                                   isReply: seq.isMultiple(of: 2)) {
+                    MacChatBubbleContentBuilder.make(message: message, sessionId: self.sid, agent: "claude", documentWidth: 420)
+                }
+            }
+            scrollView.chatDocumentView.apply(contents: items, documentWidth: 420, sessionMode: .discuss)
+            scrollView.contentView.bounds.origin.y = 600
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            window.contentView = nil
+        }
+        drain(300)
+        XCTAssertNil(released, "released without re-entering deinit")
+    }
+
     // MARK: Bubble chrome
+
+    func testTableOnlyReplyIsNotASliver() {
+        let message = ChatMessage(type: "agent_message", seq: 7, sessionId: sid, deviceId: dev,
+                                  timestamp: "2026-09-01T00:00:00.000Z",
+                                  payload: ["content": AnyCodable(Self.table)])
+        let content = MacChatBubbleContentBuilder.make(message: message, sessionId: sid, agent: "claude", documentWidth: 820)
+        var tableWidth: CGFloat = 0
+        content.body?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.body?.length ?? 0)) { value, _, _ in
+            if let table = value as? MacTableAttachment { tableWidth = table.tableLayout.contentSize.width }
+        }
+        XCTAssertGreaterThan(tableWidth, 100)
+        XCTAssertGreaterThanOrEqual(content.bodyTextWidth, min(tableWidth, content.attachmentWidth - 28) - 1,
+                                    "a table-only reply is as wide as its table")
+    }
 
     func testStepsButtonSitsAtBubbleTopLeading() throws {
         let fx = try makeFixture(total: 0)
