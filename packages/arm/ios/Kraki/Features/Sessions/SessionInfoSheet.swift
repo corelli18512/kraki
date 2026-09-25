@@ -1,5 +1,5 @@
 #if os(iOS)
-/// SessionInfoSheet — Detail sheet for session metadata, usage, and mode.
+/// SessionInfoSheet — Detail sheet for session metadata and usage.
 ///
 /// Presented from the session detail "more" button as a medium-detent sheet.
 /// Dismiss with the standard swipe-down gesture — no explicit Done button.
@@ -39,7 +39,7 @@ struct SessionInfoSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    modeSection
+                    // Mode lives in the chat header now (single entry point).
                     sessionSection
                     usageSection
                     deviceSection
@@ -71,31 +71,6 @@ struct SessionInfoSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-    }
-
-    // MARK: - Mode (top of sheet — most-used control)
-
-    private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Mode")
-
-            let modes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
-            let currentMode = appState.sessionStore.sessionModes[session.id] ?? session.mode
-
-            TintedSegmentedControl(
-                items: modes.map { $0.rawValue.capitalized },
-                selection: Binding(
-                    get: { modes.firstIndex(of: currentMode) ?? 1 },
-                    set: { idx in
-                        appState.commandSender?.setSessionMode(sessionId: session.id, mode: modes[idx])
-                    }
-                ),
-                tintColor: UIColor(Color.modeColor(currentMode))
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 32)
-            .animation(.easeInOut(duration: 0.3), value: currentMode)
-        }
     }
 
     // MARK: - Session

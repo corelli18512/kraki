@@ -109,6 +109,21 @@ struct ModePickerView: View {
 
 // MARK: - UIKit Segmented Control with dynamic tint
 
+/// UISegmentedControl whose grey track is invisible while the selected thumb
+/// (iOS 26 liquid lens: slides, drags, recolors) is untouched. The public
+/// `setBackgroundImage` route switches the control to its legacy rendering
+/// (no lens, image-sized height), so this hides only the control's DIRECT
+/// UIImageView children (the per-segment track images). If a future iOS
+/// changes that structure, the worst case is the track showing again.
+final class TrackHiddenSegmentedControl: UISegmentedControl {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for view in subviews where view is UIImageView {
+            view.alpha = 0
+        }
+    }
+}
+
 struct TintedSegmentedControl: UIViewRepresentable {
     let items: [String]
     @Binding var selection: Int
@@ -117,13 +132,20 @@ struct TintedSegmentedControl: UIViewRepresentable {
     /// when it lifts / cancels or the value changes. Lets hosts keep
     /// transient UI open while the user is interacting.
     var onInteraction: ((Bool) -> Void)? = nil
+    /// Hide the grey track so only the selected thumb is drawn.
+    var transparentTrack: Bool = false
 
     func makeUIView(context: Context) -> UISegmentedControl {
-        let control = UISegmentedControl(items: items)
+        let control: UISegmentedControl = transparentTrack
+            ? TrackHiddenSegmentedControl(items: items)
+            : UISegmentedControl(items: items)
         control.selectedSegmentIndex = selection
         control.selectedSegmentTintColor = tintColor
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         control.addTarget(context.coordinator, action: #selector(Coordinator.began), for: .touchDown)
+        if transparentTrack {
+            context.coordinator.hideTrack(of: control)
+        }
         control.addTarget(context.coordinator, action: #selector(Coordinator.ended),
                           for: [.touchUpInside, .touchUpOutside, .touchCancel])
         return control
@@ -149,6 +171,12 @@ struct TintedSegmentedControl: UIViewRepresentable {
         }
 
         @objc func began() { parent.onInteraction?(true) }
+
+        private var trackObservation: NSKeyValueObservation?
+
+        func hideTrack(of control: UISegmentedControl) {
+            control.backgroundColor = .clear
+        }
         @objc func ended() { parent.onInteraction?(false) }
     }
 }

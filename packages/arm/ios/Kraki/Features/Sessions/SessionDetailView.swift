@@ -338,7 +338,8 @@ struct HeaderModePicker: View {
                     } else {
                         idle.restart(after: Self.idleCollapse) { expanded.wrappedValue = false }
                     }
-                }
+                },
+                transparentTrack: true
             )
             .frame(maxWidth: .infinity)
             .frame(height: 34)
