@@ -511,4 +511,33 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
         for t in 0..<12 { drain(60); print(String(format: "UXPROBE a t=%d dist=%.0f hidden=%.0f down=%@ live=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N", cells(fx).last.map { String(format: "h=%.0f cfg=%.0f", $0.h, $0.configured) } ?? "-")) }
     }
+
+    func testProbeResizeAndEntry() throws {
+        // Entry cost
+        let hb0 = Heartbeat(); hb0.start()
+        let fx = try makeFixture(total: 120, size: NSSize(width: 700, height: 700))
+        drain(1_200)
+        hb0.stop()
+        print(String(format: "UXPROBE entry hitch=%.0fms >33=%d >16=%d", hb0.worst, hb0.over(33), hb0.over(16.7)))
+        // Scroll into history, then resize narrow <-> wide
+        for _ in 0..<20 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(900)
+        for (i, width) in [1200, 700, 1100, 800].enumerated() {
+            let mid = fx.sv.contentView.bounds.height / 2
+            let anchor = cells(fx).min { abs($0.screenY + $0.h / 2 - mid) < abs($1.screenY + $1.h / 2 - mid) }
+            let hb = Heartbeat(); hb.start()
+            var frame = fx.window.frame; frame.size.width = CGFloat(width)
+            fx.window.setFrame(frame, display: true)
+            var phFrames = 0, estFrames = 0
+            for _ in 0..<30 {
+                drain(16)
+                let d = diag(fx)
+                if (d["intersectingPlaceholderCount"] as? Int ?? 0) > 0 { phFrames += 1 }
+                if cells(fx).contains(where: { !$0.placeholder && abs($0.configured - $0.h) > 1 }) { estFrames += 1 }
+            }
+            hb.stop()
+            let after = anchor.flatMap { a in cells(fx).first { $0.seq == a.seq } }
+            print(String(format: "UXPROBE resize#%d ->%d placeholderFrames=%d estimatedFrames=%d anchorSeq=%d moved=%.0f hitch=%.0fms >33=%d", i, width, phFrames, estFrames, anchor?.seq ?? -1, (after?.screenY ?? 0) - (anchor?.screenY ?? 0), hb.worst, hb.over(33)))
+        }
+    }
 }

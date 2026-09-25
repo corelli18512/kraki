@@ -1990,6 +1990,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// scroll at the top edge. The shared policy enables paging only after a
     /// real user interaction or navigation command.
     private var lastDocumentWidth: CGFloat = 0
+    private var isDeallocating = false
     private var composerSubmitObserver: NSObjectProtocol?
     private var liveScrollObserver: NSObjectProtocol?
     private var liveScrollEndObserver: NSObjectProtocol?
@@ -2201,10 +2202,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollInteractionWatchdogWorkItem?.cancel()
         presentationHealthWorkItem?.cancel()
         scrollAnimationTimer?.invalidate()
-        // Detach first: tearDown resizes the document, and a still-attached
-        // clip view would reflect into this deallocating scroll view (which
-        // then forms a weak reference to itself -> objc fatal abort).
-        documentView = nil
+        // tearDown (and detaching the document) resizes the document; the clip
+        // view then reflects into this deallocating scroll view, whose control
+        // logic forms weak references to self -> objc fatal abort. Everything
+        // that runs from reflection is inert from here on.
+        isDeallocating = true
         chatDocumentView.tearDown()
         if let bubbleActionMouseMonitor {
             NSEvent.removeMonitor(bubbleActionMouseMonitor)
@@ -3040,6 +3042,10 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     override func reflectScrolledClipView(_ clipView: NSClipView) {
+        guard !isDeallocating else {
+            super.reflectScrolledClipView(clipView)
+            return
+        }
         let started = CACurrentMediaTime()
         if NSApp.currentEvent?.type == .leftMouseDragged {
             // Knob-start captured the comparison baseline. Reflection may run
@@ -3233,6 +3239,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     private func updateJumpButtonVisibility(animated: Bool) {
+        guard !isDeallocating else { return }
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
         let navigating = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
         let hasContent = !chatDocumentView.itemKeys.isEmpty
