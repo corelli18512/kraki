@@ -85,6 +85,23 @@ final class MacChatDocumentView: NSView {
 
     private(set) var itemKeys: [String] = []
     private(set) var lastApplyPrepended = false
+    private(set) var lastApplyAppendedReplies = 0
+
+    #if DEBUG
+    var automationVisibleCells: [(key: String, cell: MacChatBubbleCell)] {
+        visibleCells.sorted { $0.key < $1.key }.compactMap { index, cell in
+            index < contents.count ? (contents[index].key, cell) : nil
+        }
+    }
+    #endif
+
+    /// Document frames of AI replies, oldest first.
+    var replyFrames: [(key: String, frame: NSRect)] {
+        contents.indices.compactMap { index in
+            guard contents[index].isReply, index < itemFrames.count else { return nil }
+            return (contents[index].key, itemFrames[index])
+        }
+    }
     private var itemSignatures: [String] = []
     private var indexByKey: [String: Int] = [:]
     private var indexBySeq: [Int: Int] = [:]
@@ -128,11 +145,6 @@ final class MacChatDocumentView: NSView {
     private var liveHeightAnimation: LiveHeightAnimation?
     private var liveHeightAnimationTimer: Timer?
     private var scrollInteractionActive = false
-    private var deferredLiveSnapshot: (
-        contents: [MacChatItem],
-        documentWidth: CGFloat,
-        sessionMode: SessionMode
-    )?
     private var codeHighlightObserver: NSObjectProtocol?
     private var codeHighlightUpgradeActive = false
     private var codeHighlightUpgradePending = false
@@ -156,6 +168,7 @@ final class MacChatDocumentView: NSView {
     var attachmentStore: AttachmentStore?
     var onResolvePermission: ((String, String?, String) -> Void)?
     var onAnswerQuestion: ((String, String) -> Void)?
+    var onPendingAction: ((String, MacPendingAction) -> Void)?
     var onOpenImage: ((MacImagePreviewSelection) -> Void)?
     var onOpenHTMLArtifact: ((ContentRef) -> Void)?
     var onHeightInvalidated: (() -> Void)?
@@ -277,7 +290,6 @@ final class MacChatDocumentView: NSView {
         geometryWarmCompleted.removeAll(keepingCapacity: true)
         warmedGeometryPending = false
         scrollInteractionActive = false
-        deferredLiveSnapshot = nil
         codeHighlightUpgradePending = false
         scrollerKnobTracking = false
         lastApplyPrepended = false
@@ -340,26 +352,6 @@ final class MacChatDocumentView: NSView {
     }
 
     @discardableResult
-    func deferLiveSnapshotIfNeeded(
-        contents newContents: [MacChatItem],
-        documentWidth: CGFloat,
-        sessionMode: SessionMode
-    ) -> Bool {
-        guard scrollInteractionActive,
-              abs(self.documentWidth - documentWidth) <= 0.5,
-              self.sessionMode == sessionMode else { return false }
-        let keys = newContents.map(\.key)
-        let signatures = newContents.map(\.signature)
-        guard itemKeys == keys,
-              itemSignatures.count == signatures.count,
-              keys.contains("__live__"),
-              keys.indices.allSatisfy({ index in
-                  keys[index] == "__live__" || itemSignatures[index] == signatures[index]
-              }) else { return false }
-        deferredLiveSnapshot = (newContents, documentWidth, sessionMode)
-        return true
-    }
-
     func apply(
         contents newContents: [MacChatItem],
         documentWidth: CGFloat,
@@ -374,18 +366,6 @@ final class MacChatDocumentView: NSView {
         let oldVisibleSignatures = visibleSignatures
         let keys = newContents.map(\.key)
         let signatures = newContents.map(\.signature)
-        let onlyLiveRevisionChanged = scrollInteractionActive
-            && oldKeys == keys
-            && itemSignatures.count == signatures.count
-            && keys.indices.allSatisfy { index in
-                keys[index] == "__live__" || itemSignatures[index] == signatures[index]
-            }
-            && keys.contains("__live__")
-        if onlyLiveRevisionChanged {
-            deferredLiveSnapshot = (newContents, documentWidth, sessionMode)
-            return
-        }
-        deferredLiveSnapshot = nil
         if let oldFirst = oldKeys.first,
            let oldFirstInNew = keys.firstIndex(of: oldFirst) {
             lastApplyPrepended = oldFirstInNew > 0
@@ -469,6 +449,18 @@ final class MacChatDocumentView: NSView {
                 if heightCache[landedKey] == nil { heightCache[landedKey] = liveHeight }
                 handoffIndex = landed
             }
+        }
+
+        // Replies that landed after the previous tail (as on iOS: the live card
+        // itself is not counted; its landed answer is).
+        let newKeyIndex = Dictionary(keys.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        if let survivingTail = oldKeys.reversed().lazy.compactMap({ newKeyIndex[$0] }).first {
+            let oldKeySet = Set(oldKeys)
+            lastApplyAppendedReplies = newContents[(survivingTail + 1)...].filter {
+                $0.isReply && $0.key != "__live__" && !oldKeySet.contains($0.key)
+            }.count
+        } else {
+            lastApplyAppendedReplies = 0
         }
 
         let newIndexByKey = indexByKey
@@ -722,9 +714,13 @@ final class MacChatDocumentView: NSView {
                 // Streaming-card signatures may change 10–20 times per second.
                 // Keep an already-visible cell stable while the user scrolls;
                 // the next settled update applies the newest signature once.
+                // The live card is the exception: its prepared revision is
+                // installed immediately so streaming stays live under a
+                // scrolling reader (as on iOS).
                 let deferReconfiguration = scrollInteractionActive
                     && existingCell != nil
                     && visibleSignatures[index] != nil
+                    && !(item.key == "__live__" && preparedContent != nil)
                 if !deferReconfiguration {
                     if configuredCount >= maxConfigurations {
                         hasPendingVisibleContent = true
@@ -898,14 +894,6 @@ final class MacChatDocumentView: NSView {
     func endScrollInteraction(in viewport: NSRect) {
         scrollInteractionActive = false
         scrollerKnobTracking = false
-        if let deferred = deferredLiveSnapshot {
-            deferredLiveSnapshot = nil
-            apply(
-                contents: deferred.contents,
-                documentWidth: deferred.documentWidth,
-                sessionMode: deferred.sessionMode
-            )
-        }
         if codeHighlightUpgradePending {
             scheduleCodeHighlightUpgrade()
         }
@@ -1618,6 +1606,9 @@ final class MacChatDocumentView: NSView {
                 self.scheduleHeightInvalidation(for: cell)
             }
         )
+        cell.onPendingAction = { [weak self] clientId, action in
+            self?.onPendingAction?(clientId, action)
+        }
     }
 
     /// SwiftUI image/artifact hosts can invalidate their intrinsic height from
@@ -1655,6 +1646,9 @@ struct MacChatItem {
     let signature: String
     let estimatedHeight: CGFloat
     let visibleCharacterCount: Int
+    /// An AI reply (answer, frozen terminal card, live card): the ↑ control
+    /// steps through these and new ones light the ↓ unseen dot.
+    let isReply: Bool
     let makeContent: () -> MacChatBubbleContent
 
     init(
@@ -1663,6 +1657,7 @@ struct MacChatItem {
         signature: String,
         estimatedHeight: CGFloat,
         visibleCharacterCount: Int = 0,
+        isReply: Bool = false,
         makeContent: @escaping () -> MacChatBubbleContent
     ) {
         self.seq = seq
@@ -1670,6 +1665,7 @@ struct MacChatItem {
         self.signature = signature
         self.estimatedHeight = estimatedHeight
         self.visibleCharacterCount = visibleCharacterCount
+        self.isReply = isReply
         self.makeContent = makeContent
     }
 }
@@ -1994,6 +1990,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// scroll at the top edge. The shared policy enables paging only after a
     /// real user interaction or navigation command.
     private var lastDocumentWidth: CGFloat = 0
+    private var composerSubmitObserver: NSObjectProtocol?
     private var liveScrollObserver: NSObjectProtocol?
     private var liveScrollEndObserver: NSObjectProtocol?
     private var liveScrollActive = false
@@ -2038,6 +2035,10 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
     private let latestMessageTopPadding: CGFloat = 72
+    /// Round navigation controls (pointer target; iOS uses 44pt for touch).
+    static let jumpControlSize: CGFloat = 36
+    static let unseenDotSize: CGFloat = 11
+    private let unseenDot = NSView()
 
     var onJumpToLatest: (() -> Void)?
     var onRequestLatestTail: (() -> Void)?
@@ -2129,20 +2130,33 @@ final class MacChatScrollView: MacSmoothScrollView {
         chatDocumentView.onFullWindowGeometryReady = { [weak self] in
             self?.requestInitialTailTrimIfReady()
         }
+        composerSubmitObserver = NotificationCenter.default.addObserver(
+            forName: .krakiComposerSubmitted,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let sessionId = note.userInfo?["sessionId"] as? String,
+                  sessionId == self.representedSessionId else { return }
+            self.returnToNewestAfterLocalSubmit()
+        }
 
         for material in [jumpMaterial, latestStartMaterial] {
             material.material = .popover
             material.blendingMode = .withinWindow
             material.state = .active
             material.wantsLayer = true
-            material.layer?.cornerRadius = 15
+            material.layer?.cornerRadius = Self.jumpControlSize / 2
             material.layer?.masksToBounds = true
             material.layer?.borderWidth = 0.5
             material.isHidden = true
             addSubview(material)
         }
 
-        jumpButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Jump to latest")
+        // Double chevron = "all the way to the newest"; drawn smaller so its
+        // footprint matches the single ↑ chevron.
+        jumpButton.image = NSImage(systemSymbolName: "chevron.down.2", accessibilityDescription: "Jump to latest")?
+            .withSymbolConfiguration(.init(pointSize: 11.5, weight: .semibold))
         jumpButton.imagePosition = .imageOnly
         jumpButton.isBordered = false
         jumpButton.target = self
@@ -2152,16 +2166,24 @@ final class MacChatScrollView: MacSmoothScrollView {
         addSubview(jumpButton)
 
         latestStartButton.image = NSImage(
-            systemSymbolName: "arrow.up.to.line",
-            accessibilityDescription: "Jump to start of latest message"
-        )
+            systemSymbolName: "chevron.up",
+            accessibilityDescription: "Jump to previous reply start"
+        )?.withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
         latestStartButton.imagePosition = .imageOnly
         latestStartButton.isBordered = false
         latestStartButton.target = self
         latestStartButton.action = #selector(latestStartTapped)
         latestStartButton.isHidden = true
-        latestStartButton.setAccessibilityLabel("Jump to start of latest message")
+        latestStartButton.setAccessibilityLabel("Jump to previous reply start")
         addSubview(latestStartButton)
+
+        unseenDot.wantsLayer = true
+        unseenDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        unseenDot.layer?.cornerRadius = Self.unseenDotSize / 2
+        unseenDot.layer?.borderWidth = 1.5
+        unseenDot.isHidden = true
+        unseenDot.setAccessibilityElement(false)
+        addSubview(unseenDot)
 
         bubbleActionMouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
@@ -2173,6 +2195,9 @@ final class MacChatScrollView: MacSmoothScrollView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
+        if let composerSubmitObserver {
+            NotificationCenter.default.removeObserver(composerSubmitObserver)
+        }
         scrollInteractionWatchdogWorkItem?.cancel()
         presentationHealthWorkItem?.cancel()
         chatDocumentView.tearDown()
@@ -2568,25 +2593,41 @@ final class MacChatScrollView: MacSmoothScrollView {
             scrollPolicy.pinToTail(observedOffset: bottom)
         }
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds)
+        let size = Self.jumpControlSize
         let jumpFrame = NSRect(
-            x: bounds.width - 16 - 52,
-            y: bounds.height - bottomContentInset - 16 - 30,
-            width: 52,
-            height: 30
+            x: bounds.width - 16 - size,
+            y: bounds.height - bottomContentInset - 16 - size,
+            width: size,
+            height: size
         )
         let latestStartFrame = NSRect(
             x: jumpFrame.minX,
-            y: jumpFrame.minY - 8 - jumpFrame.height,
-            width: jumpFrame.width,
-            height: jumpFrame.height
+            y: jumpFrame.minY - 10 - size,
+            width: size,
+            height: size
         )
         jumpMaterial.frame = jumpFrame
         jumpButton.frame = jumpFrame
         latestStartMaterial.frame = latestStartFrame
         latestStartButton.frame = latestStartFrame
+        let dot = Self.unseenDotSize
+        unseenDot.frame = NSRect(x: jumpFrame.maxX - dot + 2, y: jumpFrame.minY - 2, width: dot, height: dot)
+        var ring = NSColor.windowBackgroundColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            ring = NSColor.windowBackgroundColor.cgColor
+        }
+        unseenDot.layer?.borderColor = ring
+    }
+
+    /// Anything submitted from the composer is a new message (as on iOS):
+    /// return to the newest edge so the user sees what they just sent.
+    func returnToNewestAfterLocalSubmit() {
+        jumpTapped()
     }
 
     @objc private func jumpTapped() {
+        unseenReplies = 0
+        cancelNavigationLoad()
         geometryAnchorLock = nil
         scrollPolicy.beginTailNavigation(
             offset: contentView.bounds.minY,
@@ -2607,45 +2648,113 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     @objc private func latestStartTapped() {
+        navigateToPreviousReplyStart()
+    }
+
+    // MARK: Navigation targets (confirmed rule, as on iOS: step back through AI replies)
+
+    /// Content-space y of the reading line just below the top chrome.
+    private var readableTopY: CGFloat {
+        contentView.bounds.minY + latestMessageTopPadding - 8
+    }
+
+    private func landingOffset(forRowStart minY: CGFloat) -> CGFloat {
+        let minimumY = -topContentInset
+        let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
+        return min(maximumY, max(minimumY, minY - latestMessageTopPadding))
+    }
+
+    /// The reply whose start ↑ goes to: the nearest AI reply whose start lies
+    /// above the reading line. If the reply being read has its start cut off,
+    /// that is this reply; if its start is visible, it is the previous one.
+    private func previousReplyTarget() -> String? {
+        let line = readableTopY - 2
+        let current = contentView.bounds.minY
+        for reply in chatDocumentView.replyFrames.reversed()
+        where reply.frame.minY < line && landingOffset(forRowStart: reply.frame.minY) < current - 1 {
+            return reply.key
+        }
+        return nil
+    }
+
+    private var navigationLoadInFlight = false
+    private var navigationLoadGeneration = 0
+
+    private func cancelNavigationLoad() {
+        navigationLoadGeneration &+= 1
+        navigationLoadInFlight = false
+    }
+
+    /// ↑ control. When no loaded reply qualifies, older history is loaded
+    /// first ("not loaded" is never treated as "none"), then the glide lands
+    /// on the reply start.
+    func navigateToPreviousReplyStart() {
+        if let key = previousReplyTarget() {
+            glideToReplyStart(key)
+            return
+        }
+        guard !diagnosticAtOldest, !navigationLoadInFlight else {
+            updateJumpButtonVisibility(animated: true)
+            return
+        }
+        navigationLoadInFlight = true
+        navigationLoadGeneration &+= 1
+        updateJumpButtonVisibility(animated: true)
+        pollNavigationLoad(generation: navigationLoadGeneration, pagesRequested: 0, lastTop: diagnosticWindowTop, waited: 0)
+    }
+
+    private func pollNavigationLoad(generation: Int, pagesRequested: Int, lastTop: Int, waited: Int) {
+        guard generation == navigationLoadGeneration, navigationLoadInFlight else { return }
+        if let key = previousReplyTarget() {
+            navigationLoadInFlight = false
+            glideToReplyStart(key)
+            return
+        }
+        var pages = pagesRequested
+        var top = lastTop
+        var waitedMs = waited
+        if pages == 0 || (diagnosticWindowTop != top && !loadingOlder) {
+            // Request (another) older page: the previous one landed without a
+            // qualifying reply, or this is the first request.
+            guard !diagnosticAtOldest, pages < 8 else {
+                navigationLoadInFlight = false
+                updateJumpButtonVisibility(animated: true)
+                return
+            }
+            top = diagnosticWindowTop
+            pages += 1
+            waitedMs = 0
+            onScrolledNearTop?()
+        } else if waitedMs > 3_000 {
+            navigationLoadInFlight = false
+            updateJumpButtonVisibility(animated: true)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.pollNavigationLoad(generation: generation, pagesRequested: pages, lastTop: top, waited: waitedMs + 50)
+        }
+    }
+
+    private func glideToReplyStart(_ key: String) {
         geometryAnchorLock = nil
         scrollPolicy.beginLatestMessageStartNavigation()
-        latestStartJumpPending = hasUnloadedNewer
-        if hasUnloadedNewer {
-            // The true newest item may not be in the current sliding window.
-            // Ask the owner to re-anchor first; updateNSView completes this jump
-            // after the authoritative tail snapshot lands.
-            onRequestLatestTail?()
-        } else {
-            completeLatestStartJump()
-        }
+        updateJumpButtonVisibility(animated: true)
+        animateScroll(to: { [weak self] in
+            guard let self, let frame = self.chatDocumentView.frame(forKey: key) else {
+                return self?.contentView.bounds.minY ?? 0
+            }
+            return self.landingOffset(forRowStart: frame.minY)
+        }, completion: { [weak self] in
+            guard let self else { return }
+            self.scrollPolicy.endNavigation()
+            self.updateJumpButtonVisibility(animated: true)
+        })
     }
 
     func completeLatestStartJump() {
         latestStartJumpPending = false
-        guard let frame = chatDocumentView.latestItemFrame() else {
-            scrollPolicy.endNavigation()
-            updateJumpButtonVisibility(animated: false)
-            return
-        }
-        let minimumY = -topContentInset
-        let maximumY = max(
-            minimumY,
-            chatDocumentView.frame.height - contentView.bounds.height
-        )
-        let target = min(maximumY, max(minimumY, frame.minY - latestMessageTopPadding))
-        let point = NSPoint(x: contentView.bounds.origin.x, y: target)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
-            contentView.animator().bounds.origin = point
-        }
-        updateJumpButtonVisibility(animated: true)
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + ChatScrollPolicy.navigationSafetyTimeoutSeconds
-        ) { [weak self] in
-            guard let self else { return }
-            self.scrollPolicy.endNavigation()
-            self.updateJumpButtonVisibility(animated: false)
-        }
+        scrollPolicy.endNavigation()
+        navigateToPreviousReplyStart()
     }
 
     func setBottomContentInset(_ inset: CGFloat) {
@@ -2798,6 +2907,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     #endif
 
     private func preparePreciseScrollDelta(_ deltaY: CGFloat) {
+        cancelScrollAnimation()
         geometryAnchorLock = nil
         hasUserScrolled = true
         if !liveScrollActive { beginScrollInteraction(scrollerKnob: false) }
@@ -3028,6 +3138,17 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     #if DEBUG
+    var automationControlsVisible: (up: Bool, down: Bool) {
+        (jumpButtonVisibilityTargets[ObjectIdentifier(latestStartButton)] == true,
+         jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true)
+    }
+    var automationUnseenDotVisible: Bool { !unseenDot.isHidden }
+    var automationUpTargetKey: String? { previousReplyTarget() }
+    var automationControlFrames: (up: NSRect, down: NSRect, dot: NSRect) {
+        (latestStartButton.frame, jumpButton.frame, unseenDot.frame)
+    }
+    func automationTapUp() { latestStartTapped() }
+    func automationTapDown() { jumpTapped() }
     var automationWindowRange: (top: Int, bottom: Int)? {
         guard diagnosticWindowTop > 0,
               diagnosticWindowBottom >= diagnosticWindowTop else { return nil }
@@ -3085,26 +3206,37 @@ final class MacChatScrollView: MacSmoothScrollView {
         return min(maximumY, max(minimumY, desired))
     }
 
+    /// Replies that landed while the reader was away from the bottom; shown
+    /// as a red dot on ↓ and cleared on reaching the bottom.
+    private var unseenReplies = 0 {
+        didSet { syncUnseenDot() }
+    }
+
+    private func syncUnseenDot() {
+        unseenDot.isHidden = unseenReplies == 0
+            || jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != true
+    }
+
+    func noteAppendedReplies(_ count: Int, readerWasAtBottom: Bool) {
+        guard count > 0, !readerWasAtBottom else { return }
+        unseenReplies += count
+    }
+
+    /// End of the WHOLE conversation (unloaded newer history counts as not).
+    private var isAtConversationBottom: Bool {
+        !hasUnloadedNewer && distanceToBottom <= 8
+    }
+
     private func updateJumpButtonVisibility(animated: Bool) {
-        let visibility = scrollPolicy.navigationControlVisibility(
-            distanceToBottom: distanceToBottom,
-            viewportLength: contentView.bounds.height,
-            hasUnloadedNewer: hasUnloadedNewer,
-            currentOffset: contentView.bounds.minY,
-            latestMessageStartOffset: latestMessageStartTarget()
-        )
-        setJumpButtonVisibility(
-            jumpButton,
-            material: jumpMaterial,
-            shouldShow: visibility.showTail,
-            animated: animated
-        )
-        setJumpButtonVisibility(
-            latestStartButton,
-            material: latestStartMaterial,
-            shouldShow: visibility.showLatestMessageStart,
-            animated: animated
-        )
+        if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
+        let navigating = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
+        let hasContent = !chatDocumentView.itemKeys.isEmpty
+        let showTail = !navigating && hasContent && !isAtConversationBottom
+        let showUp = !navigating && hasContent
+            && (previousReplyTarget() != nil || !diagnosticAtOldest)
+        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
+        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
+        syncUnseenDot()
     }
 
     private func setJumpButtonVisibility(
@@ -3184,16 +3316,73 @@ final class MacChatScrollView: MacSmoothScrollView {
         )
         let point = NSPoint(x: 0, y: bottom)
         if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = ChatScrollPolicy.navigationControlAnimationDurationSeconds
-                contentView.animator().bounds.origin = point
-            }
+            // Re-targets every frame, so content appended during the glide
+            // (the message just sent, a landing answer) is still reached.
+            animateScroll(to: { [weak self] in
+                guard let self else { return 0 }
+                return self.chatDocumentView.frame.height - self.contentView.bounds.height
+            }, completion: { [weak self] in
+                guard let self else { return }
+                self.scrollPolicy.pinToTail(observedOffset: self.contentView.bounds.minY)
+                self.updateJumpButtonVisibility(animated: true)
+            })
         } else {
+            cancelScrollAnimation()
             contentView.bounds.origin = point
         }
         scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
         updateJumpButtonVisibility(animated: animated)
         reflectScrolledClipView(contentView)
+    }
+
+    // MARK: Programmatic scroll animation
+
+    /// Navigation glides are driven by our own timer (not `animator()`): the
+    /// target is re-evaluated every frame (content may grow or be measured
+    /// during the glide), any user scroll cancels it immediately, and it does
+    /// not depend on the window being on screen.
+    private var scrollAnimationTimer: Timer?
+    private var scrollAnimation: (
+        start: CFTimeInterval, duration: CFTimeInterval, from: CGFloat,
+        target: () -> CGFloat, completion: (() -> Void)?
+    )?
+    var isProgrammaticScrollActive: Bool { scrollAnimation != nil }
+
+    func animateScroll(
+        duration: CFTimeInterval = 0.28,
+        to target: @escaping () -> CGFloat,
+        completion: (() -> Void)? = nil
+    ) {
+        cancelScrollAnimation()
+        scrollAnimation = (CACurrentMediaTime(), duration, contentView.bounds.minY, target, completion)
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advanceScrollAnimation() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrollAnimationTimer = timer
+    }
+
+    func cancelScrollAnimation() {
+        scrollAnimationTimer?.invalidate()
+        scrollAnimationTimer = nil
+        scrollAnimation = nil
+    }
+
+    private func advanceScrollAnimation() {
+        guard let animation = scrollAnimation else { return }
+        let progress = min(1, (CACurrentMediaTime() - animation.start) / animation.duration)
+        let eased = 1 - pow(1 - progress, 3)
+        let minimumY = -contentInsets.top
+        let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
+        let target = min(maximumY, max(minimumY, animation.target()))
+        let y = animation.from + (target - animation.from) * CGFloat(eased)
+        contentView.bounds.origin = NSPoint(x: contentView.bounds.origin.x, y: y)
+        reflectScrolledClipView(contentView)
+        if progress >= 1 {
+            let completion = animation.completion
+            cancelScrollAnimation()
+            completion?()
+        }
     }
 }
 
@@ -3221,6 +3410,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let onOpenSteps: (Int, Bool) -> Void
     let onResolvePermission: (String, String?, String) -> Void
     let onAnswerQuestion: (String, String) -> Void
+    var onPendingAction: (String, MacPendingAction) -> Void = { _, _ in }
     let onOpenImage: (MacImagePreviewSelection) -> Void
     let onOpenHTMLArtifact: (ContentRef) -> Void
 
@@ -3260,6 +3450,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         scrollView.chatDocumentView.attachmentStore = attachmentStore
         scrollView.chatDocumentView.onResolvePermission = onResolvePermission
         scrollView.chatDocumentView.onAnswerQuestion = onAnswerQuestion
+        scrollView.chatDocumentView.onPendingAction = onPendingAction
         scrollView.chatDocumentView.onOpenImage = onOpenImage
         scrollView.chatDocumentView.onOpenHTMLArtifact = onOpenHTMLArtifact
         scrollView.chatDocumentView.onHeightInvalidated = { [weak scrollView] in
@@ -3327,6 +3518,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         scrollView.chatDocumentView.attachmentStore = attachmentStore
         scrollView.chatDocumentView.onResolvePermission = onResolvePermission
         scrollView.chatDocumentView.onAnswerQuestion = onAnswerQuestion
+        scrollView.chatDocumentView.onPendingAction = onPendingAction
         scrollView.chatDocumentView.onOpenImage = onOpenImage
         scrollView.chatDocumentView.onOpenHTMLArtifact = onOpenHTMLArtifact
         scrollView.onFirstUsableLayout = { [weak scrollView] in
@@ -3341,13 +3533,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
         let buildStarted = CACurrentMediaTime()
         let builtItems = MacChatCost.measure("buildContents") { buildContents(coordinator: context.coordinator) }
         let buildMs = (CACurrentMediaTime() - buildStarted) * 1_000
-        if scrollView.chatDocumentView.deferLiveSnapshotIfNeeded(
-            contents: builtItems,
-            documentWidth: max(documentWidth, 1),
-            sessionMode: sessionMode
-        ) {
-            return
-        }
+        // Live revisions keep applying while the user scrolls (as on iOS). The
+        // reading anchor is preserved below, and per-revision cost is flat.
         if !context.coordinator.firstLayout,
            let oldFirst = scrollView.chatDocumentView.itemKeys.first,
            let oldFirstIndex = builtItems.firstIndex(where: { $0.key == oldFirst }),
@@ -3422,6 +3609,10 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 scrollView.contentView.bounds.origin.y = target
             }
         }
+        scrollView.noteAppendedReplies(
+            scrollView.chatDocumentView.lastApplyAppendedReplies,
+            readerWasAtBottom: wasPinned || context.coordinator.forcePinOnNextUpdate
+        )
         let windowState = messageStore.windowState(sessionId)
         scrollView.notePresentationSnapshot(
             windowTop: windowState?.topSeq ?? 0,
@@ -3506,6 +3697,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                     signature: signature,
                     estimatedHeight: estimatedHeight(for: message),
                     visibleCharacterCount: utf8Length(message.interruptedDraft ?? message.content ?? message.result),
+                    isReply: true,
                     makeContent: {
                         MacChatBubbleContentBuilder.live(
                             card: card,
@@ -3526,6 +3718,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                     signature: signature,
                     estimatedHeight: estimatedHeight(for: message),
                     visibleCharacterCount: utf8Length(message.content ?? message.result),
+                    isReply: message.type == "agent_message",
                     makeContent: {
                         MacChatBubbleContentBuilder.make(
                             message: message,
@@ -3546,6 +3739,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 signature: liveCardSignature(liveCard),
                 estimatedHeight: estimatedHeight(forText: liveCard.text, hasAction: liveCard.action != nil),
                 visibleCharacterCount: liveCard.text.utf8.count,
+                isReply: true,
                 makeContent: {
                     MacChatBubbleContentBuilder.live(
                         card: liveCard,
@@ -3616,6 +3810,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         combineVisibleText(message.result, into: &hasher)
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
+        hasher.combine(message.payload["localState"]?.stringValue ?? "")
         hasher.combine(message.attachments?.count ?? 0)
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)
@@ -3644,6 +3839,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
             hasher.combine(action.answer ?? "")
             hasher.combine(action.payload["decision"]?.stringValue ?? "")
             hasher.combine(action.payload["success"]?.boolValue ?? false)
+            hasher.combine(action.payload["localPending"]?.boolValue ?? false)
+            hasher.combine(action.payload["localError"]?.stringValue ?? "")
         }
         return String(hasher.finalize())
     }

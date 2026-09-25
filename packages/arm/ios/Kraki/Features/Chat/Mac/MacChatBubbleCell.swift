@@ -916,6 +916,8 @@ final class MacChatBubbleCell: NSView {
     private let bodyView = MacBubbleTextView()
     private let stepsMaterial = NSView()
     private let stepsButton = NSButton()
+    private let deliveryStatus = NSButton()
+    private var deliveryStatusRevealWork: DispatchWorkItem?
     private lazy var actionHost = NSHostingView(rootView: Optional<MacBubbleActionSlot>.none)
     private lazy var imageHost = NSHostingView(rootView: Optional<MacBubbleImageGrid>.none)
     private let artifactCardsView = MacHTMLArtifactCardsView()
@@ -930,7 +932,7 @@ final class MacChatBubbleCell: NSView {
     private(set) var renderRevision = ""
     var documentWidthVar: CGFloat = 0
 
-    private var content: MacChatBubbleContent?
+    private(set) var content: MacChatBubbleContent?
     private var sessionMode: SessionMode = .discuss
     private var onTapSteps: ((MacChatBubbleCell) -> Void)?
     private var onResolvePermission: ((String, String?, String) -> Void)?
@@ -1212,12 +1214,22 @@ final class MacChatBubbleCell: NSView {
         stepsButton.action = #selector(stepsTapped)
         stepsButton.isHidden = true
         stepsButton.setAccessibilityLabel("Show steps")
+
+        deliveryStatus.isBordered = false
+        deliveryStatus.imagePosition = .imageOnly
+        deliveryStatus.target = self
+        deliveryStatus.action = #selector(deliveryStatusClicked(_:))
+        deliveryStatus.isHidden = true
+        addSubview(deliveryStatus)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        deliveryStatusRevealWork?.cancel()
+        deliveryStatus.isHidden = true
+        onPendingAction = nil
         content = nil
         bubbleSeq = 0
         canShowStepsFlag = false
@@ -1281,6 +1293,8 @@ final class MacChatBubbleCell: NSView {
         actionHost.isHidden = true
         stepsButton.isHidden = true
         stepsMaterial.isHidden = true
+        deliveryStatusRevealWork?.cancel()
+        deliveryStatus.isHidden = true
         tableViews.forEach { $0.isHidden = true }
 
         let width = max(120, documentWidth * 0.72)
@@ -1383,6 +1397,7 @@ final class MacChatBubbleCell: NSView {
 
         stepsButton.isHidden = !content.canShowSteps
         stepsMaterial.isHidden = !content.canShowSteps
+        configureDeliveryStatus(content)
 
         imageHost.rootView = (content.inlineImages.isEmpty && content.imageRefs.isEmpty)
             ? nil
@@ -1627,10 +1642,15 @@ final class MacChatBubbleCell: NSView {
             imageHost.frame = .zero
         }
 
+        if !deliveryStatus.isHidden {
+            deliveryStatus.frame = NSRect(x: x - 26, y: y + max(bubbleHeight, 1) - 22, width: 22, height: 22)
+        }
+
         if !stepsButton.isHidden {
+            // Steps "···" rides the bubble's top-LEADING edge (as on iOS).
             let size = NSSize(width: 34, height: 20)
             let frame = NSRect(
-                x: x + bubbleWidth - size.width - 8,
+                x: x + 8,
                 y: y - size.height / 2,
                 width: size.width,
                 height: size.height
@@ -1793,7 +1813,81 @@ final class MacChatBubbleCell: NSView {
             steps.target = self
             menu.addItem(steps)
         }
+        if content.pendingDeliveryState == "failed" {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            pendingActionItems().forEach { menu.addItem($0) }
+        }
         return menu.items.isEmpty ? nil : menu
+    }
+
+    // MARK: Optimistic delivery state
+
+    var onPendingAction: ((String, MacPendingAction) -> Void)?
+
+    #if DEBUG
+    var deliveryStatusForRegression: String? {
+        deliveryStatus.isHidden ? nil : deliveryStatus.accessibilityLabel()
+    }
+    #endif
+
+    private func pendingActionItems() -> [NSMenuItem] {
+        [("Retry", MacPendingAction.retry), ("Edit", .edit), ("Delete", .delete)].map { title, action in
+            let item = NSMenuItem(title: title, action: #selector(pendingMenuAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            return item
+        }
+    }
+
+    @objc private func pendingMenuAction(_ sender: NSMenuItem) {
+        guard let clientId = content?.pendingClientId,
+              let action = sender.representedObject as? MacPendingAction else { return }
+        onPendingAction?(clientId, action)
+    }
+
+    @objc private func deliveryStatusClicked(_ sender: NSButton) {
+        guard content?.pendingDeliveryState == "failed" else { return }
+        let menu = NSMenu()
+        pendingActionItems().forEach { menu.addItem($0) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 4), in: sender)
+    }
+
+    /// Beside an optimistic bubble: "sending" appears only after a short
+    /// delay so fast confirmations never flash an icon; "failed" is a red
+    /// mark whose click offers Retry / Edit / Delete.
+    private func configureDeliveryStatus(_ content: MacChatBubbleContent) {
+        deliveryStatusRevealWork?.cancel()
+        guard let state = content.pendingDeliveryState else {
+            deliveryStatus.isHidden = true
+            return
+        }
+        deliveryStatus.isHidden = false
+        let symbol = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        if state == "failed" {
+            deliveryStatus.image = NSImage(systemSymbolName: "exclamationmark.circle.fill",
+                                           accessibilityDescription: "Not delivered")?.withSymbolConfiguration(symbol)
+            deliveryStatus.contentTintColor = .systemRed
+            deliveryStatus.isEnabled = true
+            deliveryStatus.alphaValue = 1
+            deliveryStatus.setAccessibilityLabel("Not delivered. Click to retry, edit or delete")
+            deliveryStatus.toolTip = "Not delivered"
+        } else {
+            deliveryStatus.image = NSImage(systemSymbolName: "clock",
+                                           accessibilityDescription: "Sending")?.withSymbolConfiguration(symbol)
+            deliveryStatus.contentTintColor = .tertiaryLabelColor
+            deliveryStatus.isEnabled = false
+            deliveryStatus.setAccessibilityLabel("Sending")
+            deliveryStatus.toolTip = nil
+            deliveryStatus.alphaValue = 0
+            let work = DispatchWorkItem { [weak self] in
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.25
+                    self?.deliveryStatus.animator().alphaValue = 1
+                }
+            }
+            deliveryStatusRevealWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        }
     }
 
     @objc private func copyMessage() {

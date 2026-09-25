@@ -1033,7 +1033,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             maxCoreText = max(maxCoreText, diagnostics["coreTextCellCount"] as? Int ?? 0)
             maxTextKit = max(maxTextKit, diagnostics["textKitCellCount"] as? Int ?? 0)
         }
-        var deferredLiveCount = 0
+        let deferredLiveCount = 0
         var maxStreamingScrollMs: Double = 0
         var totalStreamingScrollMs: Double = 0
         scrollView.chatDocumentView.beginScrollInteraction(scrollerKnob: false)
@@ -1041,13 +1041,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             var revisionItems = items
             revisionItems[revisionItems.count - 1] = liveItem(round)
             let started = CACurrentMediaTime()
-            if scrollView.chatDocumentView.deferLiveSnapshotIfNeeded(
+            // Live revisions apply while scrolling (no scroll-time deferral).
+            scrollView.chatDocumentView.apply(
                 contents: revisionItems,
                 documentWidth: width,
                 sessionMode: .discuss
-            ) {
-                deferredLiveCount += 1
-            }
+            )
             let minimumY = -scrollView.contentInsets.top
             let maximumY = max(
                 minimumY,

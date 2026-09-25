@@ -578,24 +578,25 @@ struct MacChatComposer: View {
         case .denyPermission:
             guard hasText, let permission = pendingPermission else { return }
             let reason = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            appState.commandSender?.deny(
+            // Keep the draft if the decision could not be sent.
+            guard appState.commandSender?.deny(
                 sessionId: sessionId,
                 permissionId: permission.id,
                 reason: reason
-            )
+            ) == true else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
-            isFocused = false
+            didSubmitFromComposer()
         case .answerQuestion:
             guard hasText, let question = pendingQuestion else { return }
             let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            appState.commandSender?.answer(
+            guard appState.commandSender?.answer(
                 sessionId: sessionId,
                 questionId: question.id,
                 answer: answer,
                 wasFreeform: true
-            )
+            ) == true else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
-            isFocused = false
+            didSubmitFromComposer()
         case .prompt, .steer:
             handleSend()
         }
@@ -619,7 +620,15 @@ struct MacChatComposer: View {
         sessionStore.setDraft(sessionId, "")
         clearImage()
         if delivery == .prompt { awaitingActive = true }
-        isFocused = false
+        didSubmitFromComposer()
+    }
+
+    /// Anything submitted from the composer is a new message: the Chat
+    /// returns to its newest edge, and focus stays in the composer so a
+    /// follow-up can be typed immediately (as on iOS).
+    private func didSubmitFromComposer() {
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
+                                        userInfo: ["sessionId": sessionId])
     }
 
     private func handleModeSwipeChanged(_ dx: CGFloat) {

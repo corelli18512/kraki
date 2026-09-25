@@ -253,10 +253,13 @@ struct MacChatView: View {
             hash = hash &* 31 &+ (action.answer?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.choices?.joined(separator: "\u{1F}").hashValue ?? 0)
             hash = hash &* 31 &+ (action.cancelled ? 1 : 0)
+            hash = hash &* 31 &+ (action.payload["localPending"]?.boolValue == true ? 1 : 0)
+            hash = hash &* 31 &+ (action.payload["localError"]?.stringValue?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.payload["success"]?.boolValue == true ? 1 : 0)
             hash = hash &* 31 &+ (action.payload["running"]?.intValue ?? 0)
         }
         hash = hash &* 31 &+ (appState.commandSender?.outbox[sessionId]?.count ?? 0)
+        hash = hash &* 31 &+ viewModel.pendingSignature.hashValue
         return hash
     }
 
@@ -497,6 +500,7 @@ struct MacChatView: View {
                 },
                 onResolvePermission: resolveLivePermission,
                 onAnswerQuestion: answerLiveQuestion,
+                onPendingAction: handlePendingAction,
                 onOpenImage: onOpenImage,
                 onOpenHTMLArtifact: onOpenHTMLArtifact
             )
@@ -592,6 +596,21 @@ struct MacChatView: View {
             appState.commandSender?.deny(sessionId: sessionId, permissionId: permissionId)
         default:
             break
+        }
+    }
+
+    /// Failed optimistic input: retry, pull back into the composer, or drop.
+    private func handlePendingAction(_ clientId: String, _ action: MacPendingAction) {
+        guard let sender = appState.commandSender else { return }
+        switch action {
+        case .retry:
+            _ = sender.retryPending(sessionId: sessionId, clientId: clientId)
+        case .delete:
+            _ = sender.discardPending(sessionId: sessionId, clientId: clientId)
+        case .edit:
+            guard let text = sender.discardPending(sessionId: sessionId, clientId: clientId) else { return }
+            let draft = appState.sessionStore.drafts[sessionId] ?? ""
+            appState.sessionStore.setDraft(sessionId, draft.isEmpty ? text : draft + "\n" + text)
         }
     }
 

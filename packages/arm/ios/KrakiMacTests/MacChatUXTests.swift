@@ -297,7 +297,10 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             }
             let d = diag(fx)
             if (d["intersectingPlaceholderCount"] as? Int ?? 0) > 0 { st.placeholderFrames += 1 }
-            if now.contains(where: { !$0.placeholder && abs($0.configured - $0.h) > 1 }) { st.estimatedFrames += 1 }
+            if let bad = now.first(where: { !$0.placeholder && abs($0.configured - $0.h) > 1 }) {
+                st.estimatedFrames += 1
+                if st.log.count < 12 { st.log.append(String(format: "step %d mismatch seq %d live=%@ frame %.0f content %.0f", step, bad.seq, bad.live ? "Y" : "N", bad.h, bad.configured)) }
+            }
         }
         // At rest: nothing may move.
         if let a = anchor() {
@@ -336,5 +339,108 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             print("UXPROBE   window top=\(w?.topSeq ?? -1) bottom=\(w?.bottomSeq ?? -1) count=\(fx.app.messageStore.messages[sid]?.count ?? 0) atStart=\(fx.vm.atHistoryStart) loadingOlder=\(fx.vm.isLoadingOlder) offset=\(fx.sv.contentView.bounds.minY) diag.older=\(diag(fx)["olderSpinnerVisible"] ?? "") paging=\(fx.sv.edgePagingDiagnostics.filter { ["olderEdgeArmed","olderPageConsumed","policyInteractionActive","loadingOlder","liveScrollActive","allowsEdgePaging"].contains($0.key) })")
             windows.forEach { $0.orderOut(nil) }
         }
+    }
+
+    func testProbeSendWhileScrolledUp() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(900)
+        print("UXPROBE send before dist=\(distanceToBottom(fx))")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "新的问题：这个怎么修？")
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+        for t in [50, 150, 400, 900] {
+            drain(t == 50 ? 50 : t - [50, 150, 400, 900][[50, 150, 400, 900].firstIndex(of: t)! - 1])
+            let last = cells(fx).last
+            print(String(format: "UXPROBE send t=%dms dist=%.0f hidden=%.0f lastSeq=%d lastY=%.0f", t, distanceToBottom(fx), hiddenBelowComposer(fx), last?.seq ?? -1, last?.screenY ?? -1))
+        }
+    }
+
+    func testProbeAnimatedScrollInHost() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(900)
+        print("UXPROBE anim active=\(NSApp.isActive) policy=\(NSApp.activationPolicy().rawValue) key=\(fx.window.isKeyWindow) visible=\(fx.window.isVisible) occl=\(fx.window.occlusionState.contains(.visible))")
+        fx.sv.scrollToBottom(animated: true)
+        for i in 0..<10 { drain(60); print("UXPROBE anim t=\(i*60) y=\(fx.sv.contentView.bounds.minY) dist=\(distanceToBottom(fx))") }
+    }
+
+    func testProbeNavigation() throws {
+        let fx = try makeFixture(total: 120)
+        drain(1_200)
+        for _ in 0..<12 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(900)
+        print("UXPROBE nav controls=\(fx.sv.automationControlsVisible) frames=\(fx.sv.automationControlFrames)")
+        var previousSeq = Int.max
+        for step in 0..<14 {
+            let key = fx.sv.automationUpTargetKey
+            fx.sv.automationTapUp()
+            drain(900)
+            let seq = key.flatMap { k in fx.app.messageStore.messages[sid]?.first { "\($0.id)" == k }?.seq } ?? -1
+            let frame = key.flatMap { fx.doc.frame(forKey: $0) }
+            let screenY = (frame?.minY ?? 0) - fx.sv.contentView.bounds.minY
+            let type = fx.app.messageStore.messages[sid]?.first { $0.seq == seq }?.type ?? "?"
+            print(String(format: "UXPROBE nav up#%d target=%@ seq=%d type=%@ landedScreenY=%.0f monotonic=%@ win=%d..%d", step, key ?? "nil", seq, type, screenY, seq < previousSeq ? "yes" : "NO", fx.app.messageStore.windows[sid]?.topSeq ?? 0, fx.app.messageStore.windows[sid]?.bottomSeq ?? 0))
+            if seq > 0 { previousSeq = seq }
+        }
+        // New reply while away → red dot; ↓ → bottom, dot cleared.
+        try startTurn(fx, seq: 121)
+        try land(fx, seq: 122, text: Self.zh)
+        drain(500)
+        print("UXPROBE nav unseenDot=\(fx.sv.automationUnseenDotVisible) controls=\(fx.sv.automationControlsVisible)")
+        fx.sv.automationTapDown()
+        drain(1_500)
+        print("UXPROBE nav afterDown dist=\(distanceToBottom(fx)) unseenDot=\(fx.sv.automationUnseenDotVisible) controls=\(fx.sv.automationControlsVisible)")
+    }
+
+    func testProbePendingStates() throws {
+        var outboundOK = true
+        let fx = try makeFixture(total: 20, outbound: { _ in outboundOK })
+        fx.app.commandSender?.confirmationTimeout = .milliseconds(400)
+        drain(1_000)
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条会发送失败")
+        func pendingStatus() -> String? {
+            fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell.deliveryStatusForRegression
+        }
+        drain(100)
+        print("UXPROBE pending t=100 status=\(pendingStatus() ?? "nil")")
+        drain(900)
+        print("UXPROBE pending t=1000 status=\(pendingStatus() ?? "nil") hidden=\(hiddenBelowComposer(fx))")
+        let clientId = fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell.content?.pendingClientId
+        fx.doc.onPendingAction?(clientId ?? "", .retry)
+        drain(100)
+        print("UXPROBE pending retry status=\(pendingStatus() ?? "nil")")
+        drain(900)
+        print("UXPROBE pending retry-timeout status=\(pendingStatus() ?? "nil")")
+        fx.doc.onPendingAction?(clientId ?? "", .edit)
+        drain(200)
+        print("UXPROBE pending edit status=\(pendingStatus() ?? "nil") draft=\(fx.app.sessionStore.drafts[sid] ?? "nil")")
+        _ = outboundOK
+    }
+
+    func testProbeScrollInsideStreamingReply() throws {
+        let fx = try makeFixture(total: 30)
+        drain(1_000)
+        try startTurn(fx, seq: 31)
+        let chars = Array(Self.longAnswer(9_000))
+        var streamed = 0
+        func push(_ n: Int) {
+            guard streamed < chars.count else { return }
+            fx.app.messageStore.applyCardMessage(sid, String(chars[streamed..<min(streamed + n, chars.count)]), reset: false)
+            streamed += n
+        }
+        while streamed < 3_000 { push(40); drain(20) }
+        drain(500)
+        var revisions = Set<String>()
+        let hb = Heartbeat(); hb.start()
+        let st = scrollAndTrack(fx, packets: 240, px: 6, intervalMs: 8, burst: 80, pauseMs: 300) { step in
+            push(10)
+            if let live = fx.doc.automationVisibleCells.first(where: { $0.key == "__live__" }) { revisions.insert(live.cell.renderRevision) }
+        }
+        hb.stop()
+        print(String(format: "UXPROBE inside-stream jumps=%d worst=%.0f placeholderFrames=%d estimatedFrames=%d restJump=%.0f liveRevisionsSeenWhileScrolling=%d hitch=%.0fms >33=%d >16=%d",
+                     st.jumps, st.worstJump, st.placeholderFrames, st.estimatedFrames, st.restJump, revisions.count, hb.worst, hb.over(33), hb.over(16.7)))
+        st.log.forEach { print("UXPROBE   \($0)") }
     }
 }

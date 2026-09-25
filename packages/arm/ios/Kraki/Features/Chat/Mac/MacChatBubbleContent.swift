@@ -24,9 +24,14 @@ struct MacChatBubbleContent {
     /// Attachments are siblings of the colored bubble and keep independent,
     /// stable geometry when a short text bubble hugs its content.
     let attachmentWidth: CGFloat
+    /// Optimistic input delivery state ("sending" | "failed"), nil otherwise.
+    var pendingDeliveryState: String? = nil
+    var pendingClientId: String? = nil
 
     var bodyTextWidth: CGFloat { bubbleWidth - MacChatBubbleLayout.msgPadH * 2 }
 }
+
+enum MacPendingAction { case retry, edit, delete }
 
 enum MacChatBubbleLayout {
     static let outerH: CGFloat = 12
@@ -81,7 +86,7 @@ enum MacChatBubbleContentBuilder {
             action: nil,
             documentWidth: documentWidth
         )
-        return MacChatBubbleContent(
+        var content = MacChatBubbleContent(
             seq: message.seq,
             sessionId: sessionId,
             kind: kind,
@@ -97,6 +102,11 @@ enum MacChatBubbleContentBuilder {
             bubbleWidth: width,
             attachmentWidth: attachmentWidth
         )
+        if message.type == "pending_input" {
+            content.pendingDeliveryState = message.payload["localState"]?.stringValue ?? "sending"
+            content.pendingClientId = message.payload["clientId"]?.stringValue
+        }
+        return content
     }
 
     /// Streaming and frozen terminal turns use the same bubble path as iOS.
