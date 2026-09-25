@@ -615,7 +615,7 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.app.messageProvider?.ingestTailCandidate(sid, json: arrival)
         fx.vc.syncLiveUpdates()
         XCTAssertEqual(fx.vc.automationUnseenArrivals, 1)
-        XCTAssertEqual(fx.vc.automationUnseenBadge, "1", "count shows as a corner badge")
+        XCTAssertTrue(fx.vc.automationUnseenDotVisible, "unseen reply shows as a red dot (no count)")
         let round = fx.vc.automationJumpControlSizes
         XCTAssertEqual(round.down, CGSize(width: 44, height: 44), "↓ is a 44pt circle even with a count")
         XCTAssertEqual(round.up, CGSize(width: 44, height: 44))
@@ -623,7 +623,7 @@ final class ChatUXRegressionTests: XCTestCase {
         drain(1_500)
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
         XCTAssertEqual(fx.vc.automationUnseenArrivals, 0)
-        XCTAssertNil(fx.vc.automationUnseenBadge)
+        XCTAssertFalse(fx.vc.automationUnseenDotVisible)
         XCTAssertFalse(fx.vc.automationControlsVisible.down)
     }
 }

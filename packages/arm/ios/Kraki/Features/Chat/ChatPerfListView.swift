@@ -603,7 +603,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private static let latestMessageTopPadding: CGFloat = 124
     /// Round navigation controls: iOS minimum comfortable tap target.
     private static let jumpControlSize: CGFloat = 44
-    private let unseenBadge = UILabel()
+    private let unseenBadge = UIView()
     /// The chat header (back / title / more) is part of the page, drawn by
     /// SessionDetailView over the top glass band, not a system navigation
     /// bar; reserve its height plus breathing room under it.
@@ -1153,7 +1153,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         jumpButton.setImage(
             // Double chevron: "all the way to the newest", distinct from the
             // single-step ↑ control above it.
-            UIImage(systemName: "chevron.down.2", withConfiguration: symbolConfiguration)
+            // Smaller point size: the stacked glyph is ~19×19 at 16pt vs the
+            // single chevron's ~19×12; 13pt gives the same visual footprint.
+            UIImage(systemName: "chevron.down.2",
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
                 ?? UIImage(systemName: "chevron.down", withConfiguration: symbolConfiguration),
             for: .normal
         )
@@ -1215,22 +1218,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         view.addSubview(latestMessageStartButton)
         latestMessageStartButtonBlur = startBlur
 
-        // Unseen-reply count: a corner badge on the round ↓ control.
+        // Unseen reply: a plain red dot on the round ↓ control (there is at
+        // most one reply to catch up on, so no count).
         unseenBadge.translatesAutoresizingMaskIntoConstraints = false
-        unseenBadge.font = .systemFont(ofSize: 11, weight: .bold)
-        unseenBadge.textColor = .white
-        unseenBadge.textAlignment = .center
-        unseenBadge.backgroundColor = tint
-        unseenBadge.layer.cornerRadius = 9
-        unseenBadge.layer.masksToBounds = true
+        unseenBadge.backgroundColor = .systemRed
+        unseenBadge.layer.cornerRadius = 5
+        unseenBadge.layer.borderWidth = 1.5
+        unseenBadge.layer.borderColor = UIColor.systemBackground.cgColor
         unseenBadge.isHidden = true
+        unseenBadge.isUserInteractionEnabled = false
         unseenBadge.isAccessibilityElement = false
         jumpButton.addSubview(unseenBadge)
         NSLayoutConstraint.activate([
-            unseenBadge.heightAnchor.constraint(equalToConstant: 18),
-            unseenBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
-            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -5),
-            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 5),
+            unseenBadge.widthAnchor.constraint(equalToConstant: 10),
+            unseenBadge.heightAnchor.constraint(equalToConstant: 10),
+            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -8),
+            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 8),
         ])
 
         NSLayoutConstraint.activate([
@@ -1319,8 +1322,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     private func refreshJumpButtonTitle() {
         if unseenArrivals > 0 {
-            let title = unseenArrivals > 99 ? "99+" : "\(unseenArrivals)"
-            unseenBadge.text = title.count > 1 ? " \(title) " : title
+            unseenBadge.layer.borderColor = UIColor.systemBackground
+                .resolvedColor(with: traitCollection).cgColor
             unseenBadge.isHidden = false
             jumpButton.accessibilityValue = "\(unseenArrivals) new"
         } else {
@@ -1510,7 +1513,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         view.layoutIfNeeded()
         return (latestMessageStartButton.bounds.size, jumpButton.bounds.size)
     }
-    var automationUnseenBadge: String? { unseenBadge.isHidden ? nil : unseenBadge.text?.trimmingCharacters(in: .whitespaces) }
+    var automationUnseenDotVisible: Bool { !unseenBadge.isHidden }
     #endif
 
     /// Re-anchor at the chat's true newest end, then pin the viewport to the
