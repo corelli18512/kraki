@@ -200,21 +200,29 @@ final class TabBarNavigationUITests: XCTestCase {
         expect(true, "list after slow completed swipe")
     }
 
-    /// Header mode control: expand, pick a mode, auto-collapse to it.
+    /// Header mode control: native segmented control; stays open while in
+    /// use and closes only after 3s without interaction. (XCUITest adds ~0.3-1s
+    /// of idle-waiting per action, so checks use wall-clock time from the
+    /// last tap rather than fixed sleeps.)
     func testHeaderModePicker() {
         row(0).tap(); settle()
         let collapsed = app.buttons["chat.mode.collapsed"]
         XCTAssertTrue(collapsed.waitForExistence(timeout: 3))
         XCTAssertTrue(collapsed.label.contains("Discuss"))
-        collapsed.tap(); settle(0.5)
-        let execute = app.buttons["chat.mode.execute"]
+        collapsed.tap()
+        let execute = app.buttons["Execute"]
         XCTAssertTrue(execute.waitForExistence(timeout: 2), "expanded picker shows all modes")
-        XCTAssertTrue(app.buttons["chat.mode.safe"].exists && app.buttons["chat.mode.delegate"].exists)
-        execute.tap(); settle(1.2)
-        XCTAssertTrue(collapsed.waitForExistence(timeout: 2), "picker collapses after choosing")
-        XCTAssertTrue(collapsed.label.contains("Execute"), "collapsed capsule shows the new mode")
+        execute.tap()
+        var lastTap: Date
+        XCTAssertTrue(app.buttons["Safe"].exists, "choosing a mode does not close the picker")
+        app.buttons["Safe"].tap()
+        XCTAssertTrue(app.buttons["Delegate"].exists, "still open while being used")
+        lastTap = Date()   // before tap(): tap() itself waits for app idle afterwards
+        app.buttons["Execute"].tap()
+        XCTAssertTrue(collapsed.waitForExistence(timeout: 6), "closes by itself when idle")
+        let idle = Date().timeIntervalSince(lastTap)
+        XCTAssertGreaterThanOrEqual(idle, 2.6, "must stay open ~3s after the last interaction (closed after \(idle)s)")
+        XCTAssertTrue(collapsed.label.contains("Execute"), "collapsed capsule shows the chosen mode")
         expect(false, "chat with mode picker")
-        collapsed.tap(); settle(4.0)
-        XCTAssertTrue(collapsed.exists, "idle expansion collapses by itself")
     }
 }

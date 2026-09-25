@@ -293,9 +293,11 @@ struct SessionDetailView: View {
 }
 
 /// Session mode control in the chat header (mirrors the Mac chat header).
-/// Collapsed: a glass capsule showing the current mode. Expanded: the four
-/// modes spread across the available width; picking one collapses after a
-/// short beat, and an idle expansion collapses after 3s.
+/// Collapsed: a glass capsule showing the current mode. Expanded: the same
+/// native tinted segmented control as the Session info sheet (drag or tap
+/// the thumb; it slides and recolors) spanning the width right of back.
+/// It closes only after 3s without any interaction; touching it pauses the
+/// countdown and every change restarts it.
 struct HeaderModePicker: View {
     /// Debug-only: keep the picker expanded (for screenshots).
     static var startsExpanded: Bool {
@@ -305,46 +307,54 @@ struct HeaderModePicker: View {
         false
         #endif
     }
+    static let idleCollapse: Duration = .seconds(3)
     private static let modes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
 
     let sessionId: String
     @Binding var expanded: Bool
     @Environment(AppState.self) private var appState
-    @State private var collapseTask: Task<Void, Never>?
+    /// Reference-typed so UIKit control callbacks (which capture a copy of
+    /// this view) always reach the one live countdown.
+    @State private var idle = IdleCountdown()
 
     private var current: SessionMode { appState.sessionStore.sessionModes[sessionId] ?? .discuss }
 
     var body: some View {
         if expanded {
-            HStack(spacing: 2) {
-                ForEach(Self.modes, id: \.self) { mode in
-                    Button {
-                        if mode != current {
-                            UISelectionFeedbackGenerator().selectionChanged()
-                            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
-                        }
-                        collapse(after: .milliseconds(450))
-                    } label: {
-                        segment(mode, selected: mode == current)
-                            .frame(maxWidth: .infinity)
+            TintedSegmentedControl(
+                items: Self.modes.map { $0.rawValue.capitalized },
+                selection: Binding(
+                    get: { Self.modes.firstIndex(of: current) ?? 1 },
+                    set: { index in
+                        let mode = Self.modes[index]
+                        guard mode != current else { return }
+                        appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(mode.rawValue.capitalized)
-                    .accessibilityAddTraits(mode == current ? .isSelected : [])
-                    .accessibilityIdentifier("chat.mode.\(mode.rawValue)")
+                ),
+                tintColor: UIColor(Color.modeColor(current)),
+                onInteraction: { [idle, expanded = $expanded] touching in
+                    if touching {
+                        idle.cancel()
+                    } else {
+                        idle.restart(after: Self.idleCollapse) { expanded.wrappedValue = false }
+                    }
                 }
-            }
-            .padding(3)
+            )
             .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .padding(.horizontal, 5)
             .frame(height: ChatHeaderMetrics.buttonSize)
+            // Same glass as the other header controls so scrolled content
+            // never shows through the segment labels.
             .modifier(GlassCapsule())
+            .animation(.easeInOut(duration: 0.3), value: current)
+            .onAppear { scheduleCollapse() }
+            .onDisappear { idle.cancel() }
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .trailing)))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Session mode")
+            .accessibilityIdentifier("chat.mode.picker")
         } else {
             Button {
                 expanded = true
-                collapse(after: .seconds(3))
             } label: {
                 HStack(spacing: 6) {
                     Circle().fill(Color.modeColor(current)).frame(width: 7, height: 7)
@@ -366,30 +376,30 @@ struct HeaderModePicker: View {
         }
     }
 
-    private func segment(_ mode: SessionMode, selected: Bool) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(selected ? Color.white : Color.modeColor(mode)).frame(width: 6, height: 6)
-            Text(mode.rawValue.capitalized)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity)
-        .frame(height: ChatHeaderMetrics.buttonSize - 6)
-        .background { if selected { Capsule().fill(Color.modeColor(mode)) } }
-        .contentShape(Capsule())
+    private func scheduleCollapse() {
+        let expanded = $expanded
+        idle.restart(after: Self.idleCollapse) { expanded.wrappedValue = false }
     }
+}
 
-    private func collapse(after delay: Duration) {
-        guard !Self.startsExpanded else { return }
-        collapseTask?.cancel()
-        collapseTask = Task { @MainActor in
+/// A single restartable countdown.
+@MainActor
+final class IdleCountdown {
+    private var task: Task<Void, Never>?
+
+    func restart(after delay: Duration, _ fire: @escaping @MainActor () -> Void) {
+        guard !HeaderModePicker.startsExpanded else { return }
+        task?.cancel()
+        task = Task { @MainActor in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            expanded = false
+            fire()
         }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
     }
 }
 

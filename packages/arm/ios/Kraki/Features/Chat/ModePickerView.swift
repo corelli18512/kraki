@@ -113,16 +113,24 @@ struct TintedSegmentedControl: UIViewRepresentable {
     let items: [String]
     @Binding var selection: Int
     let tintColor: UIColor
+    /// Touch lifecycle: `true` when a finger goes down on the control, `false`
+    /// when it lifts / cancels or the value changes. Lets hosts keep
+    /// transient UI open while the user is interacting.
+    var onInteraction: ((Bool) -> Void)? = nil
 
     func makeUIView(context: Context) -> UISegmentedControl {
         let control = UISegmentedControl(items: items)
         control.selectedSegmentIndex = selection
         control.selectedSegmentTintColor = tintColor
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.began), for: .touchDown)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.ended),
+                          for: [.touchUpInside, .touchUpOutside, .touchCancel])
         return control
     }
 
     func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.parent = self
         control.selectedSegmentIndex = selection
         UIView.animate(withDuration: 0.3) {
             control.selectedSegmentTintColor = tintColor
@@ -132,12 +140,16 @@ struct TintedSegmentedControl: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     class Coordinator: NSObject {
-        let parent: TintedSegmentedControl
+        var parent: TintedSegmentedControl
         init(_ parent: TintedSegmentedControl) { self.parent = parent }
 
         @objc func changed(_ control: UISegmentedControl) {
             parent.selection = control.selectedSegmentIndex
+            parent.onInteraction?(false)
         }
+
+        @objc func began() { parent.onInteraction?(true) }
+        @objc func ended() { parent.onInteraction?(false) }
     }
 }
 
