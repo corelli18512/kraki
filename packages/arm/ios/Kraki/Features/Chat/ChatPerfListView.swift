@@ -2105,18 +2105,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let shouldFollow = shouldFollowLiveTail
         let context = UICollectionViewFlowLayoutInvalidationContext()
         context.invalidateItems(at: [indexPath])
-        // An item-only invalidation grows FlowLayout's content size but NOT
-        // UIScrollView.contentSize. Every tail pin / distance / helper reads
-        // the scroll view, so report the delta explicitly; otherwise a growing
-        // streaming bubble slides under the composer until the next reload.
+        // An item-only invalidation updates FlowLayout's content size but NOT
+        // UIScrollView.contentSize (every tail pin / distance reads the latter).
+        // Report the growth PLUS any drift already present, so the scroll view
+        // always converges on the layout's truth instead of accumulating error
+        // (which showed as a gap under the bubble after a table rendered).
+        let layoutHeight = collectionView.collectionViewLayout.collectionViewContentSize.height
+        let drift = layoutHeight - collectionView.contentSize.height
         let oldItemHeight = collectionView.layoutAttributesForItem(at: indexPath)?.frame.height ?? 0
         let newItemHeight = self.collectionView(
             collectionView,
             layout: collectionView.collectionViewLayout,
             sizeForItemAt: indexPath
         ).height
-        if abs(newItemHeight - oldItemHeight) > 0.01 {
-            context.contentSizeAdjustment = CGSize(width: 0, height: newItemHeight - oldItemHeight)
+        let adjustment = (newItemHeight - oldItemHeight) + drift
+        if abs(adjustment) > 0.01 {
+            context.contentSizeAdjustment = CGSize(width: 0, height: adjustment)
         }
         collectionView.collectionViewLayout.invalidateLayout(with: context)
 
@@ -2521,6 +2525,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         warmWindow()
         updateJumpButtonVisibility()
     }
+
+    #if DEBUG
+    var automationContentSizeMismatch: CGFloat {
+        collectionView.contentSize.height - collectionView.collectionViewLayout.collectionViewContentSize.height
+    }
+    #endif
 
     private func pinToBottom(reason: String, animated: Bool = false) {
         guard collectionView.numberOfItems(inSection: 0) > 0 else { return }

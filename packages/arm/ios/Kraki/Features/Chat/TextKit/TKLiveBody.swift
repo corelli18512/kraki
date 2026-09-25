@@ -219,7 +219,15 @@ enum TKBodyChunks {
 
     /// Exact height of one chunk (cached by width + content).
     static func height(_ chunk: NSAttributedString, width: CGFloat) -> CGFloat {
-        let key = "\(Int(width * 2))\u{1F}\(chunk.length)\u{1F}\(chunk.string)" as NSString
+        // A table is a single U+FFFC in the string: rows streaming into it do
+        // not change the text, so its geometry must be part of the key.
+        var attachments = ""
+        chunk.enumerateAttribute(.attachment, in: NSRange(location: 0, length: chunk.length)) { value, range, _ in
+            if let table = value as? TKTableAttachment {
+                attachments += "\(range.location):\(table.tableLayout.bubbleViewportHeight),"
+            }
+        }
+        let key = "\(Int(width * 2))\u{1F}\(chunk.length)\u{1F}\(attachments)\u{1F}\(chunk.string)" as NSString
         if let hit = heightCache.object(forKey: key) { return CGFloat(hit.doubleValue) }
         let measured = TKMeasure.height(chunk, width: width)
         heightCache.setObject(NSNumber(value: Double(measured)), forKey: key)

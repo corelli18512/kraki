@@ -156,6 +156,7 @@ final class ChatUXRegressionTests: XCTestCase {
             fx.vc.syncLiveUpdates()
             drain(24)
             worstHidden = max(worstHidden, hiddenBelowComposer(fx.cv))
+            XCTAssertLessThanOrEqual(abs(fx.vc.automationContentSizeMismatch), 0.5, "scroll content size must match layout")
             let up = fx.vc.automationControlsVisible.up
             if let lastUp, lastUp != up { upToggles += 1 }
             lastUp = up
@@ -175,6 +176,56 @@ final class ChatUXRegressionTests: XCTestCase {
         let settled = try XCTUnwrap(rows(fx.cv).last)
         XCTAssertEqual(settled.y, landed.y, accuracy: 0.5)
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
+    }
+
+    /// A table streamed row by row (the answer continues after it) must keep
+    /// the live bubble exactly as tall as its content and pinned to the tail.
+    func testStreamingTableKeepsBubbleHeightAndTailGap() throws {
+        let fx = try makeFixture(total: 20)
+        drain(800)
+        try startTurn(fx, seq: 21)
+        var rowsText = ""
+        for i in 1...14 { rowsText += "| 指标\(i) | 覆盖设备 iOS、Android 以及更多平台 \(i) |\n" }
+        let full = Self.zh + "\n\n" + Self.zh + "\n\n| 项目 | 说明 |\n|---|---|\n" + rowsText
+            + "\n**H5 和小程序也能做精致。** 最终差异仍是设计与实现质量。\n\n## 为什么偏向原生\n\n" + Self.list + "\n\n" + Self.zh
+        let chars = Array(full)
+        var worst: (hidden: CGFloat, gap: CGFloat, clip: CGFloat, shrink: CGFloat) = (0, 0, 0, 0)
+        var previousHeight: CGFloat = 0
+        var i = 0
+        while i < chars.count {
+            fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 9, chars.count)]), reset: false)
+            i += 9
+            fx.vc.syncLiveUpdates()
+            drain(24)
+            guard let live = rows(fx.cv).last else { continue }
+            let visibleBottom = fx.cv.bounds.height - fx.cv.adjustedContentInset.bottom
+            worst.hidden = max(worst.hidden, live.y + live.h - visibleBottom)
+            worst.gap = max(worst.gap, visibleBottom - (live.y + live.h))
+            worst.shrink = max(worst.shrink, previousHeight - live.h)
+            previousHeight = live.h
+            // Independent truth: TextKit measurement of every chunk, no caches.
+            let content = TKBubbleContent.live(card: fx.app.messageStore.cards[sid]!, agent: "claude",
+                                               sessionId: sid, steps: 1)
+            let width = content.bodyTextWidth(cellWidth: fx.cv.bounds.width)
+            var truth: CGFloat = 0
+            if let body = content.body {
+                for chunk in TKBodyChunks.chunks(body) {
+                    truth += chunk.gapBefore + TKMeasure.height(body.attributedSubstring(from: chunk.range), width: width)
+                }
+            }
+            worst.clip = max(worst.clip, abs(content.bodyTextHeight(cellWidth: fx.cv.bounds.width) - ceil(truth)))
+            worst.gap = max(worst.gap, abs(fx.vc.automationContentSizeMismatch))
+            // Concurrent idle height refreshes (warming) interleaved with growth.
+            if i % 45 == 0 { NotificationCenter.default.post(name: .tkCodeHighlightReady, object: nil) }
+        }
+        print(String(format: "UXGATE table hidden=%.0f gap=%.0f heightErr=%.0f", worst.hidden, worst.gap, worst.clip))
+        XCTAssertLessThanOrEqual(worst.hidden, 1, "tail must stay above the composer")
+        XCTAssertLessThanOrEqual(worst.gap, 1, "no empty gap between the live bubble and the composer")
+        XCTAssertLessThanOrEqual(worst.clip, 1, "live bubble height must match a fresh measurement")
+        // Small shrinks are legitimate markdown reflow (a raw `| a | b |` line
+        // or `**` markers collapsing once parsed). The stale table geometry
+        // bug oscillated by ~190pt.
+        XCTAssertLessThanOrEqual(worst.shrink, 20, "a growing answer must not collapse its bubble")
     }
 
     /// Incremental streaming parse must render exactly what a full parse of
