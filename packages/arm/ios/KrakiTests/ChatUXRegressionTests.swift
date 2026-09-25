@@ -557,6 +557,22 @@ final class ChatUXRegressionTests: XCTestCase {
                       "reused bubble animated: \(cell.bubbleBackgroundAnimationKeysForRegression)")
     }
 
+    /// The resolved-state card_action can be coalesced away; the following
+    /// slot clear must still confirm the optimistic answer.
+    func testSlotClearConfirmsOptimisticAnswer() throws {
+        let fx = try makeFixture(total: 4)
+        fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
+        drain(300)
+        try startTurn(fx, seq: 5)
+        let store = fx.app.messageStore
+        store.applyCardAction(sid, question("q3"))
+        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q3", answer: "A") == true)
+        store.applyCardAction(sid, nil)
+        drain(600)
+        XCTAssertEqual(store.cards[sid]?.action?.answer, "A", "delivered answer must not be reverted")
+        XCTAssertNil(store.cards[sid]?.action?.payload["localError"])
+    }
+
     func testAnswerTransportFailureRevertsWithError() throws {
         let fx = try makeFixture(total: 4) { msg in (msg["type"] as? String) != "answer" }
         drain(300)

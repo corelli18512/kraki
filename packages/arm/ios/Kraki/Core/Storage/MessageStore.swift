@@ -909,6 +909,11 @@ final class MessageStore {
             // supersedes it.
             var retained = current
             retained.payload["retained"] = AnyCodable(true)
+            // Tentacle only retires a prompt it has resolved, so the clear is
+            // itself confirmation. (Its resolved-state card_action may have been
+            // coalesced away in transit; without this a delivered answer would
+            // later be reverted as "not confirmed".)
+            retained.payload.removeValue(forKey: "localPending")
             card.action = retained
             cards[sessionId] = card
             return
