@@ -9,6 +9,7 @@ struct ChatView: View {
     let sessionId: String
 
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
 
     /// View model for session/device/live-card observation. The list controller
     /// owns its own flat-spine snapshot and pagination state.
@@ -229,26 +230,29 @@ struct ChatView: View {
     /// little below the floating controls. Blur + a light page-color veil,
     /// both masked with an eased curve so there is no visible band edge.
     private var topEdgeBlur: some View {
-        // Strong only behind the status bar; already easing through the
-        // floating controls' row and gone right below it, so the first lines
-        // of content under the header stay readable.
+        // Modeled on iOS 26 Messages: a long, eased fade whose strongest
+        // point is still translucent (never an opaque slab), tinted neutral
+        // black in dark mode / white in light mode rather than the page's
+        // navy-tinted surface color.
+        let dark = colorScheme == .dark
+        let tint = dark ? Color.black : Color.white
         let mask = LinearGradient(
             stops: [
-                .init(color: .black, location: 0.0),
-                .init(color: .black.opacity(0.9), location: 0.42),
-                .init(color: .black.opacity(0.5), location: 0.68),
-                .init(color: .black.opacity(0.15), location: 0.86),
+                .init(color: .black.opacity(0.9), location: 0.0),
+                .init(color: .black.opacity(0.78), location: 0.3),
+                .init(color: .black.opacity(0.5), location: 0.55),
+                .init(color: .black.opacity(0.22), location: 0.78),
                 .init(color: .clear, location: 1.0),
             ],
             startPoint: .top,
             endPoint: .bottom
         )
         return ZStack {
-            Rectangle().fill(.ultraThinMaterial)
-            Color.surfacePrimary.opacity(0.55)
+            Rectangle().fill(.ultraThinMaterial).opacity(0.85)
+            tint.opacity(dark ? 0.55 : 0.5)
         }
         .mask(mask)
-        .frame(height: 112)
+        .frame(height: 170)
         .frame(maxWidth: .infinity, alignment: .top)
         .ignoresSafeArea(.container, edges: .top)
         .allowsHitTesting(false)

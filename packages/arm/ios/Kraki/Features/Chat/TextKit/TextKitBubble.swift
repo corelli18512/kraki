@@ -1838,7 +1838,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         bodyChunkHasTable = [false]
 
         // Historical bubble affordance (786cbdf3): a compact "···" capsule
-        // floating over the bubble's top-right edge. For traceable messages it
+        // floating over the bubble's top-left edge. For traceable messages it
         // opens Steps directly; the full action menu is available by long-press.
         var configuration = UIButton.Configuration.gray()
         configuration.title = "···"
@@ -2382,8 +2382,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             deliveryStatus.frame = CGRect(x: x - 28, y: y + max(bubbleHeight, 1) - 24, width: 24, height: 24)
         }
         let buttonSize = moreButton.sizeThatFits(CGSize(width: 80, height: 30))
+        // Steps "···" rides the bubble's top-LEADING edge.
         moreButton.frame = CGRect(
-            x: x + bubbleWidth - buttonSize.width - 8,
+            x: x + 8,
             y: y - buttonSize.height / 2,
             width: buttonSize.width, height: buttonSize.height)
     }
