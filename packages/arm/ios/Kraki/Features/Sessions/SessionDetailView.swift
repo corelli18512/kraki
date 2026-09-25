@@ -34,11 +34,19 @@ struct SessionDetailView: View {
             if let session {
                 sessionContent(session)
             } else if sessionStore.isPending(sessionId) {
-                pendingView
+                pageWithHeader(title: "New Session", showsMore: false) { pendingView }
             } else {
-                notFoundView
+                pageWithHeader(title: "", showsMore: false) { notFoundView }
             }
         }
+        // The Session list hides the system navigation bar and draws its own
+        // header, so the chat does the same: its header is page content and
+        // slides with the page. A shared UINavigationBar that is shown here
+        // and hidden on the list animates its own background in and out
+        // DURING an interactive swipe-back (the chat's top brightened
+        // mid-gesture, and iOS 26's scroll-edge blur detached from the page).
+        .toolbar(.hidden, for: .navigationBar)
+        .enablesSwipeBack()
         // Hide the tab bar across all branches — pending placeholder,
         // not-found, and the live chat — so the optimistic landing
         // from "Create Session" doesn't briefly show the tab bar
@@ -114,42 +122,70 @@ struct SessionDetailView: View {
     // MARK: - Session Content
 
     private func sessionContent(_ session: SessionInfo) -> some View {
-        ChatView(sessionId: sessionId)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    toolbarTitle(session)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showInfoSheet = true
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .accessibilityLabel("More")
-                }
-            }
-            .sheet(isPresented: $showInfoSheet) {
-                SessionInfoSheet(session: session)
-                    .environment(appState)
-            }
+        // While the relay channel is broken we replace the session title with
+        // "Reconnecting…" so the user knows the chat is currently in a
+        // stale-read state. Wording matches the ambient indicator on the
+        // brand header.
+        let title = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
+        return pageWithHeader(title: title, showsMore: true) {
+            ChatView(sessionId: sessionId)
+        }
+        .sheet(isPresented: $showInfoSheet) {
+            SessionInfoSheet(session: session)
+                .environment(appState)
+        }
     }
 
-    // MARK: - Toolbar Title
+    // MARK: - Header (page content, not a navigation bar)
 
-    private func toolbarTitle(_ session: SessionInfo) -> some View {
-        // While the relay channel is broken we replace the session
-        // title with "Reconnecting…" so the user knows the chat is
-        // currently in a stale-read state. Wording matches the
-        // ambient indicator on the brand header.
-        let displayTitle = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
+    private func pageWithHeader<Content: View>(
+        title: String,
+        showsMore: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack(alignment: .top) {
+            content()
+            chatHeader(title: title, showsMore: showsMore)
+        }
+    }
 
-        return Text(displayTitle)
-            .font(.subheadline)
-            .fontWeight(.semibold)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(.easeInOut(duration: 0.2), value: appState.isReconnecting)
+    private func chatHeader(title: String, showsMore: Bool) -> some View {
+        HStack(spacing: 10) {
+            headerButton(systemName: "chevron.left", label: "Back") { dismiss() }
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: title)
+                .accessibilityAddTraits(.isHeader)
+            if showsMore {
+                headerButton(systemName: "ellipsis", label: "More") { showInfoSheet = true }
+            } else {
+                Color.clear.frame(width: ChatHeaderMetrics.buttonSize, height: ChatHeaderMetrics.buttonSize)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: ChatHeaderMetrics.height)
+    }
+
+    @ViewBuilder
+    private func headerButton(systemName: String, label: String, action: @escaping () -> Void) -> some View {
+        let button = Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(systemName == "ellipsis" ? Color.krakiPrimary : Color.primary)
+                .frame(width: ChatHeaderMetrics.buttonSize, height: ChatHeaderMetrics.buttonSize)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        if #available(iOS 26.0, *) {
+            button.glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            button.background(.ultraThinMaterial, in: Circle())
+        }
     }
 
     // MARK: - Pending placeholder
@@ -188,7 +224,6 @@ struct SessionDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Not Found
@@ -209,6 +244,11 @@ struct SessionDetailView: View {
         guard scenePhase == .active, session != nil else { return }
         appState.markSessionReadIfVisible(sessionId)
     }
+}
+
+enum ChatHeaderMetrics {
+    static let height: CGFloat = 54
+    static let buttonSize: CGFloat = 44
 }
 
 #endif

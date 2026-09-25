@@ -57,9 +57,9 @@ final class IOSChatScrollProductionTests: XCTestCase {
 
         let afterStart = snapshot(collectionView)
         let latest = try XCTUnwrap(afterStart.visibleBubbles.last(where: { $0.id == "ios-scroll-gate:80" }))
-        XCTAssertGreaterThanOrEqual(latest.screenY, 100,
+        XCTAssertGreaterThanOrEqual(latest.screenY, 116,
                                     "latest message start must remain below the top navigation glass")
-        XCTAssertLessThanOrEqual(latest.screenY, 140,
+        XCTAssertLessThanOrEqual(latest.screenY, 146,
                                  "latest message start should land near the reading position")
         XCTAssertGreaterThan(afterStart.distanceToBottom, 100,
                              "latest-message-start must not pin the viewport to the tail")

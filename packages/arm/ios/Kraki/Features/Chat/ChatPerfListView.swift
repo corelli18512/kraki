@@ -598,8 +598,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var jumpButtonBottomConstraint: NSLayoutConstraint?
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
-    private static let latestMessageTopPadding: CGFloat = 118
-    private static let topContentPadding: CGFloat = 8
+    /// Reading line for navigation landings: status bar (≈62) + chat header
+    /// (54) + the same 8pt gap used above the first message.
+    private static let latestMessageTopPadding: CGFloat = 124
+    /// The chat header (back / title / more) is part of the page, drawn by
+    /// SessionDetailView over the top glass band, not a system navigation
+    /// bar; reserve its height plus breathing room under it.
+    private static let topContentPadding: CGFloat = ChatHeaderMetrics.height + 8
 
     /// Flip to `true` for the spinner-free local-seamless experiment.
     /// `false` = the robust, production-style experience: show a loading

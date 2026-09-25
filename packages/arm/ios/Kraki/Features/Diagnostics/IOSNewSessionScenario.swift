@@ -42,12 +42,21 @@ enum IOSNewSessionScenario {
             // A few existing Sessions so the list has realistic rows.
             for index in 0..<6 {
                 let id = "existing-\(index)"
+                let history = (1...12).map { seq in
+                    ChatMessage(type: seq % 2 == 1 ? "user_message" : "agent_message", seq: seq,
+                                sessionId: id, deviceId: deviceID, timestamp: "2026-09-25T00:00:00Z",
+                                payload: ["content": AnyCodable(seq % 2 == 1 ? "帮我看一下第 \(seq) 个问题" : answer)])
+                }
+                try database.insert(id, history)
                 app.sessionStore.upsertSession(SessionInfo(
                     id: id, deviceId: deviceID, deviceName: "Scenario Mac", agent: "pi",
                     model: "m", title: "Existing session \(index + 1)", state: .idle, mode: .discuss,
-                    lastSeq: 0, readSeq: 0, messageCount: 0,
+                    lastSeq: 12, readSeq: 12, messageCount: 12,
                     createdAt: Date().addingTimeInterval(Double(-3_600 * (index + 1))), pinned: false))
+                app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 12, deviceId: deviceID)
             }
+            app.connectionStatus = .connected
+            app.hasCompletedInitialConnect = true
             let tentacle = ScriptedTentacle(app: app)
             app.testOutboundMessageHandler = { message, target, _ in
                 tentacle.receive(message, target: target)

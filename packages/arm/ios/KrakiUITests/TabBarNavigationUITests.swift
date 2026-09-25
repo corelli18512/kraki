@@ -81,7 +81,7 @@ final class TabBarNavigationUITests: XCTestCase {
     }
 
     private func backButton() -> XCUIElement {
-        app.navigationBars.buttons.element(boundBy: 0)
+        app.buttons["Back"].firstMatch
     }
 
     // MARK: Cases
@@ -118,7 +118,7 @@ final class TabBarNavigationUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
             if row(round).isHittable { row(round).tap() }
             settle(1.2)
-            if tabBarVisible && !app.navigationBars.buttons.element(boundBy: 0).exists {
+            if tabBarVisible && !app.buttons["Back"].exists {
                 expect(true, "list round \(round)")
             } else {
                 expect(false, "chat round \(round)")
@@ -189,5 +189,16 @@ final class TabBarNavigationUITests: XCTestCase {
         settle()
         backToList()
         expect(true, "list after rapid open/close")
+    }
+
+    /// Slow, visible gestures for frame-by-frame review of the tab bar during
+    /// swipe-back: a held swipe that is cancelled, then a slow completed one.
+    func testSwipeBackTimingForRecording() {
+        row(0).tap(); settle(1.5)
+        edgeSwipe(to: 0.35, hold: 1.2); settle(1.2)
+        XCTAssertFalse(row(5).isHittable, "short held swipe must cancel")
+        expect(false, "chat after held cancel")
+        edgeSwipe(to: 0.95, hold: 0.8); settle(1.5)
+        expect(true, "list after slow completed swipe")
     }
 }

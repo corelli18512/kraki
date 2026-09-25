@@ -161,13 +161,6 @@ struct ChatView: View {
         // Painting `surfacePrimary` here restores the soft surface
         // that the glass strips visibly tint and blur.
         .background(Color.surfacePrimary)
-        // iOS 26's default navbar is fully transparent at the scroll-
-        // edge; the wrapping UICollectionView buries the scroll view
-        // from auto-detect, so the system can't switch to the
-        // materialised state on scroll either. Force the navbar to
-        // always render its glass material so the chat cells blur
-        // underneath instead of revealing RootView's solid bg.
-        .toolbarBackground(.visible, for: .navigationBar)
         .fullScreenCover(item: $selectedImagePreview) { selection in
             IOSImagePreviewGallery(selection: selection)
         }
@@ -239,14 +232,17 @@ struct ChatView: View {
                 LinearGradient(
                     stops: [
                         .init(color: .black, location: 0.0),
-                        .init(color: .black, location: 0.62),
+                        // Full material behind the status bar AND the chat
+                        // header (back / title / more), which is page content
+                        // rather than a system navigation bar.
+                        .init(color: .black, location: 0.84),
                         .init(color: .clear, location: 1.0),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
-            .frame(height: 112)
+            .frame(height: 140)
             .frame(maxWidth: .infinity, alignment: .top)
             .ignoresSafeArea(.container, edges: .top)
             .allowsHitTesting(false)

@@ -587,7 +587,7 @@ final class ChatUXRegressionTests: XCTestCase {
                            "controls hide during the glide")
             drain(1_500)
             let frame = try XCTUnwrap(fx.cv.layoutAttributesForItem(at: IndexPath(item: target, section: 0))?.frame)
-            XCTAssertEqual(frame.minY - fx.cv.contentOffset.y, 118, accuracy: 2, "lands at the reply start")
+            XCTAssertEqual(frame.minY - fx.cv.contentOffset.y, 124, accuracy: 2, "lands at the reply start")
         }
         XCTAssertTrue(fx.vc.automationControlsVisible.down, "↓ shown whenever not at the bottom")
 

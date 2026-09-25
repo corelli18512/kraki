@@ -134,6 +134,7 @@
 		7E5A1ECF6308F2C8497326D9 /* ToolStatusIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37B56341037B8B54A732E91A /* ToolStatusIcon.swift */; };
 		7F8B97ABC14A68350C0D43A6 /* KrakiVoiceInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27B142EE244DC79E4A704032 /* KrakiVoiceInputTests.swift */; };
 		7F988F04B287C0F6E680229C /* ConnectionStatusChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */; };
+		8069508FC020876BEC23411F /* SwipeBackEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */; };
 		84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */; };
 		85698BAF42714CA74CF81CB8 /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
 		858780C909D555E4389D53F9 /* MacMockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63302839C21EFDE37CC56C13 /* MacMockData.swift */; };
@@ -371,6 +372,7 @@
 		788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NewSessionSheet+macOS.swift"; sourceTree = "<group>"; };
 		7A84BF94261411BEF2B51101 /* LazyImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyImageView.swift; sourceTree = "<group>"; };
 		8261534E96234C67C920EDCA /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
+		82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeBackEnabler.swift; sourceTree = "<group>"; };
 		830D9504C54F439410E9F9CD /* AvatarTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarTestView.swift; sourceTree = "<group>"; };
 		83BE65A70DC511EA8DBC81A3 /* VoiceProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceProtocol.swift; sourceTree = "<group>"; };
 		83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
@@ -749,6 +751,7 @@
 				ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */,
 				924794751B4507709362A1AE /* LucideIcon.swift */,
 				9656866F24E385A14F14E699 /* NavigationIDs.swift */,
+				82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */,
 				6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */,
 				A625A24B0C13AF8010778069 /* Theme.swift */,
 				BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */,
@@ -1203,6 +1206,7 @@
 				A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */,
 				2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */,
 				CECE9A56D0EB248D3802DABF /* StepsSheetView.swift in Sources */,
+				8069508FC020876BEC23411F /* SwipeBackEnabler.swift in Sources */,
 				4D3AA3C13B660D6A36DEF21C /* TKLiveBody.swift in Sources */,
 				4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */,
 				A97C02EF361069D7F5305B77 /* TentacleCLIManager.swift in Sources */,
