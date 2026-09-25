@@ -839,7 +839,14 @@ final class MacTableScrollView: NSScrollView {
     private let showMoreButton = NSButton()
     private let overflowHint = NSImageView()
 
+    #if DEBUG
+    static var debugInstanceCount = 0
+    #endif
+
     init(layout: MacTableLayout, fullTable: Bool = false) {
+        #if DEBUG
+        Self.debugInstanceCount += 1
+        #endif
         tableLayout = layout
         self.fullTable = fullTable
         canvas = MacTableCanvasView(layout: layout, fullTable: fullTable)

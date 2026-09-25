@@ -93,6 +93,10 @@ class MacChatUXTestCase: XCTestCase {
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
+        // Visible on top (without taking keyboard focus) so AppKit performs the
+        // real display/compositing work; an occluded window skips drawing and
+        // under-reports main-thread cost.
+        window.level = .floating
         window.orderFrontRegardless()
         windows.append(window)
         drain(50)
@@ -162,6 +166,75 @@ class MacChatUXTestCase: XCTestCase {
         try ingest(fx, ["type": "agent_message", "seq": seq, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:02.000Z", "payload": ["content": text]])
         fx.app.messageStore.endCardTurn(sid)
+    }
+
+    struct ScrollStats {
+        var steps = 0, jumps = 0, worstJump: CGFloat = 0, placeholderFrames = 0, estimatedFrames = 0
+        var restJump: CGFloat = 0, pagesLoaded = 0, blockedSteps = 0
+        var log: [String] = []
+    }
+
+    /// Scrolls with precise packets (px per packet, ms between packets) and
+    /// tracks the bubble at the viewport middle: it must move exactly by the
+    /// applied scroll delta. Anything else is an unexpected jump.
+    func scrollAndTrack(_ fx: Fx, packets: Int, px: CGFloat, intervalMs: Int, restMs: Int = 1_500,
+                        burst: Int = .max, pauseMs: Int = 0,
+                        during: ((Int) -> Void)? = nil) -> ScrollStats {
+        var st = ScrollStats()
+        let startTop = fx.app.messageStore.windows[sid]?.topSeq ?? 0
+        func anchor() -> Cell? {
+            let mid = fx.sv.contentView.bounds.height / 2
+            return cells(fx).filter { !$0.placeholder }.min { abs($0.screenY + $0.h / 2 - mid) < abs($1.screenY + $1.h / 2 - mid) }
+        }
+        for step in 0..<packets {
+            if step > 0, step % burst == 0 {
+                // Fingers lifted: the gesture ends; track stillness meanwhile.
+                if let a = anchor() {
+                    for _ in 0..<max(1, pauseMs / 25) {
+                        during?(step)
+                        drain(25)
+                        if let b = cells(fx).first(where: { $0.seq == a.seq }), abs(b.screenY - a.screenY) > 1 {
+                            st.jumps += 1; st.worstJump = max(st.worstJump, abs(b.screenY - a.screenY))
+                            if st.log.count < 12 { st.log.append(String(format: "pause@%d seq %d moved %.0f", step, a.seq, b.screenY - a.screenY)) }
+                            break
+                        }
+                    }
+                }
+            }
+            during?(step)
+            guard let a = anchor() else { drain(intervalMs); continue }
+            let r = fx.sv.automationPreciseScrollPacket(deltaY: px)
+            let applied = r.before - r.after
+            if applied < px - 0.5 { st.blockedSteps += 1 }
+            drain(intervalMs)
+            st.steps += 1
+            let now = cells(fx)
+            if let b = now.first(where: { $0.seq == a.seq }) {
+                let err = b.screenY - (a.screenY + applied)
+                if abs(err) > 1 {
+                    st.jumps += 1
+                    st.worstJump = max(st.worstJump, abs(err))
+                    if st.log.count < 12 { st.log.append(String(format: "step %d seq %d err %.0f (applied %.0f)", step, a.seq, err, applied)) }
+                }
+            }
+            let d = diag(fx)
+            if (d["intersectingPlaceholderCount"] as? Int ?? 0) > 0 { st.placeholderFrames += 1 }
+            if let bad = now.first(where: { !$0.placeholder && abs($0.configured - $0.h) > 1 }) {
+                st.estimatedFrames += 1
+                if st.log.count < 12 { st.log.append(String(format: "step %d mismatch seq %d live=%@ frame %.0f content %.0f", step, bad.seq, bad.live ? "Y" : "N", bad.h, bad.configured)) }
+            }
+        }
+        // At rest: nothing may move.
+        if let a = anchor() {
+            var worst: CGFloat = 0
+            for _ in 0..<(restMs / 50) {
+                drain(50)
+                if let b = cells(fx).first(where: { $0.seq == a.seq }) { worst = max(worst, abs(b.screenY - a.screenY)) }
+            }
+            st.restJump = worst
+        }
+        st.pagesLoaded = max(0, startTop - (fx.app.messageStore.windows[sid]?.topSeq ?? 0))
+        return st
     }
 
     func dumpCost(_ tag: String) {
@@ -244,75 +317,6 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             let desc = c.suffix(2).map { String(format: "[%d y=%.0f h=%.0f cfg=%.0f%@]", $0.seq, $0.screenY, $0.h, $0.configured, $0.placeholder ? " PH" : "") }.joined()
             print(String(format: "UXPROBE land t=%.0fms dist=%.0f hidden=%.0f %@", (CACurrentMediaTime() - t0) * 1000, distanceToBottom(fx), hiddenBelowComposer(fx), desc))
         }
-    }
-
-    struct ScrollStats {
-        var steps = 0, jumps = 0, worstJump: CGFloat = 0, placeholderFrames = 0, estimatedFrames = 0
-        var restJump: CGFloat = 0, pagesLoaded = 0, blockedSteps = 0
-        var log: [String] = []
-    }
-
-    /// Scrolls with precise packets (px per packet, ms between packets) and
-    /// tracks the bubble at the viewport middle: it must move exactly by the
-    /// applied scroll delta. Anything else is an unexpected jump.
-    func scrollAndTrack(_ fx: Fx, packets: Int, px: CGFloat, intervalMs: Int, restMs: Int = 1_500,
-                        burst: Int = .max, pauseMs: Int = 0,
-                        during: ((Int) -> Void)? = nil) -> ScrollStats {
-        var st = ScrollStats()
-        let startTop = fx.app.messageStore.windows[sid]?.topSeq ?? 0
-        func anchor() -> Cell? {
-            let mid = fx.sv.contentView.bounds.height / 2
-            return cells(fx).filter { !$0.placeholder }.min { abs($0.screenY + $0.h / 2 - mid) < abs($1.screenY + $1.h / 2 - mid) }
-        }
-        for step in 0..<packets {
-            if step > 0, step % burst == 0 {
-                // Fingers lifted: the gesture ends; track stillness meanwhile.
-                if let a = anchor() {
-                    for _ in 0..<max(1, pauseMs / 25) {
-                        during?(step)
-                        drain(25)
-                        if let b = cells(fx).first(where: { $0.seq == a.seq }), abs(b.screenY - a.screenY) > 1 {
-                            st.jumps += 1; st.worstJump = max(st.worstJump, abs(b.screenY - a.screenY))
-                            if st.log.count < 12 { st.log.append(String(format: "pause@%d seq %d moved %.0f", step, a.seq, b.screenY - a.screenY)) }
-                            break
-                        }
-                    }
-                }
-            }
-            during?(step)
-            guard let a = anchor() else { drain(intervalMs); continue }
-            let r = fx.sv.automationPreciseScrollPacket(deltaY: px)
-            let applied = r.before - r.after
-            if applied < px - 0.5 { st.blockedSteps += 1 }
-            drain(intervalMs)
-            st.steps += 1
-            let now = cells(fx)
-            if let b = now.first(where: { $0.seq == a.seq }) {
-                let err = b.screenY - (a.screenY + applied)
-                if abs(err) > 1 {
-                    st.jumps += 1
-                    st.worstJump = max(st.worstJump, abs(err))
-                    if st.log.count < 12 { st.log.append(String(format: "step %d seq %d err %.0f (applied %.0f)", step, a.seq, err, applied)) }
-                }
-            }
-            let d = diag(fx)
-            if (d["intersectingPlaceholderCount"] as? Int ?? 0) > 0 { st.placeholderFrames += 1 }
-            if let bad = now.first(where: { !$0.placeholder && abs($0.configured - $0.h) > 1 }) {
-                st.estimatedFrames += 1
-                if st.log.count < 12 { st.log.append(String(format: "step %d mismatch seq %d live=%@ frame %.0f content %.0f", step, bad.seq, bad.live ? "Y" : "N", bad.h, bad.configured)) }
-            }
-        }
-        // At rest: nothing may move.
-        if let a = anchor() {
-            var worst: CGFloat = 0
-            for _ in 0..<(restMs / 50) {
-                drain(50)
-                if let b = cells(fx).first(where: { $0.seq == a.seq }) { worst = max(worst, abs(b.screenY - a.screenY)) }
-            }
-            st.restJump = worst
-        }
-        st.pagesLoaded = max(0, startTop - (fx.app.messageStore.windows[sid]?.topSeq ?? 0))
-        return st
     }
 
     func testProbeHistoryScroll() throws {
