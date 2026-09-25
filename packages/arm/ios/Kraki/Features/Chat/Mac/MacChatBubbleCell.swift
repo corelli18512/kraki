@@ -107,7 +107,9 @@ final class MacCoreTextLayoutArtifact: NSObject {
         guard attributed.length > 0, width > 0 else { return nil }
         let cacheKey = "\(key)|w:\(Int(width.rounded()))" as NSString
         if let hit = cache.object(forKey: cacheKey) { return hit }
-        let built = MacCoreTextLayoutArtifact(attributed: attributed, width: width)
+        let built = MacChatCost.measure(Thread.isMainThread ? "ctArtifact(main)" : "ctArtifact(bg)") {
+            MacCoreTextLayoutArtifact(attributed: attributed, width: width)
+        }
         cache.setObject(
             built,
             forKey: cacheKey,
@@ -439,6 +441,10 @@ final class MacCoreTextBodyView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        MacChatCost.measure("ctDraw") { drawBody(dirtyRect) }
+    }
+
+    private func drawBody(_ dirtyRect: NSRect) {
         guard let artifact,
               let context = NSGraphicsContext.current?.cgContext else { return }
         drawBlockBackgrounds(artifact.blocks, dirtyRect: dirtyRect)
@@ -914,7 +920,7 @@ final class MacChatBubbleCell: NSView {
     private lazy var imageHost = NSHostingView(rootView: Optional<MacBubbleImageGrid>.none)
     private let artifactCardsView = MacHTMLArtifactCardsView()
     private var tableViews: [MacTableScrollView] = []
-    private var tableAttachmentIDs: [ObjectIdentifier] = []
+    private var tableContentKeys: [String] = []
 
     private(set) var bubbleSeq = 0
     private(set) var canShowStepsFlag = false
@@ -1242,7 +1248,7 @@ final class MacChatBubbleCell: NSView {
         actionHost.rootView = nil
         tableViews.forEach { $0.removeFromSuperview() }
         tableViews.removeAll(keepingCapacity: true)
-        tableAttachmentIDs.removeAll(keepingCapacity: true)
+        tableContentKeys.removeAll(keepingCapacity: true)
         stepsButton.isHidden = true
         stepsMaterial.isHidden = true
         bubbleBG.fillColor = .clear
@@ -1523,6 +1529,10 @@ final class MacChatBubbleCell: NSView {
     }
 
     override func layout() {
+        MacChatCost.measure("cell.layout") { layoutBody() }
+    }
+
+    private func layoutBody() {
         super.layout()
         contentClipView.frame = bounds
         guard let content else { return }
@@ -1631,45 +1641,51 @@ final class MacChatBubbleCell: NSView {
     }
 
     private func syncTableViews(bodyOrigin: NSPoint) {
+        let placements: [(layout: MacTableLayout, frame: NSRect)]
+        let anchor: NSView
         if usesCoreTextBody, let artifact = coreTextBodyView.artifact {
-            let placements = artifact.tables
-            let desiredIDs = placements.map { ObjectIdentifier($0.attachment) }
-            if desiredIDs != tableAttachmentIDs {
-                tableViews.forEach { $0.removeFromSuperview() }
-                tableAttachmentIDs = desiredIDs
-                tableViews = placements.map { placement in
-                    let table = MacTableScrollView(layout: placement.attachment.tableLayout)
-                    contentClipView.addSubview(table, positioned: .above, relativeTo: coreTextBodyView)
-                    return table
-                }
-            }
-            for (index, placement) in placements.enumerated() where index < tableViews.count {
-                var frame = placement.frame
-                frame.origin.x += bodyOrigin.x
-                frame.origin.y += bodyOrigin.y
-                tableViews[index].frame = frame
-                tableViews[index].needsLayout = true
-            }
-            return
+            placements = artifact.tables.map { ($0.attachment.tableLayout, $0.frame) }
+            anchor = coreTextBodyView
+        } else {
+            placements = bodyView.tablePlacements().map { ($0.attachment.tableLayout, $0.frame) }
+            anchor = bodyView
         }
-        let placements = bodyView.tablePlacements()
-        let desiredIDs = placements.map { ObjectIdentifier($0.attachment) }
-        if desiredIDs != tableAttachmentIDs {
-            tableViews.forEach { $0.removeFromSuperview() }
-            tableAttachmentIDs = desiredIDs
-            tableViews = placements.map { placement in
-                let table = MacTableScrollView(layout: placement.attachment.tableLayout)
-                contentClipView.addSubview(table, positioned: .above, relativeTo: bodyView)
-                return table
-            }
-        }
+        reconcileTableViews(placements.map(\.layout), above: anchor)
         for (index, placement) in placements.enumerated() where index < tableViews.count {
             var frame = placement.frame
             frame.origin.x += bodyOrigin.x
             frame.origin.y += bodyOrigin.y
-            tableViews[index].frame = frame
-            tableViews[index].needsLayout = true
+            if tableViews[index].frame != frame {
+                tableViews[index].frame = frame
+            }
         }
+    }
+
+    /// Streaming re-parses the body on every revision, producing new table
+    /// attachment objects each time. Match table views by *content* so only a
+    /// table that actually changed (the one still receiving rows) is rebuilt;
+    /// re-inserting NSScrollViews on every token was the dominant main-thread
+    /// cost of long streaming answers.
+    private func reconcileTableViews(_ layouts: [MacTableLayout], above anchor: NSView) {
+        let keys = layouts.map(\.contentKey)
+        guard keys != tableContentKeys else { return }
+        var reusable: [String: [MacTableScrollView]] = [:]
+        for (key, view) in zip(tableContentKeys, tableViews) { reusable[key, default: []].append(view) }
+        var next: [MacTableScrollView] = []
+        next.reserveCapacity(layouts.count)
+        for (key, layout) in zip(keys, layouts) {
+            if var pool = reusable[key], !pool.isEmpty {
+                next.append(pool.removeFirst())
+                reusable[key] = pool
+            } else {
+                let table = MacTableScrollView(layout: layout)
+                contentClipView.addSubview(table, positioned: .above, relativeTo: anchor)
+                next.append(table)
+            }
+        }
+        reusable.values.joined().forEach { $0.removeFromSuperview() }
+        tableViews = next
+        tableContentKeys = keys
     }
 
     static func height(

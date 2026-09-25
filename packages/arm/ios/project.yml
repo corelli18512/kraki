@@ -54,6 +54,20 @@ schemes:
         KrakiMac: all
     run:
       config: Debug
+  KrakiMacTests:
+    build:
+      targets:
+        KrakiMac: all
+        KrakiMacTests: [test]
+    test:
+      config: Debug
+      targets:
+        - KrakiMacTests
+      environmentVariables:
+        # Host app stays on the offline scenario page: no CLI login, no Relay,
+        # no Tentacle daemon polling; data lives in a throwaway directory.
+        KRAKI_MAC_CHAT_SCENARIO_PAGE: "1"
+        KRAKI_DATA_DIR: /tmp/kraki-mac-tests-data
 
 targets:
   Kraki:
@@ -140,6 +154,20 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
       - target: Kraki
+
+  KrakiMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: KrakiMacTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Kraki Dev.app/Contents/MacOS/Kraki Dev"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: KrakiMac
 
   KrakiUITests:
     type: bundle.ui-testing

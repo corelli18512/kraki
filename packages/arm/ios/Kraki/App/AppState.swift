@@ -42,6 +42,23 @@ final class AppState {
     var voiceCapability: VoiceCapability?
     @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
 
+    /// The durable outbox lives next to the message database, so each app
+    /// flavor (Release / Dev / isolated KRAKI_DATA_DIR test instances) has its
+    /// own. (Application Support is shared on unsandboxed macOS.)
+    static func pendingOutboxURL() -> URL {
+        let url = KrakiDataPaths.persistentDirectory().appendingPathComponent("kraki-pending-outbox.json")
+        #if os(iOS)
+        // 0.1.2–0.1.3 stored it at the Application Support root (per-app on iOS).
+        let fm = FileManager.default
+        if let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("kraki-pending-outbox.json"),
+           fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: url.path) {
+            try? fm.moveItem(at: legacy, to: url)
+        }
+        #endif
+        return url
+    }
+
     init() {
         self.sessionStore = SessionStore()
         self.deviceStore = DeviceStore()
@@ -293,11 +310,7 @@ final class AppState {
             crypto: crypto,
             appState: self
         )
-        let sender = CommandSender(
-            appState: self,
-            outboxURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("kraki-pending-outbox.json")
-        )
+        let sender = CommandSender(appState: self, outboxURL: Self.pendingOutboxURL())
         let provider = MessageProvider(appState: self)
         #if os(iOS)
         let push = PushManager(appState: self)

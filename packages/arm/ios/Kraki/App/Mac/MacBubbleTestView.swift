@@ -651,6 +651,14 @@ final class MacTableLayout {
     let bubbleViewportHeight: CGFloat
     let hiddenRowCount: Int
 
+    /// Identity of the table's visible content (for view reuse).
+    private(set) lazy var contentKey: String = {
+        var hasher = Hasher()
+        for row in rows { hasher.combine(row) }
+        hasher.combine(alignments.map { "\($0)" })
+        return "\(rows.count)x\(rows.first?.count ?? 0):\(hasher.finalize())"
+    }()
+
     static let showMoreHeight: CGFloat = 40
     static let cellPadH: CGFloat = 10
     static let cellPadV: CGFloat = 8
@@ -889,7 +897,8 @@ final class MacTableScrollView: NSScrollView {
         }
         overflowHint.frame = NSRect(x: bounds.width - 24, y: max(6, (bounds.height - 20) / 2),
                                     width: 20, height: 20)
-        hasHorizontalScroller = tableLayout.contentSize.width > contentSize.width + 1
+        let needsScroller = tableLayout.contentSize.width > contentSize.width + 1
+        if hasHorizontalScroller != needsScroller { hasHorizontalScroller = needsScroller }
         updateOverflowHint()
     }
 

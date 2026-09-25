@@ -21,6 +21,28 @@ fileprivate struct MacChatPresentationHealth {
     }
 }
 
+/// Debug-only per-stage main-thread cost accumulator (tests enable it).
+enum MacChatCost {
+    #if DEBUG
+    static var enabled = false
+    static var buckets: [String: (count: Int, total: Double, max: Double)] = [:]
+    #endif
+    @inline(__always)
+    static func measure<T>(_ label: String, _ body: () throws -> T) rethrows -> T {
+        #if DEBUG
+        guard enabled, Thread.isMainThread else { return try body() }
+        let t0 = CACurrentMediaTime()
+        defer {
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            var b = buckets[label] ?? (0, 0, 0)
+            b.count += 1; b.total += ms; b.max = max(b.max, ms)
+            buckets[label] = b
+        }
+        #endif
+        return try body()
+    }
+}
+
 private enum MacChatPerf {
     private static let logger = OSLog(subsystem: "chat.kraki.ios", category: "mac-chat-perf")
     static let enabled: Bool = {
@@ -140,6 +162,62 @@ final class MacChatDocumentView: NSView {
     var onWarmedHeightsReady: (() -> Void)?
     var onAnimatedGeometryStep: ((CGFloat) -> Void)?
     var onFullWindowGeometryReady: (() -> Void)?
+
+    // Older pages are prepared off-main *before* they enter the document, so
+    // a fast fling that is already waiting at the top edge never exposes
+    // placeholder rows (the spinner simply stays ~one frame longer).
+    private var stagedContent: [String: MacChatBubbleContent] = [:]
+    private var stagingInFlight: Set<String> = []
+    private var stagingCompletions: [() -> Void] = []
+
+    /// Items (by cache key at the current width/mode) not yet prepared.
+    func unpreparedItems(_ items: [MacChatItem], documentWidth: CGFloat, sessionMode: SessionMode) -> [MacChatItem] {
+        guard abs(self.documentWidth - documentWidth) <= 0.5, self.sessionMode == sessionMode else { return [] }
+        return items.filter { item in
+            let key = cacheKey(item)
+            return contentCache[key] == nil && stagedContent[key] == nil
+        }
+    }
+
+    func stage(_ items: [MacChatItem], completion: @escaping () -> Void) {
+        stagingCompletions.append(completion)
+        let jobs = items.map { (item: $0, key: cacheKey($0)) }.filter { !stagingInFlight.contains($0.key) }
+        guard !jobs.isEmpty else { return }
+        stagingInFlight.formUnion(jobs.map(\.key))
+        let documentWidth = self.documentWidth
+        let sessionMode = self.sessionMode
+        contentWarmQueue.async { [weak self] in
+            var results: [(String, MacChatBubbleContent, CGFloat?)] = []
+            for job in jobs {
+                let content = job.item.makeContent()
+                let artifact = content.body.flatMap {
+                    MacCoreTextLayoutArtifact.cached(
+                        attributed: $0,
+                        width: content.bodyTextWidth,
+                        key: "\(job.item.key)|\(job.item.signature)|\(Int(documentWidth.rounded()))|\(sessionMode.rawValue)"
+                    )
+                }
+                let exact: CGFloat? = content.action == nil
+                    ? MacChatBubbleCell.height(for: content, bodyHeight: artifact?.height ?? 0)
+                    : nil
+                results.append((job.key, content, exact))
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for (key, content, exact) in results {
+                    self.stagingInFlight.remove(key)
+                    self.stagedContent[key] = content
+                    if let exact {
+                        Self.exactHeightCache.setObject(NSNumber(value: Double(exact)), forKey: key as NSString, cost: 16)
+                    }
+                }
+                guard self.stagingInFlight.isEmpty else { return }
+                let completions = self.stagingCompletions
+                self.stagingCompletions.removeAll()
+                completions.forEach { $0() }
+            }
+        }
+    }
 
     var isFullWindowGeometryReady: Bool {
         !contents.isEmpty
@@ -354,6 +432,11 @@ final class MacChatDocumentView: NSView {
             contentCache = contentCache.filter { validCacheKeys.contains($0.key) }
             heightCache = heightCache.filter { validCacheKeys.contains($0.key) }
         }
+        for (key, content) in stagedContent where validCacheKeys.contains(key) && !widthChanged && !modeChanged {
+            cacheContent(content, forKey: key)
+            geometryWarmCompleted.insert(key)
+        }
+        stagedContent = stagedContent.filter { !validCacheKeys.contains($0.key) }
         for key in validCacheKeys where heightCache[key] == nil {
             if let cached = Self.exactHeightCache.object(forKey: key as NSString) {
                 heightCache[key] = CGFloat(cached.doubleValue)
@@ -371,10 +454,33 @@ final class MacChatDocumentView: NSView {
             }
         }
 
+        // Live → landed handoff: the persisted answer replaces the live card
+        // in the same snapshot. Until its own content is prepared, it keeps the
+        // live bubble's exact height and rendered cell, so the tail never
+        // flashes an estimated placeholder or jumps.
+        var handoffIndex: Int?
+        if !keys.contains("__live__"),
+           oldKeys.contains("__live__"),
+           let liveHeight = oldDisplayedHeightByKey["__live__"] {
+            let oldKeySet = Set(oldKeys)
+            if let landed = newContents.indices.last(where: { !oldKeySet.contains(newContents[$0].key) }),
+               landed == newContents.count - 1 || newContents[(landed + 1)...].allSatisfy({ oldKeySet.contains($0.key) }) {
+                let landedKey = cacheKey(newContents[landed])
+                if heightCache[landedKey] == nil { heightCache[landedKey] = liveHeight }
+                handoffIndex = landed
+            }
+        }
+
         let newIndexByKey = indexByKey
         visibleCells.removeAll(keepingCapacity: true)
         visibleSignatures.removeAll(keepingCapacity: true)
         for (oldIndex, cell) in oldVisible {
+            if oldIndex < oldKeys.count, oldKeys[oldIndex] == "__live__",
+               let handoffIndex, visibleCells[handoffIndex] == nil {
+                visibleCells[handoffIndex] = cell
+                visibleSignatures[handoffIndex] = oldVisibleSignatures[oldIndex]
+                continue
+            }
             guard oldIndex < oldKeys.count,
                   let newIndex = newIndexByKey[oldKeys[oldIndex]],
                   visibleCells[newIndex] == nil else {
@@ -406,6 +512,9 @@ final class MacChatDocumentView: NSView {
             (item: item, key: cacheKey(item))
         }
         warmEnqueued.formUnion(jobs.map(\.key))
+        #if DEBUG
+        let warmStarted = CACurrentMediaTime()
+        #endif
         contentWarmQueue.async { [weak self] in
             var results: [(String, MacChatBubbleContent, CGFloat?)] = []
             results.reserveCapacity(jobs.count)
@@ -428,6 +537,15 @@ final class MacChatDocumentView: NSView {
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                #if DEBUG
+                if MacChatCost.enabled {
+                    MacChatCost.measure("warmBatch(bg) jobs=\(min(jobs.count, 9))+") {}
+                    var b = MacChatCost.buckets["warmBatch latency"] ?? (0, 0, 0)
+                    let ms = (CACurrentMediaTime() - warmStarted) * 1000
+                    b.count += 1; b.total += ms; b.max = max(b.max, ms)
+                    MacChatCost.buckets["warmBatch latency"] = b
+                }
+                #endif
                 let generationMatches = generation == self.warmGeneration
                 if generationMatches {
                     for (key, content, exactHeight) in results
@@ -527,6 +645,18 @@ final class MacChatDocumentView: NSView {
         runwayOverride: CGFloat? = nil,
         allowColdContent: Bool = false,
         maxConfigurations: Int = 1
+    ) -> CGFloat {
+        MacChatCost.measure("updateVisibleCells") {
+            updateVisibleCellsBody(in: viewport, runwayOverride: runwayOverride,
+                                   allowColdContent: allowColdContent, maxConfigurations: maxConfigurations)
+        }
+    }
+
+    private func updateVisibleCellsBody(
+        in viewport: NSRect,
+        runwayOverride: CGFloat?,
+        allowColdContent: Bool,
+        maxConfigurations: Int
     ) -> CGFloat {
         guard documentWidth > 1, viewport.width > 1, viewport.height > 1 else { return 0 }
         let started = CACurrentMediaTime()
@@ -907,6 +1037,10 @@ final class MacChatDocumentView: NSView {
 
     @discardableResult
     func commitWarmedHeights(animateLive: Bool = false) -> Bool {
+        MacChatCost.measure("commitWarmedHeights") { commitWarmedHeightsBody(animateLive: animateLive) }
+    }
+
+    private func commitWarmedHeightsBody(animateLive: Bool) -> Bool {
         guard !pendingHeights.isEmpty else {
             warmedGeometryPending = false
             return false
@@ -1183,7 +1317,7 @@ final class MacChatDocumentView: NSView {
     private func resolvedContent(for item: MacChatItem) -> MacChatBubbleContent {
         let key = cacheKey(item)
         if let cached = contentCache[key] { return cached }
-        let content = item.makeContent()
+        let content = MacChatCost.measure("makeContent(main)") { item.makeContent() }
         cacheContent(content, forKey: key)
         return content
     }
@@ -1447,6 +1581,15 @@ final class MacChatDocumentView: NSView {
     }
 
     private func configure(
+        _ cell: MacChatBubbleCell,
+        with item: MacChatItem,
+        content: MacChatBubbleContent? = nil
+    ) {
+        let content = content ?? resolvedContent(for: item)
+        MacChatCost.measure("cell.configure") { configureBody(cell, with: item, content: content) }
+    }
+
+    private func configureBody(
         _ cell: MacChatBubbleCell,
         with item: MacChatItem,
         content: MacChatBubbleContent? = nil
@@ -2343,7 +2486,10 @@ final class MacChatScrollView: MacSmoothScrollView {
         if restartWarmup {
             chatDocumentView.endScrollInteraction(in: viewport)
         } else {
-            guard chatDocumentView.commitWarmedHeights(animateLive: alphaValue > 0.99) else { return }
+            // Growth commits immediately (as on iOS): the pinned tail follows in
+            // the same frame. Animating the frame toward each new height left
+            // the newest lines clipped while tokens kept arriving.
+            guard chatDocumentView.commitWarmedHeights() else { return }
         }
         let heightDelta = chatDocumentView.frame.height - oldHeight
         if followingBottom || isEntryBottomLocked, abs(heightDelta) > 0.5 {
@@ -2399,6 +2545,10 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     override func layout() {
+        MacChatCost.measure("scrollView.layout") { layoutBody() }
+    }
+
+    private func layoutBody() {
         super.layout()
         configureTransientOverlayScroller()
         let width = contentSize.width
@@ -3133,6 +3283,10 @@ struct MacChatListRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: MacChatScrollView, context: Context) {
+        MacChatCost.measure("updateNSView") { updateNSViewBody(scrollView, context: context) }
+    }
+
+    private func updateNSViewBody(_ scrollView: MacChatScrollView, context: Context) {
         let totalStarted = CACurrentMediaTime()
         if context.coordinator.sessionId != sessionId
             || context.coordinator.entryGeneration != entryGeneration {
@@ -3185,7 +3339,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             )
         }
         let buildStarted = CACurrentMediaTime()
-        let builtItems = buildContents(coordinator: context.coordinator)
+        let builtItems = MacChatCost.measure("buildContents") { buildContents(coordinator: context.coordinator) }
         let buildMs = (CACurrentMediaTime() - buildStarted) * 1_000
         if scrollView.chatDocumentView.deferLiveSnapshotIfNeeded(
             contents: builtItems,
@@ -3194,6 +3348,31 @@ struct MacChatListRepresentable: NSViewRepresentable {
         ) {
             return
         }
+        if !context.coordinator.firstLayout,
+           let oldFirst = scrollView.chatDocumentView.itemKeys.first,
+           let oldFirstIndex = builtItems.firstIndex(where: { $0.key == oldFirst }),
+           oldFirstIndex > 0 {
+            let missing = scrollView.chatDocumentView.unpreparedItems(
+                Array(builtItems[..<oldFirstIndex]),
+                documentWidth: max(documentWidth, 1),
+                sessionMode: sessionMode
+            )
+            if !missing.isEmpty {
+                let coordinator = context.coordinator
+                coordinator.stagedUpdateGeneration &+= 1
+                let generation = coordinator.stagedUpdateGeneration
+                let stagedSession = sessionId
+                scrollView.chatDocumentView.stage(missing) { [weak scrollView] in
+                    guard let scrollView,
+                          coordinator.stagedUpdateGeneration == generation,
+                          coordinator.sessionId == stagedSession else { return }
+                    self.updateNSViewBody(scrollView, context: context)
+                }
+                return
+            }
+        }
+        // Any snapshot applied now supersedes a still-staging older one.
+        context.coordinator.stagedUpdateGeneration &+= 1
         let oldOffset = scrollView.contentView.bounds.minY
         let viewport = scrollView.contentView.bounds
         let fallbackAnchor = scrollView.chatDocumentView.stableVisibleAnchor(in: viewport)
@@ -3267,6 +3446,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator {
+        /// Latest update deferred while a prepended page is prepared.
+        var stagedUpdateGeneration = 0
         var sessionId: String?
         var entryGeneration = -1
         var firstLayout = true

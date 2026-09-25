@@ -212,6 +212,21 @@ struct MacChatView: View {
         return 62
     }
 
+    /// Persisted window identity only (not the live card), so the spine
+    /// projection is recomputed when messages change, not on every token.
+    private var windowRevision: Int {
+        let window = appState.messageStore.messages[sessionId] ?? []
+        let state = appState.messageStore.windows[sessionId]
+        var hash = state?.bottomSeq ?? 0
+        hash = hash &* 31 &+ (state?.topSeq ?? 0)
+        hash = hash &* 31 &+ window.count
+        hash = hash &* 31 &+ (window.first?.seq ?? 0)
+        hash = hash &* 31 &+ (window.last?.seq ?? 0)
+        hash = hash &* 31 &+ (window.last?.type.hashValue ?? 0)
+        hash = hash &* 31 &+ (window.last?.content?.hashValue ?? 0)
+        return hash
+    }
+
     private var spineRevision: Int {
         // Read the observable store DIRECTLY. Going through
         // MessageProvider.currentWindow() hides the dependency behind a
@@ -452,7 +467,7 @@ struct MacChatView: View {
                 messageStore: appState.messageStore,
                 attachmentStore: appState.attachmentStore,
                 documentWidth: geometry.size.width,
-                messages: viewModel.displayMessages,
+                messages: viewModel.displayMessages(spineRevision: windowRevision),
                 liveCard: liveCardForList(viewModel),
                 liveTraceSeq: viewModel.lastUserMessage?.seq ?? 0,
                 liveSteps: viewModel.lastUserStepsHint,
