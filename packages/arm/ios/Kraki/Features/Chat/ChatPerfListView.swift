@@ -1222,7 +1222,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // most one reply to catch up on, so no count).
         unseenBadge.translatesAutoresizingMaskIntoConstraints = false
         unseenBadge.backgroundColor = .systemRed
-        unseenBadge.layer.cornerRadius = 5
+        unseenBadge.layer.cornerRadius = 6.5
         unseenBadge.layer.borderWidth = 1.5
         unseenBadge.layer.borderColor = UIColor.systemBackground.cgColor
         unseenBadge.isHidden = true
@@ -1230,10 +1230,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         unseenBadge.isAccessibilityElement = false
         jumpButton.addSubview(unseenBadge)
         NSLayoutConstraint.activate([
-            unseenBadge.widthAnchor.constraint(equalToConstant: 10),
-            unseenBadge.heightAnchor.constraint(equalToConstant: 10),
-            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -8),
-            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 8),
+            unseenBadge.widthAnchor.constraint(equalToConstant: 13),
+            unseenBadge.heightAnchor.constraint(equalToConstant: 13),
+            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -5),
+            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 5),
         ])
 
         NSLayoutConstraint.activate([
