@@ -50,7 +50,10 @@ enum IOSNewSessionScenario {
                 try database.insert(id, history)
                 app.sessionStore.upsertSession(SessionInfo(
                     id: id, deviceId: deviceID, deviceName: "Scenario Mac", agent: "pi",
-                    model: "m", title: "Existing session \(index + 1)", state: .idle, mode: .discuss,
+                    model: "m",
+                    title: index == 3 ? "重构 iOS 聊天列表的滚动锚点、流式增量渲染和发送状态机（第二轮验收）"
+                        : index == 4 ? "Refactor the iOS chat list scroll anchoring and streaming renderer" : "Existing session \(index + 1)",
+                    state: .idle, mode: .discuss,
                     lastSeq: 12, readSeq: 12, messageCount: 12,
                     createdAt: Date().addingTimeInterval(Double(-3_600 * (index + 1))), pinned: false))
                 app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 12, deviceId: deviceID)

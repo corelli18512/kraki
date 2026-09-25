@@ -18,7 +18,10 @@ final class TabBarNavigationUITests: XCTestCase {
     // MARK: Helpers
 
     private func row(_ index: Int) -> XCUIElement {
-        app.staticTexts["Existing session \(index + 1)"].firstMatch
+        // Fixture rows 4 and 5 carry long titles (header truncation checks).
+        let titles = [3: "重构 iOS 聊天列表的滚动锚点、流式增量渲染和发送状态机（第二轮验收）",
+                      4: "Refactor the iOS chat list scroll anchoring and streaming renderer"]
+        return app.staticTexts[titles[index] ?? "Existing session \(index + 1)"].firstMatch
     }
 
     private var tabBarVisible: Bool {
@@ -55,16 +58,6 @@ final class TabBarNavigationUITests: XCTestCase {
         }
         XCTAssertEqual(tabBarVisible, visible, "\(label): tab bar should be \(visible ? "visible" : "hidden")",
                        file: file, line: line)
-    }
-
-    /// True when a pushed detail page (chat) is on screen.
-    private var onDetail: Bool {
-        app.navigationBars.buttons["More"].exists || app.staticTexts["New Session"].exists
-            || app.navigationBars.buttons.element(boundBy: 0).label == "Back"
-    }
-
-    private var composerExists: Bool {
-        app.buttons["Send"].exists || app.textViews.count > 0 || app.textFields.count > 0
     }
 
     /// The invariant, whatever page a racy gesture actually landed on: the
@@ -205,5 +198,23 @@ final class TabBarNavigationUITests: XCTestCase {
         expect(false, "chat after held cancel")
         edgeSwipe(to: 0.95, hold: 0.8); settle(1.5)
         expect(true, "list after slow completed swipe")
+    }
+
+    /// Header mode control: expand, pick a mode, auto-collapse to it.
+    func testHeaderModePicker() {
+        row(0).tap(); settle()
+        let collapsed = app.buttons["chat.mode.collapsed"]
+        XCTAssertTrue(collapsed.waitForExistence(timeout: 3))
+        XCTAssertTrue(collapsed.label.contains("Discuss"))
+        collapsed.tap(); settle(0.5)
+        let execute = app.buttons["chat.mode.execute"]
+        XCTAssertTrue(execute.waitForExistence(timeout: 2), "expanded picker shows all modes")
+        XCTAssertTrue(app.buttons["chat.mode.safe"].exists && app.buttons["chat.mode.delegate"].exists)
+        execute.tap(); settle(1.2)
+        XCTAssertTrue(collapsed.waitForExistence(timeout: 2), "picker collapses after choosing")
+        XCTAssertTrue(collapsed.label.contains("Execute"), "collapsed capsule shows the new mode")
+        expect(false, "chat with mode picker")
+        collapsed.tap(); settle(4.0)
+        XCTAssertTrue(collapsed.exists, "idle expansion collapses by itself")
     }
 }

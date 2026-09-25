@@ -138,9 +138,9 @@ struct ChatView: View {
         // and the bottom input area so message cells visibly blur THROUGH
         // the navbar's glass band and the input's glass capsule.
         .ignoresSafeArea(.container, edges: [.top, .bottom])
-        // Top navbar glass band.
+        // Progressive blur under the status bar and floating header.
         .overlay(alignment: .top) {
-            if !waitingForLatest { topNavGlassBand }
+            if !waitingForLatest { topEdgeBlur }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Show the compose area whenever the tentacle device is on file
@@ -218,34 +218,40 @@ struct ChatView: View {
     private static var autoSendFired = false
     #endif
 
-    // MARK: - Top navbar glass band
+    // MARK: - Top edge blur
 
     /// Soft glass fade under the top navbar. Lives in SwiftUI (outside
     /// the flipped UICollectionView), so its gradient direction is
     /// independent of the inverted list's `scaleY(-1)` transform:
     /// full material behind the status bar + title, fading to clear a
     /// little below the bar so message cells emerge sharp.
-    private var topNavGlassBand: some View {
-        Rectangle()
-            .fill(.bar)
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0.0),
-                        // Full material behind the status bar AND the chat
-                        // header (back / title / more), which is page content
-                        // rather than a system navigation bar.
-                        .init(color: .black, location: 0.84),
-                        .init(color: .clear, location: 1.0),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(height: 140)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .ignoresSafeArea(.container, edges: .top)
-            .allowsHitTesting(false)
+    /// Progressive blur: strongest under the status bar, easing to nothing a
+    /// little below the floating controls. Blur + a light page-color veil,
+    /// both masked with an eased curve so there is no visible band edge.
+    private var topEdgeBlur: some View {
+        // Strong only behind the status bar; already easing through the
+        // floating controls' row and gone right below it, so the first lines
+        // of content under the header stay readable.
+        let mask = LinearGradient(
+            stops: [
+                .init(color: .black, location: 0.0),
+                .init(color: .black.opacity(0.9), location: 0.42),
+                .init(color: .black.opacity(0.5), location: 0.68),
+                .init(color: .black.opacity(0.15), location: 0.86),
+                .init(color: .clear, location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        return ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            Color.surfacePrimary.opacity(0.55)
+        }
+        .mask(mask)
+        .frame(height: 112)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .ignoresSafeArea(.container, edges: .top)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Bottom Input Area
