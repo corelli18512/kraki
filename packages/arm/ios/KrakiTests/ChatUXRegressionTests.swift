@@ -393,6 +393,118 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(store.cards[sid]?.text, "好的，继续。")
     }
 
+    func testAnsweredQuestionKeepsPreviousNarrationContextUntilReplacement() throws {
+        let fx = try makeFixture(total: 10)
+        drain(600)
+        try startTurn(fx, seq: 11)
+        let store = fx.app.messageStore
+        store.applyCardMessage(sid, "我先确认一下签名方式。", reset: false)
+        store.applyCardAction(sid, question("q9"))
+        fx.vc.syncLiveUpdates(); drain(100)
+        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q9", answer: "A") == true)
+        store.applyCardAction(sid, question("q9", answer: "A"))
+        // Tentacle: settled-tail null, then the replacing reset delta.
+        store.applyCardAction(sid, nil)
+        XCTAssertEqual(store.cards[sid]?.action?.answer, "A",
+                       "the answered question must not be stripped, exposing only the old narration")
+        XCTAssertEqual(store.cards[sid]?.text, "我先确认一下签名方式。")
+        store.applyCardMessage(sid, "好的，用 API Key 签名。", reset: true)
+        XCTAssertNil(store.cards[sid]?.action)
+        XCTAssertEqual(store.cards[sid]?.text, "好的，用 API Key 签名。")
+        // A tool also supersedes a retained prompt.
+        store.applyCardAction(sid, question("q10", answer: "B"))
+        store.applyCardAction(sid, nil)
+        store.applyCardAction(sid, ChatMessage(type: "tool_start", seq: 0, sessionId: sid, deviceId: dev,
+                                               timestamp: nil, payload: ["toolName": AnyCodable("bash")]))
+        XCTAssertEqual(store.cards[sid]?.action?.type, "tool_start")
+    }
+
+    /// Sending, echo and landing must not reload the list: visible cells keep
+    /// their identity (no re-dequeue flash), and bubble backgrounds never run
+    /// an implicit color/shape animation.
+    func testSendEchoAndLandingKeepVisibleCellsInPlace() throws {
+        let fx = try makeFixture(total: 30)
+        drain(1_000)
+        func cellsByID() -> [String: ObjectIdentifier] {
+            var map: [String: ObjectIdentifier] = [:]
+            for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell }) {
+                if let id = cell.contentSnapshot?.message.id { map[id] = ObjectIdentifier(cell) }
+            }
+            return map
+        }
+        func assertNoBackgroundAnimations(_ label: String) {
+            for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell }) {
+                XCTAssertTrue(cell.bubbleBackgroundAnimationKeysForRegression.isEmpty,
+                              "\(label): bubble background animating \(cell.bubbleBackgroundAnimationKeysForRegression)")
+            }
+        }
+        assertNoBackgroundAnimations("entry")
+        let before = cellsByID()
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "新消息"))
+        fx.vc.syncLiveUpdates()
+        let afterSend = cellsByID()
+        for (id, cell) in before where afterSend[id] != nil {
+            XCTAssertEqual(afterSend[id], cell, "send must not re-dequeue existing row \(id)")
+        }
+        assertNoBackgroundAnimations("send")
+        let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
+        let pendingCell = try XCTUnwrap(afterSend[pending.id])
+        let clientId = try XCTUnwrap(pending.payload["clientId"]?.stringValue)
+        let echo = try JSONSerialization.data(withJSONObject: [
+            "type": "user_message", "seq": 31, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "新消息", "clientId": clientId],
+        ])
+        fx.app.messageStore.beginCardTurn(sid)
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
+        sender.clearPending(sid, clientId: clientId)
+        fx.vc.syncLiveUpdates()
+        XCTAssertEqual(cellsByID()["\(sid):31"], pendingCell, "echo must reuse the optimistic bubble's cell")
+        assertNoBackgroundAnimations("echo")
+
+        fx.app.messageStore.applyCardMessage(sid, "回复内容", reset: false)
+        fx.vc.syncLiveUpdates(); drain(100)
+        let liveCell = fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
+            .first { $0.contentSnapshot?.isLive == true }
+        try land(fx, seq: 32, text: "回复内容")
+        XCTAssertNotNil(liveCell)
+        XCTAssertEqual(cellsByID()["\(sid):32"], liveCell.map(ObjectIdentifier.init),
+                       "landing must reuse the live bubble's cell")
+        assertNoBackgroundAnimations("landing")
+    }
+
+    /// A rendered cell that is reused for another Session's bubble (or re-
+    /// resolved for its trait) must switch color/shape immediately, without the
+    /// shape layer's implicit fade.
+    func testReusedBubbleBackgroundChangesWithoutImplicitAnimation() throws {
+        // Must be a scene-attached window: layers of a scene-less window are
+        // never committed to the render tree and never animate implicitly.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        window.makeKeyAndVisible()
+        windows.append(window)
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 100, width: 402, height: 120))
+        window.addSubview(cell)
+        func content(_ session: String, _ text: String) -> TKBubbleContent {
+            TKBubbleContent.make(message: ChatMessage(type: "agent_message", seq: 1, sessionId: session, deviceId: dev,
+                                                      timestamp: nil, payload: ["content": AnyCodable(text)]),
+                                 sessionId: session, agent: "claude")
+        }
+        cell.configure(content("session-a", "第一条"), cellWidth: 402)
+        cell.layoutIfNeeded()
+        CATransaction.flush()
+        drain(400) // rendered and settled
+        let first = cell.bubbleFillForRegression
+        cell.prepareForReuse()
+        cell.configure(content("session-zz-different-hue", "第二条，更长一些的内容，让形状也变化"), cellWidth: 402)
+        cell.frame.size.height = 160
+        cell.layoutIfNeeded()
+        XCTAssertNotEqual(cell.bubbleFillForRegression, first)
+        XCTAssertTrue(cell.bubbleBackgroundAnimationKeysForRegression.isEmpty,
+                      "reused bubble animated: \(cell.bubbleBackgroundAnimationKeysForRegression)")
+    }
+
     func testAnswerTransportFailureRevertsWithError() throws {
         let fx = try makeFixture(total: 4) { msg in (msg["type"] as? String) != "answer" }
         drain(300)

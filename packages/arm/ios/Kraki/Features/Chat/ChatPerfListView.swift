@@ -934,6 +934,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let t0 = CFAbsoluteTimeGetCurrent()
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: TKBubbleCell.reuseID, for: indexPath) as! TKBubbleCell
+        configureCell(cell, at: indexPath)
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        if ms > 3 { chatPerfLog.log("[cell] slow configure item=\(indexPath.item) ms=\(String(format: "%.1f", ms))") }
+        return cell
+    }
+
+    /// Configure `cell` for the row at `indexPath`. Shared by dequeue and by
+    /// in-place tail updates (which re-point an existing visible cell at a new
+    /// row identity instead of reloading the list).
+    private func configureCell(_ cell: TKBubbleCell, at indexPath: IndexPath) {
         cell.sessionMode = vm.session?.mode ?? .discuss
         cell.attachmentStore = appState.attachmentStore
         cell.onResolvePermission = onResolvePermission
@@ -988,9 +998,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         } else {
             chatPerfLog.log("[cell] OOB guard item=\(indexPath.item) count=\(items.count)")
         }
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 3 { chatPerfLog.log("[cell] slow configure item=\(indexPath.item) ms=\(String(format: "%.1f", ms))") }
-        return cell
     }
 
     func collectionView(_ collectionView: UICollectionView,
@@ -2210,10 +2217,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let oldItemsForArrivals = items
             let anchor = wasAtBottom ? nil : readingAnchor()
             let anchorID = anchor.flatMap { $0.0.item < items.count ? items[$0.0.item] : nil }
-            items = newIds
+            let oldItems = items
             lastLiveCardSignature = cardSig
             liveContentMemo = nil
-            collectionView.reloadData()
+            if edgeStateChanged || isFirstMaterialization || !applyTailInPlace(old: oldItems, new: newIds) {
+                items = newIds
+                collectionView.reloadData()
+            }
             collectionView.layoutIfNeeded()
             if !items.isEmpty, !didInitialScroll || wasAtBottom {
                 pinToBottom(reason: "live-update", animated: false)
@@ -2263,6 +2273,56 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             appState.sessionStore.setDraft(sessionId, draft.isEmpty ? text : draft + "\n" + text)
         }
         syncLiveUpdates()
+    }
+
+    /// Apply a change confined to the newest rows (send, echo, stream start,
+    /// answer landing) without `reloadData()`: rows are inserted/deleted
+    /// without animation and rows whose identity changed in place (pending →
+    /// echoed message, live card → landed answer) keep their existing cell and
+    /// are simply reconfigured. A reload re-dequeues every visible cell, which
+    /// re-assigns all text and backgrounds and reads as a flash.
+    private func applyTailInPlace(old: [String], new: [String]) -> Bool {
+        guard !old.isEmpty, !new.isEmpty, collectionView.window != nil else { return false }
+        let shared = min(old.count, new.count)
+        var prefix = 0
+        while prefix < shared, old[prefix] == new[prefix] { prefix += 1 }
+        let oldTail = old.count - prefix
+        let newTail = new.count - prefix
+        guard oldTail <= 12, newTail <= 12, prefix > 0 || old.count <= 12 else { return false }
+        let replaced = min(oldTail, newTail)
+
+        // Exact heights for every new identity before any layout sees it.
+        let width = collectionView.bounds.width
+        sizer.prepare(width: width)
+        for id in new[prefix...] where id != Self.liveCardID {
+            guard let message = message(id) else { continue }
+            sizer.prime(message, width: width, notify: false)
+            appliedHeightIDs.insert(id)
+        }
+
+        items = new
+        UIView.performWithoutAnimation {
+            let context = UICollectionViewFlowLayoutInvalidationContext()
+            context.invalidateFlowLayoutDelegateMetrics = true
+            collectionView.collectionViewLayout.invalidateLayout(with: context)
+            collectionView.performBatchUpdates {
+                if oldTail > newTail {
+                    collectionView.deleteItems(at: ((prefix + replaced)..<old.count).map { IndexPath(item: $0, section: 0) })
+                }
+                if newTail > oldTail {
+                    collectionView.insertItems(at: ((prefix + replaced)..<new.count).map { IndexPath(item: $0, section: 0) })
+                }
+            }
+            for index in prefix..<(prefix + replaced) {
+                let indexPath = IndexPath(item: index, section: 0)
+                guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
+                configureCell(cell, at: indexPath)
+                cell.setNeedsLayout()
+            }
+            collectionView.layoutIfNeeded()
+        }
+        chatPerfLog.log("[apply] tail-in-place prefix=\(prefix) replaced=\(replaced) old=\(oldTail) new=\(newTail)")
+        return true
     }
 
     private func reconfigureVisiblePendingRows() {

@@ -886,7 +886,7 @@ final class MessageStore {
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()
         card.text = reset ? content : card.text + content
-        if !card.text.isEmpty, card.action?.payload["retained"]?.boolValue == true {
+        if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
             // Narration resumed: the retained resolved prompt is now superseded,
             // exactly as Tentacle intended when it cleared the slot.
             card.action = nil
@@ -898,18 +898,19 @@ final class MessageStore {
     func setCardAction(_ sessionId: String, _ action: ChatMessage?) {
         guard !closedCardTurns.contains(sessionId) else { return }
         var card = cards[sessionId] ?? SessionCard()
-        if action == nil, card.text.isEmpty, let current = card.action, Self.isResolvedPrompt(current) {
+        if action == nil, let current = card.action, Self.isResolvedPrompt(current) {
             // Tentacle retires a resolved prompt the instant narration resumes
-            // and sends the empty slot just BEFORE the first delta. With no
-            // draft yet, applying it would delete the whole live bubble and
-            // re-insert it one update later ("the bubble disappears until the
-            // reply arrives"). Keep the resolved prompt until narration arrives
-            // or a short grace period passes.
+            // and sends the empty slot just BEFORE the first delta (which is
+            // usually a reset that replaces the pre-question narration).
+            // Applying it on its own either deletes the whole live bubble (no
+            // draft) or strips the question and briefly exposes only the
+            // previous segment's narration. Keep the answered prompt until the
+            // replacing narration arrives; a tool action or the turn end also
+            // supersedes it.
             var retained = current
             retained.payload["retained"] = AnyCodable(true)
             card.action = retained
             cards[sessionId] = card
-            scheduleRetainedPromptExpiry(sessionId)
             return
         }
         if let current = card.action, current.payload["localPending"]?.boolValue == true,
@@ -923,20 +924,6 @@ final class MessageStore {
     }
 
     // MARK: Optimistic prompt resolution
-
-    private var retainedPromptGeneration: [String: Int] = [:]
-
-    private func scheduleRetainedPromptExpiry(_ sessionId: String) {
-        let generation = (retainedPromptGeneration[sessionId] ?? 0) + 1
-        retainedPromptGeneration[sessionId] = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            guard let self, self.retainedPromptGeneration[sessionId] == generation,
-                  var card = self.cards[sessionId],
-                  card.action?.payload["retained"]?.boolValue == true else { return }
-            card.action = nil
-            self.cards[sessionId] = card
-        }
-    }
 
     static func promptID(_ action: ChatMessage) -> String? {
         switch action.type {

@@ -1378,7 +1378,19 @@ final class TKBubbleContent {
 // MARK: - Rounded bubble background view (per-corner radii)
 
 private final class TKRoundedView: UIView {
-    var fillColor: UIColor = .clear { didSet { setNeedsLayout() } }
+    /// The bubble fill is applied immediately and WITHOUT the standalone
+    /// shape layer's implicit 0.25 s animation. Implicit animation made every
+    /// new or reused cell fade from black / clear / the previous bubble's color
+    /// into its Session theme color — a visible color flash on Session entry
+    /// and whenever the list reloaded (e.g. after sending).
+    var fillColor: UIColor = .clear {
+        didSet {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            shape.fillColor = fillColor.resolvedColor(with: traitCollection).cgColor
+            CATransaction.commit()
+        }
+    }
     /// (topLeading, topTrailing, bottomLeading, bottomTrailing)
     var radii: (CGFloat, CGFloat, CGFloat, CGFloat) = (16, 16, 16, 16) {
         didSet { setNeedsLayout() }
@@ -1410,8 +1422,27 @@ private final class TKRoundedView: UIView {
         path.addArc(withCenter: CGPoint(x: r.minX + tl, y: r.minY + tl),
                     radius: tl, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
         path.close()
-        shape.path = path.cgPath
-        shape.fillColor = fillColor.cgColor
+        let newPath = path.cgPath
+        let oldPath = shape.presentation()?.path ?? shape.path
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shape.path = newPath
+        shape.fillColor = fillColor.resolvedColor(with: traitCollection).cgColor
+        CATransaction.commit()
+        // Follow an enclosing UIView animation (streaming height growth) so the
+        // background grows with its cell; never morph implicitly otherwise
+        // (a reused cell must not animate from the previous bubble's shape).
+        let duration = UIView.inheritedAnimationDuration
+        if duration > 0, let oldPath, oldPath != newPath {
+            let animation = CABasicAnimation(keyPath: "path")
+            animation.fromValue = oldPath
+            animation.toValue = newPath
+            animation.duration = duration
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            shape.add(animation, forKey: "path")
+        } else {
+            shape.removeAnimation(forKey: "path")
+        }
     }
 }
 
@@ -1754,6 +1785,14 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var actionFrameForRegression: CGRect { actionHost.frame }
     var bubbleFrameForRegression: CGRect { bubbleBG.frame }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
+    /// Pending CA animations on the bubble background (must be none after a
+    /// configure outside a UIView animation — no color/shape morph).
+    var bubbleBackgroundAnimationKeysForRegression: [String] {
+        (bubbleBG.layer.sublayers ?? []).flatMap { $0.animationKeys() ?? [] }
+    }
+    var bubbleFillForRegression: CGColor? {
+        (bubbleBG.layer.sublayers?.first as? CAShapeLayer)?.fillColor
+    }
     var deliveryStatusForRegression: String? {
         deliveryStatus.isHidden ? nil : deliveryStatus.accessibilityLabel
     }
