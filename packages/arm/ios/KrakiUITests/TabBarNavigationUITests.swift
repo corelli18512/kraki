@@ -173,7 +173,12 @@ final class TabBarNavigationUITests: XCTestCase {
     /// cancel; repeat quickly with a completed swipe.
     func testLongHeldSwipesAndRapidRepeats() {
         row(0).tap(); settle()
+        // Released exactly at half width: UIKit may either complete or cancel.
+        // Whatever it decided, the tab bar must match the page it settled on.
         edgeSwipe(to: 0.5, hold: 1.5); settle()
+        expectConsistent("after long held half-way release")
+        if row(5).isHittable { row(0).tap(); settle() }
+        edgeSwipe(to: 0.3, hold: 1.5); settle()
         expect(false, "chat after long held cancel")
         edgeSwipe(to: 0.25, hold: 0.0, fast: false); settle(0.3)
         edgeSwipe(to: 0.9, fast: true); settle()

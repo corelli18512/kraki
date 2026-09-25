@@ -16,8 +16,10 @@
 /// (a cancelled / long-held interactive swipe-back, a replacement route whose
 /// new page appears before the old one disappears, multi-level pops), and the
 /// last writer won — leaving the tab bar over the composer or missing on the
-/// root list. Hiding travels with a push; showing waits until a pop has
-/// completed and then slides the bar in (a cancelled swipe never shows it).
+/// root list. Hiding travels with a push. Showing never happens while a
+/// swipe-back is still under the finger: it starts the moment UIKit commits
+/// to completing the pop (finger lifted), alongside the page's settle
+/// animation; a cancelled swipe never shows it.
 
 import SwiftUI
 import UIKit
@@ -69,6 +71,17 @@ struct TabBarHider: UIViewControllerRepresentable {
             // cancelled swipe therefore never flashes the bar.
             Self.reconcile(tabBarController, animated: animated)
             if let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator {
+                if coordinator.isInteractive {
+                    // Swipe-back: the moment the finger lifts and UIKit
+                    // commits to completing the pop, bring the bar in together
+                    // with the page's settle animation instead of waiting for
+                    // it to finish. A cancelled swipe never shows it.
+                    coordinator.notifyWhenInteractionChanges { [weak tabBarController] context in
+                        guard !context.isCancelled else { return }
+                        Self.reconcile(tabBarController, animated: true, ignoringTransition: true,
+                                       expectingPopTo: true)
+                    }
+                }
                 coordinator.animate(alongsideTransition: nil) { [weak tabBarController] context in
                     Self.reconcile(tabBarController, animated: !context.isCancelled, ignoringTransition: true)
                     // UIKit finalizes the navigation stack right after this
@@ -88,17 +101,30 @@ struct TabBarHider: UIViewControllerRepresentable {
 
         /// True when this hider's page is the top page of its navigation stack
         /// and that stack belongs to the selected tab of `tabBarController`.
-        fileprivate func isVisiblePage(in tabBarController: UITabBarController) -> Bool {
+        fileprivate func isVisiblePage(in tabBarController: UITabBarController,
+                                       afterCommittedPop: Bool = false) -> Bool {
             guard isViewLoaded,
                   let navigation = navigationController,
-                  let top = navigation.topViewController,
-                  isDescendant(of: top) else { return false }
+                  let top = navigation.topViewController else { return false }
+            // During a committed interactive pop, `topViewController` may still
+            // be the page being removed; judge by the destination instead.
+            var page = top
+            if afterCommittedPop,
+               let from = navigation.transitionCoordinator?.viewController(forKey: .from),
+               let to = navigation.transitionCoordinator?.viewController(forKey: .to),
+               from === top {
+                page = to
+            }
+            guard isDescendant(of: page) else { return false }
             guard let selected = tabBarController.selectedViewController else { return false }
             return navigation.isDescendant(of: selected)
         }
 
-        static func shouldHide(_ tabBarController: UITabBarController) -> Bool {
-            registry.allObjects.contains { $0.isVisiblePage(in: tabBarController) }
+        static func shouldHide(_ tabBarController: UITabBarController,
+                               afterCommittedPop: Bool = false) -> Bool {
+            registry.allObjects.contains {
+                $0.isVisiblePage(in: tabBarController, afterCommittedPop: afterCommittedPop)
+            }
         }
 
         /// A navigation transition (push/pop, including an interactive swipe
@@ -111,9 +137,10 @@ struct TabBarHider: UIViewControllerRepresentable {
         }
 
         static func reconcile(_ tabBarController: UITabBarController?, animated: Bool,
-                              ignoringTransition: Bool = false) {
+                              ignoringTransition: Bool = false,
+                              expectingPopTo: Bool = false) {
             guard let tabBarController else { return }
-            let hidden = shouldHide(tabBarController)
+            let hidden = shouldHide(tabBarController, afterCommittedPop: expectingPopTo)
             // Defer showing until the transition has finished; its completion
             // reconciles again (see reconcileAlongsideTransition).
             if !hidden, !ignoringTransition, isTransitioning(tabBarController) { return }
