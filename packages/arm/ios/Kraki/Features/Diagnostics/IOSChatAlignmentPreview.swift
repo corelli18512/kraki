@@ -35,7 +35,8 @@ enum IOSChatAlignmentPreviewFixture {
       <body>
         <main>
           <span class="ok">Native secure preview active</span>
-          <h1>iOS Chat alignment passed</h1>
+          <h1>Fixture HTML artifact</h1>
+          <p>Static fixture content. This page is not a test result.</p>
           <ul>
             <li>One reusable TextKit bubble cell</li>
             <li>Interruptible height animation</li>
@@ -153,6 +154,15 @@ enum IOSChatAlignmentPreviewFixture {
                         ]),
                     ]
                 ),
+                // The history must end with an accepted prompt: opening a
+                // window restores the card gate from persisted truth, and a
+                // trailing agent_message closes it (every delta would be
+                // dropped and the "streaming" preview would stream nothing).
+                ChatMessage(
+                    type: "user_message", seq: 5, sessionId: sessionID,
+                    deviceId: deviceID, timestamp: "2026-08-03T00:00:04Z",
+                    payload: ["content": AnyCodable("写一份完整的发布检查方案，带代码和表格。")]
+                ),
             ]
             try database.insert(sessionID, messages)
 
@@ -166,9 +176,9 @@ enum IOSChatAlignmentPreviewFixture {
                 title: "iOS Chat Alignment",
                 state: .active,
                 mode: .discuss,
-                lastSeq: 4,
-                readSeq: 4,
-                messageCount: 4,
+                lastSeq: 5,
+                readSeq: 5,
+                messageCount: 5,
                 createdAt: Date(),
                 pinned: false
             )
@@ -183,7 +193,7 @@ enum IOSChatAlignmentPreviewFixture {
                 lastSeen: nil,
                 createdAt: nil
             )
-            app.messageProvider?.setTentacleInfo(sessionId: sessionID, lastSeq: 4, deviceId: deviceID)
+            app.messageProvider?.setTentacleInfo(sessionId: sessionID, lastSeq: 5, deviceId: deviceID)
             _ = app.messageProvider?.openSession(sessionID, reanchorLatest: true)
             app.messageStore.beginCardTurn(sessionID)
             return app
@@ -222,12 +232,25 @@ struct IOSChatAlignmentPreview: View {
     @State private var revision = 0
     @State private var phase = "Preparing production Chat path…"
 
-    private let tokens = Array(repeating: [
-        "The live bubble keeps its logical identity while the current TextKit surface remains visible.",
-        "Each exact height is applied with an interruptible ease-out transition and bottom following stays synchronized.",
-        "New streaming revisions take over from the presentation frame instead of reloading or flashing the cell.",
-        "HTML report cards use fixed metadata geometry and the WebView remains outside the virtualized conversation list.",
-    ], count: 9).flatMap { $0 }
+    /// Realistic streamed answer: CJK prose, fenced code, list and table,
+    /// long enough to exceed several screens and several render chunks.
+    static let streamedAnswer: String = {
+        let zh = "好的，我先梳理发布前需要确认的事项。首先要确认服务端配置和客户端版本一致，然后检查推送证书、数据库迁移和回滚方案。每一步都需要有明确的负责人和验收标准，避免上线后才发现问题。"
+        let code = "```swift\nfunc verifyRelease() async throws {\n    let manifest = try await api.fetchManifest()\n    guard manifest.version == Bundle.main.version else {\n        throw ReleaseError.versionMismatch\n    }\n    try await migrations.dryRun()\n}\n```"
+        let list = "检查清单：\n\n1. 版本号与构建号\n2. 证书与签名\n3. 数据迁移演练\n4. 回滚脚本\n5. 监控与告警\n\n- 风险：中\n- 需要灰度：是"
+        let table = "| 项目 | 负责人 | 状态 |\n|---|---|---|\n| 签名 | 张三 | 完成 |\n| 迁移 | 李四 | 进行中 |\n| 监控 | 王五 | 待开始 |"
+        let en = "Once these are green, cut the release branch, tag it, and let the staged rollout run for 24 hours before widening."
+        return (0..<4).map { index in
+            "## 第 \(index + 1) 部分\n\n\(zh)\n\n\(code)\n\n\(list)\n\n\(table)\n\n\(en)"
+        }.joined(separator: "\n\n")
+    }()
+
+    private let tokens: [String] = {
+        let characters = Array(streamedAnswer)
+        return stride(from: 0, to: characters.count, by: 14).map {
+            String(characters[$0..<min($0 + 14, characters.count)])
+        }
+    }()
 
     var body: some View {
         let _ = revision
@@ -300,14 +323,30 @@ struct IOSChatAlignmentPreview: View {
             for token in tokens {
                 appState.messageStore.applyCardMessage(
                     IOSChatAlignmentPreviewFixture.sessionID,
-                    token + " ",
+                    token,
                     reset: false
                 )
                 revision += 1
-                try? await Task.sleep(for: .milliseconds(55))
+                try? await Task.sleep(for: .milliseconds(30))
             }
-            phase = "Streaming complete · opening secure report"
             IOSChatAlignmentLog.write("stream-complete revisions=\(revision)")
+            try? await Task.sleep(for: .milliseconds(500))
+            // Land the concluding answer exactly like the router does.
+            let landed: [String: Any] = [
+                "type": "agent_message", "seq": 6,
+                "sessionId": IOSChatAlignmentPreviewFixture.sessionID,
+                "deviceId": IOSChatAlignmentPreviewFixture.deviceID,
+                "timestamp": "2026-08-03T00:00:05Z",
+                "payload": ["content": Self.streamedAnswer],
+            ]
+            if let json = try? JSONSerialization.data(withJSONObject: landed) {
+                appState.messageProvider?.ingestTailCandidate(IOSChatAlignmentPreviewFixture.sessionID, json: json)
+                appState.messageStore.endCardTurn(IOSChatAlignmentPreviewFixture.sessionID)
+            }
+            revision += 1
+            phase = "Answer landed"
+            IOSChatAlignmentLog.write("landed seq=6")
+            guard ProcessInfo.processInfo.environment["KRAKI_IOS_ALIGNMENT_OPEN_REPORT"] == "1" else { return }
             try? await Task.sleep(for: .milliseconds(900))
             selectedArtifact = IOSSelectedHTMLArtifact(
                 sessionId: IOSChatAlignmentPreviewFixture.sessionID,

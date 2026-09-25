@@ -56,6 +56,9 @@ struct MessageInputView: View {
     /// unsupported format, etc.) so the user sees that the picker
     /// didn't silently swallow their selection.
     @State private var imageAttachError: String?
+    /// Transient "couldn't send" hint. The draft is kept so nothing is lost.
+    @State private var submitFailure: String?
+    @State private var submitFailureTask: Task<Void, Never>?
     @State private var awaitingActive = false
     @State private var abortPending = false
     @State private var voiceDraftPrefix = ""
@@ -185,6 +188,7 @@ struct MessageInputView: View {
     /// Short banner text to surface above the input row when sending
     /// wouldn't deliver right now. `nil` ⇒ no pill rendered.
     private var unreachableHint: String? {
+        if let submitFailure { return submitFailure }
         guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
@@ -761,22 +765,52 @@ struct MessageInputView: View {
     private func handlePermissionDenyWithReason() {
         guard hasText, let perm = pendingPermission else { return }
         let reason = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id, reason: reason)
+        guard appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id, reason: reason) == true else {
+            showSubmitFailure()
+            return
+        }
         sessionStore.setDraft(sessionId, "")
-        isFocused = false
+        didSubmitFromComposer()
     }
 
     private func handleQuestionAnswer() {
         guard hasText, let q = pendingQuestion else { return }
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.answer(
+        guard appState.commandSender?.answer(
             sessionId: sessionId,
             questionId: q.id,
             answer: answer,
             wasFreeform: true
-        )
+        ) == true else {
+            // Keep the typed answer so the user can retry.
+            showSubmitFailure()
+            return
+        }
         sessionStore.setDraft(sessionId, "")
-        isFocused = false
+        didSubmitFromComposer()
+    }
+
+    /// Anything submitted from the composer is a new message: return the
+    /// conversation to its newest edge. The keyboard stays up for follow-ups.
+    private func didSubmitFromComposer() {
+        submitFailureTask?.cancel()
+        submitFailure = nil
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6)
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
+                                        userInfo: ["sessionId": sessionId])
+    }
+
+    private func showSubmitFailure() {
+        submitFailureTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            submitFailure = "Couldn't send — your text is kept. Try again."
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        submitFailureTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { submitFailure = nil }
+        }
     }
 
     // MARK: - Send action
@@ -936,12 +970,15 @@ struct MessageInputView: View {
             text: sendText,
             attachments: attachments,
             delivery: delivery
-        ) == true else { return }
+        ) == true else {
+            showSubmitFailure()
+            return
+        }
 
         sessionStore.setDraft(sessionId, "")
         clearImage()
         if delivery == .prompt { awaitingActive = true }
-        isFocused = false
+        didSubmitFromComposer()
     }
 
     private func clearImage() {
@@ -1082,5 +1119,11 @@ private struct ModeChangeToast: View {
     }()
 }
 
-#endif
 
+extension Notification.Name {
+    /// Posted after the composer successfully submits a prompt, steer, typed
+    /// answer or deny reason. userInfo["sessionId"]: String.
+    static let krakiComposerSubmitted = Notification.Name("chat.kraki.composerSubmitted")
+}
+
+#endif

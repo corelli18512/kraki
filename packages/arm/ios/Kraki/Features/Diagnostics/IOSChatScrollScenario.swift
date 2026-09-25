@@ -16,12 +16,23 @@ enum IOSChatScrollScenarioFixture {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("kraki-ios-visible-scroll-\(UUID().uuidString)", isDirectory: true)
             let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+            // Realistic mixed content: uniform English prose is the one shape
+            // whose estimated height is already exact, so it cannot reveal
+            // estimate→exact jumps. Mix CJK prose, code, lists and tables.
+            let zh = "好的，我来检查一下这个问题。首先确认服务端配置，再看客户端请求是否带上了正确的鉴权头；两边都没问题的话，多半是缓存导致的。"
+            let code = "修改如下：\n\n```swift\nfunc load() async throws {\n    let data = try await api.fetch()\n    cache.store(data)\n    try decode(data)\n}\n```\n\n再跑一次测试。"
+            let list = "改动：\n\n1. 修复登录态\n2. 优化滚动\n3. 新增重试\n\n- 风险：低\n- 需要回归：是"
+            let table = "| 指标 | 之前 | 之后 |\n|---|---|---|\n| 冷启动 | 1.8s | 0.9s |\n| 掉帧 | 12% | 2% |"
+            let shapes = [zh + "\n\n" + zh, code, list, table, zh + zh + zh]
             let messages = (1...totalMessages).map { seq in
-                let repeats = seq == totalMessages ? 48 : 3
-                let content = String(
-                    repeating: "Message \(seq): this isolated production bubble exercises native scrolling, pagination, anchoring, and tail navigation. ",
-                    count: repeats
-                )
+                let content: String
+                if seq == totalMessages {
+                    content = (0..<6).map { _ in zh + "\n\n" + code + "\n\n" + list }.joined(separator: "\n\n")
+                } else if seq.isMultiple(of: 2) {
+                    content = "Message \(seq): " + shapes[(seq / 2) % shapes.count]
+                } else {
+                    content = "Message \(seq): 帮我看一下为什么往上翻历史会跳"
+                }
                 return ChatMessage(
                     type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",
                     seq: seq,
@@ -177,7 +188,7 @@ private final class IOSVisibleScrollScenarioRunner {
         let tailButton = buttons(in: viewController.view)
             .first { $0.accessibilityLabel == "Jump to latest" }
         tailButton?.sendActions(for: .touchUpInside)
-        await pause(950)
+        await pause(1_500)
         collectionView.layoutIfNeeded()
         record(
             "tail-navigation",
@@ -186,9 +197,9 @@ private final class IOSVisibleScrollScenarioRunner {
 
         status = "4/6 · Latest-message start navigation"
         let startButton = buttons(in: viewController.view)
-            .first { $0.accessibilityLabel == "Jump to start of latest message" }
+            .first { $0.accessibilityLabel == "Jump to previous reply start" }
         startButton?.sendActions(for: .touchUpInside)
-        await pause(950)
+        await pause(1_500)
         collectionView.layoutIfNeeded()
         record(
             "latest-message-start-navigation",
@@ -200,7 +211,7 @@ private final class IOSVisibleScrollScenarioRunner {
         let tailAfterStart = buttons(in: viewController.view)
             .first { $0.accessibilityLabel == "Jump to latest" }
         tailAfterStart?.sendActions(for: .touchUpInside)
-        await pause(900)
+        await pause(1_500)
         let initialTop = topSeq()
         let minimumOffset = -collectionView.adjustedContentInset.top
         viewController.automationMarkUserScrolledAway()

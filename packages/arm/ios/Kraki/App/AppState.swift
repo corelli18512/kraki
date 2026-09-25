@@ -293,7 +293,11 @@ final class AppState {
             crypto: crypto,
             appState: self
         )
-        let sender = CommandSender(appState: self)
+        let sender = CommandSender(
+            appState: self,
+            outboxURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("kraki-pending-outbox.json")
+        )
         let provider = MessageProvider(appState: self)
         #if os(iOS)
         let push = PushManager(appState: self)

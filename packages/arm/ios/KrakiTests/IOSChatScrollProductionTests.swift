@@ -31,7 +31,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
 
         let buttons = findButtons(in: viewController.view)
         let startButton = try XCTUnwrap(
-            buttons.first { $0.accessibilityLabel == "Jump to start of latest message" }
+            buttons.first { $0.accessibilityLabel == "Jump to previous reply start" }
         )
         let bottomButton = try XCTUnwrap(
             buttons.first { $0.accessibilityLabel == "Jump to latest" }

@@ -69,7 +69,7 @@ private enum IOSCodePalette {
 
 // MARK: - Metrics (mirror the SwiftUI bubble so cached heights line up)
 
-private enum TKMetrics {
+enum TKMetrics {
     /// Hosting cell padding around the bubble (UIHostingConfiguration used
     /// `.padding(.horizontal, 12) / .vertical, 6`).
     static let outerH: CGFloat = 12
@@ -625,42 +625,77 @@ enum TKMarkdown {
         let out = NSMutableAttributedString()
         let segments = splitMessageBody(text)
         for (i, seg) in segments.enumerated() {
-            let piece: NSAttributedString
-            switch seg {
-            case .inline(let content):
-                piece = inlineSegment(content)
-            case .blockquote(let content):
-                piece = blockquoteSegment(content)
-            case .codeBlock(let language, let code):
-                piece = codeSegment(
-                    language: language,
-                    code: code,
-                    allowHighlighting: allowHighlighting
-                )
-            case .table(let rows, let alignments):
-                piece = tableSegment(rows: rows, alignments: alignments)
-            }
-            if i > 0 {
-                // 6pt gap between segments (mirrors the SwiftUI VStack spacing).
-                out.append(NSAttributedString(string: "\n", attributes: [
-                    .font: UIFont.systemFont(ofSize: 6),
-                ]))
-            }
+            let piece = segmentPiece(seg, allowHighlighting: allowHighlighting, lineCache: nil)
+            if i > 0 { out.append(segmentSeparator) }
             out.append(piece)
         }
-        if out.length == 0 { return inlineSegment(text) }
+        if out.length == 0 { return inlineSegment(text, lineCache: nil) }
         return out
+    }
+
+    /// 6pt gap between segments (mirrors the SwiftUI VStack spacing).
+    static let segmentSeparator = NSAttributedString(string: "\n", attributes: [
+        .font: UIFont.systemFont(ofSize: 6),
+    ])
+
+    /// Stable identity of one parsed segment. Equal keys produce identical
+    /// rendered pieces, which lets the streaming pipeline reuse settled blocks.
+    static func segmentKey(_ seg: MessageBodySegment) -> String {
+        switch seg {
+        case .inline(let content): return "i\u{1F}" + content
+        case .blockquote(let content): return "q\u{1F}" + content
+        case .codeBlock(let language, let code): return "c\u{1F}\(language ?? "")\u{1F}" + code
+        case .table(let rows, let alignments):
+            let a = alignments.map { alignment -> String in
+                switch alignment { case .leading: return "l"; case .center: return "c"; case .trailing: return "r" }
+            }.joined()
+            return "t\u{1F}\(a)\u{1F}" + rows.map { $0.joined(separator: "\u{1E}") }.joined(separator: "\u{1D}")
+        }
+    }
+
+    /// Render one parsed segment. `lineCache` (streaming only) memoizes inline
+    /// lines, so a growing paragraph run re-renders only its changed line.
+    static func segmentPiece(_ seg: MessageBodySegment, allowHighlighting: Bool,
+                             lineCache: TKInlineLineCache?) -> NSAttributedString {
+        switch seg {
+        case .inline(let content):
+            return inlineSegment(content, lineCache: lineCache)
+        case .blockquote(let content):
+            return blockquoteSegment(content)
+        case .codeBlock(let language, let code):
+            return codeSegment(language: language, code: code, allowHighlighting: allowHighlighting)
+        case .table(let rows, let alignments):
+            return tableSegment(rows: rows, alignments: alignments)
+        }
     }
 
     /// Inline markdown segment: headings and lists are normalized before the
     /// inline markdown pass so source markers (`#`, `-`, `1.`) never leak into
     /// rendered output. List rows use hanging indents and real typographic
     /// bullets/numbers while preserving inline emphasis and links per row.
-    private static func inlineSegment(_ text: String) -> NSAttributedString {
+    private static func inlineSegment(_ text: String, lineCache: TKInlineLineCache? = nil) -> NSAttributedString {
         let lines = text.components(separatedBy: "\n")
         let result = NSMutableAttributedString()
         for (index, line) in lines.enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
+            if let lineCache {
+                if let hit = lineCache.pieces[line] {
+                    result.append(hit)
+                } else {
+                    let piece = inlineLine(line)
+                    lineCache.store(line, piece)
+                    result.append(piece)
+                }
+            } else {
+                result.append(inlineLine(line))
+            }
+        }
+        return result
+    }
+
+    private static func inlineLine(_ line: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        do {
             switch parseMarkdownInlineLine(line) {
             case .heading(let level, let headingText):
                 let font: UIFont
@@ -937,6 +972,10 @@ final class TKBubbleContent {
     /// Frozen terminal card (turn_status / interrupted_turn). Real timestamp.
     let isFrozen: Bool
     let frozenTimestamp: String?
+    /// Incremental streaming body (live, non-frozen cards only) and the
+    /// revision this content snapshot represents.
+    let liveBody: TKLiveBody?
+    let liveRevision: Int
 
     private var heightCache: [CGFloat: CGFloat] = [:]
     private var bubbleWidthCache: [CGFloat: CGFloat] = [:]
@@ -946,7 +985,8 @@ final class TKBubbleContent {
          body: NSAttributedString?, images: [UIImage] = [],
          imageRefs: [ContentRef] = [], htmlArtifacts: [ContentRef] = [],
          action: ChatMessage? = nil, isLive: Bool = false,
-         isFrozen: Bool = false, frozenTimestamp: String? = nil) {
+         isFrozen: Bool = false, frozenTimestamp: String? = nil,
+         liveBody: TKLiveBody? = nil) {
         self.message = message
         self.kind = kind
         self.hueSeed = hueSeed
@@ -958,6 +998,14 @@ final class TKBubbleContent {
         self.isLive = isLive
         self.isFrozen = isFrozen
         self.frozenTimestamp = frozenTimestamp
+        self.liveBody = liveBody
+        self.liveRevision = liveBody?.revision ?? 0
+    }
+
+    /// Optimistic input delivery state ("sending" | "failed"), nil otherwise.
+    var pendingDeliveryState: String? {
+        guard message.type == "pending_input" else { return nil }
+        return message.payload["localState"]?.stringValue ?? "sending"
     }
 
     var canShowSteps: Bool {
@@ -995,19 +1043,32 @@ final class TKBubbleContent {
         let msg = ChatMessage(type: "agent_message", seq: 0,
                               sessionId: sessionId, deviceId: nil,
                               timestamp: frozenTimestamp, payload: payload)
-        let body = draft.isEmpty ? nil
-            : TKMarkdown.attributed(
-                draft,
-                cacheKey: "\(sessionId):live:\(draft.count)",
-                allowHighlighting: isFrozen
-            )
+        let liveBody: TKLiveBody?
+        let body: NSAttributedString?
+        if isFrozen {
+            liveBody = nil
+            body = draft.isEmpty ? nil
+                : TKMarkdown.attributed(
+                    draft,
+                    cacheKey: "\(sessionId):live:\(draft.count)",
+                    allowHighlighting: true
+                )
+        } else {
+            // Streaming: incremental parse/measure keyed to the Session so each
+            // chunk costs O(changed tail), not O(whole answer).
+            let incremental = TKLiveBody.forSession(sessionId)
+            incremental.update(draft)
+            liveBody = incremental
+            body = incremental.body
+        }
         return TKBubbleContent(message: msg, kind: .agent, hueSeed: sessionId,
                                body: body, images: [],
                                imageRefs: uniqueRefs(attachments).filter { $0.mimeType.hasPrefix("image/") },
                                htmlArtifacts: uniqueRefs(attachments).filter { $0.mimeType == "text/html" },
                                action: card.action,
                                isLive: !isFrozen, isFrozen: isFrozen,
-                               frozenTimestamp: frozenTimestamp)
+                               frozenTimestamp: frozenTimestamp,
+                               liveBody: liveBody)
     }
 
     func bubbleWidth(cellWidth: CGFloat) -> CGFloat {
@@ -1106,11 +1167,30 @@ final class TKBubbleContent {
         bubbleWidth(cellWidth: cellWidth) - TKMetrics.msgPadH * 2
     }
 
+    private var bodyChunkCache: [CGFloat: [TKBodyChunks.Placed]] = [:]
+
+    /// Paragraph-aligned body chunks with exact per-chunk geometry. Short
+    /// bodies are a single chunk (identical to one text view).
+    func bodyChunks(cellWidth: CGFloat) -> [TKBodyChunks.Placed] {
+        guard let body, body.length > 0 else { return [] }
+        let width = bodyTextWidth(cellWidth: cellWidth)
+        if let cached = bodyChunkCache[width] { return cached }
+        let placed: [TKBodyChunks.Placed]
+        if let liveBody, liveBody.revision == liveRevision {
+            placed = liveBody.chunkLayout(width: width)
+        } else {
+            placed = TKBodyChunks.layout(body, width: width)
+        }
+        bodyChunkCache[width] = placed
+        return placed
+    }
+
     func bodyTextHeight(cellWidth: CGFloat) -> CGFloat {
         guard let body, body.length > 0 else { return 0 }
         let width = bodyTextWidth(cellWidth: cellWidth)
         if let cached = bodyTextHeightCache[width] { return cached }
-        let height = TKMeasure.height(body, width: width)
+        let chunks = bodyChunks(cellWidth: cellWidth)
+        let height = chunks.last.map { ceil($0.y + $0.height) } ?? 0
         bodyTextHeightCache[width] = height
         return height
     }
@@ -1223,6 +1303,7 @@ final class TKBubbleContent {
         hasher.combine(Data(text.utf8.suffix(512)))
         hasher.combine(message.attachments?.count ?? 0)
         hasher.combine(message.steps ?? 0)
+        hasher.combine(message.payload["localState"]?.stringValue ?? "")
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)
             hasher.combine(ref.mimeType)
@@ -1658,6 +1739,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var sessionMode: SessionMode = .discuss
     var onActionHeightChange: (() -> Void)?
     var onShowTable: ((TKTableLayout) -> Void)?
+    enum PendingAction { case retry, edit, delete }
+    /// Retry / edit / delete an unconfirmed optimistic input (by clientId).
+    var onPendingAction: ((String, PendingAction) -> Void)?
+    private let deliveryStatus = UIButton(type: .system)
     private(set) var sessionId: String = ""
     var contentSnapshot: TKBubbleContent? { content }
     var hasProvisionalCodeHighlight: Bool {
@@ -1669,11 +1754,22 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var actionFrameForRegression: CGRect { actionHost.frame }
     var bubbleFrameForRegression: CGRect { bubbleBG.frame }
     var bubbleHiddenForRegression: Bool { bubbleBG.isHidden }
+    var deliveryStatusForRegression: String? {
+        deliveryStatus.isHidden ? nil : deliveryStatus.accessibilityLabel
+    }
     #endif
 
     private let renderClipView = UIView()
     private let bubbleBG = TKRoundedView()
     private let bodyView: TKBodyTextView
+    /// bodyViews[0] == bodyView; long bodies add paragraph-aligned chunk views.
+    private var bodyViews: [TKBodyTextView] = []
+    /// The attributed chunk currently assigned to each body view, so an
+    /// unchanged chunk is never re-assigned (no TextKit relayout).
+    private var bodyChunkStrings: [NSAttributedString?] = []
+    private var bodyChunkRanges: [NSRange] = []
+    private var bodyChunkHasTable: [Bool] = []
+    private var assignedLive: (body: TKLiveBody, revision: Int)?
     private let moreButton = UIButton(type: .system)
     private let actionHost = BubbleActionHostView()
     private let imageHost = BubbleImageHostView()
@@ -1690,29 +1786,17 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     private var reuseGeneration = 0
 
     override init(frame: CGRect) {
-        bodyView = TKBodyTextView(usingTextLayoutManager: true)
+        bodyView = Self.makeBodyView()
         super.init(frame: frame)
         contentView.clipsToBounds = false
         renderClipView.clipsToBounds = true
         contentView.addSubview(renderClipView)
         renderClipView.addSubview(bubbleBG)
-
-        bodyView.isEditable = false
-        bodyView.isScrollEnabled = false
-        bodyView.isSelectable = true
-        bodyView.isUserInteractionEnabled = false
-        bodyView.isOpaque = false
-        bodyView.tintColor = .clear
-        bodyView.backgroundColor = .clear
-        bodyView.subviews.forEach {
-            $0.isOpaque = false
-            $0.backgroundColor = .clear
-        }
-        bodyView.textContainerInset = .zero
-        bodyView.textContainer.lineFragmentPadding = 0
-        bodyView.adjustsFontForContentSizeCategory = true
-        bodyView.dataDetectorTypes = []
         renderClipView.addSubview(bodyView)
+        bodyViews = [bodyView]
+        bodyChunkStrings = [nil]
+        bodyChunkRanges = [NSRange(location: NSNotFound, length: 0)]
+        bodyChunkHasTable = [false]
 
         // Historical bubble affordance (786cbdf3): a compact "···" capsule
         // floating over the bubble's top-right edge. For traceable messages it
@@ -1727,6 +1811,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         moreButton.addTarget(self, action: #selector(openSteps), for: .touchUpInside)
         moreButton.accessibilityLabel = "Show steps"
         contentView.addSubview(moreButton)
+        deliveryStatus.isHidden = true
+        deliveryStatus.addTarget(self, action: #selector(deliveryStatusTapped), for: .touchUpInside)
+        contentView.addSubview(deliveryStatus)
         contentView.addInteraction(UIContextMenuInteraction(delegate: self))
 
         // Action slot for streaming / frozen bubbles. Hidden on plain
@@ -1749,6 +1836,104 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private static func makeBodyView() -> TKBodyTextView {
+        let view = TKBodyTextView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.isScrollEnabled = false
+        view.isSelectable = true
+        view.isUserInteractionEnabled = false
+        view.isOpaque = false
+        view.tintColor = .clear
+        view.backgroundColor = .clear
+        view.subviews.forEach {
+            $0.isOpaque = false
+            $0.backgroundColor = .clear
+        }
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        // The cell sets each body frame from an exact measured height. If the
+        // container tracked that height, every growth would resize it and
+        // invalidate TextKit layout for the whole chunk. Only width tracks.
+        view.textContainer.heightTracksTextView = false
+        view.textContainer.size = CGSize(width: view.textContainer.size.width,
+                                         height: CGFloat.greatestFiniteMagnitude)
+        view.adjustsFontForContentSizeCategory = true
+        view.dataDetectorTypes = []
+        view.linkTextAttributes = [.foregroundColor: IOSMarkdownPalette.link]
+        return view
+    }
+
+    /// Assign `body` across chunk views, touching only chunks whose content
+    /// changed. While an answer streams, that is just the last chunk.
+    private func assignBody(_ content: TKBubbleContent, cellWidth: CGFloat) {
+        guard let body = content.body, body.length > 0 else {
+            for (index, view) in bodyViews.enumerated() {
+                if bodyChunkStrings[index] != nil { view.attributedText = nil }
+                bodyChunkStrings[index] = nil
+                bodyChunkRanges[index] = NSRange(location: NSNotFound, length: 0)
+                bodyChunkHasTable[index] = false
+                view.isHidden = true
+            }
+            assignedLive = nil
+            return
+        }
+        // Streaming revisions report the first changed character; chunks that
+        // end before it are unchanged and are not even compared.
+        var unchangedPrefix = 0
+        if let live = content.liveBody, content.liveRevision == live.revision,
+           let assigned = assignedLive, assigned.body === live {
+            unchangedPrefix = live.changedFrom(since: assigned.revision) ?? 0
+        }
+        let chunks = content.bodyChunks(cellWidth: cellWidth)
+        while bodyViews.count < chunks.count {
+            let view = Self.makeBodyView()
+            renderClipView.insertSubview(view, aboveSubview: bodyViews.last ?? bubbleBG)
+            bodyViews.append(view)
+            bodyChunkStrings.append(nil)
+            bodyChunkRanges.append(NSRange(location: NSNotFound, length: 0))
+            bodyChunkHasTable.append(false)
+        }
+        for (index, view) in bodyViews.enumerated() {
+            guard index < chunks.count else {
+                if bodyChunkStrings[index] != nil { view.attributedText = nil }
+                bodyChunkStrings[index] = nil
+                bodyChunkRanges[index] = NSRange(location: NSNotFound, length: 0)
+                bodyChunkHasTable[index] = false
+                view.isHidden = true
+                continue
+            }
+            let range = chunks[index].range
+            if bodyChunkStrings[index] != nil, bodyChunkRanges[index] == range,
+               NSMaxRange(range) <= unchangedPrefix {
+                view.isHidden = false
+                continue
+            }
+            let piece = range.length == body.length ? body : body.attributedSubstring(from: range)
+            if let current = bodyChunkStrings[index], current.isEqual(to: piece) {
+                bodyChunkRanges[index] = range
+                view.isHidden = false
+                continue
+            }
+            view.attributedText = piece
+            bodyChunkStrings[index] = piece
+            bodyChunkRanges[index] = range
+            var hasTable = false
+            piece.enumerateAttribute(.attachment, in: NSRange(location: 0, length: piece.length)) { value, _, stop in
+                if value is TKTableAttachment { hasTable = true; stop.pointee = true }
+            }
+            bodyChunkHasTable[index] = hasTable
+            view.selectedRange = NSRange(location: 0, length: 0)
+            view.setNeedsDisplay()
+            view.isHidden = false
+            if index > 0 {
+                // The cell / first chunk carries the semantic label.
+                view.isAccessibilityElement = false
+                view.accessibilityElementsHidden = true
+            }
+        }
+        assignedLive = content.liveBody.map { ($0, content.liveRevision) }
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -1776,8 +1961,14 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         onOpenImage = nil
         onOpenHTMLArtifact = nil
         attachmentStore = nil
-        bodyView.attributedText = nil
-        bodyView.isHidden = true
+        for (index, view) in bodyViews.enumerated() {
+            view.attributedText = nil
+            view.isHidden = true
+            bodyChunkStrings[index] = nil
+            bodyChunkRanges[index] = NSRange(location: NSNotFound, length: 0)
+            bodyChunkHasTable[index] = false
+        }
+        assignedLive = nil
         imageHost.configure(
             images: [],
             refs: [],
@@ -1796,8 +1987,49 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         tableViews.removeAll(keepingCapacity: true)
         tableAttachmentIDs.removeAll(keepingCapacity: true)
         moreButton.isHidden = true
+        onPendingAction = nil
+        deliveryStatus.layer.removeAllAnimations()
+        deliveryStatus.isHidden = true
         bubbleBG.fillColor = .clear
         bubbleBG.frame = .zero
+    }
+
+    private var pendingClientID: String? {
+        content?.message.payload["clientId"]?.stringValue
+    }
+
+    @objc private func deliveryStatusTapped() {
+        guard content?.pendingDeliveryState == "failed", let clientID = pendingClientID else { return }
+        onPendingAction?(clientID, .retry)
+    }
+
+    /// Delivery indicator beside an optimistic bubble. "Sending" appears only
+    /// after a short delay so fast confirmations never flash an icon.
+    private func configureDeliveryStatus(_ content: TKBubbleContent) {
+        guard let state = content.pendingDeliveryState else {
+            deliveryStatus.layer.removeAllAnimations()
+            deliveryStatus.isHidden = true
+            return
+        }
+        let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        deliveryStatus.isHidden = false
+        deliveryStatus.layer.removeAllAnimations()
+        if state == "failed" {
+            deliveryStatus.setImage(UIImage(systemName: "exclamationmark.circle.fill", withConfiguration: symbol), for: .normal)
+            deliveryStatus.tintColor = .systemRed
+            deliveryStatus.isUserInteractionEnabled = true
+            deliveryStatus.alpha = 1
+            deliveryStatus.accessibilityLabel = "Not delivered. Tap to retry"
+        } else {
+            deliveryStatus.setImage(UIImage(systemName: "clock", withConfiguration: symbol), for: .normal)
+            deliveryStatus.tintColor = .tertiaryLabel
+            deliveryStatus.isUserInteractionEnabled = false
+            deliveryStatus.accessibilityLabel = "Sending"
+            deliveryStatus.alpha = 0
+            UIView.animate(withDuration: 0.25, delay: 0.8, options: [.allowUserInteraction]) { [weak self] in
+                self?.deliveryStatus.alpha = 1
+            }
+        }
     }
 
     private func scheduleActionHeightNotification() {
@@ -1818,19 +2050,29 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         // receives UITextView touches, which prevents iOS selection highlights
         // from leaving black rectangles behind ordinary user/agent text.
         let textInteractive = enabled && bodyHasLinks
-        if bodyView.isSelectable != textInteractive { bodyView.isSelectable = textInteractive }
-        if bodyView.isUserInteractionEnabled != textInteractive {
-            bodyView.isUserInteractionEnabled = textInteractive
+        for view in bodyViews {
+            if view.isSelectable != textInteractive { view.isSelectable = textInteractive }
+            if view.isUserInteractionEnabled != textInteractive {
+                view.isUserInteractionEnabled = textInteractive
+            }
+            if textInteractive { view.disableDoubleTapSelection() }
         }
         for tableView in tableViews where tableView.isUserInteractionEnabled != enabled {
             tableView.isUserInteractionEnabled = enabled
         }
-        if textInteractive { bodyView.disableDoubleTapSelection() }
     }
 
     func configure(_ content: TKBubbleContent, cellWidth: CGFloat) {
+        let previous = self.content
         self.content = content
-        bodyView.resignFirstResponder()
+        if content.liveBody != nil, previous?.liveBody === content.liveBody {
+            // Next revision of the same streaming bubble: only the changed
+            // (last) chunk is re-assigned; skip whole-body scans.
+            assignBody(content, cellWidth: cellWidth)
+            configureLiveFastPath(content, cellWidth: cellWidth)
+            return
+        }
+        bodyViews.forEach { $0.resignFirstResponder() }
         bodyHasLinks = false
         if let body = content.body, body.length > 0 {
             body.enumerateAttribute(.link,
@@ -1841,30 +2083,11 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 }
             }
         }
-        bodyView.isSelectable = false
-        bodyView.isUserInteractionEnabled = false
-        bodyView.isOpaque = false
-        bodyView.backgroundColor = .clear
-        // UIKit normally derives link color from `tintColor`, but this read-only
-        // view keeps a clear tint so links cannot surface an editor caret.
-        // Pin the link foreground separately so URL runs remain visible.
-        bodyView.linkTextAttributes = [
-            .foregroundColor: IOSMarkdownPalette.link,
-        ]
-        bodyView.subviews.forEach {
-            $0.isOpaque = false
-            $0.backgroundColor = .clear
+        for view in bodyViews {
+            view.isSelectable = false
+            view.isUserInteractionEnabled = false
         }
-        bodyView.attributedText = content.body
-        if !bodyHasLinks {
-            // UITextView may restore its previous selected range while a reused
-            // cell assigns new attributed text. Collapse it after assignment;
-            // this removes stale whole-word/whole-message highlights without
-            // asking TextKit2 for the invalid nil/NSNotFound selection state.
-            bodyView.selectedRange = NSRange(location: 0, length: 0)
-        }
-        bodyView.setNeedsDisplay()
-        bodyView.isHidden = content.body == nil
+        assignBody(content, cellWidth: cellWidth)
         refreshBubbleAppearance()
         switch content.kind {
         case .agent: bubbleBG.radii = (4, 16, 16, 16)
@@ -1892,6 +2115,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         imageHost.isHidden = !hasImages
 
         moreButton.isHidden = !content.canShowSteps
+        configureDeliveryStatus(content)
         artifactCardsView.configure(artifacts: content.htmlArtifacts) { [weak self] artifact in
             self?.onOpenHTMLArtifact?(artifact)
         }
@@ -1924,7 +2148,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             || !content.images.isEmpty
             || !content.imageRefs.isEmpty
             || !content.htmlArtifacts.isEmpty
-        let semanticText = TKMarkdown.plainText(content.body)
+        let semanticText = content.isLive ? content.message.content : TKMarkdown.plainText(content.body)
         isAccessibilityElement = !exposesInteractiveContent
         accessibilityLabel = exposesInteractiveContent ? nil : semanticText
         accessibilityTraits = content.kind == .error ? [.staticText, .notEnabled] : .staticText
@@ -1935,8 +2159,34 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         setNeedsLayout()
     }
 
-    private func syncTableViews(bodyOrigin: CGPoint) {
-        let placements = bodyView.tablePlacements()
+    /// Streaming revision of the same live bubble: the body was edited in
+    /// place; refresh only the cheap, revision-dependent chrome.
+    private func configureLiveFastPath(_ content: TKBubbleContent, cellWidth: CGFloat) {
+        if let action = content.action {
+            actionHost.onResolvePermission = onResolvePermission
+            actionHost.onAnswerQuestion = onAnswerQuestion
+            actionHost.configure(action: action, sessionMode: sessionMode)
+            actionHost.isHidden = false
+        } else if !actionHost.isHidden {
+            actionHost.isHidden = true
+            actionHost.configure(action: nil, sessionMode: sessionMode)
+        }
+        moreButton.isHidden = !content.canShowSteps
+        accessibilityLabel = content.action == nil ? content.message.content : nil
+        bodyView.accessibilityLabel = content.message.content
+        setNeedsLayout()
+    }
+
+    private func syncTableViews() {
+        var placements: [TKBodyTextView.TablePlacement] = []
+        for (index, view) in bodyViews.enumerated() where !view.isHidden && bodyChunkHasTable[index] {
+            for placement in view.tablePlacements() {
+                var frame = placement.frame
+                frame.origin.x += view.frame.minX
+                frame.origin.y += view.frame.minY
+                placements.append(.init(attachment: placement.attachment, frame: frame))
+            }
+        }
         let desiredIDs = placements.map { ObjectIdentifier($0.attachment) }
         if desiredIDs != tableAttachmentIDs {
             let oldViews = tableViews
@@ -1955,9 +2205,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             }
         }
         for (index, placement) in placements.enumerated() where index < tableViews.count {
-            var frame = placement.frame
-            frame.origin.x += bodyOrigin.x
-            frame.origin.y += bodyOrigin.y
+            let frame = placement.frame
             let view = tableViews[index]
             view.frame = frame
             view.showsHorizontalScrollIndicator = placement.attachment.tableLayout.contentSize.width > frame.width
@@ -1982,6 +2230,17 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         if content.canShowSteps {
             actions.append(UIAction(title: "Show Steps", image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
                 self?.openSteps()
+            })
+        }
+        if content.pendingDeliveryState == "failed", let clientID = pendingClientID {
+            actions.insert(UIAction(title: "Retry", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                self?.onPendingAction?(clientID, .retry)
+            }, at: 0)
+            actions.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { [weak self] _ in
+                self?.onPendingAction?(clientID, .edit)
+            })
+            actions.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onPendingAction?(clientID, .delete)
             })
         }
         return actions
@@ -2015,10 +2274,14 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         var cursorY = y + TKMetrics.msgPadV
         let textHeight = content.bodyTextHeight(cellWidth: cellWidth)
         if textHeight > 0 {
-            bodyView.frame = CGRect(x: innerX, y: cursorY, width: innerWidth, height: textHeight)
+            let chunks = content.bodyChunks(cellWidth: cellWidth)
+            for (index, chunk) in chunks.enumerated() where index < bodyViews.count {
+                let frame = CGRect(x: innerX, y: cursorY + chunk.y, width: innerWidth, height: chunk.height)
+                if bodyViews[index].frame != frame { bodyViews[index].frame = frame }
+            }
             cursorY += textHeight
         }
-        syncTableViews(bodyOrigin: bodyView.frame.origin)
+        syncTableViews()
         let actionWidth = bubbleWidth - TKMetrics.msgPadH * 2
         let artifactHeight = TKHTMLArtifactCardsView.height(for: content.htmlArtifacts.count)
         if artifactHeight > 0 {
@@ -2076,6 +2339,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             imageHost.frame = .zero
         }
 
+        if !deliveryStatus.isHidden {
+            deliveryStatus.frame = CGRect(x: x - 28, y: y + max(bubbleHeight, 1) - 24, width: 24, height: 24)
+        }
         let buttonSize = moreButton.sizeThatFits(CGSize(width: 80, height: 30))
         moreButton.frame = CGRect(
             x: x + bubbleWidth - buttonSize.width - 8,

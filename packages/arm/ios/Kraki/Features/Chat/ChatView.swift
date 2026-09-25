@@ -66,6 +66,7 @@ struct ChatView: View {
         let _ = viewModel?.windowBottomSeq
         let _ = viewModel?.card
         let _ = viewModel?.runtimeStatus
+        let _ = viewModel?.pendingSignature
         let providerWaitingForLatest = viewModel == nil
             || viewModel?.isWaitingForLatestBubble == true
         let waitingForInitialConnection = ChatEntryLoading.isInitialConnectionGateActive(
@@ -73,7 +74,13 @@ struct ChatView: View {
             hasCompletedInitialConnect: appState.hasCompletedInitialConnect,
             connectionStatus: appState.connectionStatus
         )
-        let entrySourceWaiting = providerWaitingForLatest || waitingForInitialConnection
+        // Cold start: while the first Relay connection is still being made,
+        // show cached history immediately (newer messages append at the tail
+        // when they arrive) instead of hiding it behind a spinner. The
+        // spinner remains only when there is nothing cached to show.
+        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
+        let entrySourceWaiting = providerWaitingForLatest
+            || (waitingForInitialConnection && !hasCachedHistory)
         let waitingForLatest = ChatEntryLoading.isEntryGateActive(
             providerWaitingForLatest: entrySourceWaiting,
             hasMaterializedLatest: hasMaterializedLatest
