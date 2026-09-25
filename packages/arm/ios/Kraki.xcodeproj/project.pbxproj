@@ -217,6 +217,7 @@
 		D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		D760ADD6B42A59302671894C /* MessageBodyParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B6A816B6624FE9CCD472F5 /* MessageBodyParser.swift */; };
+		D7E3CD08B7DCB2E17937B051 /* TabBarNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */; };
 		D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		DA146D38E38EA06776C68831 /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		DCD8FF29E282B33BE985EA1E /* ModePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6783BD1527A13261E67330A /* ModePickerView.swift */; };
@@ -249,6 +250,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		51845756C297802DA5D97044 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08FB8B14B93E4AEACA69B644 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EC0ED9322F6D2A73F356C1FC;
+			remoteInfo = Kraki;
+		};
 		61CA61C570F7068C35EDFBCA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 08FB8B14B93E4AEACA69B644 /* Project object */;
@@ -379,6 +387,7 @@
 		9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
 		9E85D17DFC304688DBB3F729 /* ActivityRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRow.swift; sourceTree = "<group>"; };
 		9EAEB25D42AF6E6FEEA99513 /* VoiceInputCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = VoiceInputCore; path = Vendor/VoiceInputCore; sourceTree = SOURCE_ROOT; };
+		A14B6DB3934575CD54101AA1 /* KrakiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1F1C34007991B7E9D900DBF /* DevicesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesPane.swift; sourceTree = "<group>"; };
 		A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoManager.swift; sourceTree = "<group>"; };
 		A4037D4173EC6CC310DB2771 /* IOSClientAlignmentPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClientAlignmentPreview.swift; sourceTree = "<group>"; };
@@ -427,6 +436,7 @@
 		F1BC3B39CCEB12DE1DD65808 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
 		F1E5D28B402A345F0D22B851 /* AccountPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPane.swift; sourceTree = "<group>"; };
 		F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindow.swift; sourceTree = "<group>"; };
+		F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarNavigationUITests.swift; sourceTree = "<group>"; };
 		F85975C0842C3E6C99D031CE /* PairingSheet+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingSheet+macOS.swift"; sourceTree = "<group>"; };
 		F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatView.swift; sourceTree = "<group>"; };
 		F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardView.swift; sourceTree = "<group>"; };
@@ -567,6 +577,7 @@
 				BBDA8D94155FA58FEEB63630 /* Kraki */,
 				8DF3DD32B2C3E1FB471E63B1 /* KrakiNotification */,
 				FDCB20E9E6DE6DFD3BC671B3 /* KrakiTests */,
+				E29D608922476083B8502B59 /* KrakiUITests */,
 				A52B4557FE045496F98B459B /* Packages */,
 				E68499EC59D084B32717E874 /* Products */,
 			);
@@ -792,6 +803,14 @@
 			path = Protocol;
 			sourceTree = "<group>";
 		};
+		E29D608922476083B8502B59 /* KrakiUITests */ = {
+			isa = PBXGroup;
+			children = (
+				F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */,
+			);
+			path = KrakiUITests;
+			sourceTree = "<group>";
+		};
 		E68499EC59D084B32717E874 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -799,6 +818,7 @@
 				36547BB6B68E22C1BEB7D1CD /* KrakiMac.app */,
 				714C9952404A97A090FC011F /* KrakiNotification.appex */,
 				CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */,
+				A14B6DB3934575CD54101AA1 /* KrakiUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -872,6 +892,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0AE2B76FE6BA87108E1DCECD /* KrakiUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 62E518A099326EA673D6A907 /* Build configuration list for PBXNativeTarget "KrakiUITests" */;
+			buildPhases = (
+				82046BC0302807262D00B8C7 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				260539E3DE733179F357B7BE /* PBXTargetDependency */,
+			);
+			name = KrakiUITests;
+			packageProductDependencies = (
+			);
+			productName = KrakiUITests;
+			productReference = A14B6DB3934575CD54101AA1 /* KrakiUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		1C9C7B02590BC6E4A9557496 /* KrakiTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 289A3C0ACADCFE4907FC57AA /* Build configuration list for PBXNativeTarget "KrakiTests" */;
@@ -965,6 +1003,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					0AE2B76FE6BA87108E1DCECD = {
+						TestTargetID = EC0ED9322F6D2A73F356C1FC;
+					};
 					68F952A8553187B8C0B31B8C = {
 						DevelopmentTeam = 3A83X5JZ3S;
 						ProvisioningStyle = Automatic;
@@ -1002,6 +1043,7 @@
 				68F952A8553187B8C0B31B8C /* KrakiMac */,
 				8CF158A689FF2418C7E20679 /* KrakiNotification */,
 				1C9C7B02590BC6E4A9557496 /* KrakiTests */,
+				0AE2B76FE6BA87108E1DCECD /* KrakiUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -1180,6 +1222,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		82046BC0302807262D00B8C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D7E3CD08B7DCB2E17937B051 /* TabBarNavigationUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		90562F65733123E69E9FD141 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1284,6 +1334,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		260539E3DE733179F357B7BE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EC0ED9322F6D2A73F356C1FC /* Kraki */;
+			targetProxy = 51845756C297802DA5D97044 /* PBXContainerItemProxy */;
+		};
 		7286A4C1B3139883DDAE18D0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 8CF158A689FF2418C7E20679 /* KrakiNotification */;
@@ -1453,6 +1508,23 @@
 			};
 			name = Debug;
 		};
+		950FCD9913A83592108B7749 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = Debug;
+		};
 		9F285059C2FC3AB278D77A58 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1607,6 +1679,23 @@
 			};
 			name = Release;
 		};
+		EE295603EE4D4077ED0BA16C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1615,6 +1704,15 @@
 			buildConfigurations = (
 				A4BE29614D491BD977CBE5DF /* Debug */,
 				024DD3818783B0EEB6A93A6F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		62E518A099326EA673D6A907 /* Build configuration list for PBXNativeTarget "KrakiUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				950FCD9913A83592108B7749 /* Debug */,
+				EE295603EE4D4077ED0BA16C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

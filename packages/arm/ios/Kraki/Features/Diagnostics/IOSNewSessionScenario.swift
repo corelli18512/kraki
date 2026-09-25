@@ -340,6 +340,18 @@ struct IOSNewSessionScenarioView: View {
         await pause(2_500)
         let stack = navigationController(in: window?.rootViewController)?.viewControllers.count ?? -1
         IOSNewSessionScenario.log("CHECK left-placeholder navStack=\(stack == 1 ? "ok" : "BAD(\(stack))") sessions=\(appState.sessionStore.sessions.keys.filter { $0.hasPrefix("scenario-") }.count)")
+        // Programmatic navigation: notification-style jump (resets the path)
+        // from the list, then again from inside a chat, then the
+        // "Session deleted while viewing" pop to the list.
+        appState.sessionStore.navigateToSession = "existing-0"
+        await pause(1_200)
+        let hiddenAfterJump = tabBarHidden
+        appState.sessionStore.navigateToSession = "existing-1"
+        await pause(1_200)
+        let hiddenAfterChatToChat = tabBarHidden
+        appState.sessionStore.popToSessionListSignal &+= 1
+        await pause(1_200)
+        IOSNewSessionScenario.log("CHECK programmatic-nav jump=\(hiddenAfterJump ? "ok" : "BAD") chatToChat=\(hiddenAfterChatToChat ? "ok" : "BAD") popToList=\(tabBarHidden ? "BAD(hidden on list)" : "ok")")
         IOSNewSessionScenario.log("phase=done")
     }
 }

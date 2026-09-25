@@ -622,6 +622,10 @@ final class NewSessionJourneyTests: XCTestCase {
             IOSNewSessionScenario.forceAutorun = false
             window.isHidden = true
             window.rootViewController = nil
+            // Let torn-down pages, scripted deliveries and deferred
+            // reconciliation finish here, so timing-sensitive tests that run
+            // next do not inherit a busy main thread.
+            RunLoop.main.run(until: Date().addingTimeInterval(2.5))
         }
         window.rootViewController = UIHostingController(
             rootView: IOSNewSessionScenarioView().environment(app))
@@ -633,7 +637,7 @@ final class NewSessionJourneyTests: XCTestCase {
         XCTAssertTrue(IOSNewSessionScenario.finished, "journey did not finish")
         let log = (try? String(contentsOf: IOSNewSessionScenario.logURL, encoding: .utf8)) ?? ""
         let checks = log.split(separator: "\n").filter { $0.contains("CHECK") }
-        XCTAssertEqual(checks.count, 6, "expected all journey checks:\n\(log)")
+        XCTAssertEqual(checks.count, 7, "expected all journey checks:\n\(log)")
         for check in checks {
             XCTAssertFalse(check.contains("BAD"), String(check))
         }
