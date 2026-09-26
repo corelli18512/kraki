@@ -180,14 +180,10 @@ final class SessionStore {
     /// pending placeholder (create/fork/import resolved). The navigation layer
     /// then swaps the top route in place instead of pop-to-root + push.
     var navigationReplacesPlaceholder = false
-    /// Session id that should be revealed in the macOS sidebar after a
-    /// create/fork/import request resolves. This is separate from semantic
-    /// navigation so a selected row can be brought into view without making
-    /// every ordinary click jump the list.
+    /// Session the macOS sidebar should bring into view (minimal scroll, never
+    /// a jump to the top) after a create/fork/import resolves. The iOS list
+    /// does not move: the user is already inside the new Session.
     var sessionListRevealId: String?
-    /// Monotonic event used to return the sidebar/table to its top as soon
-    /// as a create/fork/import operation begins, before the real row exists.
-    var sessionListScrollToTopSignal: Int = 0
     /// Latest session-list snapshot timestamp received from each Tentacle.
     /// `session_list` is a snapshot, not a per-session delta. A reconnect or
     /// device-join can therefore deliver an older snapshot after a newer one
@@ -1030,7 +1026,6 @@ final class SessionStore {
         navigateToSession = nil
         navigationReplacesPlaceholder = false
         sessionListRevealId = nil
-        sessionListScrollToTopSignal = 0
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadSnapshots.removeAll()
@@ -1053,7 +1048,6 @@ final class SessionStore {
     func addPendingSession(_ id: String) {
         pendingSessions.insert(id)
         pendingSessionErrors.removeValue(forKey: id)
-        sessionListScrollToTopSignal &+= 1
     }
 
     /// Clear a pending entry without affecting any real session that

@@ -74,6 +74,7 @@
 		388347D65132D47B191241F1 /* MacAutomationDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */; };
 		39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */; };
 		3B1435A3F3E6CE75A3D0621E /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
+		3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */; };
 		3D41352AEBFC0FFDA4E57F36 /* AvatarTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D9504C54F439410E9F9CD /* AvatarTestView.swift */; };
 		3D9E42E6CB81D0C1A79E9B77 /* IOSVoiceComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */; };
 		3E6DC3A38E8C02979FFFA91D /* PendingTailBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */; };
@@ -433,6 +434,7 @@
 		B25E8CC25E0F72D13A5394C5 /* PKCE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCE.swift; sourceTree = "<group>"; };
 		B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAutomationDriver.swift; sourceTree = "<group>"; };
 		B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlatBubbleTestView.swift; sourceTree = "<group>"; };
+		B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSessionSidebarRevealTests.swift; sourceTree = "<group>"; };
 		B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceComposerPresentation.swift; sourceTree = "<group>"; };
 		BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePlatform.swift; sourceTree = "<group>"; };
 		BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScrollPolicy.swift; sourceTree = "<group>"; };
@@ -895,6 +897,7 @@
 			children = (
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
 				5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */,
+				B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */,
 			);
 			path = KrakiMacTests;
 			sourceTree = "<group>";
@@ -1180,6 +1183,7 @@
 			files = (
 				231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */,
 				0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */,
+				3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

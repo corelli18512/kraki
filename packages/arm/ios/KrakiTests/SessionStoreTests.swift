@@ -747,4 +747,29 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .signedOut)
         XCTAssertFalse(coordinator.isLaunchGateVisible)
     }
+
+    /// iOS: creating a Session never asks the list to scroll (the user is
+    /// already inside the new Session); only macOS reveals the row.
+    @MainActor
+    func testCreatingASessionDoesNotScrollTheIOSList() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("create-\(UUID().uuidString)")
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.deviceStore.devices["dev"] = DeviceSummary(id: "dev", name: "Mac", role: .tentacle, kind: .desktop,
+                                                       publicKey: nil, encryptionKey: nil, online: true,
+                                                       lastSeen: nil, createdAt: nil)
+        var requestId = ""
+        app.testOutboundMessageHandler = { msg, _, _ in
+            if msg["type"] as? String == "create_session" {
+                requestId = (msg["payload"] as? [String: Any])?["requestId"] as? String ?? ""
+            }
+            return true
+        }
+        app.commandSender?.createSession(targetDeviceId: "dev", agentId: "pi", model: "m")
+        XCTAssertFalse(requestId.isEmpty)
+        app.sessionStore.upsertSession(SessionInfo(
+            id: "created", deviceId: "dev", deviceName: "Mac", agent: "pi", model: "m", title: nil,
+            state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false))
+        app.commandSender?.resolveCreateRequest(requestId, sessionId: "created")
+        XCTAssertNil(app.sessionStore.sessionListRevealId)
+    }
 }
