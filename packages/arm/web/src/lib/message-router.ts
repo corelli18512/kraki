@@ -1,4 +1,5 @@
 import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction, CompactingMessage, SessionState } from '@kraki/protocol';
+import { normalizeSessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
 import { createLogger } from './logger';
@@ -257,10 +258,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // agent_message boundary: clear the ephemeral narration draft and land a
       // persistent bubble that anchors the turn's Steps.
       store.appendMessage(sid, msg);
-      const label =
-        msg.payload.content ??
-        (msg.payload.kind === 'no_reply' ? 'No reply' : 'System notice');
-      updatePreview(sid, { text: truncPreview(label), type: 'agent', timestamp: msg.timestamp }, !replaying);
+      // A steps-only turn (kind no_reply) has no text of its own: keep the
+      // previous preview rather than inventing a "No reply" line.
+      if (msg.payload.kind !== 'no_reply' || msg.payload.content) {
+        const label = msg.payload.content ?? 'System notice';
+        updatePreview(sid, { text: truncPreview(label), type: 'agent', timestamp: msg.timestamp }, !replaying);
+      }
       break;
     }
 
@@ -315,9 +318,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // Skip our own echoes — mode was already applied optimistically
       if (ctx.cmdState.consumeModeEcho(sid)) break;
       const mode = (msg as SessionModeSetMessage).payload?.mode;
-      if (mode === 'safe' || mode === 'discuss' || mode === 'execute' || mode === 'delegate') {
-        store.setSessionMode(sid, mode);
-      }
+      if (mode) store.setSessionMode(sid, normalizeSessionMode(mode));
       break;
     }
 

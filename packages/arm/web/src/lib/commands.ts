@@ -1,3 +1,4 @@
+import { toWireSessionMode, type SessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 
 /** Instance-scoped tracking for create_session requests. */
@@ -119,7 +120,7 @@ export function abortSession(
 
 export function setSessionMode(
   sessionId: string,
-  mode: 'safe' | 'discuss' | 'execute' | 'delegate',
+  mode: SessionMode,
   send: (msg: Record<string, unknown>) => void,
   state?: CommandState,
 ): void {
@@ -127,7 +128,8 @@ export function setSessionMode(
   send({
     type: 'set_session_mode',
     sessionId,
-    payload: { mode },
+    // Transition release: legacy wire name so older tentacles understand it.
+    payload: { mode: toWireSessionMode(mode) },
   });
   const store = getStore();
   store.setSessionMode(sessionId, mode);

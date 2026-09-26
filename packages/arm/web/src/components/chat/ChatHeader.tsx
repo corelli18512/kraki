@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronLeft } from 'lucide-react';
 
-export type SessionMode = 'safe' | 'discuss' | 'execute' | 'delegate';
+export type SessionMode = import('@kraki/protocol').SessionMode;
 
 export const MODES: { id: SessionMode; label: string; color: string; hint: string }[] = [
-  { id: 'safe', label: 'Safe', color: '#34d399', hint: 'Ask before every tool' },
-  { id: 'discuss', label: 'Discuss', color: '#22d3ee', hint: 'Read freely, ask before writing' },
-  { id: 'execute', label: 'Execute', color: '#fbbf24', hint: 'Edit files without asking' },
+  { id: 'safe', label: 'Safe', color: '#34d399', hint: 'Ask before changes and commands' },
+  { id: 'auto', label: 'Auto', color: '#fbbf24', hint: 'Run tools without asking' },
   { id: 'delegate', label: 'Delegate', color: '#f4836e', hint: 'Run everything, answer on its own' },
 ];
 

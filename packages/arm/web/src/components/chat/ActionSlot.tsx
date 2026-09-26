@@ -2,7 +2,7 @@ import { CircleCheck, CircleStop, CircleX, Lock, OctagonX } from 'lucide-react';
 import type { CardActionState } from '@kraki/protocol';
 import type { CardAction } from '../../lib/chat/spine';
 
-export type PermissionDecision = 'approve' | 'always_allow' | 'deny' | 'execute';
+export type PermissionDecision = 'approve' | 'always_allow' | 'deny';
 
 /** Anything the bubble's lower action slot can show: the live card's action
  *  (tool / batch / permission) or a frozen row's (question choices /
@@ -12,16 +12,8 @@ export type SlotAction = CardActionState | CardAction;
 export interface ActionHandlers {
   onAnswer?: (questionId: string, choice: string) => void;
   onPermission?: (permissionId: string, toolName: string | undefined, decision: PermissionDecision) => void;
-  sessionMode?: 'safe' | 'discuss' | 'execute' | 'delegate';
 }
 
-const WRITE_TOOLS = new Set(['write', 'write_file', 'create', 'create_file', 'edit', 'edit_file']);
-
-/** In discuss mode a write permission's middle action switches the session to
- *  Execute (as on iOS/Mac). */
-export function switchesToExecute(mode: string | undefined, toolName: string | undefined): boolean {
-  return mode === 'discuss' && !!toolName && WRITE_TOOLS.has(toolName);
-}
 
 function argsSummary(toolName: string | undefined, args: Record<string, unknown> | undefined): string | undefined {
   if (!args) return undefined;
@@ -106,7 +98,6 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
     id: string; toolName?: string; description?: string; args?: Record<string, unknown>;
     decision?: string; localPending?: boolean; localError?: string;
   };
-  const writeInDiscuss = switchesToExecute(handlers.sessionMode, p.toolName);
   const description = p.description || `Run ${p.toolName ?? 'tool'}`;
   const summary = argsSummary(p.toolName, p.args);
   const decide = (decision: PermissionDecision) => handlers.onPermission?.(p.id, p.toolName, decision);
@@ -117,7 +108,7 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
         <Lock className="kslot-icon text-orange-500" aria-hidden />
         <div className="min-w-0 flex-1">
           {!p.decision && (
-            <div className="kslot-permission-title">{writeInDiscuss ? 'Write Approval — Discuss Mode' : 'Permission Required'}</div>
+            <div className="kslot-permission-title">Approval needed — Safe mode</div>
           )}
           <div className="kslot-permission-desc">{description}</div>
           {summary && summary !== description && <div className="kslot-permission-args">{summary}</div>}
@@ -133,9 +124,7 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
       {!p.decision && (
         <div className="kslot-permission-buttons">
           <button type="button" className="kperm kperm-approve" onClick={() => decide('approve')}>Approve</button>
-          {writeInDiscuss
-            ? <button type="button" className="kperm kperm-execute" onClick={() => decide('execute')}>Switch to Execute</button>
-            : <button type="button" className="kperm kperm-allow" onClick={() => decide('always_allow')}>Allow in Session</button>}
+          <button type="button" className="kperm kperm-allow" onClick={() => decide('always_allow')}>Allow in Session</button>
           <button type="button" className="kperm kperm-deny" onClick={() => decide('deny')}>Deny</button>
         </div>
       )}

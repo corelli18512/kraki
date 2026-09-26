@@ -50,7 +50,6 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
   const session = useStore((s) => s.sessions.get(sessionId));
   const card = useStore((s) => s.cards.get(sessionId));
-  const mode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss');
   const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
   const connected = useStore((s) => s.status === 'connected');
   const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
@@ -214,7 +213,6 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const ctx = useMemo<BubbleContext>(() => ({
     sessionId,
     hueSeed: sessionId,
-    sessionMode: mode,
     onAnswer: (questionId, choice) => {
       wsClient.sendInput(sessionId, choice, { answerTo: questionId });
       afterSubmit();
@@ -226,7 +224,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     onRetry: (clientId) => outbox.retry(clientId),
     onDelete: (clientId) => { outbox.discard(clientId); },
     onOpenArtifact,
-  }), [sessionId, mode, afterSubmit, onOpenArtifact]);
+  }), [sessionId, afterSubmit, onOpenArtifact]);
 
   const intent = composerIntent(sessionActive, questions.length > 0);
   const canAbort = sessionActive || showLive;

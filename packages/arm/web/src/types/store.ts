@@ -94,7 +94,7 @@ export interface AppState {
   activeSessionId: string | null;
 
   // Per-session permission mode ('ask' = prompt user, 'auto' = auto-approve)
-  sessionModes: Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>;
+  sessionModes: Map<string, import('@kraki/protocol').SessionMode>;
 
   // GitHub OAuth client ID from relay (for web login)
   githubClientId: string | null;
@@ -153,7 +153,7 @@ export interface AppActions {
   setLastError: (message: string | null) => void;
   setNavigateToSession: (sessionId: string | null) => void;
   setActiveSessionId: (sessionId: string | null) => void;
-  setSessionMode: (sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') => void;
+  setSessionMode: (sessionId: string, mode: import('@kraki/protocol').SessionMode) => void;
   setGithubClientId: (clientId: string | null) => void;
   setVapidPublicKey: (key: string | null) => void;
   setRelayVersion: (version: string | null) => void;
