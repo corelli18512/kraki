@@ -574,9 +574,9 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         print("UXPROBE pending retry status=\(pendingStatus() ?? "nil")")
         drain(900)
         print("UXPROBE pending retry-timeout status=\(pendingStatus() ?? "nil")")
-        fx.doc.onPendingAction?(clientId ?? "", .edit)
+        fx.doc.onPendingAction?(clientId ?? "", .delete)
         drain(200)
-        print("UXPROBE pending edit status=\(pendingStatus() ?? "nil") draft=\(fx.app.sessionStore.drafts[sid] ?? "nil")")
+        print("UXPROBE pending delete status=\(pendingStatus() ?? "nil")")
         _ = outboundOK
     }
 

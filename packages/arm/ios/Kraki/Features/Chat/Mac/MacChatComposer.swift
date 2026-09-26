@@ -19,10 +19,33 @@ enum MacComposerPlaceholderPolicy {
 
 /// macOS counterpart of the production iOS `MessageInputView`.
 ///
-/// The view intentionally keeps the same hierarchy and constants: a floating
-/// row with an image circle, one unified 42pt liquid-glass input capsule, and
-/// an optional 42pt stop circle. Permission/question controls remain in the
-/// live bubble; the composer only changes its textual submission intent.
+/// Same structure as iOS: one 42 pt glass capsule [image | thumbnail] text
+/// [clear] [mic], and beside it one round primary control (the size and
+/// column of the chat's jump controls) that morphs Send / Stop / Steer.
+/// Dictation stays a single row on macOS (the capsule is wide enough).
+/// Session mode is chosen in the chat header, not on the composer.
+/// Permission/question controls remain in the live bubble.
+enum MacComposerMetrics {
+    static let capsuleHeight: CGFloat = 42
+    /// Primary circle — same as the chat's jump controls.
+    static let control: CGFloat = 36
+    /// Capsule ↔ primary circle, and between stacked round controls.
+    static let controlGap: CGFloat = 8
+    /// Primary circle ↔ the jump control above it (+1 pt balances the
+    /// bordered glass control against the solid circle).
+    static let stackGap: CGFloat = 9
+    static let verticalPadding: CGFloat = 6
+    /// Distance from the chat bottom to the bottom of the ↓ jump control.
+    static var jumpControlBottom: CGFloat {
+        verticalPadding + (capsuleHeight - control) / 2 + control + stackGap
+    }
+    static let stopRed = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.62, green: 0.17, blue: 0.17, alpha: 1)
+            : NSColor(red: 0.78, green: 0.16, blue: 0.16, alpha: 1)
+    })
+}
+
 struct MacChatComposer: View {
     let sessionId: String
     var pendingPermission: PendingPermission? = nil
@@ -42,14 +65,6 @@ struct MacChatComposer: View {
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
 
-    // Mode swipe state — mirrors iOS MessageInputView.
-    @State private var rawDragX: CGFloat = 0
-    @State private var dragStartMode: SessionMode?
-    @State private var measuredInputBoxWidth: CGFloat = 0
-    @State private var showModeToast = false
-    @State private var modeToastMode: SessionMode = .discuss
-    @State private var modeToastTask: Task<Void, Never>?
-
     init(
         sessionId: String,
         pendingPermission: PendingPermission? = nil,
@@ -67,8 +82,7 @@ struct MacChatComposer: View {
         _previewImage = State(initialValue: initialImageData.flatMap(NSImage.init(data:)))
     }
 
-    private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
-    private static let inputBoxHeight: CGFloat = 42
+    private static let inputBoxHeight: CGFloat = MacComposerMetrics.capsuleHeight
     private static let voiceStartSound: NSSound? = {
         let sound = NSSound(
             contentsOfFile: "/System/Library/Sounds/Hero.aiff",
@@ -77,8 +91,6 @@ struct MacChatComposer: View {
         sound?.volume = 1.0
         return sound
     }()
-    private static let commitDistanceFraction: CGFloat = 0.4
-    private static let momentumVelocity: CGFloat = 500
 
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
@@ -121,11 +133,8 @@ struct MacChatComposer: View {
         voiceController.hasFailure(for: sessionId)
     }
 
-    private var currentSessionMode: SessionMode {
-        sessionStore.sessionModes[sessionId] ?? session?.mode ?? .discuss
-    }
-    private var tintBaseMode: SessionMode { dragStartMode ?? currentSessionMode }
-    private var modeStepWidth: CGFloat { max(80, measuredInputBoxWidth) }
+    /// Agent running and nothing typed: the primary control stops the turn.
+    private var showsStop: Bool { canShowAbort && !hasText && !hasImage }
 
     private var isDeviceReachable: Bool {
         guard let deviceId = session?.deviceId,
@@ -146,11 +155,6 @@ struct MacChatComposer: View {
 
     var body: some View {
         composeCard
-            .overlay(alignment: .topTrailing) {
-                modeToast
-                    .offset(x: -23, y: -32)
-                    .allowsHitTesting(false)
-            }
             .overlay(alignment: .top) {
                 unreachableHintPill
                     .offset(y: -28)
@@ -240,16 +244,16 @@ struct MacChatComposer: View {
             inputRow
         }
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .padding(.top, MacComposerMetrics.verticalPadding)
+        .padding(.bottom, MacComposerMetrics.verticalPadding)
         .frame(maxWidth: .infinity)
     }
 
     private var inputRow: some View {
-        HStack(spacing: 8) {
-            imageAttachButton
+        HStack(alignment: .bottom, spacing: MacComposerMetrics.controlGap) {
             inputBox
-            if canShowAbort { abortButton }
+            primaryButton
+                .padding(.bottom, (Self.inputBoxHeight - MacComposerMetrics.control) / 2)
         }
     }
 
@@ -263,72 +267,28 @@ struct MacChatComposer: View {
                 )
             } else {
                 HStack(alignment: .center, spacing: 0) {
+                    imageSlot
                     textFieldForMode
+                    if hasText || hasImage { clearButton }
                     if canShowVoice { inlineVoiceButton }
-                    sendIconButton
                 }
+                .padding(.trailing, 5)
             }
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
         .contentShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
-        .simultaneousGesture(inputBoxModeSwipeGesture)
-        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
     }
 
     @ViewBuilder
     private var inputBoxGlassBackground: some View {
         let shape = RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous)
-        ZStack(alignment: .bottom) {
-            if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: shape)
-            } else {
-                shape.fill(.ultraThinMaterial)
-            }
-            swipeBottomStrip
-                .clipShape(shape)
-                .allowsHitTesting(false)
+        if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.ultraThinMaterial)
         }
-    }
-
-    private var swipeBottomStrip: some View {
-        GeometryReader { proxy in
-            let modes = Self.allModes
-            let count = modes.count
-            let baseIndex = modes.firstIndex(of: tintBaseMode) ?? 1
-            let previousIndex = ((baseIndex - 1) % count + count) % count
-            let nextIndex = ((baseIndex + 1) % count + count) % count
-            let width = proxy.size.width
-            HStack(spacing: 0) {
-                Color.modeColor(modes[previousIndex]).opacity(0.95)
-                    .frame(width: width, height: 1.5)
-                Color.modeColor(modes[baseIndex]).opacity(0.95)
-                    .frame(width: width, height: 1.5)
-                Color.modeColor(modes[nextIndex]).opacity(0.95)
-                    .frame(width: width, height: 1.5)
-            }
-            .offset(x: -width + rawDragX)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .onAppear { measuredInputBoxWidth = width }
-            .onChange(of: width) { _, newWidth in measuredInputBoxWidth = newWidth }
-        }
-    }
-
-    private var inputBoxModeSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                if dragStartMode == nil {
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    guard abs(dx) > abs(dy) else { return }
-                }
-                handleModeSwipeChanged(value.translation.width)
-            }
-            .onEnded { value in
-                guard dragStartMode != nil else { return }
-                handleModeSwipeEnded(value.velocity.width)
-            }
     }
 
     private var textFieldForMode: some View {
@@ -345,7 +305,7 @@ struct MacChatComposer: View {
             Text(placeholder)
                 .font(.system(size: 15))
                 .foregroundStyle(.tertiary)
-                .padding(.leading, 18)
+                .padding(.leading, 4)
                 .opacity(MacComposerPlaceholderPolicy.isVisible(
                     committedText: text,
                     nativeEditorHasText: nativeEditorHasText
@@ -366,7 +326,7 @@ struct MacChatComposer: View {
                 onRequestFocus: requestComposerFocus,
                 onSubmit: handleModeSubmit
             )
-            .padding(.leading, 14)
+            .padding(.leading, 0)
             .padding(.trailing, 4)
         }
         .frame(maxWidth: .infinity)
@@ -383,27 +343,64 @@ struct MacChatComposer: View {
         )
     }
 
-    private var sendIconButton: some View {
-        Button(action: handleModeSubmit) {
-            Image(systemName: "arrow.right")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Color.modeColor(currentSessionMode))
-                .frame(width: 34, height: Self.inputBoxHeight)
-                .contentShape(Rectangle())
-                .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
-        }
-        .buttonStyle(.plain)
-        .disabled(!canSend)
-        .opacity(sendButtonOpacity)
-        .padding(.trailing, 6)
-        .accessibilityLabel(sendAccessibilityLabel)
-        .accessibilityHint(sendAccessibilityHint)
+    private enum PrimaryRole: Equatable { case send, stop }
+    private var primaryRole: PrimaryRole { showsStop ? .stop : .send }
+
+    private var primaryGlyph: String {
+        if primaryRole == .stop { return "stop.fill" }
+        return submissionIntent == .steer ? "arrow.turn.right.up" : "arrow.up"
     }
 
-    private var sendButtonOpacity: Double {
-        if !canSend { return 0.4 }
-        if !isDeviceReachable { return 0.5 }
-        return 1
+    /// One circle; its fill and glyph cross-fade between Send / Stop / Steer.
+    /// The animation is scoped to those style modifiers only: a button-wide
+    /// implicit (or transaction) animation also animated the chat's layout on
+    /// every update while a reply streamed and stalled the main thread.
+    private var primaryButton: some View {
+        let role = primaryRole
+        let glyph = primaryGlyph
+        let fill: Color = role == .stop ? MacComposerMetrics.stopRed
+            : canSend ? Color.krakiPrimary : Color(nsColor: .quaternaryLabelColor)
+        let morph = Animation.easeInOut(duration: 0.22)
+        return Button(action: role == .stop ? requestAbort : handleModeSubmit) {
+            ZStack {
+                Circle().animation(morph) { $0.foregroundStyle(fill) }
+                ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
+                    Image(systemName: name)
+                        .font(.system(size: name == "stop.fill" ? 11 : 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .animation(morph) {
+                            $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
+                                .scaleEffect(name == glyph ? 1 : 0.6)
+                        }
+                }
+                if role == .stop && abortPending {
+                    ProgressView().controlSize(.small).tint(.white)
+                }
+            }
+            .frame(width: MacComposerMetrics.control, height: MacComposerMetrics.control)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(role == .stop ? (abortPending || !isDeviceReachable) : !canSend)
+        .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (canSend && !isDeviceReachable ? 0.6 : 1))
+        .accessibilityLabel(role == .stop ? "Stop agent" : sendAccessibilityLabel)
+        .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
+    }
+
+    private var clearButton: some View {
+        Button {
+            sessionStore.setDraft(sessionId, "")
+            clearImage()
+            requestComposerFocus()
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.tertiary)
+                .frame(width: 26, height: Self.inputBoxHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear message")
     }
 
     private var sendAccessibilityLabel: String {
@@ -426,11 +423,11 @@ struct MacChatComposer: View {
 
     private var inlineVoiceButton: some View {
         Button(action: handleVoiceButton) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 14, weight: .medium))
+            Image(systemName: "mic")
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
-                .contentShape(Circle())
+                .frame(width: 32, height: Self.inputBoxHeight)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!canStartVoice)
@@ -507,29 +504,9 @@ struct MacChatComposer: View {
         if !played { NSSound.beep() }
     }
 
-    private var abortButton: some View {
-        Button(action: requestAbort) {
-            Group {
-                if abortPending {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.red)
-                }
-            }
-            .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .background(.ultraThinMaterial, in: Circle())
-        .disabled(abortPending || !isDeviceReachable)
-        .opacity(isDeviceReachable ? 1 : 0.5)
-        .accessibilityLabel("Stop agent")
-        .accessibilityHint("Aborts the current agent turn")
-    }
-
-    private var imageAttachButton: some View {
+    /// Single image: the attach icon itself becomes the thumbnail (click to
+    /// replace, small × to remove).
+    private var imageSlot: some View {
         Group {
             if let previewImage {
                 ZStack(alignment: .topTrailing) {
@@ -537,29 +514,32 @@ struct MacChatComposer: View {
                         Image(nsImage: previewImage)
                             .resizable()
                             .scaledToFill()
-                            .frame(height: Self.inputBoxHeight)
-                            .frame(maxWidth: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .frame(width: 28, height: 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .frame(width: 38, height: Self.inputBoxHeight)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     Button(action: clearImage) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, Color.black.opacity(0.6))
                     }
                     .buttonStyle(.plain)
-                    .offset(x: 4, y: -4)
+                    .offset(x: -1, y: 4)
+                    .accessibilityLabel("Remove image")
                 }
             } else {
                 Button(action: chooseImage) {
-                    LucideIcon(.imagePlus, size: 22, strokeWidth: 2.25, color: .secondary)
-                        .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
-                        .modifier(MacGlassCircleModifier())
+                    LucideIcon(.imagePlus, size: 19, strokeWidth: 2.1, color: .secondary)
+                        .frame(width: 38, height: Self.inputBoxHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
+        .padding(.leading, 6)
         .disabled(!isIdle || voiceOwnsComposer)
         .opacity(isIdle && !voiceOwnsComposer ? 1 : 0.4)
         .accessibilityLabel("Attach image")
@@ -629,83 +609,6 @@ struct MacChatComposer: View {
     private func didSubmitFromComposer() {
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                         userInfo: ["sessionId": sessionId])
-    }
-
-    private func handleModeSwipeChanged(_ dx: CGFloat) {
-        if dragStartMode == nil { dragStartMode = currentSessionMode }
-        let limit = modeStepWidth
-        if abs(dx) <= limit {
-            rawDragX = dx
-        } else {
-            let excess = abs(dx) - limit
-            let rubber = excess / (1 + excess / 80) * 0.4
-            rawDragX = (dx > 0 ? 1 : -1) * (limit + rubber)
-        }
-    }
-
-    private func handleModeSwipeEnded(_ velocity: CGFloat) {
-        let modes = Self.allModes
-        let count = modes.count
-        let baseMode = dragStartMode ?? currentSessionMode
-        let baseIndex = modes.firstIndex(of: baseMode) ?? 1
-        let dx = rawDragX
-        let distanceCommit = abs(dx) >= Self.commitDistanceFraction * modeStepWidth
-        let velocityCommit = abs(velocity) >= Self.momentumVelocity
-            && dx != 0
-            && (velocity > 0) == (dx > 0)
-        let commitStep = distanceCommit || velocityCommit ? (dx > 0 ? -1 : 1) : 0
-        let targetOffset: CGFloat = commitStep == 0 ? 0 : -CGFloat(commitStep) * modeStepWidth
-
-        if commitStep != 0 {
-            let targetIndex = ((baseIndex + commitStep) % count + count) % count
-            let mode = modes[targetIndex]
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
-            presentModeToast(mode)
-        }
-
-        let remaining = targetOffset - rawDragX
-        let normalizedVelocity = remaining == 0 ? 0 : Double(velocity / remaining)
-        let spring: Animation = .interpolatingSpring(
-            mass: 1,
-            stiffness: 180,
-            damping: 22,
-            initialVelocity: normalizedVelocity
-        )
-        withAnimation(spring) {
-            rawDragX = targetOffset
-        } completion: {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                dragStartMode = nil
-                rawDragX = 0
-            }
-        }
-    }
-
-    private func presentModeToast(_ mode: SessionMode) {
-        modeToastMode = mode
-        modeToastTask?.cancel()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-            showModeToast = true
-        }
-        modeToastTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1300))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.25)) { showModeToast = false }
-        }
-    }
-
-    @ViewBuilder
-    private var modeToast: some View {
-        if showModeToast {
-            MacModeChangeToast(mode: modeToastMode)
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.85, anchor: .bottom).combined(with: .opacity),
-                    removal: .opacity.combined(with: .scale(scale: 0.92, anchor: .bottom))
-                ))
-        }
     }
 
     @ViewBuilder
@@ -1757,50 +1660,6 @@ private final class MacComposerPasteProbeView: NSView {
     }
 }
 
-private struct MacGlassCircleModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: Circle())
-        } else {
-            content.background(.ultraThinMaterial, in: Circle())
-        }
-    }
-}
-
-private struct MacModeChangeToast: View {
-    let mode: SessionMode
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.modeColor(mode))
-                .frame(width: 7, height: 7)
-            Text(Self.widestModeName)
-                .font(Self.labelFont)
-                .hidden()
-                .overlay {
-                    Text(mode.rawValue.capitalized)
-                        .font(Self.labelFont)
-                        .foregroundStyle(Color.modeColor(mode).opacity(0.85))
-                        .contentTransition(.opacity)
-                }
-        }
-        .animation(.easeInOut(duration: 0.35), value: mode)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background {
-            if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: Capsule())
-            } else {
-                Capsule().fill(.ultraThinMaterial)
-            }
-        }
-        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-    }
-
-    private static let labelFont: Font = .system(size: 13, weight: .medium)
-    private static let widestModeName = "Delegate"
-}
 
 #if DEBUG
 @MainActor

@@ -576,13 +576,23 @@ struct MessageInputView: View {
             case .send: handleModeSubmit()
             }
         } label: {
+            // Animation is scoped to the fill and glyph style only: a
+            // button-wide implicit animation also animates the chat's layout
+            // on every update while a reply streams (costly on macOS).
+            let glyph = primaryGlyph(role)
+            let fill = primaryFill
+            let morph = Animation.easeInOut(duration: 0.22)
             ZStack {
-                Circle().fill(primaryFill)
-                Image(systemName: primaryGlyph(role))
-                    .font(.system(size: role == .stop ? 14 : 18, weight: .bold))
-                    .foregroundStyle(.white)
-                    .contentTransition(.symbolEffect(.replace))
-                    .opacity(role == .stop && abortPending ? 0 : 1)
+                Circle().animation(morph) { $0.foregroundStyle(fill) }
+                ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
+                    Image(systemName: name)
+                        .font(.system(size: name == "stop.fill" ? 14 : 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .animation(morph) {
+                            $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
+                                .scaleEffect(name == glyph ? 1 : 0.6)
+                        }
+                }
                 if role == .stop && abortPending {
                     ProgressView().controlSize(.small).tint(.white)
                 }
@@ -596,10 +606,6 @@ struct MessageInputView: View {
         .accessibilityIdentifier(role == .voiceSend ? "voice-send" : role == .stop ? "chat-stop" : "chat-send")
         .accessibilityLabel(role == .stop ? "Stop agent" : sendAccessibilityLabel)
         .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: role)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: submissionIntent)
-        .animation(.easeInOut(duration: 0.2), value: canSend)
-        .animation(.easeInOut(duration: 0.2), value: abortPending)
     }
 
     private var sendAccessibilityLabel: String {
