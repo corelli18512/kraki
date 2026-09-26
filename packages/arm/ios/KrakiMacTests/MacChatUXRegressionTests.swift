@@ -563,6 +563,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertTrue(fx.doc.itemKeys.contains("\(sid):23"))
         let r = analyze(shots, maxStep: 10_000, viewportHeight: fx.sv.contentView.bounds.height)
         print("UXGATE question-flow \(r)")
+        r.log.forEach { print("UXGATE question-flow log \($0)") }
         XCTAssertEqual(r.placeholderFrames, 0, "question state changes never show a placeholder")
         XCTAssertEqual(r.blanks, 0)
         XCTAssertLessThanOrEqual(hiddenBelowComposer(fx), 1, "the answer is visible at the bottom")

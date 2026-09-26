@@ -434,6 +434,7 @@ final class MacChatDocumentView: NSView {
                 heightCache[key] = CGFloat(cached.doubleValue)
             }
         }
+        primeNewShortIdentities(oldKeys: oldKeys)
         // A live card keeps one logical identity while its text revision changes.
         // Carry the currently displayed height into the new signature so a token
         // update never collapses the bubble back to its capped estimate while the
@@ -714,11 +715,8 @@ final class MacChatDocumentView: NSView {
             var preparedContent = cachedContent(for: item)
             // A short visible row that the warmer has not reached yet is
             // cheaper to prepare right now (~1–3ms, one per pass) than to show
-            // as a grey placeholder for a few frames — during a very fast
-            // glide, and equally at rest when a visible row takes a new
-            // identity (an echo replacing its pending input, a question
-            // closing), where the placeholder reads as a flash.
-            if preparedContent == nil, intersectsViewport,
+            // as a grey placeholder for a few frames of a very fast glide.
+            if scrollInteractionActive, preparedContent == nil, intersectsViewport,
                !geometryBarrierReached, configuredCount < maxConfigurations,
                item.visibleCharacterCount <= 1_500 {
                 preparedContent = resolvedContent(for: item)
@@ -1329,6 +1327,43 @@ final class MacChatDocumentView: NSView {
 
     private func cachedContent(for item: MacChatItem) -> MacChatBubbleContent? {
         contentCache[cacheKey(item)]
+    }
+
+    /// At rest, a few short rows that appear with a new identity (a sent
+    /// message, a question that drops its choices once answered, an echo
+    /// replacing its pending input) get their content and exact height now,
+    /// before any layout sees them — as on iOS. Otherwise the first pass lays
+    /// them out at an estimate, and every row below a row whose height then
+    /// changes waits one turn as a placeholder (seen when answering: the
+    /// question shrinks and the answer bubble below it flashed grey). The same
+    /// work `stage` does off-main for older pages, ~1–3ms per row.
+    private func primeNewShortIdentities(oldKeys: [String]) {
+        guard !scrollInteractionActive, documentWidth > 1 else { return }
+        let old = Set(oldKeys)
+        let fresh = contents.lazy.filter {
+            !old.contains($0.key) && $0.key != "__live__" && $0.visibleCharacterCount <= 1_500
+        }
+        var primed = 0
+        for item in fresh.reversed() {
+            let key = cacheKey(item)
+            guard heightCache[key] == nil else { continue }
+            guard primed < 4 else { break }
+            let content = resolvedContent(for: item)
+            // Action slots (tool / permission / open question) are measured by
+            // their hosted view once configured.
+            guard content.action == nil else { continue }
+            let artifact = content.body.flatMap {
+                MacCoreTextLayoutArtifact.cached(
+                    attributed: $0,
+                    width: content.bodyTextWidth,
+                    key: "\(item.key)|\(item.signature)|\(Int(documentWidth.rounded()))|\(sessionMode.rawValue)"
+                )
+            }
+            let exact = MacChatBubbleCell.height(for: content, bodyHeight: artifact?.height ?? 0)
+            heightCache[key] = exact
+            Self.exactHeightCache.setObject(NSNumber(value: Double(exact)), forKey: key as NSString, cost: 16)
+            primed += 1
+        }
     }
 
     private func resolvedContent(for item: MacChatItem) -> MacChatBubbleContent {
